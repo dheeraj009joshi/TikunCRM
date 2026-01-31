@@ -1,0 +1,20 @@
+# Netlify configuration for LeedsCRM frontend
+# The app lives in the frontend/ subdirectory. Backend API is at https://leedsapi.tikuntech.com/api/v1
+#
+# Important: Run Netlify CLI from the repo root (LeedsCrm), not from inside frontend/:
+#   cd /path/to/LeedsCrm && netlify login
+#   cd /path/to/LeedsCrm && netlify deploy --prod
+
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = ".next"
+
+# Required for Next.js: use Netlify's Next.js runtime so routes and SSR work (fixes "Page not found")
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+[build.environment]
+  NODE_VERSION = "20"
+  # Set NEXT_PUBLIC_API_URL in Netlify UI: Site settings → Environment variables
+  # Recommended: NEXT_PUBLIC_API_URL = https://leedsapi.tikuntech.com/api/v1
