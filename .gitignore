@@ -1,5 +1,5 @@
 # Local Netlify folder
 .netlify
-
+docs/**
 # Backup of nested .git (backend/frontend were submodules; do not commit)
 **/.git.bak
