@@ -1,0 +1,147 @@
+import apiClient from "@/lib/api-client";
+
+const LEADS_PREFIX = "/leads";
+
+export interface UserBrief {
+    id: string;
+    email: string;
+    first_name: string;
+    last_name: string;
+    role: string;
+    is_active: boolean;
+    dealership_id?: string;
+}
+
+export interface DealershipBrief {
+    id: string;
+    name: string;
+}
+
+export interface Lead {
+    id: string;
+    first_name: string;
+    last_name?: string;
+    email?: string;
+    phone?: string;
+    alternate_phone?: string;
+    source: string;
+    status: string;
+    dealership_id?: string;
+    assigned_to?: string;
+    created_by?: string;
+    notes?: string;
+    meta_data: Record<string, unknown>;
+    interested_in?: string;
+    budget_range?: string;
+    first_contacted_at?: string;
+    last_contacted_at?: string;
+    converted_at?: string;
+    created_at: string;
+    updated_at: string;
+    // Extended info (available in detail view)
+    assigned_to_user?: UserBrief;
+    created_by_user?: UserBrief;
+    dealership?: DealershipBrief;
+}
+
+export interface LeadListResponse {
+    items: Lead[];
+    total: number;
+    page: number;
+    page_size: number;
+    pages: number;
+}
+
+export interface LeadListParams {
+    page?: number;
+    page_size?: number;
+    status?: string;
+    source?: string;
+    search?: string;
+    dealership_id?: string;
+}
+
+export const LeadService = {
+    // List leads with role-based filtering applied server-side
+    async listLeads(params: LeadListParams = {}): Promise<LeadListResponse> {
+        const response = await apiClient.get(LEADS_PREFIX, { params });
+        return response.data;
+    },
+
+    // Get unassigned leads (leads not assigned to any dealership) - Super Admin only
+    async listUnassignedLeads(params: LeadListParams = {}): Promise<LeadListResponse> {
+        const response = await apiClient.get(`${LEADS_PREFIX}/unassigned`, { params });
+        return response.data;
+    },
+
+    // Get leads assigned to dealership but not to salesperson - Dealership Admin
+    async listUnassignedToSalesperson(params: LeadListParams = {}): Promise<LeadListResponse> {
+        const response = await apiClient.get(`${LEADS_PREFIX}/unassigned-to-salesperson`, { params });
+        return response.data;
+    },
+
+    // Get single lead details
+    async getLead(id: string): Promise<Lead> {
+        const response = await apiClient.get(`${LEADS_PREFIX}/${id}`);
+        return response.data;
+    },
+
+    // Create new lead
+    async createLead(data: Partial<Lead>): Promise<Lead> {
+        const response = await apiClient.post(LEADS_PREFIX, data);
+        return response.data;
+    },
+
+    // Update lead status
+    async updateLeadStatus(id: string, status: string, notes?: string): Promise<Lead> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/status`, { status, notes });
+        return response.data;
+    },
+
+    // Assign lead to salesperson (within a dealership)
+    async assignToSalesperson(id: string, userId: string, notes?: string): Promise<Lead> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/assign`, { 
+            assigned_to: userId, 
+            notes 
+        });
+        return response.data;
+    },
+
+    // Assign lead to dealership - Super Admin only
+    async assignToDealership(id: string, dealershipId: string, notes?: string): Promise<Lead> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/assign-dealership`, { 
+            dealership_id: dealershipId, 
+            notes 
+        });
+        return response.data;
+    },
+
+    // Bulk assign leads to dealership - Super Admin only
+    async bulkAssignToDealership(
+        leadIds: string[], 
+        dealershipId: string
+    ): Promise<{ message: string; assigned_count: number; dealership_id: string }> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/bulk-assign-dealership`, {
+            lead_ids: leadIds,
+            dealership_id: dealershipId
+        });
+        return response.data;
+    },
+
+    // Add note to lead
+    async addNote(id: string, content: string): Promise<Lead> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/notes`, { content });
+        return response.data;
+    },
+
+    // Legacy alias for backward compatibility
+    async assignLead(id: string, userId: string, notes?: string): Promise<Lead> {
+        return this.assignToSalesperson(id, userId, notes);
+    },
+
+    // Delete lead - Super Admin only
+    async deleteLead(id: string): Promise<{ message: string; lead_id: string }> {
+        const response = await apiClient.delete(`${LEADS_PREFIX}/${id}`);
+        return response.data;
+    }
+};

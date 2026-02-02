@@ -1,0 +1,284 @@
+"""
+Follow-Up Endpoints
+"""
+from datetime import datetime
+from typing import Any, List, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select, desc
+from sqlalchemy.orm import selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
+
+from app.api import deps
+from app.core.permissions import Permission, UserRole
+from app.db.database import get_db
+from app.models.user import User
+from app.models.follow_up import FollowUp, FollowUpStatus
+from app.models.lead import Lead
+from app.models.activity import ActivityType
+from app.schemas.follow_up import FollowUpResponse, FollowUpCreate, FollowUpUpdate
+from app.schemas.lead import LeadBrief
+from app.schemas.user import UserBrief
+from app.services.activity import ActivityService
+
+router = APIRouter()
+
+
+@router.get("/", response_model=List[FollowUpResponse])
+async def list_follow_ups(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+    status: Optional[FollowUpStatus] = None,
+    overdue: bool = False
+) -> Any:
+    """
+    List follow-ups for the current user or dealership.
+    """
+    query = select(FollowUp).options(
+        selectinload(FollowUp.lead),
+        selectinload(FollowUp.assigned_to_user)
+    )
+    
+    # RBAC Isolation
+    if current_user.role == UserRole.SALESPERSON:
+        query = query.where(FollowUp.assigned_to == current_user.id)
+    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+        # Get users in dealership first or join with User model
+        from app.models.user import User as UserModel
+        query = query.join(UserModel).where(UserModel.dealership_id == current_user.dealership_id)
+        
+    if status:
+        query = query.where(FollowUp.status == status)
+    
+    if overdue:
+        query = query.where(
+            FollowUp.scheduled_at < datetime.utcnow(),
+            FollowUp.status == FollowUpStatus.PENDING
+        )
+        
+    query = query.order_by(FollowUp.scheduled_at.asc())
+    
+    result = await db.execute(query)
+    follow_ups = result.scalars().all()
+    
+    # Enrich with lead and user info
+    enriched = []
+    for follow_up in follow_ups:
+        follow_up_dict = {
+            **follow_up.__dict__,
+            "lead": LeadBrief(
+                id=follow_up.lead.id,
+                first_name=follow_up.lead.first_name,
+                last_name=follow_up.lead.last_name,
+                email=follow_up.lead.email,
+                phone=follow_up.lead.phone,
+                status=follow_up.lead.status,
+                source=follow_up.lead.source
+            ) if follow_up.lead else None,
+            "assigned_to_user": UserBrief(
+                id=follow_up.assigned_to_user.id,
+                email=follow_up.assigned_to_user.email,
+                first_name=follow_up.assigned_to_user.first_name,
+                last_name=follow_up.assigned_to_user.last_name,
+                role=follow_up.assigned_to_user.role,
+                is_active=follow_up.assigned_to_user.is_active,
+                dealership_id=follow_up.assigned_to_user.dealership_id,
+                smtp_email=follow_up.assigned_to_user.smtp_email,
+                email_config_verified=follow_up.assigned_to_user.email_config_verified
+            ) if follow_up.assigned_to_user else None
+        }
+        enriched.append(FollowUpResponse(**follow_up_dict))
+    
+    return enriched
+
+
+@router.post("/{lead_id}", response_model=FollowUpResponse)
+async def schedule_follow_up(
+    lead_id: UUID,
+    follow_up_in: FollowUpCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Schedule a new follow-up for a lead.
+    """
+    # Verify lead exists and user has access
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    
+    # RBAC: Check if user has access to this lead
+    if current_user.role == UserRole.SALESPERSON:
+        # Salesperson can only schedule for leads assigned to them
+        if lead.assigned_to != current_user.id:
+            raise HTTPException(status_code=403, detail="You can only schedule follow-ups for leads assigned to you")
+    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+        # Dealership admin/owner can schedule for leads in their dealership
+        if lead.dealership_id != current_user.dealership_id:
+            raise HTTPException(status_code=403, detail="You can only schedule follow-ups for leads in your dealership")
+    # Super Admin has access to all leads
+        
+    follow_up = FollowUp(
+        lead_id=lead_id,
+        assigned_to=current_user.id,
+        scheduled_at=follow_up_in.scheduled_at,
+        notes=follow_up_in.notes,
+        status=FollowUpStatus.PENDING
+    )
+    
+    db.add(follow_up)
+    await db.flush()
+    
+    # Log activity
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.FOLLOW_UP_SCHEDULED,
+        description=f"Follow-up scheduled for {follow_up_in.scheduled_at.strftime('%Y-%m-%d %H:%M')}",
+        user_id=current_user.id,
+        lead_id=lead_id,
+        dealership_id=lead.dealership_id,
+        meta_data={"scheduled_at": follow_up_in.scheduled_at.isoformat()}
+    )
+    
+    await db.commit()
+    
+    # Re-fetch with relationships loaded
+    result = await db.execute(
+        select(FollowUp)
+        .options(selectinload(FollowUp.lead), selectinload(FollowUp.assigned_to_user))
+        .where(FollowUp.id == follow_up.id)
+    )
+    follow_up = result.scalar_one()
+    
+    # Enrich response
+    follow_up_dict = {
+        **follow_up.__dict__,
+        "lead": LeadBrief(
+            id=follow_up.lead.id,
+            first_name=follow_up.lead.first_name,
+            last_name=follow_up.lead.last_name,
+            email=follow_up.lead.email,
+            phone=follow_up.lead.phone,
+            status=follow_up.lead.status,
+            source=follow_up.lead.source
+        ) if follow_up.lead else None,
+        "assigned_to_user": UserBrief(
+            id=follow_up.assigned_to_user.id,
+            email=follow_up.assigned_to_user.email,
+            first_name=follow_up.assigned_to_user.first_name,
+            last_name=follow_up.assigned_to_user.last_name,
+            role=follow_up.assigned_to_user.role,
+            is_active=follow_up.assigned_to_user.is_active,
+            dealership_id=follow_up.assigned_to_user.dealership_id,
+            smtp_email=follow_up.assigned_to_user.smtp_email,
+            email_config_verified=follow_up.assigned_to_user.email_config_verified
+        ) if follow_up.assigned_to_user else None
+    }
+    
+    return FollowUpResponse(**follow_up_dict)
+
+
+class FollowUpCompleteRequest(BaseModel):
+    """Request body for completing a follow-up"""
+    notes: Optional[str] = None
+
+
+@router.post("/{follow_up_id}/complete", response_model=FollowUpResponse)
+async def complete_follow_up(
+    follow_up_id: UUID,
+    request: Optional[FollowUpCompleteRequest] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Mark a follow-up as completed.
+    """
+    result = await db.execute(
+        select(FollowUp)
+        .options(selectinload(FollowUp.lead), selectinload(FollowUp.assigned_to_user))
+        .where(FollowUp.id == follow_up_id)
+    )
+    follow_up = result.scalar_one_or_none()
+    
+    if not follow_up:
+        raise HTTPException(status_code=404, detail="Follow-up not found")
+        
+    if follow_up.assigned_to != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
+         raise HTTPException(status_code=403, detail="Not authorized")
+         
+    completion_notes = request.notes if request else None
+    follow_up.status = FollowUpStatus.COMPLETED
+    follow_up.completed_at = datetime.utcnow()
+    follow_up.completion_notes = completion_notes
+    
+    await db.flush()
+    
+    # Get lead for dealership_id context
+    lead_result = await db.execute(select(Lead).where(Lead.id == follow_up.lead_id))
+    lead = lead_result.scalar_one()
+    
+    # Log activity
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.FOLLOW_UP_COMPLETED,
+        description="Follow-up completed",
+        user_id=current_user.id,
+        lead_id=follow_up.lead_id,
+        dealership_id=lead.dealership_id,
+        meta_data={"completion_notes": completion_notes}
+    )
+    
+    await db.commit()
+    
+    # Enrich response
+    follow_up_dict = {
+        **follow_up.__dict__,
+        "lead": LeadBrief(
+            id=follow_up.lead.id,
+            first_name=follow_up.lead.first_name,
+            last_name=follow_up.lead.last_name,
+            email=follow_up.lead.email,
+            phone=follow_up.lead.phone,
+            status=follow_up.lead.status,
+            source=follow_up.lead.source
+        ) if follow_up.lead else None,
+        "assigned_to_user": UserBrief(
+            id=follow_up.assigned_to_user.id,
+            email=follow_up.assigned_to_user.email,
+            first_name=follow_up.assigned_to_user.first_name,
+            last_name=follow_up.assigned_to_user.last_name,
+            role=follow_up.assigned_to_user.role,
+            is_active=follow_up.assigned_to_user.is_active,
+            dealership_id=follow_up.assigned_to_user.dealership_id,
+            smtp_email=follow_up.assigned_to_user.smtp_email,
+            email_config_verified=follow_up.assigned_to_user.email_config_verified
+        ) if follow_up.assigned_to_user else None
+    }
+    
+    return FollowUpResponse(**follow_up_dict)
+
+
+@router.delete("/{follow_up_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_follow_up(
+    follow_up_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+):
+    """
+    Delete a follow-up.
+    """
+    result = await db.execute(select(FollowUp).where(FollowUp.id == follow_up_id))
+    follow_up = result.scalar_one_or_none()
+    
+    if not follow_up:
+        raise HTTPException(status_code=404, detail="Follow-up not found")
+        
+    if follow_up.assigned_to != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
+         raise HTTPException(status_code=403, detail="Not authorized")
+    
+    await db.delete(follow_up)
+    await db.commit()
