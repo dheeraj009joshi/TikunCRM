@@ -1,9 +1,11 @@
 # Netlify configuration for LeedsCRM frontend
 # The app lives in the frontend/ subdirectory. Backend API is at https://leedsapi.tikuntech.com/api/v1
 #
-# Important: Run Netlify CLI from the repo root (LeedsCrm), not from inside frontend/:
-#   cd /path/to/LeedsCrm && netlify login
-#   cd /path/to/LeedsCrm && netlify deploy --prod
+# Deploy from local CLI (run from repo root only):
+#   cd /path/to/LeedsCrm
+#   netlify login          # once
+#   netlify link           # once, link to your site (or netlify init)
+#   netlify deploy --prod # build runs on Netlify, then deploy
 
 [build]
   base = "frontend"
