@@ -211,7 +211,7 @@ function CreateAppointmentModal({
             scheduledAt.setHours(hours, minutes, 0, 0)
             
             await AppointmentService.create({
-                title: title.trim() || undefined,
+                title: title.trim() || "Appointment",
                 description: notes || undefined,
                 appointment_type: "in_person", // Always in person
                 scheduled_at: scheduledAt.toISOString(),
