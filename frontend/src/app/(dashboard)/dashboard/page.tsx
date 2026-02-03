@@ -36,7 +36,7 @@ export default function DashboardPage() {
             return (
                 <div className="flex h-[50vh] items-center justify-center">
                     <div className="text-center">
-                        <h2 className="text-lg font-semibold">Welcome to LeedsCRM</h2>
+                        <h2 className="text-lg font-semibold">Welcome to LeadsCRM</h2>
                         <p className="text-muted-foreground">Loading your dashboard...</p>
                     </div>
                 </div>

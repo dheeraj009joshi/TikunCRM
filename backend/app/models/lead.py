@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from app.models.activity import Activity
     from app.models.follow_up import FollowUp
     from app.models.email_log import EmailLog
+    from app.models.appointment import Appointment
 
 
 class LeadSource(str, Enum):
@@ -114,6 +115,12 @@ class Lead(Base):
         DateTime(timezone=True),
         nullable=True
     )
+    last_activity_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="Last activity timestamp for auto-assignment tracking"
+    )
     converted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         nullable=True
@@ -162,6 +169,11 @@ class Lead(Base):
     )
     email_logs: Mapped[List["EmailLog"]] = relationship(
         "EmailLog",
+        back_populates="lead",
+        lazy="noload"
+    )
+    appointments: Mapped[List["Appointment"]] = relationship(
+        "Appointment",
         back_populates="lead",
         lazy="noload"
     )

@@ -12,7 +12,8 @@ import {
     Loader2,
     Phone,
     Mail,
-    Calendar
+    Calendar,
+    CalendarClock
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, MetricCard } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -29,22 +30,29 @@ import {
 } from "@/components/ui/table"
 import { DashboardService, SalespersonStats } from "@/services/dashboard-service"
 import { LeadService, Lead } from "@/services/lead-service"
+import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
+import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { formatDateInTimezone } from "@/utils/timezone"
 import { DonutChart } from "@tremor/react"
 
 export function SalespersonDashboard() {
     const [stats, setStats] = React.useState<SalespersonStats | null>(null)
     const [recentLeads, setRecentLeads] = React.useState<Lead[]>([])
+    const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
+    const { timezone } = useDealershipTimezone()
 
     React.useEffect(() => {
         const fetchData = async () => {
             try {
-                const [statsData, leadsData] = await Promise.all([
+                const [statsData, leadsData, appointmentsData] = await Promise.all([
                     DashboardService.getSalespersonStats(),
-                    LeadService.listLeads({ page: 1, page_size: 5 })
+                    LeadService.listLeads({ page: 1, page_size: 5 }),
+                    AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] }))
                 ])
                 setStats(statsData)
                 setRecentLeads(leadsData.items)
+                setTodayAppointments(appointmentsData.items || [])
             } catch (error) {
                 console.error("Failed to fetch dashboard stats:", error)
             } finally {
@@ -158,6 +166,62 @@ export function SalespersonDashboard() {
                         </Card>
                     )}
                 </div>
+            )}
+
+            {/* Today's Appointments Widget */}
+            {todayAppointments.length > 0 && (
+                <Card className="border-purple-200 bg-purple-50 dark:border-purple-900 dark:bg-purple-950">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                        <div className="flex items-center gap-2">
+                            <div className="rounded-full bg-purple-100 p-2 dark:bg-purple-900">
+                                <CalendarClock className="h-5 w-5 text-purple-600" />
+                            </div>
+                            <div>
+                                <CardTitle className="text-base font-semibold text-purple-700 dark:text-purple-300">
+                                    Today's Appointments ({todayAppointments.length})
+                                </CardTitle>
+                            </div>
+                        </div>
+                        <Link href="/appointments?filter=today">
+                            <Button variant="outline" size="sm" className="border-purple-300 text-purple-700">
+                                View All
+                            </Button>
+                        </Link>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="space-y-2">
+                            {todayAppointments.slice(0, 3).map((apt) => (
+                                <div 
+                                    key={apt.id} 
+                                    className="flex items-center justify-between bg-white dark:bg-purple-900/50 rounded-lg p-3"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="text-center min-w-[50px]">
+                                            <p className="text-sm font-bold text-purple-600">
+                                                {formatDateInTimezone(apt.scheduled_at, timezone, { timeStyle: "short" })}
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <p className="font-medium text-sm">{apt.title}</p>
+                                            {apt.lead && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    with {apt.lead.first_name} {apt.lead.last_name || ""}
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <Badge variant={
+                                        apt.status === "completed" ? "converted" :
+                                        apt.status === "cancelled" ? "destructive" :
+                                        "outline"
+                                    }>
+                                        {getAppointmentStatusLabel(apt.status)}
+                                    </Badge>
+                                </div>
+                            ))}
+                        </div>
+                    </CardContent>
+                </Card>
             )}
 
             {/* Stats Grid */}

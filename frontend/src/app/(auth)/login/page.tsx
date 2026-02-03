@@ -42,8 +42,13 @@ export default function LoginPage() {
             // Store auth in Zustand store (includes token + refresh token + user)
             setAuth(data.user, data.access_token, data.refresh_token)
 
-            // Redirect to dashboard
-            router.push("/dashboard")
+            // Check if user must change password
+            if (data.user?.must_change_password) {
+                router.push("/change-password?required=true")
+            } else {
+                // Redirect to dashboard
+                router.push("/dashboard")
+            }
         } catch (err: any) {
             console.error("Login failed:", err)
             setError(err.message || "Login failed. Please check your credentials.")
@@ -61,7 +66,7 @@ export default function LoginPage() {
                     <div className="mr-2 flex h-8 w-8 items-center justify-center rounded bg-white text-primary">
                         <span className="font-bold">L</span>
                     </div>
-                    LeedsCRM
+                    LeadsCRM
                 </div>
                 <div className="relative z-20 mt-auto">
                     <blockquote className="space-y-2">

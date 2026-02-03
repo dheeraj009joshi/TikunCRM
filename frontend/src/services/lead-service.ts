@@ -21,6 +21,7 @@ export interface Lead {
     id: string;
     first_name: string;
     last_name?: string;
+    full_name?: string; // Computed property from backend
     email?: string;
     phone?: string;
     alternate_phone?: string;
@@ -42,6 +43,14 @@ export interface Lead {
     assigned_to_user?: UserBrief;
     created_by_user?: UserBrief;
     dealership?: DealershipBrief;
+    /** "full" = full access; "mention_only" = can only read lead and reply to notes */
+    access_level?: "full" | "mention_only";
+}
+
+// Helper to get full name from lead (handles missing full_name)
+export function getLeadFullName(lead: Lead): string {
+    if (lead.full_name) return lead.full_name;
+    return [lead.first_name, lead.last_name].filter(Boolean).join(' ') || 'Unknown Lead';
 }
 
 export interface LeadListResponse {
@@ -59,6 +68,8 @@ export interface LeadListParams {
     source?: string;
     search?: string;
     dealership_id?: string;
+    /** "unassigned" = only leads in the unassigned pool (no dealership) - visible to all users */
+    pool?: string;
 }
 
 export const LeadService = {
@@ -129,8 +140,19 @@ export const LeadService = {
     },
 
     // Add note to lead
-    async addNote(id: string, content: string): Promise<Lead> {
-        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/notes`, { content });
+    async addNote(
+        id: string, 
+        content: string, 
+        options?: { 
+            parent_id?: string;
+            mentioned_user_ids?: string[];
+        }
+    ): Promise<Lead> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/notes`, { 
+            content,
+            parent_id: options?.parent_id,
+            mentioned_user_ids: options?.mentioned_user_ids
+        });
         return response.data;
     },
 

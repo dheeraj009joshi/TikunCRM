@@ -4,6 +4,8 @@ Background task scheduler using APScheduler
 Handles periodic background tasks including:
 - IMAP email sync for all users (every 1 minute)
 - Google Sheets lead sync (every 1 minute)
+- Lead auto-assignment on first note (every 1 minute)
+- Stale lead unassignment after 72 hours (every hour)
 """
 import logging
 from contextlib import asynccontextmanager
@@ -57,9 +59,33 @@ def setup_scheduler():
         max_instances=1,  # Prevent overlapping runs
     )
     
+    # Lead auto-assignment - runs every 1 minute to assign leads based on first note
+    from app.tasks.lead_assignment import run_auto_assign_task
+    scheduler.add_job(
+        run_auto_assign_task,
+        trigger=IntervalTrigger(minutes=1),
+        id="lead_auto_assign",
+        name="Auto-assign leads based on first note",
+        replace_existing=True,
+        max_instances=1,
+    )
+    
+    # Stale lead unassignment - runs every hour to unassign inactive leads
+    from app.tasks.lead_assignment import run_stale_unassign_task
+    scheduler.add_job(
+        run_stale_unassign_task,
+        trigger=IntervalTrigger(hours=1),
+        id="lead_stale_unassign",
+        name="Unassign leads with no activity for 72 hours",
+        replace_existing=True,
+        max_instances=1,
+    )
+    
     logger.info("Background scheduler configured:")
     logger.info("  - IMAP email sync (every 1 minute)")
     logger.info("  - Google Sheets lead sync (every 1 minute)")
+    logger.info("  - Lead auto-assignment (every 1 minute)")
+    logger.info("  - Stale lead unassignment (every hour)")
 
 
 def start_scheduler():

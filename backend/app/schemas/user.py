@@ -87,6 +87,7 @@ class UserResponse(UserBase):
     dealership_email: Optional[str] = None  # Deprecated
     smtp_email: Optional[str] = None
     email_config_verified: bool = False
+    must_change_password: bool = False
     last_login_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

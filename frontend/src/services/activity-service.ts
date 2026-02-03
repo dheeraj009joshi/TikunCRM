@@ -16,6 +16,9 @@ export type ActivityType =
     | "follow_up_scheduled"
     | "follow_up_completed"
     | "follow_up_missed"
+    | "appointment_scheduled"
+    | "appointment_completed"
+    | "appointment_cancelled"
     | "user_login"
     | "user_logout"
     | "import_completed"
@@ -38,6 +41,7 @@ export interface Activity {
     user_id?: string;
     lead_id?: string;
     dealership_id?: string;
+    parent_id?: string;
     meta_data: Record<string, unknown>;
     created_at: string;
     user?: ActivityUser;
@@ -73,6 +77,9 @@ export const ACTIVITY_TYPE_INFO: Record<ActivityType, { label: string; icon: str
     follow_up_scheduled: { label: "Follow-up Scheduled", icon: "calendar", color: "amber" },
     follow_up_completed: { label: "Follow-up Completed", icon: "check-circle", color: "emerald" },
     follow_up_missed: { label: "Follow-up Missed", icon: "alert-circle", color: "rose" },
+    appointment_scheduled: { label: "Appointment Scheduled", icon: "calendar-clock", color: "purple" },
+    appointment_completed: { label: "Appointment Completed", icon: "check-circle", color: "emerald" },
+    appointment_cancelled: { label: "Appointment Cancelled", icon: "x-circle", color: "rose" },
     user_login: { label: "User Login", icon: "log-in", color: "gray" },
     user_logout: { label: "User Logout", icon: "log-out", color: "gray" },
     import_completed: { label: "Import Completed", icon: "download", color: "blue" },

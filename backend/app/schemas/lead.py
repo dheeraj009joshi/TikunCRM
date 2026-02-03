@@ -72,6 +72,7 @@ class BulkLeadDealershipAssignment(BaseModel):
 class LeadResponse(LeadBase):
     """Schema for lead response"""
     id: UUID
+    full_name: Optional[str] = None  # Computed from first_name + last_name
     source: LeadSource
     status: LeadStatus
     dealership_id: Optional[UUID] = None
@@ -96,6 +97,7 @@ class LeadBrief(BaseModel):
     id: UUID
     first_name: str
     last_name: Optional[str] = None
+    full_name: Optional[str] = None  # Computed from first_name + last_name
     email: Optional[str] = None
     phone: Optional[str] = None
     status: LeadStatus
@@ -119,6 +121,7 @@ class LeadDetail(LeadResponse):
     assigned_to_user: Optional[UserBrief] = None
     created_by_user: Optional[UserBrief] = None
     dealership: Optional[DealershipBrief] = None
+    access_level: Optional[str] = None  # "full" or "mention_only" (mention_only = can only read/reply to notes)
 
 
 class LeadListResponse(BaseModel):

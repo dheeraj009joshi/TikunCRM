@@ -12,6 +12,7 @@ export interface User {
     dealership_id: string | null;
     is_active: boolean;
     email_config_verified?: boolean;
+    must_change_password?: boolean;
 }
 
 interface AuthState {

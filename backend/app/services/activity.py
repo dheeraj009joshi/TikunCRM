@@ -2,12 +2,17 @@
 Activity Logging Service
 """
 import json
+import logging
+from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity, ActivityType
+
+logger = logging.getLogger(__name__)
 
 
 class ActivityService:
@@ -23,10 +28,12 @@ class ActivityService:
         lead_id: Optional[UUID] = None,
         dealership_id: Optional[UUID] = None,
         meta_data: Optional[Dict[str, Any]] = None,
-        ip_address: Optional[str] = None
+        ip_address: Optional[str] = None,
+        update_lead_activity: bool = True
     ) -> Activity:
         """
         Create a new activity log entry.
+        Also updates the lead's last_activity_at for auto-assignment tracking.
         """
         activity = Activity(
             type=activity_type,
@@ -39,7 +46,39 @@ class ActivityService:
         )
         
         db.add(activity)
+        
+        # Update lead's last_activity_at for assignment tracking
+        if lead_id and update_lead_activity:
+            from app.models.lead import Lead
+            result = await db.execute(
+                select(Lead).where(Lead.id == lead_id)
+            )
+            lead = result.scalar_one_or_none()
+            if lead:
+                lead.last_activity_at = datetime.utcnow()
+        
         await db.flush()
+        
+        # Emit WebSocket event for real-time updates
+        if lead_id:
+            try:
+                from app.services.notification_service import emit_activity_added
+                await emit_activity_added(
+                    lead_id=str(lead_id),
+                    dealership_id=str(dealership_id) if dealership_id else None,
+                    activity_data={
+                        "id": str(activity.id),
+                        "type": activity_type.value,
+                        "description": description,
+                        "user_id": str(user_id) if user_id else None,
+                        "meta_data": meta_data or {},
+                        "created_at": activity.created_at.isoformat() if activity.created_at else datetime.utcnow().isoformat(),
+                    }
+                )
+            except Exception as e:
+                # Don't fail activity creation if WebSocket fails
+                logger.warning(f"Failed to emit WebSocket activity event: {e}")
+        
         return activity
 
     @staticmethod

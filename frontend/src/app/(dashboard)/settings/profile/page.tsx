@@ -11,10 +11,12 @@ import {
     Loader2,
     CheckCircle2,
     XCircle,
+    Bell,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { PushNotificationToggle } from "@/components/pwa/push-notification-toggle"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
@@ -242,6 +244,30 @@ export default function ProfileSettingsPage() {
                     </CardContent>
                 </Card>
             )}
+            
+            {/* Notification Settings */}
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Bell className="h-5 w-5" />
+                        Notification Settings
+                    </CardTitle>
+                    <CardDescription>
+                        Configure how you want to receive notifications
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="bg-blue-50 text-blue-700 rounded-lg p-4 text-sm">
+                        <p className="font-medium mb-1">Push Notifications</p>
+                        <p className="text-blue-600">
+                            Enable push notifications to receive instant alerts about new leads, 
+                            appointments, and follow-ups even when the browser is closed.
+                        </p>
+                    </div>
+                    
+                    <PushNotificationToggle />
+                </CardContent>
+            </Card>
             
             {/* Save Button */}
             <div className="flex justify-end">

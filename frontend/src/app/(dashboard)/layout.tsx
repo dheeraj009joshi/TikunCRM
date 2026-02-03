@@ -4,6 +4,7 @@ import * as React from "react"
 import { Sidebar } from "@/components/layout/sidebar"
 import { Header } from "@/components/layout/header"
 import { EmailConfigReminderModal } from "@/components/email-config-reminder-modal"
+import { WebSocketProvider } from "@/components/providers/websocket-provider"
 import { useAuthStore } from "@/stores/auth-store"
 
 export default function DashboardLayout({
@@ -53,18 +54,20 @@ export default function DashboardLayout({
     }
 
     return (
-        <div className="flex min-h-screen bg-background text-foreground">
-            <Sidebar />
-            <div className="flex flex-1 flex-col pl-64">
-                <Header />
-                <main className="flex-1 p-6 overflow-y-auto">
-                    {children}
-                </main>
+        <WebSocketProvider>
+            <div className="flex min-h-screen bg-background text-foreground">
+                <Sidebar />
+                <div className="flex flex-1 flex-col pl-64">
+                    <Header />
+                    <main className="flex-1 p-6 overflow-y-auto">
+                        {children}
+                    </main>
+                </div>
+                <EmailConfigReminderModal 
+                    open={showReminder} 
+                    onOpenChange={handleReminderClose}
+                />
             </div>
-            <EmailConfigReminderModal 
-                open={showReminder} 
-                onOpenChange={handleReminderClose}
-            />
-        </div>
+        </WebSocketProvider>
     )
 }

@@ -42,14 +42,19 @@ apiClient.interceptors.request.use(
     }
 );
 
-// Response interceptor for handling common errors (e.g., 401 Unauthorized)
+// Response interceptor for handling common errors (e.g., 401/403 Unauthorized)
 apiClient.interceptors.response.use(
     (response) => response,
     async (error: AxiosError) => {
         const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 
-        // If error is 401 and we haven't already tried to refresh
-        if (error.response?.status === 401 && !originalRequest._retry) {
+        // Handle 403 "Not authenticated" as well (FastAPI's HTTPBearer returns 403)
+        const isAuthError = error.response?.status === 401 || 
+            (error.response?.status === 403 && 
+             (error.response?.data as any)?.detail === "Not authenticated");
+
+        // If error is 401/403 auth error and we haven't already tried to refresh
+        if (isAuthError && !originalRequest._retry) {
             // Don't try to refresh if this is the refresh endpoint itself
             if (originalRequest.url?.includes("/auth/refresh")) {
                 // Refresh failed, clear tokens and redirect to login

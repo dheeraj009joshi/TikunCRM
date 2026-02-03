@@ -122,18 +122,14 @@ export default function LeadsPage() {
     const fetchLeads = React.useCallback(async () => {
         setIsLoading(true)
         try {
-            const params: any = { page, page_size: 20 }
+            const params: Record<string, unknown> = { page, page_size: 20 }
             if (search) params.search = search
             if (status && status !== "all") params.status = status
             if (source && source !== "all") params.source = source
+            // Unassigned pool (no dealership) - visible to all users
+            if (viewMode === "unassigned") params.pool = "unassigned"
 
-            let data: LeadListResponse
-            if (viewMode === "unassigned" && (isDealershipLevel || isSuperAdmin)) {
-                data = await LeadService.listUnassignedToSalesperson(params)
-            } else {
-                data = await LeadService.listLeads(params)
-            }
-            
+            const data = await LeadService.listLeads(params)
             setLeads(data.items)
             setTotal(data.total)
         } catch (error) {
@@ -141,7 +137,7 @@ export default function LeadsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [page, search, status, source, viewMode, isDealershipLevel, isSuperAdmin])
+    }, [page, search, status, source, viewMode])
 
     React.useEffect(() => {
         const timer = setTimeout(() => {
@@ -200,23 +196,13 @@ export default function LeadsPage() {
                 )}
             </div>
 
-            {/* View Mode Tabs (for Dealership Admin) */}
-            {(isDealershipLevel || isSuperAdmin) && (
-                <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as "all" | "unassigned")}>
-                    <TabsList>
-                        <TabsTrigger value="all">All Leads</TabsTrigger>
-                        <TabsTrigger value="unassigned" className="relative">
-                            Unassigned to Salesperson
-                            {viewMode !== "unassigned" && (
-                                <span className="absolute -top-1 -right-1 flex h-2 w-2">
-                                    <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping"></span>
-                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-                                </span>
-                            )}
-                        </TabsTrigger>
-                    </TabsList>
-                </Tabs>
-            )}
+            {/* Leads / Unassigned Pool toggles - visible to all users */}
+            <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as "all" | "unassigned")}>
+                <TabsList>
+                    <TabsTrigger value="all">Leads</TabsTrigger>
+                    <TabsTrigger value="unassigned">Unassigned Pool</TabsTrigger>
+                </TabsList>
+            </Tabs>
 
             {/* Toolbar */}
             <Card>
@@ -290,7 +276,7 @@ export default function LeadsPage() {
                                     search || status !== "all" || source !== "all"
                                         ? "Try adjusting your filters"
                                         : viewMode === "unassigned"
-                                            ? "All leads have been assigned to salespersons"
+                                            ? "No leads in the unassigned pool"
                                             : "Create your first lead to get started"
                                 }
                                 action={

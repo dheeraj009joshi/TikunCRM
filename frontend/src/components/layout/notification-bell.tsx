@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useNotificationEvents } from "@/hooks/use-websocket"
 import { formatRelativeTimeInTimezone } from "@/utils/timezone"
 
 import { Button } from "@/components/ui/button"
@@ -92,10 +93,34 @@ export function NotificationBell() {
         
         fetchUnreadCount()
         
-        // Poll every 30 seconds
+        // Poll every 30 seconds (as fallback if WebSocket is not connected)
         const interval = setInterval(fetchUnreadCount, 30000)
         return () => clearInterval(interval)
     }, [])
+    
+    // Listen for real-time notification events via WebSocket
+    const handleNewNotification = React.useCallback((notification: any) => {
+        // Add the new notification to the top of the list
+        setNotifications(prev => {
+            // Avoid duplicates
+            if (prev.some(n => n.id === notification.id)) {
+                return prev
+            }
+            return [{
+                id: notification.id,
+                type: notification.notification_type,
+                title: notification.title,
+                message: notification.message,
+                link: notification.link,
+                is_read: false,
+                created_at: notification.created_at,
+            } as Notification, ...prev].slice(0, 10) // Keep only 10 most recent
+        })
+        // Increment unread count
+        setUnreadCount(prev => prev + 1)
+    }, [])
+    
+    useNotificationEvents(handleNewNotification)
     
     // Fetch notifications when popover opens
     React.useEffect(() => {
@@ -116,6 +141,7 @@ export function NotificationBell() {
                 )
             )
             setUnreadCount(prev => Math.max(0, prev - 1))
+            window.dispatchEvent(new CustomEvent("leads-crm:badges-refresh", { detail: { notifications: true } }))
         } catch (error) {
             console.error("Failed to mark notification as read:", error)
         }
@@ -128,6 +154,7 @@ export function NotificationBell() {
             await NotificationService.markAllAsRead()
             setNotifications(prev => prev.map(n => ({ ...n, is_read: true })))
             setUnreadCount(0)
+            window.dispatchEvent(new CustomEvent("leads-crm:badges-refresh", { detail: { notifications: true } }))
         } catch (error) {
             console.error("Failed to mark all as read:", error)
         } finally {
@@ -135,13 +162,14 @@ export function NotificationBell() {
         }
     }
     
-    // Handle notification click
-    const handleNotificationClick = async (notification: Notification) => {
-        await handleMarkAsRead(notification)
-        
+    // Handle notification click – navigate immediately, mark as read in background
+    const handleNotificationClick = (notification: Notification) => {
         if (notification.link) {
             setOpen(false)
             router.push(notification.link)
+        }
+        if (!notification.is_read) {
+            handleMarkAsRead(notification)
         }
     }
     

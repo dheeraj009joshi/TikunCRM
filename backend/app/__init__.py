@@ -1,3 +1,3 @@
 """
-LeedsCRM Backend Application
+LeadsCRM Backend Application
 """

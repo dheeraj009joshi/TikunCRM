@@ -5,7 +5,8 @@ import { useRouter, usePathname } from "next/navigation"
 import { useAuthStore } from "@/stores/auth-store"
 import { Loader2 } from "lucide-react"
 
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password"]
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password"]
+const CHANGE_PASSWORD_PATH = "/change-password"
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
     const { isAuthenticated, user, setAuth, logout, setLoading } = useAuthStore()
@@ -14,6 +15,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     const [isInitialized, setIsInitialized] = React.useState(false)
 
     const isPublicPath = PUBLIC_PATHS.some(path => pathname.startsWith(path))
+    const isChangePasswordPath = pathname.startsWith(CHANGE_PASSWORD_PATH)
 
     React.useEffect(() => {
         const initAuth = async () => {
@@ -31,6 +33,13 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
             // We have a token - check if user is already loaded from persisted store
             if (isAuthenticated && user) {
+                // Check if user must change password
+                if (user.must_change_password && !isChangePasswordPath) {
+                    router.replace('/change-password?required=true')
+                    setIsInitialized(true)
+                    return
+                }
+                
                 // Already authenticated from Zustand persist
                 if (isPublicPath) {
                     router.replace('/dashboard')
@@ -51,6 +60,13 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                 if (response.ok) {
                     const userData = await response.json()
                     setAuth(userData, storedToken)
+                    
+                    // Check if user must change password
+                    if (userData.must_change_password && !isChangePasswordPath) {
+                        router.replace('/change-password?required=true')
+                        setIsInitialized(true)
+                        return
+                    }
                     
                     if (isPublicPath) {
                         router.replace('/dashboard')
@@ -74,6 +90,13 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                                     localStorage.setItem('refresh_token', refreshData.refresh_token)
                                 }
                                 setAuth(refreshData.user, refreshData.access_token, refreshData.refresh_token)
+                                
+                                // Check if user must change password
+                                if (refreshData.user?.must_change_password && !isChangePasswordPath) {
+                                    router.replace('/change-password?required=true')
+                                    setIsInitialized(true)
+                                    return
+                                }
                                 
                                 if (isPublicPath) {
                                     router.replace('/dashboard')

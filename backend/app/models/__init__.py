@@ -12,6 +12,9 @@ from app.models.email_log import EmailLog, EmailDirection
 from app.models.email_template import EmailTemplate, TemplateCategory
 from app.models.dealership_email_config import DealershipEmailConfig
 from app.models.notification import Notification, NotificationType
+from app.models.password_reset import PasswordResetToken
+from app.models.appointment import Appointment, AppointmentType, AppointmentStatus
+from app.models.push_subscription import PushSubscription
 
 __all__ = [
     "Dealership",
@@ -33,4 +36,9 @@ __all__ = [
     "DealershipEmailConfig",
     "Notification",
     "NotificationType",
+    "PasswordResetToken",
+    "Appointment",
+    "AppointmentType",
+    "AppointmentStatus",
+    "PushSubscription",
 ]

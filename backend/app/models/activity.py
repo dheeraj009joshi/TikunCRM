@@ -4,7 +4,7 @@ Activity Model - Immutable Audit Logging
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, List
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy import Enum as SQLEnum
@@ -24,6 +24,7 @@ class ActivityType(str, Enum):
     LEAD_CREATED = "lead_created"
     LEAD_ASSIGNED = "lead_assigned"
     LEAD_REASSIGNED = "lead_reassigned"
+    LEAD_UNASSIGNED = "lead_unassigned"
     STATUS_CHANGED = "status_changed"
     LEAD_DELETED = "lead_deleted"
     
@@ -39,6 +40,11 @@ class ActivityType(str, Enum):
     FOLLOW_UP_SCHEDULED = "follow_up_scheduled"
     FOLLOW_UP_COMPLETED = "follow_up_completed"
     FOLLOW_UP_MISSED = "follow_up_missed"
+    
+    # Appointments
+    APPOINTMENT_SCHEDULED = "appointment_scheduled"
+    APPOINTMENT_COMPLETED = "appointment_completed"
+    APPOINTMENT_CANCELLED = "appointment_cancelled"
     
     # User actions
     USER_LOGIN = "user_login"
@@ -97,6 +103,14 @@ class Activity(Base):
         index=True
     )
     
+    # Parent activity for replies (thread support)
+    parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("activities.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True
+    )
+    
     # Additional metadata (e.g., old_status, new_status, call_duration, etc.)
     meta_data: Mapped[dict] = mapped_column(JSONB, name="meta_data", default=dict, nullable=False)
     
@@ -120,6 +134,20 @@ class Activity(Base):
     lead: Mapped[Optional["Lead"]] = relationship(
         "Lead",
         back_populates="activities",
+        lazy="noload"
+    )
+    
+    # Self-referential relationship for reply threading
+    replies: Mapped[List["Activity"]] = relationship(
+        "Activity",
+        back_populates="parent",
+        lazy="noload",
+        cascade="all, delete-orphan"
+    )
+    parent: Mapped[Optional["Activity"]] = relationship(
+        "Activity",
+        back_populates="replies",
+        remote_side=[id],
         lazy="noload"
     )
     

@@ -323,6 +323,7 @@ async def sync_google_sheet_leads():
                         existing_phones.add(lead_data['phone'])
                 
                 # Batch insert new leads
+                created_leads = []
                 if new_leads:
                     for lead_data in new_leads:
                         new_lead = Lead(
@@ -339,9 +340,14 @@ async def sync_google_sheet_leads():
                             created_by=None,
                         )
                         session.add(new_lead)
+                        created_leads.append(new_lead)
                     
                     await session.commit()
                     new_leads_count = len(new_leads)
+                    
+                    # Send SMS notifications for new leads
+                    if new_leads_count > 0:
+                        await send_new_lead_sms_notifications(session, created_leads)
                 
             except Exception as e:
                 await session.rollback()
@@ -356,3 +362,71 @@ async def sync_google_sheet_leads():
     except Exception as e:
         logger.error(f"Google Sheet sync failed: {e}")
         # Don't re-raise - let scheduler continue
+
+
+async def send_new_lead_sms_notifications(session: AsyncSession, leads: List[Lead]):
+    """
+    Send SMS notifications for new leads to all users with phone numbers.
+    Sends a summary if multiple leads, or individual notification if single lead.
+    """
+    try:
+        from app.services.sms_service import sms_service
+        
+        if not sms_service.is_configured:
+            logger.debug("SMS not configured - skipping new lead notifications")
+            return
+        
+        if not leads:
+            return
+        
+        # Build message based on number of leads
+        if len(leads) == 1:
+            lead = leads[0]
+            lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+            lead_phone = lead.phone or "No phone"
+            
+            message = (
+                f"🚗 New Lead!\n"
+                f"Name: {lead_name}\n"
+                f"Phone: {lead_phone}\n"
+                f"Be first to respond!"
+            )
+        else:
+            # Multiple leads - send summary
+            message = (
+                f"🚗 {len(leads)} New Leads!\n"
+                f"Check your CRM dashboard.\n"
+                f"Be first to respond!"
+            )
+        
+        # Get all users with phone numbers
+        from app.models.user import User
+        result = await session.execute(
+            select(User).where(
+                User.is_active == True,
+                User.phone.isnot(None),
+                User.phone != ""
+            )
+        )
+        users = result.scalars().all()
+        
+        if not users:
+            logger.debug("No users with phone numbers to notify")
+            return
+        
+        # Send SMS to each user
+        sent_count = 0
+        for user in users:
+            if user.phone:
+                try:
+                    result = await sms_service.send_sms(user.phone, message)
+                    if result.get("success"):
+                        sent_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to send SMS to {user.phone}: {e}")
+        
+        logger.info(f"Sent new lead SMS notifications to {sent_count}/{len(users)} users")
+        
+    except Exception as e:
+        logger.error(f"Failed to send SMS notifications: {e}")
+        # Don't raise - this shouldn't break the sync

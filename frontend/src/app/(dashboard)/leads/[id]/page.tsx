@@ -1,11 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { useParams } from "next/navigation"
+import { useParams, useSearchParams } from "next/navigation"
 import {
     Phone,
     Mail,
     Calendar,
+    CalendarClock,
     Clock,
     ChevronLeft,
     MessageSquare,
@@ -24,6 +25,17 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Textarea } from "@/components/ui/textarea"
+import { Label } from "@/components/ui/label"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
+import { MentionInput } from "@/components/ui/mention-input"
 import { Button } from "@/components/ui/button"
 import { Badge, getStatusVariant, getSourceVariant, getRoleVariant } from "@/components/ui/badge"
 import { UserAvatar } from "@/components/ui/avatar"
@@ -35,14 +47,16 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
-import { LeadService, Lead } from "@/services/lead-service"
+import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { ActivityService, Activity, ACTIVITY_TYPE_INFO, ActivityType } from "@/services/activity-service"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
 import { AssignToDealershipModal, AssignToSalespersonModal } from "@/components/leads/assignment-modal"
 import { EmailComposerModal } from "@/components/emails/email-composer-modal"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
+import { BookAppointmentModal } from "@/components/appointments/book-appointment-modal"
 import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useLeadUpdateEvents, useActivityEvents } from "@/hooks/use-websocket"
 import { formatDateInTimezone } from "@/utils/timezone"
 import {
     AlertDialog,
@@ -76,13 +90,20 @@ const getActivityIcon = (type: ActivityType) => {
         case "call_logged": return <PhoneCall className="h-4 w-4 text-emerald-500" />
         case "email_sent": return <Send className="h-4 w-4 text-blue-500" />
         case "email_received": return <Mail className="h-4 w-4 text-indigo-500" />
+        case "follow_up_scheduled": return <Calendar className="h-4 w-4 text-amber-500" />
+        case "follow_up_completed": return <CheckCircle className="h-4 w-4 text-emerald-500" />
+        case "appointment_scheduled": return <CalendarClock className="h-4 w-4 text-purple-500" />
+        case "appointment_completed": return <CheckCircle className="h-4 w-4 text-emerald-500" />
+        case "appointment_cancelled": return <XCircle className="h-4 w-4 text-rose-500" />
         default: return <Clock className="h-4 w-4 text-gray-400" />
     }
 }
 
 export default function LeadDetailsPage() {
     const params = useParams()
+    const searchParams = useSearchParams()
     const leadId = params.id as string
+    const noteIdFromUrl = searchParams.get("note")
     const { canAssignToSalesperson, canAssignToDealership, role, isDealershipLevel, isSuperAdmin } = useRole()
     const { timezone } = useDealershipTimezone()
     const user = useAuthStore(state => state.user)
@@ -103,6 +124,9 @@ export default function LeadDetailsPage() {
     // Follow-up scheduling
     const [showScheduleFollowUp, setShowScheduleFollowUp] = React.useState(false)
     
+    // Appointment booking
+    const [showBookAppointment, setShowBookAppointment] = React.useState(false)
+    
     // Assignment modals
     const [showDealershipModal, setShowDealershipModal] = React.useState(false)
     const [showSalespersonModal, setShowSalespersonModal] = React.useState(false)
@@ -110,6 +134,21 @@ export default function LeadDetailsPage() {
     // Delete confirmation
     const [showDeleteDialog, setShowDeleteDialog] = React.useState(false)
     const [isDeleting, setIsDeleting] = React.useState(false)
+    
+    // Lost reason modal
+    const [showLostReasonModal, setShowLostReasonModal] = React.useState(false)
+    const [lostReason, setLostReason] = React.useState("")
+    
+    // Reply to note
+    const [replyingTo, setReplyingTo] = React.useState<string | null>(null)
+    const [replyContent, setReplyContent] = React.useState("")
+    const [mentionedUserIds, setMentionedUserIds] = React.useState<string[]>([])
+    // Which note threads have replies expanded (click to load replies)
+    const [expandedReplies, setExpandedReplies] = React.useState<Set<string>>(new Set())
+    // Active tab: default to Notes when opening from mention link (?note=activity_id)
+    const [activeActivityTab, setActiveActivityTab] = React.useState<"timeline" | "notes">(
+        noteIdFromUrl ? "notes" : "timeline"
+    )
 
     const fetchLead = React.useCallback(async () => {
         try {
@@ -138,18 +177,90 @@ export default function LeadDetailsPage() {
         fetchLead()
         fetchActivities()
     }, [fetchLead, fetchActivities])
+    
+    // When opened from mention notification (?note=activity_id): expand thread if reply, then scroll to note
+    const scrolledToNoteRef = React.useRef<string | null>(null)
+    React.useEffect(() => {
+        if (!noteIdFromUrl || !activities.length || activeActivityTab !== "notes") return
+        if (scrolledToNoteRef.current === noteIdFromUrl) return
+        const targetNote = activities.find(a => a.type === "note_added" && a.id === noteIdFromUrl)
+        if (!targetNote) return
+        if (targetNote.parent_id) {
+            setExpandedReplies(prev => new Set(prev).add(targetNote.parent_id!))
+        }
+        const scrollToNote = () => {
+            const el = document.querySelector(`[data-activity-id="${noteIdFromUrl}"]`)
+            if (el) {
+                el.scrollIntoView({ behavior: "smooth", block: "center" })
+                el.classList.add("ring-2", "ring-primary", "ring-offset-2", "rounded-md")
+                setTimeout(() => el.classList.remove("ring-2", "ring-primary", "ring-offset-2", "rounded-md"), 2500)
+            }
+            scrolledToNoteRef.current = noteIdFromUrl
+        }
+        if (targetNote.parent_id) {
+            setTimeout(scrollToNote, 300)
+        } else {
+            requestAnimationFrame(scrollToNote)
+        }
+    }, [noteIdFromUrl, activities, activeActivityTab])
+    
+    // Sync tab to "notes" when URL has ?note= (e.g. user landed from notification)
+    React.useEffect(() => {
+        if (noteIdFromUrl && activeActivityTab !== "notes") setActiveActivityTab("notes")
+    }, [noteIdFromUrl])
+    
+    React.useEffect(() => {
+        if (!noteIdFromUrl) scrolledToNoteRef.current = null
+    }, [noteIdFromUrl])
+    
+    // Listen for real-time lead updates via WebSocket
+    const handleLeadUpdate = React.useCallback((data: any) => {
+        if (data.lead_id === leadId) {
+            // Refresh lead data when it's updated
+            fetchLead()
+        }
+    }, [leadId, fetchLead])
+    
+    useLeadUpdateEvents(leadId, handleLeadUpdate)
+    
+    // Listen for real-time activity updates via WebSocket
+    const handleNewActivity = React.useCallback((data: any) => {
+        if (data.lead_id === leadId) {
+            // Refresh activities and lead data so Lead Context (DEALERSHIP, ASSIGNED TO) updates
+            // e.g. when a note triggers auto-assignment
+            fetchActivities()
+            fetchLead()
+        }
+    }, [leadId, fetchActivities, fetchLead])
+    
+    useActivityEvents(leadId, handleNewActivity)
 
-    const handleStatusChange = async (newStatus: string) => {
+    const handleStatusChange = async (newStatus: string, notes?: string) => {
         if (!lead) return
+        
+        // If changing to lost, show the lost reason modal
+        if (newStatus === "lost" && !notes) {
+            setShowLostReasonModal(true)
+            return
+        }
+        
         setIsUpdatingStatus(true)
         try {
-            await LeadService.updateLeadStatus(lead.id, newStatus)
+            await LeadService.updateLeadStatus(lead.id, newStatus, notes)
             setLead({ ...lead, status: newStatus })
+            fetchActivities() // Refresh to show the status change with reason
         } catch (error) {
             console.error("Failed to update status:", error)
         } finally {
             setIsUpdatingStatus(false)
         }
+    }
+    
+    const handleMarkAsLost = async () => {
+        if (!lostReason.trim()) return
+        await handleStatusChange("lost", `Lost Reason: ${lostReason}`)
+        setShowLostReasonModal(false)
+        setLostReason("")
     }
 
     const handleDeleteLead = async () => {
@@ -171,8 +282,11 @@ export default function LeadDetailsPage() {
         if (!lead || !newNote.trim()) return
         setIsAddingNote(true)
         try {
-            await LeadService.addNote(lead.id, newNote)
+            await LeadService.addNote(lead.id, newNote, {
+                mentioned_user_ids: mentionedUserIds.length > 0 ? mentionedUserIds : undefined
+            })
             setNewNote("")
+            setMentionedUserIds([])
             fetchActivities() // Refresh activities to show new note
         } catch (error) {
             console.error("Failed to add note:", error)
@@ -227,11 +341,12 @@ export default function LeadDetailsPage() {
     }
 
     const currentStatus = LEAD_STATUSES.find(s => s.value === lead.status)
+    const isMentionOnly = lead.access_level === "mention_only"
 
     return (
-        <div className="space-y-6 max-w-7xl mx-auto">
+        <div className="h-[calc(100vh-120px)] flex flex-col max-w-7xl mx-auto overflow-hidden">
             {/* Navigation */}
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between shrink-0 mb-4">
                 <Link href="/leads" className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1">
                     <ChevronLeft className="h-4 w-4" />
                     Back to Leads
@@ -241,9 +356,9 @@ export default function LeadDetailsPage() {
                         {lead.source.replace('_', ' ')}
                     </Badge>
                     <span className="text-xs text-muted-foreground">
-                        Created {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium" })}
+                        Created {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
                     </span>
-                    {isSuperAdmin && (
+                    {isSuperAdmin && !isMentionOnly && (
                         <Button
                             variant="outline"
                             size="sm"
@@ -257,9 +372,15 @@ export default function LeadDetailsPage() {
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {isMentionOnly && (
+                <div className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-4 py-2 text-sm text-amber-800 dark:text-amber-200">
+                    You have limited access (you were mentioned in a note). You can read this lead and reply to notes only.
+                </div>
+            )}
+
+            <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0 overflow-hidden">
                 {/* Left Column: Profile & Info */}
-                <div className="lg:col-span-1 space-y-6">
+                <div className="lg:col-span-1 space-y-6 overflow-y-auto">
                     {/* Profile Card */}
                     <Card>
                         <CardContent className="p-6">
@@ -271,7 +392,8 @@ export default function LeadDetailsPage() {
                                     {lead.first_name} {lead.last_name}
                                 </h1>
                                 
-                                {/* Status Selector */}
+                                {/* Status Selector - hidden for mention-only access */}
+                                {!isMentionOnly && (
                                 <div className="mt-3 w-full max-w-xs">
                                     <Select 
                                         value={lead.status} 
@@ -299,8 +421,10 @@ export default function LeadDetailsPage() {
                                         </SelectContent>
                                     </Select>
                                 </div>
+                                )}
 
-                                {/* Quick Actions */}
+                                {/* Quick Actions - hidden for mention-only access */}
+                                {!isMentionOnly && (
                                 <div className="flex flex-col gap-2 mt-6 w-full">
                                     <div className="flex gap-2">
                                         {lead.phone && (
@@ -308,7 +432,6 @@ export default function LeadDetailsPage() {
                                                 className="flex-1"
                                                 onClick={() => {
                                                     window.open(`tel:${lead.phone}`, '_self')
-                                                    // Quick call log prompt
                                                     setTimeout(() => {
                                                         const outcome = window.prompt("Call outcome (e.g., Answered, No Answer, Voicemail):")
                                                         if (outcome) {
@@ -340,7 +463,16 @@ export default function LeadDetailsPage() {
                                         <Calendar className="h-4 w-4 mr-2" />
                                         Schedule Follow-up
                                     </Button>
+                                    <Button 
+                                        variant="outline" 
+                                        className="w-full"
+                                        onClick={() => setShowBookAppointment(true)}
+                                    >
+                                        <CalendarClock className="h-4 w-4 mr-2" />
+                                        Book Appointment
+                                    </Button>
                                 </div>
+                                )}
                             </div>
 
                             {/* Contact Details */}
@@ -374,7 +506,7 @@ export default function LeadDetailsPage() {
                                         <Calendar className="h-4 w-4" /> Created
                                     </span>
                                     <span className="font-medium">
-                                        {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium" })}
+                                        {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
                                     </span>
                                 </div>
                                 {lead.last_contacted_at && (
@@ -415,7 +547,7 @@ export default function LeadDetailsPage() {
                                         <Badge variant="outline" className="text-amber-600 border-amber-300">
                                             Not Assigned to Dealership
                                         </Badge>
-                                        {canAssignToDealership && (
+                                        {!isMentionOnly && canAssignToDealership && (
                                             <Button 
                                                 size="sm" 
                                                 variant="outline"
@@ -454,7 +586,7 @@ export default function LeadDetailsPage() {
                                                 </Badge>
                                             </div>
                                         </div>
-                                        {(canAssignToSalesperson || isDealershipLevel || isSuperAdmin) && lead.dealership_id && (
+                                        {!isMentionOnly && (canAssignToSalesperson || isDealershipLevel || isSuperAdmin) && lead.dealership_id && (
                                             <Button 
                                                 size="sm" 
                                                 variant="outline"
@@ -470,7 +602,7 @@ export default function LeadDetailsPage() {
                                         <Badge variant="outline" className="text-amber-600 border-amber-300">
                                             Unassigned
                                         </Badge>
-                                        {(canAssignToSalesperson || isDealershipLevel || isSuperAdmin) && lead.dealership_id && (
+                                        {!isMentionOnly && (canAssignToSalesperson || isDealershipLevel || isSuperAdmin) && lead.dealership_id && (
                                             <Button 
                                                 size="sm" 
                                                 variant="outline"
@@ -511,7 +643,8 @@ export default function LeadDetailsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* Quick Status Actions */}
+                    {/* Quick Status Actions - hidden for mention-only access */}
+                    {!isMentionOnly && (
                     <Card>
                         <CardHeader>
                             <CardTitle className="text-base">Quick Actions</CardTitle>
@@ -524,6 +657,14 @@ export default function LeadDetailsPage() {
                             >
                                 <Calendar className="h-4 w-4 mr-2 text-blue-500" />
                                 Schedule Follow-up
+                            </Button>
+                            <Button 
+                                className="w-full justify-start" 
+                                variant="outline"
+                                onClick={() => setShowBookAppointment(true)}
+                            >
+                                <CalendarClock className="h-4 w-4 mr-2 text-purple-500" />
+                                Book Appointment
                             </Button>
                             {lead.status !== "converted" && (
                                 <Button 
@@ -560,12 +701,13 @@ export default function LeadDetailsPage() {
                             )}
                         </CardContent>
                     </Card>
+                    )}
                 </div>
 
                 {/* Right Column: Activity & Interaction */}
-                <div className="lg:col-span-2">
-                    <Card className="h-full flex flex-col">
-                        <Tabs defaultValue="timeline" className="flex-1 flex flex-col">
+                <div className="lg:col-span-2 flex flex-col min-h-0 overflow-hidden">
+                    <Card className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                        <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as "timeline" | "notes")} className="flex-1 flex flex-col min-h-0 overflow-hidden">
                             <div className="border-b px-6">
                                 <TabsList className="bg-transparent h-auto p-0">
                                     <TabsTrigger 
@@ -583,7 +725,7 @@ export default function LeadDetailsPage() {
                                 </TabsList>
                             </div>
 
-                            <TabsContent value="timeline" className="flex-1 p-6 m-0 overflow-y-auto max-h-[500px]">
+                            <TabsContent value="timeline" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
                                 {isLoadingActivities ? (
                                     <div className="flex items-center justify-center py-12">
                                         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -671,10 +813,28 @@ export default function LeadDetailsPage() {
                                 )}
                             </TabsContent>
 
-                            <TabsContent value="notes" className="flex-1 p-6 m-0 overflow-y-auto max-h-[500px]">
+                            <TabsContent value="notes" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
                                 {(() => {
-                                    const notes = activities.filter(a => a.type === "note_added")
-                                    if (notes.length === 0) {
+                                    const allNotes = activities.filter(a => a.type === "note_added")
+                                    // Separate parent notes and replies (threaded)
+                                    const parentNotes = allNotes
+                                        .filter(n => !n.parent_id)
+                                        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                                    const repliesMap = allNotes.reduce((acc, note) => {
+                                        if (note.parent_id) {
+                                            if (!acc[note.parent_id]) acc[note.parent_id] = []
+                                            acc[note.parent_id].push(note)
+                                        }
+                                        return acc
+                                    }, {} as Record<string, typeof allNotes>)
+                                    // Sort replies by created_at (oldest first) within each thread
+                                    Object.keys(repliesMap).forEach(parentId => {
+                                        repliesMap[parentId] = repliesMap[parentId].sort(
+                                            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+                                        )
+                                    })
+                                    
+                                    if (parentNotes.length === 0) {
                                         return (
                                             <div className="text-center py-12 text-muted-foreground">
                                                 <MessageSquare className="h-12 w-12 mx-auto opacity-10 mb-2" />
@@ -683,64 +843,206 @@ export default function LeadDetailsPage() {
                                             </div>
                                         )
                                     }
+                                    
+                                    const handleReply = async (parentId: string) => {
+                                        if (!lead || !replyContent.trim()) return
+                                        setIsAddingNote(true)
+                                        try {
+                                            await LeadService.addNote(lead.id, replyContent, {
+                                                parent_id: parentId,
+                                                mentioned_user_ids: mentionedUserIds.length > 0 ? mentionedUserIds : undefined
+                                            })
+                                            setReplyContent("")
+                                            setReplyingTo(null)
+                                            setMentionedUserIds([])
+                                            setExpandedReplies(prev => new Set(prev).add(parentId)) // expand thread so new reply is visible
+                                            fetchActivities()
+                                        } catch (error) {
+                                            console.error("Failed to add reply:", error)
+                                        } finally {
+                                            setIsAddingNote(false)
+                                        }
+                                    }
+                                    
                                     return (
                                         <div className="space-y-4">
-                                            {notes.map((note) => (
-                                                <div key={note.id} className="p-3 border rounded-lg">
-                                                    <div className="flex items-start justify-between gap-2 mb-2">
-                                                        <div className="flex items-center gap-2">
-                                                            {note.user && (
-                                                                <UserAvatar 
-                                                                    firstName={note.user.first_name}
-                                                                    lastName={note.user.last_name}
-                                                                    size="sm"
-                                                                />
+                                            {parentNotes.map((note) => {
+                                                const replies = repliesMap[note.id] || []
+                                                const mentionedUsers = note.meta_data?.mentioned_users as Array<{id: string; name: string}> | undefined
+                                                
+                                                return (
+                                                    <div key={note.id} className="border rounded-lg" data-activity-id={note.id}>
+                                                        {/* Parent Note */}
+                                                        <div className="p-3">
+                                                            <div className="flex items-start justify-between gap-2 mb-2">
+                                                                <div className="flex items-center gap-2">
+                                                                    {note.user && (
+                                                                        <UserAvatar 
+                                                                            firstName={note.user.first_name}
+                                                                            lastName={note.user.last_name}
+                                                                            size="sm"
+                                                                        />
+                                                                    )}
+                                                                    <span className="text-sm font-medium">
+                                                                        {note.user ? `${note.user.first_name} ${note.user.last_name}` : 'System'}
+                                                                    </span>
+                                                                </div>
+                                                                <span className="text-xs text-muted-foreground">
+                                                                    {formatDateInTimezone(note.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
+                                                                </span>
+                                                            </div>
+                                                            <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                                                                {String(note.meta_data?.content || note.description)}
+                                                            </p>
+                                                            {mentionedUsers && mentionedUsers.length > 0 && (
+                                                                <div className="mt-2 flex flex-wrap gap-1">
+                                                                    {mentionedUsers.map(u => (
+                                                                        <Badge key={u.id} variant="secondary" size="sm">
+                                                                            @{u.name}
+                                                                        </Badge>
+                                                                    ))}
+                                                                </div>
                                                             )}
-                                                            <span className="text-sm font-medium">
-                                                                {note.user ? `${note.user.first_name} ${note.user.last_name}` : 'System'}
-                                                            </span>
+                                                            <div className="mt-2 flex items-center gap-3">
+                                                                <button
+                                                                    onClick={() => setReplyingTo(replyingTo === note.id ? null : note.id)}
+                                                                    className="text-xs text-primary hover:underline flex items-center gap-1"
+                                                                >
+                                                                    <MessageSquare className="h-3 w-3" />
+                                                                    Reply
+                                                                </button>
+                                                                {replies.length > 0 && (
+                                                                    <button
+                                                                        onClick={() => {
+                                                                            const next = new Set(expandedReplies)
+                                                                            if (next.has(note.id)) next.delete(note.id)
+                                                                            else next.add(note.id)
+                                                                            setExpandedReplies(next)
+                                                                        }}
+                                                                        className="text-xs text-muted-foreground hover:text-foreground hover:underline flex items-center gap-1"
+                                                                    >
+                                                                        {expandedReplies.has(note.id)
+                                                                            ? `Hide ${replies.length} reply${replies.length !== 1 ? "ies" : ""}`
+                                                                            : `View ${replies.length} reply${replies.length !== 1 ? "ies" : ""}`}
+                                                                    </button>
+                                                                )}
+                                                            </div>
                                                         </div>
-                                                        <span className="text-xs text-muted-foreground">
-                                                            {formatDateInTimezone(note.created_at, timezone, { dateStyle: "medium" })}
-                                                        </span>
+                                                        
+                                                        {/* Replies - nested, shown only when expanded */}
+                                                        {replies.length > 0 && expandedReplies.has(note.id) && (
+                                                            <div className="border-t border-l-4 border-l-primary/30 bg-muted/20 ml-4 mr-3 mb-2 rounded-r">
+                                                                <div className="text-xs font-medium text-muted-foreground px-3 pt-2 pb-1">
+                                                                    {replies.length} reply{replies.length !== 1 ? "ies" : ""}
+                                                                </div>
+                                                                {replies.map(reply => {
+                                                                    const replyMentions = reply.meta_data?.mentioned_users as Array<{id: string; name: string}> | undefined
+                                                                    return (
+                                                                        <div key={reply.id} className="p-3 pl-6 border-b last:border-b-0 border-border/50" data-activity-id={reply.id}>
+                                                                            <div className="flex items-start justify-between gap-2 mb-1">
+                                                                                <div className="flex items-center gap-2">
+                                                                                    {reply.user && (
+                                                                                        <UserAvatar 
+                                                                                            firstName={reply.user.first_name}
+                                                                                            lastName={reply.user.last_name}
+                                                                                            size="xs"
+                                                                                        />
+                                                                                    )}
+                                                                                    <span className="text-xs font-medium">
+                                                                                        {reply.user ? `${reply.user.first_name} ${reply.user.last_name}` : 'System'}
+                                                                                    </span>
+                                                                                </div>
+                                                                                <span className="text-xs text-muted-foreground">
+                                                                                    {formatDateInTimezone(reply.created_at, timezone, { dateStyle: "short", timeStyle: "short" })}
+                                                                                </span>
+                                                                            </div>
+                                                                            <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                                                                                {String(reply.meta_data?.content || reply.description)}
+                                                                            </p>
+                                                                            {replyMentions && replyMentions.length > 0 && (
+                                                                                <div className="mt-1 flex flex-wrap gap-1">
+                                                                                    {replyMentions.map(u => (
+                                                                                        <Badge key={u.id} variant="secondary" size="sm">
+                                                                                            @{u.name}
+                                                                                        </Badge>
+                                                                                    ))}
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    )
+                                                                })}
+                                                            </div>
+                                                        )}
+                                                        
+                                                        {/* Reply Input */}
+                                                        {replyingTo === note.id && (
+                                                            <div className="p-3 border-t bg-muted/20">
+                                                                <MentionInput
+                                                                    value={replyContent}
+                                                                    onChange={setReplyContent}
+                                                                    onMentionedUsersChange={setMentionedUserIds}
+                                                                    placeholder="Write a reply... Use @ to mention someone"
+                                                                    rows={2}
+                                                                    disabled={isAddingNote}
+                                                                />
+                                                                <div className="flex justify-end gap-2 mt-2">
+                                                                    <Button
+                                                                        size="sm"
+                                                                        variant="ghost"
+                                                                        onClick={() => {
+                                                                            setReplyingTo(null)
+                                                                            setReplyContent("")
+                                                                        }}
+                                                                    >
+                                                                        Cancel
+                                                                    </Button>
+                                                                    <Button
+                                                                        size="sm"
+                                                                        onClick={() => handleReply(note.id)}
+                                                                        disabled={!replyContent.trim() || isAddingNote}
+                                                                    >
+                                                                        {isAddingNote ? (
+                                                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                                                        ) : (
+                                                                            "Reply"
+                                                                        )}
+                                                                    </Button>
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                     </div>
-                                                    <p className="text-sm text-muted-foreground">
-                                                        {String(note.meta_data?.content || note.description)}
-                                                    </p>
-                                                </div>
-                                            ))}
+                                                )
+                                            })}
                                         </div>
                                     )
                                 })()}
                             </TabsContent>
                         </Tabs>
 
-                        {/* Quick Note Input */}
-                        <div className="p-4 border-t bg-muted/30">
-                            <div className="relative flex items-center gap-2">
-                                <div className="relative flex-1">
-                                    <MessageSquare className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                    <input
-                                        value={newNote}
-                                        onChange={(e) => setNewNote(e.target.value)}
-                                        placeholder="Add a private note or log an activity..."
-                                        className="w-full rounded-xl border bg-background pl-10 pr-4 py-3 text-sm focus:ring-1 focus:ring-primary outline-none shadow-inner transition-all"
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter' && !e.shiftKey) {
-                                                e.preventDefault()
-                                                handleAddNote()
-                                            }
-                                        }}
-                                    />
+                        {/* Quick Note Input - Fixed at bottom */}
+                        <div className="p-4 border-t bg-muted/30 shrink-0">
+                            <div className="flex flex-col gap-2 relative">
+                                <MentionInput
+                                    value={newNote}
+                                    onChange={setNewNote}
+                                    onMentionedUsersChange={setMentionedUserIds}
+                                    placeholder="Add a note... Use @ to mention someone"
+                                    rows={2}
+                                    disabled={isAddingNote}
+                                />
+                                <div className="flex justify-end">
+                                    <Button 
+                                        onClick={handleAddNote}
+                                        disabled={!newNote.trim() || isAddingNote}
+                                    >
+                                        {isAddingNote ? (
+                                            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                        ) : (
+                                            <Send className="h-4 w-4 mr-1" />
+                                        )}
+                                        Add Note
+                                    </Button>
                                 </div>
-                                <Button 
-                                    onClick={handleAddNote}
-                                    disabled={!newNote.trim() || isAddingNote}
-                                    loading={isAddingNote}
-                                >
-                                    <Send className="h-4 w-4 mr-1" />
-                                    Log
-                                </Button>
                             </div>
                         </div>
                     </Card>
@@ -787,6 +1089,19 @@ export default function LeadDetailsPage() {
                 />
             )}
             
+            {/* Book Appointment Modal */}
+            {lead && (
+                <BookAppointmentModal
+                    isOpen={showBookAppointment}
+                    onClose={() => setShowBookAppointment(false)}
+                    leadId={lead.id}
+                    leadName={getLeadFullName(lead)}
+                    onSuccess={() => {
+                        fetchActivities() // Refresh activities to show the new appointment
+                    }}
+                />
+            )}
+            
             {/* Delete Confirmation Dialog */}
             {lead && (
                 <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
@@ -818,6 +1133,61 @@ export default function LeadDetailsPage() {
                     </AlertDialogContent>
                 </AlertDialog>
             )}
+            
+            {/* Lost Reason Modal */}
+            <Dialog open={showLostReasonModal} onOpenChange={setShowLostReasonModal}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <XCircle className="h-5 w-5 text-rose-500" />
+                            Mark Lead as Lost
+                        </DialogTitle>
+                        <DialogDescription>
+                            Please provide a reason why this lead was lost. This helps with future analysis and improvements.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="lostReason">Reason for Loss *</Label>
+                            <Textarea
+                                id="lostReason"
+                                placeholder="e.g., Went with competitor, Budget constraints, Not ready to buy, No response..."
+                                value={lostReason}
+                                onChange={(e) => setLostReason(e.target.value)}
+                                rows={4}
+                            />
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                            Common reasons: Price too high, Chose competitor, Not a good fit, Timing issues, No response
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            onClick={() => {
+                                setShowLostReasonModal(false)
+                                setLostReason("")
+                            }}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            onClick={handleMarkAsLost}
+                            disabled={!lostReason.trim() || isUpdatingStatus}
+                        >
+                            {isUpdatingStatus ? (
+                                <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Updating...
+                                </>
+                            ) : (
+                                "Mark as Lost"
+                            )}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

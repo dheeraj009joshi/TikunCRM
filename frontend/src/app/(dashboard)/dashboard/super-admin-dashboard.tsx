@@ -12,7 +12,8 @@ import {
     ArrowDownRight,
     Loader2,
     InboxIcon,
-    Eye
+    Eye,
+    CalendarClock
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, MetricCard } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -33,25 +34,32 @@ import {
     DealershipPerformance,
     LeadsBySource 
 } from "@/services/dashboard-service"
+import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
+import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { formatDateInTimezone } from "@/utils/timezone"
 import { DonutChart, BarChart } from "@tremor/react"
 
 export function SuperAdminDashboard() {
     const [stats, setStats] = React.useState<SuperAdminStats | null>(null)
     const [dealerships, setDealerships] = React.useState<DealershipPerformance[]>([])
     const [leadsBySource, setLeadsBySource] = React.useState<LeadsBySource[]>([])
+    const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
+    const { timezone } = useDealershipTimezone()
 
     React.useEffect(() => {
         const fetchData = async () => {
             try {
-                const [statsData, dealershipData, sourceData] = await Promise.all([
+                const [statsData, dealershipData, sourceData, appointmentsData] = await Promise.all([
                     DashboardService.getSuperAdminStats(),
                     DashboardService.getDealershipPerformance(10),
-                    DashboardService.getLeadsBySource()
+                    DashboardService.getLeadsBySource(),
+                    AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] }))
                 ])
                 setStats(statsData)
                 setDealerships(dealershipData)
                 setLeadsBySource(sourceData)
+                setTodayAppointments(appointmentsData.items || [])
             } catch (error) {
                 console.error("Failed to fetch dashboard stats:", error)
             } finally {
@@ -136,6 +144,60 @@ export function SuperAdminDashboard() {
                     </Link>
                 </div>
             </div>
+
+            {/* Today's Appointments Widget */}
+            {todayAppointments.length > 0 && (
+                <Card className="border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                        <div className="flex items-center gap-2">
+                            <div className="rounded-full bg-emerald-100 p-2 dark:bg-emerald-900">
+                                <CalendarClock className="h-5 w-5 text-emerald-600" />
+                            </div>
+                            <div>
+                                <CardTitle className="text-base font-semibold text-emerald-700 dark:text-emerald-300">
+                                    Today's Appointments ({todayAppointments.length})
+                                </CardTitle>
+                            </div>
+                        </div>
+                        <Link href="/appointments?filter=today">
+                            <Button variant="outline" size="sm" className="border-emerald-300 text-emerald-700">
+                                View All
+                            </Button>
+                        </Link>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
+                            {todayAppointments.slice(0, 4).map((apt) => (
+                                <div 
+                                    key={apt.id} 
+                                    className="flex items-center gap-3 bg-white dark:bg-emerald-900/50 rounded-lg p-3"
+                                >
+                                    <div className="text-center min-w-[50px]">
+                                        <p className="text-sm font-bold text-emerald-600">
+                                            {formatDateInTimezone(apt.scheduled_at, timezone, { timeStyle: "short" })}
+                                        </p>
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <p className="font-medium text-sm truncate">{apt.title}</p>
+                                        {apt.lead && (
+                                            <p className="text-xs text-muted-foreground truncate">
+                                                {apt.lead.first_name} {apt.lead.last_name || ""}
+                                            </p>
+                                        )}
+                                    </div>
+                                    <Badge variant={
+                                        apt.status === "completed" ? "converted" :
+                                        apt.status === "cancelled" ? "destructive" :
+                                        "outline"
+                                    } className="shrink-0">
+                                        {getAppointmentStatusLabel(apt.status)}
+                                    </Badge>
+                                </div>
+                            ))}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
 
             {/* Stats Grid */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">

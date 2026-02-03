@@ -1,0 +1,36 @@
+{
+  "name": "LeedsCRM",
+  "short_name": "LeedsCRM",
+  "description": "Multi-level Lead Management CRM for Dealerships",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "url": "/dashboard",
+      "description": "View your dashboard"
+    },
+    {
+      "name": "Leads",
+      "url": "/leads",
+      "description": "Manage leads"
+    },
+    {
+      "name": "Appointments",
+      "url": "/appointments",
+      "description": "View appointments"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 """
-LeedsCRM - FastAPI Main Application
+LeadsCRM - FastAPI Main Application
 """
 import logging
 from contextlib import asynccontextmanager

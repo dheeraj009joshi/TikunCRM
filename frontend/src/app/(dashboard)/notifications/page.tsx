@@ -160,6 +160,7 @@ export default function NotificationsPage() {
                 )
             )
             fetchStats()
+            window.dispatchEvent(new CustomEvent("leads-crm:badges-refresh", { detail: { notifications: true } }))
         } catch (error) {
             console.error("Failed to mark notification as read:", error)
         }
@@ -172,6 +173,7 @@ export default function NotificationsPage() {
             await NotificationService.markAllAsRead()
             setNotifications(prev => prev.map(n => ({ ...n, is_read: true })))
             fetchStats()
+            window.dispatchEvent(new CustomEvent("leads-crm:badges-refresh", { detail: { notifications: true } }))
         } catch (error) {
             console.error("Failed to mark all as read:", error)
         } finally {
@@ -203,16 +205,13 @@ export default function NotificationsPage() {
         }
     }
     
-    // Handle notification click
+    // Handle notification click – navigate immediately, mark as read in background
     const handleNotificationClick = (notification: Notification) => {
-        // Mark as read if unread
-        if (!notification.is_read) {
-            handleMarkAsRead(notification)
-        }
-        
-        // Navigate to link if available
         if (notification.link) {
             router.push(notification.link)
+        }
+        if (!notification.is_read) {
+            handleMarkAsRead(notification)
         }
     }
     

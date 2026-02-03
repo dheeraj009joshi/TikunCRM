@@ -54,6 +54,44 @@ async def list_users(
     return result.scalars().all()
 
 
+@router.get("/mentionable", response_model=List[UserBrief])
+async def get_mentionable_users(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+    dealership_id: Optional[UUID] = None
+) -> Any:
+    """
+    Get users that can be mentioned in notes.
+    - Dealership users: Can mention users in the same dealership
+    - Super Admin: Can mention users in a specific dealership or all users
+    
+    Returns active users only.
+    """
+    query = select(User).where(User.is_active == True)
+    
+    # Determine which users can be mentioned
+    if current_user.role == UserRole.SUPER_ADMIN:
+        # Super Admin can mention anyone, optionally filter by dealership
+        if dealership_id:
+            query = query.where(User.dealership_id == dealership_id)
+    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER, UserRole.SALESPERSON]:
+        # Dealership users can only mention users in their dealership
+        if current_user.dealership_id:
+            query = query.where(User.dealership_id == current_user.dealership_id)
+        else:
+            # No dealership - can't mention anyone
+            return []
+    
+    # Exclude current user from the list (can't mention yourself)
+    query = query.where(User.id != current_user.id)
+    
+    # Order by name
+    query = query.order_by(User.first_name, User.last_name)
+    
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
 @router.get("/team", response_model=TeamListResponse)
 async def get_team_with_stats(
     db: AsyncSession = Depends(get_db),
@@ -243,7 +281,8 @@ async def create_user(
         last_name=user_in.last_name,
         role=user_in.role,
         dealership_id=user_in.dealership_id,
-        is_active=True
+        is_active=True,
+        must_change_password=True  # Force password change on first login
     )
     
     db.add(user)

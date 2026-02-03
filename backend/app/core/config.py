@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     )
     
     # Application
-    app_name: str = "LeedsCRM"
+    app_name: str = "LeadsCRM"
     app_env: str = "development"
     debug: bool = True
     
@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     
     # Default sender (used when sending on behalf of users)
     email_from_address: str = ""  # e.g., noreply@yourcompany.com
-    email_from_name: str = "LeedsCRM"
+    email_from_name: str = "LeadsCRM"
     
     # SendGrid (Recommended for production)
     sendgrid_api_key: str = ""
@@ -91,6 +91,36 @@ class Settings(BaseSettings):
     def is_sendgrid_configured(self) -> bool:
         """Check if SendGrid is properly configured"""
         return bool(self.sendgrid_api_key and self.sendgrid_from_email)
+    
+    # Twilio SMS Settings
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_phone_number: str = ""  # The Twilio phone number to send from (e.g., +1234567890)
+    sms_notifications_enabled: bool = False
+    
+    @property
+    def is_twilio_configured(self) -> bool:
+        """Check if Twilio is properly configured"""
+        return bool(
+            self.twilio_account_sid and 
+            self.twilio_auth_token and 
+            self.twilio_phone_number and
+            self.sms_notifications_enabled
+        )
+    
+    # Web Push (VAPID) Settings
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_claims_email: str = ""  # Email for VAPID claims (e.g., mailto:admin@yoursite.com)
+    
+    @property
+    def is_push_configured(self) -> bool:
+        """Check if Web Push is properly configured"""
+        return bool(
+            self.vapid_public_key and 
+            self.vapid_private_key and
+            self.vapid_claims_email
+        )
 
 
 @lru_cache()

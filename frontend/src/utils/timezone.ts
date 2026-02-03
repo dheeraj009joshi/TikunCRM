@@ -88,31 +88,25 @@ export function formatDateInTimezone(
 }
 
 /**
- * Format relative time (e.g., "2 hours ago") in dealership timezone
- * This calculates the relative time based on the timezone-adjusted date
+ * Format relative time (e.g., "2 hours ago")
+ * Note: Timezone doesn't affect relative time - the difference between two
+ * UTC timestamps is the same regardless of timezone. We just use the UTC
+ * timestamp directly.
  */
 export function formatRelativeTimeInTimezone(
     date: Date | string,
-    timezone: string = "UTC"
+    timezone: string = "UTC"  // Kept for API compatibility, but not used
 ): string {
     try {
         const dateObj = typeof date === "string" ? new Date(date) : date;
         
-        // For relative time, we need to account for the timezone difference
-        // Get the current time in the target timezone
-        const now = new Date();
-        const nowInTz = convertToTimezone(now, timezone);
-        const dateInTz = convertToTimezone(dateObj, timezone);
-        
-        // Calculate the difference
-        const diffMs = nowInTz.getTime() - dateInTz.getTime();
-        const adjustedDate = new Date(now.getTime() - diffMs);
-        
-        return formatDistanceToNow(adjustedDate, { addSuffix: true });
+        // For relative time, timezone doesn't matter - the difference 
+        // between two timestamps is the same in any timezone.
+        // Just compare the UTC timestamps directly.
+        return formatDistanceToNow(dateObj, { addSuffix: true });
     } catch (error) {
         console.error("Error formatting relative time:", error);
-        const dateObj = typeof date === "string" ? new Date(date) : date;
-        return formatDistanceToNow(dateObj, { addSuffix: true });
+        return "unknown";
     }
 }
 

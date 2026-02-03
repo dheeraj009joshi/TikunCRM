@@ -12,7 +12,7 @@ export default function Home() {
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
             <LayoutDashboard className="h-6 w-6" />
           </div>
-          <h1 className="text-4xl font-extrabold tracking-tight">LeedsCRM</h1>
+          <h1 className="text-4xl font-extrabold tracking-tight">LeadsCRM</h1>
           <p className="text-muted-foreground">The most advanced lead management platform for enterprise dealerships.</p>
         </div>
 
@@ -39,7 +39,7 @@ export default function Home() {
         </div>
 
         <p className="text-xs text-muted-foreground pt-8 uppercase tracking-widest font-semibold">
-          Powered by LeedsCRM Technology
+          Powered by LeadsCRM Technology
         </p>
       </div>
     </div>

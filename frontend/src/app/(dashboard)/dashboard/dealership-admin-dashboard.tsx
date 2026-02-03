@@ -12,7 +12,8 @@ import {
     ArrowUpRight,
     Loader2,
     UserPlus,
-    ClipboardList
+    ClipboardList,
+    CalendarClock
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, MetricCard } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -30,22 +31,29 @@ import {
 import { UserAvatar } from "@/components/ui/avatar"
 import { DashboardService, DealershipAdminStats } from "@/services/dashboard-service"
 import { TeamService, UserWithStats } from "@/services/team-service"
+import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
+import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { formatDateInTimezone } from "@/utils/timezone"
 import { BarChart } from "@tremor/react"
 
 export function DealershipAdminDashboard() {
     const [stats, setStats] = React.useState<DealershipAdminStats | null>(null)
     const [team, setTeam] = React.useState<UserWithStats[]>([])
+    const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
+    const { timezone } = useDealershipTimezone()
 
     React.useEffect(() => {
         const fetchData = async () => {
             try {
-                const [statsData, teamData] = await Promise.all([
+                const [statsData, teamData, appointmentsData] = await Promise.all([
                     DashboardService.getDealershipAdminStats(),
-                    TeamService.getTeamWithStats()
+                    TeamService.getTeamWithStats(),
+                    AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] }))
                 ])
                 setStats(statsData)
                 setTeam(teamData.items)
+                setTodayAppointments(appointmentsData.items || [])
             } catch (error) {
                 console.error("Failed to fetch dashboard stats:", error)
             } finally {
@@ -175,6 +183,62 @@ export function DealershipAdminDashboard() {
                         </Card>
                     )}
                 </div>
+            )}
+
+            {/* Today's Appointments Widget */}
+            {todayAppointments.length > 0 && (
+                <Card className="border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                        <div className="flex items-center gap-2">
+                            <div className="rounded-full bg-blue-100 p-2 dark:bg-blue-900">
+                                <CalendarClock className="h-5 w-5 text-blue-600" />
+                            </div>
+                            <div>
+                                <CardTitle className="text-base font-semibold text-blue-700 dark:text-blue-300">
+                                    Today's Appointments ({todayAppointments.length})
+                                </CardTitle>
+                            </div>
+                        </div>
+                        <Link href="/appointments?filter=today">
+                            <Button variant="outline" size="sm" className="border-blue-300 text-blue-700">
+                                View All
+                            </Button>
+                        </Link>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="space-y-2">
+                            {todayAppointments.slice(0, 4).map((apt) => (
+                                <div 
+                                    key={apt.id} 
+                                    className="flex items-center justify-between bg-white dark:bg-blue-900/50 rounded-lg p-3"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="text-center min-w-[50px]">
+                                            <p className="text-sm font-bold text-blue-600">
+                                                {formatDateInTimezone(apt.scheduled_at, timezone, { timeStyle: "short" })}
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <p className="font-medium text-sm">{apt.title}</p>
+                                            {apt.lead && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    with {apt.lead.first_name} {apt.lead.last_name || ""}
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <Badge variant={
+                                        apt.status === "completed" ? "converted" :
+                                        apt.status === "cancelled" ? "destructive" :
+                                        "outline"
+                                    }>
+                                        {getAppointmentStatusLabel(apt.status)}
+                                    </Badge>
+                                </div>
+                            ))}
+                        </div>
+                    </CardContent>
+                </Card>
             )}
 
             {/* Stats Grid */}
