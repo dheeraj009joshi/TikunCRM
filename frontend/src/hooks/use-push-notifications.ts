@@ -161,10 +161,10 @@ export function usePushNotifications(): UsePushNotificationsReturn {
       // Get service worker registration
       const registration = await navigator.serviceWorker.ready
 
-      // Subscribe to push
+      // Subscribe to push (cast needed: Uint8Array is valid BufferSource at runtime)
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
       })
 
       // Send subscription to backend

@@ -945,7 +945,7 @@ export default function LeadDetailsPage() {
                                                                                         <UserAvatar 
                                                                                             firstName={reply.user.first_name}
                                                                                             lastName={reply.user.last_name}
-                                                                                            size="xs"
+                                                                                            size="sm"
                                                                                         />
                                                                                     )}
                                                                                     <span className="text-xs font-medium">

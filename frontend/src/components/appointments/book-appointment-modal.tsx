@@ -100,7 +100,7 @@ export function BookAppointmentModal({
             
             await AppointmentService.create({
                 lead_id: leadId,
-                title: title.trim() || undefined,
+                title: title.trim() || "Appointment",
                 description: notes || undefined,
                 appointment_type: "in_person", // Always in person
                 scheduled_at: scheduledAt.toISOString(),
