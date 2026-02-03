@@ -212,19 +212,6 @@ export function Sidebar() {
         }
     }, [user, role, pathname])
     
-    // Refetch badge counts when user marks notifications as read (custom event from notifications page or bell)
-    React.useEffect(() => {
-        const handler = (e: CustomEvent<{ notifications?: boolean; unassigned?: boolean }>) => {
-            const detail = e.detail || {}
-            refetchBadgeCounts({
-                notifications: detail.notifications ?? false,
-                unassigned: detail.unassigned ?? false,
-            })
-        }
-        window.addEventListener("leads-crm:badges-refresh" as any, handler as any)
-        return () => window.removeEventListener("leads-crm:badges-refresh" as any, handler as any)
-    }, [refetchBadgeCounts])
-    
     // Refetch specific badge counts (used by WebSocket handlers)
     const refetchBadgeCounts = React.useCallback((which: { unassigned?: boolean; notifications?: boolean; appointments?: boolean; followUps?: boolean }) => {
         if (which.unassigned) {
@@ -248,6 +235,19 @@ export function Sidebar() {
                 .catch(() => {})
         }
     }, [])
+
+    // Refetch badge counts when user marks notifications as read (custom event from notifications page or bell)
+    React.useEffect(() => {
+        const handler = (e: CustomEvent<{ notifications?: boolean; unassigned?: boolean }>) => {
+            const detail = e.detail || {}
+            refetchBadgeCounts({
+                notifications: detail.notifications ?? false,
+                unassigned: detail.unassigned ?? false,
+            })
+        }
+        window.addEventListener("leads-crm:badges-refresh" as any, handler as any)
+        return () => window.removeEventListener("leads-crm:badges-refresh" as any, handler as any)
+    }, [refetchBadgeCounts])
 
     // Listen for real-time notification events via WebSocket – refetch count so numbers stay in sync
     const handleNewNotification = React.useCallback(() => {
