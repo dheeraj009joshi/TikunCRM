@@ -70,57 +70,51 @@ def parse_sheet_row(row: Dict[str, str], headers: List[str]) -> Optional[Dict[st
     """
     Parse a single row from the Google Sheet into lead data.
     
-    Exact column names from the sheet:
-    - (first column, empty name): lead_id like 'l:1210811227098597'
+    Column names from the sheet:
+    - lead_id_col: First column containing lead ID like l:xxxxx (mapped by fetch_sheet_data)
     - created_time: Timestamp
     - ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name: Ad info
     - form_id, form_name: Form info
     - is_organic: Boolean
     - platform: 'fb' or 'ig'
-    - full_name: Customer name
-    - phone_number: Phone with 'p:' prefix like 'p:+14708454461'
+    - full_name: Customer name (REQUIRED)
+    - phone_number: Phone with 'p:' prefix like 'p:+14708454461' (REQUIRED)
     - lead_status: Status like 'CREATED'
     - notes: Notes
-    - Second Follow Up, 3rd Follow Up, 4th Follow Up: Follow-up notes
+    - 3rd Follow Up, 4th Follow Up: Follow-up notes
     - appt: Appointment info
     - location: Customer location
     - origin: Country of origin
     """
     try:
-        # Get the first column value (lead_id) - the key might be empty string
-        row_values = list(row.values())
-        row_keys = list(row.keys())
-        
-        # First column contains the lead_id (starts with 'l:')
-        lead_id = None
-        if row_keys and row_keys[0] == '':
-            lead_id = row.get('', '')
-        
-        # Also check all values for l: pattern
-        if not lead_id or not lead_id.startswith('l:'):
-            for val in row_values:
-                if val and isinstance(val, str) and val.startswith('l:'):
-                    lead_id = val
-                    break
-        
-        # If no lead_id found, skip this row
-        if not lead_id or not lead_id.startswith('l:'):
-            return None
-        
-        # Get full name (exact column name: 'full_name')
+        # Get full name (exact column name: 'full_name') - REQUIRED
         full_name = row.get('full_name', '').strip()
         
         if not full_name:
             return None
         
-        first_name, last_name = parse_full_name(full_name)
-        
-        # Get phone number (exact column name: 'phone_number')
+        # Get phone number - REQUIRED for deduplication
         phone = row.get('phone_number', '')
         phone = clean_phone(phone)
         
+        if not phone:
+            return None
+        
+        first_name, last_name = parse_full_name(full_name)
+        
+        # Get lead ID from first column (stored as 'lead_id_col' by fetch_sheet_data)
+        lead_id_col = row.get('lead_id_col', '').strip()
+        
+        if lead_id_col.startswith('l:'):
+            sheet_lead_id = lead_id_col
+            external_id = lead_id_col  # Use the l:xxx ID as external_id
+        else:
+            sheet_lead_id = None
+            external_id = f"sheet:{phone}"  # Fallback to phone-based ID
+        
         # Get notes - combine relevant columns
         notes_parts = []
+        
         if row.get('notes'):
             notes_parts.append(f"Notes: {row['notes']}")
         if row.get('Second Follow Up'):
@@ -160,7 +154,7 @@ def parse_sheet_row(row: Dict[str, str], headers: List[str]) -> Optional[Dict[st
         
         # Build metadata with all relevant info
         meta_data = {
-            'sheet_lead_id': lead_id,
+            'sheet_lead_id': sheet_lead_id,
             'platform': platform,
             'campaign_name': campaign_name,
             'campaign_id': campaign_id,
@@ -178,7 +172,7 @@ def parse_sheet_row(row: Dict[str, str], headers: List[str]) -> Optional[Dict[st
         }
         
         return {
-            'external_id': lead_id,
+            'external_id': external_id,
             'first_name': first_name,
             'last_name': last_name,
             'phone': phone,
@@ -197,17 +191,45 @@ async def fetch_sheet_data() -> tuple[List[Dict[str, str]], List[str]]:
     """
     Fetch data from Google Sheet using CSV export.
     Returns tuple of (list of row dictionaries, list of headers).
+    
+    NOTE: We use csv.reader instead of DictReader because the sheet has multiple
+    columns with empty headers, and DictReader overwrites values for duplicate keys.
+    The first column (lead ID like l:xxxxx) must be captured separately.
     """
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(SHEET_EXPORT_URL, follow_redirects=True)
             response.raise_for_status()
             
-            # Parse CSV
+            # Parse CSV using regular reader to handle duplicate empty headers
             content = response.text
-            reader = csv.DictReader(io.StringIO(content))
-            headers = reader.fieldnames or []
-            rows = list(reader)
+            reader = csv.reader(io.StringIO(content))
+            
+            # Get headers from first row
+            headers = next(reader, [])
+            if not headers:
+                logger.warning("No headers found in Google Sheet")
+                return [], []
+            
+            # Build rows as dictionaries, keeping first column as special key 'lead_id_col'
+            rows = []
+            for row_values in reader:
+                if not row_values:
+                    continue
+                    
+                # Build row dict - use headers for column names
+                row_dict = {}
+                for i, value in enumerate(row_values):
+                    if i == 0:
+                        # First column is always the lead ID, store with special key
+                        row_dict['lead_id_col'] = value.strip() if value else ''
+                    elif i < len(headers):
+                        header = headers[i]
+                        # Only store if we don't already have this header (avoid duplicates)
+                        if header and header not in row_dict:
+                            row_dict[header] = value.strip() if value else ''
+                
+                rows.append(row_dict)
             
             logger.info(f"Fetched {len(rows)} rows from Google Sheet with {len(headers)} columns")
             logger.debug(f"Headers: {headers}")

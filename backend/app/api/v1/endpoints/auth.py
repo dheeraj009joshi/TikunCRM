@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -29,7 +29,10 @@ async def login(
     """
     OAuth2 compatible token login, get an access token for future requests
     """
-    result = await db.execute(select(User).where(User.email == form_data.username))
+    # Case-insensitive email lookup
+    result = await db.execute(
+        select(User).where(func.lower(User.email) == form_data.username.strip().lower())
+    )
     user = result.scalar_one_or_none()
     
     if not user or not verify_password(form_data.password, user.password_hash):

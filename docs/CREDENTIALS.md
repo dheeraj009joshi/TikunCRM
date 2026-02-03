@@ -44,6 +44,19 @@ Each dealership gets **5 salespersons**. All use the same password.
 
 ## How to create these users
 
+### Option 1: Super Admin only (production / fix login)
+
+If login fails with "Incorrect email or password" (e.g. production DB was never seeded), run this **from your machine** with `backend/.env` pointing to the **same database** as your API (e.g. production):
+
+```bash
+cd backend
+python -m scripts.seed_super_admin
+```
+
+This creates or **resets** the Super Admin `admin@leedscrm.com` with password `admin123`. Safe to run multiple times (idempotent).
+
+### Option 2: Full demo data (development)
+
 From the **backend** directory:
 
 ```bash
@@ -58,5 +71,7 @@ Ensure the database is running and migrations are applied first. The script crea
 - 3 Dealership Admins  
 - 15 Salespersons (5 per dealership)  
 - 100+ sample leads  
+
+**Seeding production:** Use the same `DATABASE_URL` in `backend/.env` as your production API (e.g. Azure PostgreSQL). Then run `python -m scripts.seed_super_admin` (or `seed_demo`) from your machine so the script connects to that database.
 
 **Important:** Change default passwords in production. These credentials are for **development and demo only**.
