@@ -8,6 +8,8 @@ export interface Toast {
     description?: string
     action?: ToastActionElement
     variant?: "default" | "destructive"
+    open?: boolean
+    onOpenChange?: (open: boolean) => void
 }
 
 const TOAST_LIMIT = 5
@@ -137,9 +139,9 @@ function dispatch(action: Action) {
     })
 }
 
-type Toast = Omit<ToasterToast, "id">
+type ToastInput = Omit<ToasterToast, "id">
 
-function toast({ ...props }: Toast) {
+function toast({ ...props }: ToastInput) {
     const id = genId()
 
     const update = (props: ToasterToast) =>
