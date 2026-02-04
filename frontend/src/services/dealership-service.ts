@@ -54,7 +54,7 @@ export interface UpdateDealershipData extends Partial<CreateDealershipData> {
 export const DealershipService = {
     // List all dealerships (Super Admin only)
     async listDealerships(params: { is_active?: boolean } = {}): Promise<Dealership[]> {
-        const response = await apiClient.get(DEALERSHIPS_PREFIX, { params });
+        const response = await apiClient.get(`${DEALERSHIPS_PREFIX}/`, { params });
         return response.data;
     },
 
@@ -66,7 +66,7 @@ export const DealershipService = {
 
     // Create new dealership (Super Admin only)
     async createDealership(data: CreateDealershipData): Promise<Dealership> {
-        const response = await apiClient.post(DEALERSHIPS_PREFIX, data);
+        const response = await apiClient.post(`${DEALERSHIPS_PREFIX}/`, data);
         return response.data;
     },
 

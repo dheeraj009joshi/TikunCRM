@@ -77,10 +77,17 @@ class WebSocketService {
                 }
             };
 
-            this.ws.onerror = (error) => {
-                console.error("[WS] Error:", error);
+            this.ws.onerror = (event: Event) => {
+                // WebSocket error events don't contain much info - check if it's a connection failure
+                const errorInfo = {
+                    type: event.type,
+                    readyState: this.ws?.readyState,
+                    readyStateText: this.getReadyStateText(this.ws?.readyState),
+                    message: "WebSocket connection error - check if backend is running on port 8000"
+                };
+                console.error("[WS] Error:", errorInfo);
                 this.isConnecting = false;
-                this.emit("connection:error", { error });
+                this.emit("connection:error", errorInfo);
             };
         } catch (error) {
             console.error("[WS] Failed to create WebSocket:", error);
@@ -100,6 +107,19 @@ class WebSocketService {
         this.userId = null;
         this.token = null;
         this.reconnectAttempts = 0;
+    }
+
+    /**
+     * Get human-readable WebSocket ready state
+     */
+    private getReadyStateText(state: number | undefined): string {
+        switch (state) {
+            case WebSocket.CONNECTING: return "CONNECTING";
+            case WebSocket.OPEN: return "OPEN";
+            case WebSocket.CLOSING: return "CLOSING";
+            case WebSocket.CLOSED: return "CLOSED";
+            default: return "UNKNOWN";
+        }
     }
 
     /**

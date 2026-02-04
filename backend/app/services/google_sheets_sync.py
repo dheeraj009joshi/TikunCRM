@@ -16,6 +16,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import select, text
 
 from app.models.lead import Lead, LeadSource, LeadStatus
+from app.models.dealership import Dealership
+from app.models.activity import Activity, ActivityType
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -298,6 +300,19 @@ async def sync_google_sheet_leads():
         
         async with sync_session_maker() as session:
             try:
+                # Look up Toyota South Atlanta dealership for auto-assignment
+                # Use ILIKE for case-insensitive matching and TRIM to handle trailing spaces
+                toyota_south_result = await session.execute(
+                    select(Dealership).where(
+                        Dealership.name.ilike("%Toyota South Atlanta%")
+                    )
+                )
+                toyota_south = toyota_south_result.scalar_one_or_none()
+                if not toyota_south:
+                    logger.warning("Toyota South Atlanta dealership not found - leads will be unassigned")
+                else:
+                    logger.info(f"Auto-assigning leads to dealership: {toyota_south.name} (id: {toyota_south.id})")
+                
                 # Get all existing external_ids and phones in batch
                 existing_external_ids = await get_existing_external_ids(session)
                 existing_phones = await get_existing_phones(session)
@@ -325,6 +340,9 @@ async def sync_google_sheet_leads():
                 # Batch insert new leads
                 created_leads = []
                 if new_leads:
+                    # Determine dealership_id for all leads (Toyota South if found)
+                    target_dealership_id = toyota_south.id if toyota_south else None
+                    
                     for lead_data in new_leads:
                         new_lead = Lead(
                             first_name=lead_data['first_name'],
@@ -335,19 +353,78 @@ async def sync_google_sheet_leads():
                             notes=lead_data['notes'],
                             meta_data=lead_data['meta_data'],
                             external_id=lead_data['external_id'],
-                            dealership_id=None,
+                            dealership_id=target_dealership_id,
                             assigned_to=None,
                             created_by=None,
                         )
                         session.add(new_lead)
                         created_leads.append(new_lead)
                     
+                    # Flush to get lead IDs before creating activities
+                    await session.flush()
+                    
+                    # Create LEAD_CREATED activity for each lead (system activity)
+                    for lead in created_leads:
+                        activity = Activity(
+                            type=ActivityType.LEAD_CREATED,
+                            description="Lead created from Google Sheets import",
+                            user_id=None,  # System activity
+                            lead_id=lead.id,
+                            dealership_id=lead.dealership_id,
+                            meta_data={
+                                "source": "google_sheets",
+                                "external_id": lead.external_id,
+                                "auto_assigned_dealership": toyota_south.name if toyota_south else None
+                            }
+                        )
+                        session.add(activity)
+                    
                     await session.commit()
                     new_leads_count = len(new_leads)
                     
-                    # Send SMS notifications for new leads
+                    # Emit WebSocket events and send notifications for each new lead
+                    for lead in created_leads:
+                        try:
+                            from app.services.notification_service import (
+                                emit_lead_created, 
+                                emit_badges_refresh,
+                                notify_lead_assigned_to_dealership_background,
+                            )
+                            await emit_lead_created(
+                                str(lead.id),
+                                str(lead.dealership_id) if lead.dealership_id else None,
+                                {
+                                    "first_name": lead.first_name,
+                                    "last_name": lead.last_name,
+                                    "phone": lead.phone,
+                                    "source": lead.source.value if lead.source else None,
+                                }
+                            )
+                            
+                            # Send notification to all dealership members
+                            if lead.dealership_id:
+                                lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "New Lead"
+                                source_display = lead.source.value if lead.source else "google_sheets"
+                                await notify_lead_assigned_to_dealership_background(
+                                    lead_id=lead.id,
+                                    lead_name=lead_name,
+                                    dealership_id=lead.dealership_id,
+                                    source=source_display,
+                                )
+                        except Exception as e:
+                            logger.warning(f"Failed to emit WebSocket event for lead {lead.id}: {e}")
+                    
+                    # Emit badges refresh event so sidebar counts update
                     if new_leads_count > 0:
-                        await send_new_lead_sms_notifications(session, created_leads)
+                        try:
+                            from app.services.notification_service import emit_badges_refresh
+                            await emit_badges_refresh(unassigned=True)
+                        except Exception as e:
+                            logger.warning(f"Failed to emit badges refresh: {e}")
+                    
+                    # Send notifications for new leads to dealership team
+                    if new_leads_count > 0 and toyota_south:
+                        await send_new_lead_notifications(session, created_leads, toyota_south.id)
                 
             except Exception as e:
                 await session.rollback()
@@ -364,69 +441,41 @@ async def sync_google_sheet_leads():
         # Don't re-raise - let scheduler continue
 
 
-async def send_new_lead_sms_notifications(session: AsyncSession, leads: List[Lead]):
+async def send_new_lead_notifications(session: AsyncSession, leads: List[Lead], dealership_id: str):
     """
-    Send SMS notifications for new leads to all users with phone numbers.
-    Sends a summary if multiple leads, or individual notification if single lead.
+    Send comprehensive notifications for new leads to all dealership team members.
+    Uses multi-channel notification service (push + SMS).
     """
     try:
-        from app.services.sms_service import sms_service
+        from app.services.notification_service import NotificationService
         
-        if not sms_service.is_configured:
-            logger.debug("SMS not configured - skipping new lead notifications")
-            return
+        notification_service = NotificationService(session)
         
-        if not leads:
-            return
-        
-        # Build message based on number of leads
-        if len(leads) == 1:
-            lead = leads[0]
-            lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
-            lead_phone = lead.phone or "No phone"
-            
-            message = (
-                f"🚗 New Lead!\n"
-                f"Name: {lead_name}\n"
-                f"Phone: {lead_phone}\n"
-                f"Be first to respond!"
-            )
-        else:
-            # Multiple leads - send summary
-            message = (
-                f"🚗 {len(leads)} New Leads!\n"
-                f"Check your CRM dashboard.\n"
-                f"Be first to respond!"
-            )
-        
-        # Get all users with phone numbers
-        from app.models.user import User
-        result = await session.execute(
-            select(User).where(
-                User.is_active == True,
-                User.phone.isnot(None),
-                User.phone != ""
-            )
-        )
-        users = result.scalars().all()
-        
-        if not users:
-            logger.debug("No users with phone numbers to notify")
-            return
-        
-        # Send SMS to each user
-        sent_count = 0
-        for user in users:
-            if user.phone:
-                try:
-                    result = await sms_service.send_sms(user.phone, message)
-                    if result.get("success"):
-                        sent_count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to send SMS to {user.phone}: {e}")
-        
-        logger.info(f"Sent new lead SMS notifications to {sent_count}/{len(users)} users")
+        for lead in leads:
+            try:
+                lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+                
+                # Use the new notification service method to broadcast to all dealership members
+                await notification_service.notify_new_lead_to_dealership(
+                    dealership_id=dealership_id,
+                    lead_name=lead_name,
+                    lead_id=lead.id,
+                    lead_source="google_sheets"
+                )
+                
+                logger.info(f"Sent new lead notifications for lead {lead.id} to dealership {dealership_id}")
+                
+            except Exception as e:
+                logger.error(f"Failed to send notifications for lead {lead.id}: {e}")
         
     except Exception as e:
-        logger.error(f"Failed to send SMS notifications: {e}")
-        # Don't raise - this shouldn't break the sync
+        logger.error(f"Failed to send new lead notifications: {e}")
+
+
+async def send_new_lead_sms_notifications(session: AsyncSession, leads: List[Lead]):
+    """
+    DEPRECATED: Use send_new_lead_notifications instead.
+    This function is kept for backward compatibility but will be removed in future versions.
+    """
+    logger.warning("send_new_lead_sms_notifications is deprecated. Use send_new_lead_notifications instead.")
+

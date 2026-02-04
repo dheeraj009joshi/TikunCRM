@@ -27,6 +27,7 @@ class AppointmentCreate(AppointmentBase):
     """Schema for creating an appointment"""
     lead_id: UUID  # Required - every appointment must be linked to a lead
     assigned_to: Optional[UUID] = None
+    confirm_skate: bool = False  # If True, user confirmed they want to proceed despite SKATE warning
 
 
 class AppointmentUpdate(BaseModel):

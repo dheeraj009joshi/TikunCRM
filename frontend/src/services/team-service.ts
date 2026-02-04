@@ -50,7 +50,7 @@ export const TeamService = {
         role?: UserRole;
         is_active?: boolean;
     } = {}): Promise<UserBrief[]> {
-        const response = await apiClient.get("/users", { params });
+        const response = await apiClient.get("/users/", { params });
         return response.data;
     },
 
@@ -76,7 +76,7 @@ export const TeamService = {
 
     // Create new user (team member)
     async createUser(data: CreateUserData): Promise<UserBrief> {
-        const response = await apiClient.post("/users", data);
+        const response = await apiClient.post("/users/", data);
         return response.data;
     },
 

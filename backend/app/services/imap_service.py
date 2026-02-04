@@ -11,6 +11,7 @@ from email.header import decode_header
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import List, Optional, Tuple
 
+from app.core.timezone import utc_now
 from app.models.dealership_email_config import DealershipEmailConfig
 
 logger = logging.getLogger(__name__)
@@ -191,7 +192,7 @@ class IMAPService:
             try:
                 date = parsedate_to_datetime(date_str)
             except Exception:
-                date = datetime.utcnow()
+                date = utc_now()
             
             # Extract body
             text_body, html_body = self._get_email_body(msg)

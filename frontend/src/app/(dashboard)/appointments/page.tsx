@@ -37,7 +37,7 @@ import {
     getAppointmentStatusColor
 } from "@/services/appointment-service"
 import { LeadService, Lead } from "@/services/lead-service"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { useAuthStore } from "@/stores/auth-store"
 import { UserAvatar } from "@/components/ui/avatar"
@@ -508,7 +508,7 @@ function CompleteAppointmentModal({
 
 export default function AppointmentsPage() {
     const { user } = useAuthStore()
-    const { timezone } = useDealershipTimezone()
+    const { timezone } = useBrowserTimezone()
     
     const [appointments, setAppointments] = React.useState<Appointment[]>([])
     const [stats, setStats] = React.useState<AppointmentStats | null>(null)
@@ -649,7 +649,7 @@ export default function AppointmentsPage() {
             <!DOCTYPE html>
             <html>
             <head>
-                <title>Appointments Report - LeadsCRM</title>
+                <title>Appointments Report - TikunCRM</title>
                 <style>
                     body { font-family: Arial, sans-serif; padding: 20px; }
                     h1 { color: #333; border-bottom: 2px solid #333; padding-bottom: 10px; }
@@ -702,7 +702,7 @@ export default function AppointmentsPage() {
                     </tbody>
                 </table>
                 <div class="footer">
-                    <p>LeadsCRM - Appointments Report</p>
+                    <p>TikunCRM - Appointments Report</p>
                 </div>
                 <script>window.onload = function() { window.print(); }</script>
             </body>

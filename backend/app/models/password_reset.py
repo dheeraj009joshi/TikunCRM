@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
+from app.core.timezone import utc_now
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -59,7 +60,7 @@ class PasswordResetToken(Base):
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False
     )
     
@@ -89,19 +90,19 @@ class PasswordResetToken(Base):
         token = cls(
             user_id=user_id,
             token_hash=token_hash,
-            expires_at=datetime.utcnow() + timedelta(hours=expire_hours)
+            expires_at=utc_now() + timedelta(hours=expire_hours)
         )
         
         return token, raw_token
     
     def is_valid(self) -> bool:
         """Check if token is valid (not used and not expired)"""
-        return not self.used and datetime.utcnow() < self.expires_at
+        return not self.used and utc_now() < self.expires_at
     
     def mark_used(self) -> None:
         """Mark token as used"""
         self.used = True
-        self.used_at = datetime.utcnow()
+        self.used_at = utc_now()
     
     def __repr__(self) -> str:
         return f"<PasswordResetToken user_id={self.user_id} used={self.used}>"

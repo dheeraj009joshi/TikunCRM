@@ -4,7 +4,7 @@ Dealership Endpoints
 from typing import Any, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.db.database import get_db
 from app.models.dealership import Dealership
 from app.models.user import User
 from app.schemas.dealership import DealershipResponse, DealershipCreate, DealershipUpdate, DealershipBrief
+from app.services.email_notifier import send_new_member_welcome_email
 
 router = APIRouter()
 
@@ -35,6 +36,7 @@ async def list_dealerships(
 async def create_dealership(
     *,
     db: AsyncSession = Depends(get_db),
+    background_tasks: BackgroundTasks,
     dealership_in: DealershipCreate,
     current_user: User = Depends(deps.require_permission(Permission.CREATE_DEALERSHIP))
 ) -> Any:
@@ -42,7 +44,8 @@ async def create_dealership(
     Create new dealership with optional owner.
     
     If owner details are provided, a Dealership Owner user will be created
-    and assigned to this dealership.
+    and assigned to this dealership. A welcome email with login credentials
+    is sent to the owner.
     """
     # Check if owner email is already registered
     if dealership_in.owner:
@@ -79,11 +82,22 @@ async def create_dealership(
             phone=dealership_in.owner.phone,
             role=UserRole.DEALERSHIP_OWNER,
             dealership_id=dealership.id,
-            is_active=True
+            is_active=True,
+            must_change_password=True,
         )
         db.add(owner)
         await db.flush()
-    
+        # Send welcome email with login credentials in background
+        to_name = f"{owner.first_name} {owner.last_name}".strip() or owner.email
+        added_by_name = current_user.full_name or current_user.email
+        background_tasks.add_task(
+            send_new_member_welcome_email,
+            owner.email,
+            to_name,
+            dealership_in.owner.password,
+            added_by_name,
+        )
+
     return dealership
 
 

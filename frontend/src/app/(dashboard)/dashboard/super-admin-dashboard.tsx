@@ -35,7 +35,7 @@ import {
     LeadsBySource 
 } from "@/services/dashboard-service"
 import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { DonutChart, BarChart } from "@tremor/react"
 
@@ -45,7 +45,7 @@ export function SuperAdminDashboard() {
     const [leadsBySource, setLeadsBySource] = React.useState<LeadsBySource[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
-    const { timezone } = useDealershipTimezone()
+    const { timezone } = useBrowserTimezone()
 
     React.useEffect(() => {
         const fetchData = async () => {

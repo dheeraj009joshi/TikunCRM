@@ -48,6 +48,7 @@ class LeadStatusUpdate(BaseModel):
     """Schema for updating lead status"""
     status: LeadStatus
     notes: Optional[str] = None
+    confirm_skate: bool = False  # If True, user confirmed they want to proceed despite SKATE warning
 
 
 class LeadAssignment(BaseModel):

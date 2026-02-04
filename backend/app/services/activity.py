@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity, ActivityType
+from app.core.timezone import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class ActivityService:
             )
             lead = result.scalar_one_or_none()
             if lead:
-                lead.last_activity_at = datetime.utcnow()
+                lead.last_activity_at = utc_now()
         
         await db.flush()
         
@@ -72,7 +73,7 @@ class ActivityService:
                         "description": description,
                         "user_id": str(user_id) if user_id else None,
                         "meta_data": meta_data or {},
-                        "created_at": activity.created_at.isoformat() if activity.created_at else datetime.utcnow().isoformat(),
+                        "created_at": activity.created_at.isoformat() if activity.created_at else utc_now().isoformat(),
                     }
                 )
             except Exception as e:
@@ -91,10 +92,13 @@ class ActivityService:
         old_status: str,
         new_status: str,
         performer_name: str,
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
+        is_skate_action: bool = False
     ) -> Activity:
         """Helper for logging lead status changes"""
         description = f"Status changed from {old_status} to {new_status} by {performer_name}"
+        if is_skate_action:
+            description = f"[SKATE] {description}"
         if notes:
             description += f". Notes: {notes}"
             
@@ -109,7 +113,8 @@ class ActivityService:
                 "old_status": old_status,
                 "new_status": new_status,
                 "performer_name": performer_name,
-                "notes": notes
+                "notes": notes,
+                "is_skate_action": is_skate_action
             }
         )
 

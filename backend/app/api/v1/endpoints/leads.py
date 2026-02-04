@@ -1,17 +1,22 @@
 """
 Lead Endpoints
 """
+import logging
 from datetime import datetime
 from typing import Any, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+logger = logging.getLogger(__name__)
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
+from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
 from app.models.lead import Lead, LeadStatus, LeadSource
@@ -24,7 +29,12 @@ from app.schemas.lead import (
 )
 from app.schemas.activity import NoteCreate
 from app.services.activity import ActivityService
-from app.services.notification_service import NotificationService
+from app.services.notification_service import (
+    NotificationService,
+    send_skate_alert_background,
+    notify_lead_assigned_to_dealership_background,
+)
+from app.utils.skate_helper import check_skate_condition, check_note_skate_condition
 
 
 # Request schemas for call/email logging
@@ -33,6 +43,7 @@ class CallLogCreate(BaseModel):
     duration_seconds: Optional[int] = None
     outcome: str
     notes: Optional[str] = None
+    confirm_skate: bool = False  # If True, user confirmed they want to proceed despite SKATE warning
 
 
 class EmailLogCreate(BaseModel):
@@ -40,6 +51,7 @@ class EmailLogCreate(BaseModel):
     subject: str
     body: Optional[str] = None
     direction: str = "sent"  # sent or received
+    confirm_skate: bool = False  # If True, user confirmed they want to proceed despite SKATE warning
 
 
 router = APIRouter()
@@ -56,26 +68,38 @@ async def auto_assign_lead_on_activity(
     Auto-assign a lead to a user when they perform the first activity.
     
     Rules:
-    - Lead must be in the unassigned pool (no assigned_to AND no dealership_id)
+    - Lead has no assigned_to (no salesperson assigned)
+    - Either: lead is in global pool (no dealership) OR lead is in user's dealership
     - User must have a dealership_id
-    - On first activity, lead is assigned to the user AND their dealership
+    - On first activity, lead is assigned to the user (and their dealership if not already set)
     
     Returns True if auto-assignment occurred, False otherwise.
     """
-    # Only auto-assign if lead is truly unassigned (in the pool)
-    if lead.assigned_to is not None or lead.dealership_id is not None:
+    # Lead already has a salesperson assigned - no auto-assign needed
+    if lead.assigned_to is not None:
         return False
     
     # User must have a dealership to claim a lead
     if not user.dealership_id:
         return False
     
+    # Check if lead is either in global pool OR in the user's dealership
+    lead_in_global_pool = lead.dealership_id is None
+    lead_in_user_dealership = lead.dealership_id == user.dealership_id
+    
+    if not (lead_in_global_pool or lead_in_user_dealership):
+        # Lead is in a different dealership - user can't claim it
+        return False
+    
     # Perform the auto-assignment
     lead.assigned_to = user.id
-    lead.dealership_id = user.dealership_id
-    lead.last_activity_at = datetime.utcnow()
+    dealership_just_assigned = lead.dealership_id is None
+    if lead.dealership_id is None:
+        lead.dealership_id = user.dealership_id  # Also assign to dealership if in global pool
+    lead.last_activity_at = utc_now()
     
     performer_name = f"{user.first_name} {user.last_name}"
+    lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "Lead"
     
     # Log auto-assignment activity
     await ActivityService.log_activity(
@@ -92,6 +116,19 @@ async def auto_assign_lead_on_activity(
             "performer_name": performer_name
         }
     )
+    
+    # When lead was in global pool and is now assigned to dealership, notify all dealership members
+    if dealership_just_assigned and notification_service:
+        try:
+            await notification_service.notify_lead_assigned_to_dealership(
+                lead_id=lead.id,
+                lead_name=lead_name,
+                dealership_id=user.dealership_id,
+                performer_name=performer_name,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("notify_lead_assigned_to_dealership failed: %s", e)
     
     # Notify the user they were assigned
     if notification_service:
@@ -202,51 +239,61 @@ async def list_leads(
     status: Optional[LeadStatus] = None,
     source: Optional[LeadSource] = None,
     search: Optional[str] = None,
-    pool: Optional[str] = None  # "unassigned" = only leads with no dealership (visible to all)
+    pool: Optional[str] = None  # "unassigned" | "mine" | None (all)
 ) -> Any:
     """
     List leads with filtering and pagination.
-    Role-based isolation is applied. Unassigned leads (no dealership) are visible to everyone.
-    Use pool=unassigned to show only the unassigned pool.
+    
+    Role-based filtering:
+    - Super Admin: sees all leads
+    - Dealership Admin/Owner: sees all leads in their dealership
+    - Salesperson: sees all leads in their dealership (with SKATE protection)
+    
+    pool parameter:
+    - "unassigned": leads with no salesperson assigned (or no dealership for super admin)
+    - "mine": leads assigned to the current user only
+    - None (default): all leads visible to the user based on role
     """
     query = select(Lead)
     
-    # Visibility rules: everyone with a dealership sees unassigned pool + their role-based leads
-    if current_user.role == UserRole.SALESPERSON:
-        # Salesperson can see: their assigned leads + dealership leads + unassigned pool
-        if current_user.dealership_id:
-            query = query.where(
-                or_(
-                    Lead.assigned_to == current_user.id,
-                    Lead.dealership_id == current_user.dealership_id,
-                    Lead.dealership_id.is_(None)  # Unassigned pool
-                )
-            )
-        else:
-            # Salesperson without dealership: can see assigned leads + unassigned pool
-            query = query.where(
-                or_(
-                    Lead.assigned_to == current_user.id,
-                    Lead.dealership_id.is_(None)  # Unassigned pool
-                )
-            )
-    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        # Dealership admins/owners see: their dealership leads + unassigned pool
-        if current_user.dealership_id:
-            query = query.where(
-                or_(
-                    Lead.dealership_id == current_user.dealership_id,
-                    Lead.dealership_id.is_(None)  # Unassigned pool
-                )
-            )
-        else:
-            # Admin/owner without dealership: can only see unassigned pool
+    # Handle pool filters first as they override role-based filtering
+    if pool == "mine":
+        # Show only leads assigned to the current user
+        query = query.where(Lead.assigned_to == current_user.id)
+        
+    elif pool == "unassigned":
+        if current_user.role == UserRole.SUPER_ADMIN:
+            # Super Admin: show leads with no dealership (for dealership assignment)
             query = query.where(Lead.dealership_id.is_(None))
-    # Super admin sees all (no filter)
-    
-    # Filter to unassigned pool only (no dealership) - all users can toggle to this view
-    if pool == "unassigned":
-        query = query.where(Lead.dealership_id.is_(None))
+        elif current_user.dealership_id:
+            # Dealership users: show leads in their dealership but no salesperson assigned
+            query = query.where(
+                and_(
+                    Lead.dealership_id == current_user.dealership_id,
+                    Lead.assigned_to.is_(None)
+                )
+            )
+        else:
+            query = query.where(Lead.id.is_(None))  # Returns empty if no dealership
+            
+    else:
+        # Default: Apply role-based filtering for "all" leads view
+        if current_user.role == UserRole.SALESPERSON:
+            # Salesperson sees ALL leads in their dealership (including those assigned to others)
+            # SKATE warnings will prompt when attempting actions on others' leads
+            if current_user.dealership_id:
+                query = query.where(Lead.dealership_id == current_user.dealership_id)
+            else:
+                query = query.where(Lead.id.is_(None))  # Returns empty if no dealership
+            
+        elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+            # Dealership admins/owners see all leads in their dealership
+            if current_user.dealership_id:
+                query = query.where(Lead.dealership_id == current_user.dealership_id)
+            else:
+                # Admin/owner without dealership shouldn't see any leads
+                query = query.where(Lead.id.is_(None))  # Returns empty
+        # Super admin sees all (no filter)
     
     # Filters
     if status:
@@ -355,11 +402,13 @@ async def list_leads_unassigned_to_salesperson(
         )
     )
     
-    # Role-based filtering
-    if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        query = query.where(Lead.dealership_id == current_user.dealership_id)
-    elif current_user.role == UserRole.SALESPERSON:
-        raise HTTPException(status_code=403, detail="Salespersons cannot view unassigned leads")
+    # Role-based filtering - all dealership users can see leads in their dealership without salesperson
+    if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER, UserRole.SALESPERSON]:
+        if current_user.dealership_id:
+            query = query.where(Lead.dealership_id == current_user.dealership_id)
+        else:
+            # User without dealership shouldn't see anything
+            query = query.where(Lead.id.is_(None))  # Returns empty
     # Super Admin can see all
     
     if search:
@@ -399,6 +448,7 @@ async def create_lead(
     *,
     db: AsyncSession = Depends(get_db),
     lead_in: LeadCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(deps.require_permission(Permission.CREATE_LEAD))
 ) -> Any:
     """
@@ -428,6 +478,18 @@ async def create_lead(
         lead_id=lead.id,
         dealership_id=dealership_id
     )
+    
+    # Send notification to all dealership members when a new lead is added
+    if dealership_id:
+        lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "New Lead"
+        source_display = lead.source.value if lead.source else "unknown"
+        background_tasks.add_task(
+            notify_lead_assigned_to_dealership_background,
+            lead_id=lead.id,
+            lead_name=lead_name,
+            dealership_id=dealership_id,
+            source=source_display,
+        )
     
     # Emit WebSocket event so sidebar unassigned count updates when new unassigned lead is created
     if lead.dealership_id is None:
@@ -568,6 +630,7 @@ async def get_lead(
 async def update_lead_status(
     lead_id: UUID,
     status_in: LeadStatusUpdate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user)
 ) -> Any:
@@ -581,10 +644,39 @@ async def update_lead_status(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
+    # Soft SKATE check: check if this is a SKATE scenario
+    skate_info = await check_skate_condition(db, current_user, lead, "status change")
+    is_skate_action = False
+    
+    if skate_info:
+        if not status_in.confirm_skate:
+            # Return skate warning for confirmation
+            return JSONResponse(
+                status_code=200,
+                content=skate_info,
+            )
+        else:
+            # User confirmed SKATE - proceed but send notifications
+            is_skate_action = True
+            dealership_id = lead.dealership_id or current_user.dealership_id
+            if dealership_id:
+                performer_name = f"{current_user.first_name} {current_user.last_name}"
+                background_tasks.add_task(
+                    send_skate_alert_background,
+                    lead_id=lead.id,
+                    lead_name=skate_info["lead_name"],
+                    dealership_id=dealership_id,
+                    assigned_to_user_id=lead.assigned_to,
+                    assigned_to_name=skate_info["assigned_to_name"],
+                    performer_name=performer_name,
+                    action="updated status",
+                    performer_user_id=current_user.id,
+                )
+
     # Access check: unassigned pool is open to all dealership users
     is_unassigned_pool = lead.dealership_id is None
     if not is_unassigned_pool:
-        # Must have access to assigned leads
+        # Must have access to assigned leads (admins/owners)
         has_access = (
             current_user.role == UserRole.SUPER_ADMIN
             or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
@@ -592,17 +684,17 @@ async def update_lead_status(
         )
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to update this lead")
-    
+
     notification_service = NotificationService(db)
-    
+
     # Auto-assignment: if lead is in unassigned pool and user has a dealership
     auto_assigned = await auto_assign_lead_on_activity(
         db, lead, current_user, "status_change", notification_service
     )
-        
+
     old_status = lead.status.value
     lead.status = status_in.status
-    lead.last_activity_at = datetime.utcnow()
+    lead.last_activity_at = utc_now()
     
     # Log status change with performer name
     performer_name = f"{current_user.first_name} {current_user.last_name}"
@@ -614,10 +706,27 @@ async def update_lead_status(
         old_status=old_status,
         new_status=status_in.status.value,
         performer_name=performer_name,
-        notes=status_in.notes
+        notes=status_in.notes,
+        is_skate_action=is_skate_action
     )
     
     await db.flush()
+    
+    # Emit real-time WebSocket event with updated lead status
+    try:
+        from app.services.notification_service import emit_lead_updated
+        await emit_lead_updated(
+            str(lead.id),
+            str(lead.dealership_id) if lead.dealership_id else None,
+            "status_changed",
+            {
+                "status": status_in.status.value,
+                "old_status": old_status
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to emit lead:updated WebSocket event: {e}")
+    
     return lead
 
 
@@ -698,6 +807,37 @@ async def assign_lead(
         )
     
     await db.flush()
+    
+    # Emit real-time WebSocket event with updated lead data
+    try:
+        from app.services.notification_service import emit_lead_updated
+        # Fetch dealership name if assigned
+        dealership_data = None
+        if lead.dealership_id:
+            dealership_result = await db.execute(select(Dealership).where(Dealership.id == lead.dealership_id))
+            dealership = dealership_result.scalar_one_or_none()
+            if dealership:
+                dealership_data = {"id": str(dealership.id), "name": dealership.name}
+        
+        await emit_lead_updated(
+            str(lead.id),
+            str(lead.dealership_id) if lead.dealership_id else None,
+            "assigned",
+            {
+                "assigned_to": str(assign_in.assigned_to),
+                "assigned_to_user": {
+                    "id": str(assign_to_user.id),
+                    "first_name": assign_to_user.first_name,
+                    "last_name": assign_to_user.last_name,
+                    "email": assign_to_user.email,
+                    "role": assign_to_user.role
+                },
+                "dealership": dealership_data
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to emit lead:updated WebSocket event: {e}")
+    
     return lead
 
 
@@ -705,12 +845,14 @@ async def assign_lead(
 async def assign_lead_to_dealership(
     lead_id: UUID,
     assign_in: LeadDealershipAssignment,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.require_permission(Permission.ASSIGN_LEAD_TO_DEALERSHIP))
 ) -> Any:
     """
     Super Admin assigns lead to a dealership.
     This moves the lead from the unassigned pool to a specific dealership.
+    Notifies all members of the dealership.
     """
     result = await db.execute(select(Lead).where(Lead.id == lead_id))
     lead = result.scalar_one_or_none()
@@ -732,9 +874,10 @@ async def assign_lead_to_dealership(
     
     old_dealership_id = lead.dealership_id
     lead.dealership_id = assign_in.dealership_id
+    lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "Lead"
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
     
     # Log activity with names
-    performer_name = f"{current_user.first_name} {current_user.last_name}"
     await ActivityService.log_activity(
         db,
         activity_type=ActivityType.LEAD_ASSIGNED,
@@ -752,18 +895,47 @@ async def assign_lead_to_dealership(
     )
     
     await db.flush()
+    
+    # Notify all dealership members in background (don't hold the API response)
+    background_tasks.add_task(
+        notify_lead_assigned_to_dealership_background,
+        lead_id=lead.id,
+        lead_name=lead_name,
+        dealership_id=assign_in.dealership_id,
+        performer_name=performer_name,
+    )
+    
+    # Emit real-time WebSocket event with updated lead data
+    try:
+        from app.services.notification_service import emit_lead_updated
+        await emit_lead_updated(
+            str(lead.id),
+            str(lead.dealership_id) if lead.dealership_id else None,
+            "dealership_assigned",
+            {
+                "dealership_id": str(assign_in.dealership_id),
+                "dealership": {
+                    "id": str(dealership.id),
+                    "name": dealership.name
+                }
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to emit lead:updated WebSocket event: {e}")
+    
     return lead
 
 
 @router.post("/bulk-assign-dealership")
 async def bulk_assign_leads_to_dealership(
     assignment_in: BulkLeadDealershipAssignment,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.require_permission(Permission.ASSIGN_LEAD_TO_DEALERSHIP))
 ) -> Any:
     """
     Bulk assign multiple leads to a dealership.
-    Super Admin only.
+    Super Admin only. Notifies all dealership members for each lead.
     """
     # Verify dealership exists
     dealership_result = await db.execute(
@@ -789,6 +961,7 @@ async def bulk_assign_leads_to_dealership(
     for lead in leads:
         lead.dealership_id = assignment_in.dealership_id
         assigned_count += 1
+        lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "Lead"
         
         # Log activity for each lead
         await ActivityService.log_activity(
@@ -805,6 +978,14 @@ async def bulk_assign_leads_to_dealership(
                 "notes": assignment_in.notes
             }
         )
+        # Notify all dealership members for this lead (background, don't hold response)
+        background_tasks.add_task(
+            notify_lead_assigned_to_dealership_background,
+            lead_id=lead.id,
+            lead_name=lead_name,
+            dealership_id=assignment_in.dealership_id,
+            performer_name=performer_name,
+        )
     
     await db.commit()
     
@@ -819,6 +1000,7 @@ async def bulk_assign_leads_to_dealership(
 async def add_lead_note(
     lead_id: UUID,
     note_in: NoteCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user)
 ) -> Any:
@@ -835,6 +1017,39 @@ async def add_lead_note(
     
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+    
+    # Soft SKATE check for notes: check if this is a SKATE scenario
+    # For notes, mentioning the assigned user avoids SKATE
+    logger.info(f"add_lead_note: user={current_user.email} role={current_user.role} lead_assigned_to={lead.assigned_to} confirm_skate={note_in.confirm_skate}")
+    skate_info = await check_note_skate_condition(db, current_user, lead, note_in.mentioned_user_ids)
+    is_skate_action = False
+    logger.info(f"add_lead_note: skate_info={skate_info}")
+    
+    if skate_info:
+        if not note_in.confirm_skate:
+            # Return skate warning for confirmation
+            logger.info("add_lead_note: Returning skate_warning response")
+            return JSONResponse(
+                status_code=200,
+                content=skate_info,
+            )
+        else:
+            # User confirmed SKATE - proceed but send notifications
+            is_skate_action = True
+            dealership_id = lead.dealership_id or current_user.dealership_id
+            if dealership_id:
+                performer_name = f"{current_user.first_name} {current_user.last_name}"
+                background_tasks.add_task(
+                    send_skate_alert_background,
+                    lead_id=lead.id,
+                    lead_name=skate_info["lead_name"],
+                    dealership_id=dealership_id,
+                    assigned_to_user_id=lead.assigned_to,
+                    assigned_to_name=skate_info["assigned_to_name"],
+                    performer_name=performer_name,
+                    action="added a note",
+                    performer_user_id=current_user.id,
+                )
     
     # Access check: 
     # - Unassigned pool leads (no dealership) are accessible to all dealership users
@@ -905,11 +1120,18 @@ async def add_lead_note(
             for u in mentioned_users
         ]
     
+    # Add is_skate_action to metadata if applicable
+    if is_skate_action:
+        meta_data["is_skate_action"] = True
+    
     # Log note as activity with parent_id for threading
     from app.models.activity import Activity
+    description = f"{'Reply' if note_in.parent_id else 'Note'} added by {performer_name}"
+    if is_skate_action:
+        description = f"[SKATE] {description}"
     note_activity = Activity(
         type=ActivityType.NOTE_ADDED,
-        description=f"{'Reply' if note_in.parent_id else 'Note'} added by {performer_name}",
+        description=description,
         user_id=current_user.id,
         lead_id=lead.id,
         dealership_id=lead.dealership_id or current_user.dealership_id,
@@ -920,7 +1142,7 @@ async def add_lead_note(
     await db.flush()  # Flush so note_activity.id is set for mention link
     
     # Update lead's last activity timestamp
-    lead.last_activity_at = datetime.utcnow()
+    lead.last_activity_at = utc_now()
     
     # Send notifications to mentioned users (link includes note id so frontend can scroll to it)
     if note_in.mentioned_user_ids:
@@ -944,6 +1166,19 @@ async def add_lead_note(
                         "note_preview": note_in.content[:100] + "..." if len(note_in.content) > 100 else note_in.content
                     }
                 )
+        # Emit WebSocket events so mentioned users see the new note and notification badge updates
+        from app.services.notification_service import emit_activity_added, emit_badges_refresh
+        await emit_activity_added(
+            str(lead.id),
+            str(lead.dealership_id) if lead.dealership_id else None,
+            {
+                "activity_id": str(note_activity.id),
+                "type": "note_added",
+                "performer_name": performer_name,
+                "has_mentions": True,
+            }
+        )
+        await emit_badges_refresh(notifications=True)
     
     await db.flush()
     return lead
@@ -953,6 +1188,7 @@ async def add_lead_note(
 async def log_call(
     lead_id: UUID,
     call_in: CallLogCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user)
 ) -> Any:
@@ -966,10 +1202,39 @@ async def log_call(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
+    # Soft SKATE check: check if this is a SKATE scenario
+    skate_info = await check_skate_condition(db, current_user, lead, "log call")
+    is_skate_action = False
+    
+    if skate_info:
+        if not call_in.confirm_skate:
+            # Return skate warning for confirmation
+            return JSONResponse(
+                status_code=200,
+                content=skate_info,
+            )
+        else:
+            # User confirmed SKATE - proceed but send notifications
+            is_skate_action = True
+            dealership_id = lead.dealership_id or current_user.dealership_id
+            if dealership_id:
+                performer_name = f"{current_user.first_name} {current_user.last_name}"
+                background_tasks.add_task(
+                    send_skate_alert_background,
+                    lead_id=lead.id,
+                    lead_name=skate_info["lead_name"],
+                    dealership_id=dealership_id,
+                    assigned_to_user_id=lead.assigned_to,
+                    assigned_to_name=skate_info["assigned_to_name"],
+                    performer_name=performer_name,
+                    action="logged a call",
+                    performer_user_id=current_user.id,
+                )
+
     # Access check: unassigned pool is open to all dealership users
     is_unassigned_pool = lead.dealership_id is None
     if not is_unassigned_pool:
-        # Must have access to assigned leads
+        # Must have access to assigned leads (admins/owners)
         has_access = (
             current_user.role == UserRole.SUPER_ADMIN
             or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
@@ -977,26 +1242,29 @@ async def log_call(
         )
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to log calls for this lead")
-    
+
     notification_service = NotificationService(db)
-    
+
     # Auto-assignment: if lead is in unassigned pool and user has a dealership
     auto_assigned = await auto_assign_lead_on_activity(
         db, lead, current_user, "call", notification_service
     )
     
     # Update last contacted
-    lead.last_contacted_at = datetime.utcnow()
-    lead.last_activity_at = datetime.utcnow()
+    lead.last_contacted_at = utc_now()
+    lead.last_activity_at = utc_now()
     if not lead.first_contacted_at:
-        lead.first_contacted_at = datetime.utcnow()
+        lead.first_contacted_at = utc_now()
         
     # Log call as activity
     performer_name = f"{current_user.first_name} {current_user.last_name}"
+    description = f"Call logged by {performer_name}: {call_in.outcome}"
+    if is_skate_action:
+        description = f"[SKATE] {description}"
     await ActivityService.log_activity(
         db,
         activity_type=ActivityType.CALL_LOGGED,
-        description=f"Call logged by {performer_name}: {call_in.outcome}",
+        description=description,
         user_id=current_user.id,
         lead_id=lead.id,
         dealership_id=lead.dealership_id,
@@ -1005,7 +1273,8 @@ async def log_call(
             "outcome": call_in.outcome,
             "notes": call_in.notes,
             "performer_name": performer_name,
-            "auto_assigned": auto_assigned
+            "auto_assigned": auto_assigned,
+            "is_skate_action": is_skate_action
         }
     )
     
@@ -1023,6 +1292,7 @@ async def log_call(
 async def log_email(
     lead_id: UUID,
     email_in: EmailLogCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user)
 ) -> Any:
@@ -1036,10 +1306,39 @@ async def log_email(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
+    # Soft SKATE check: check if this is a SKATE scenario
+    skate_info = await check_skate_condition(db, current_user, lead, "log email")
+    is_skate_action = False
+    
+    if skate_info:
+        if not email_in.confirm_skate:
+            # Return skate warning for confirmation
+            return JSONResponse(
+                status_code=200,
+                content=skate_info,
+            )
+        else:
+            # User confirmed SKATE - proceed but send notifications
+            is_skate_action = True
+            dealership_id = lead.dealership_id or current_user.dealership_id
+            if dealership_id:
+                performer_name = f"{current_user.first_name} {current_user.last_name}"
+                background_tasks.add_task(
+                    send_skate_alert_background,
+                    lead_id=lead.id,
+                    lead_name=skate_info["lead_name"],
+                    dealership_id=dealership_id,
+                    assigned_to_user_id=lead.assigned_to,
+                    assigned_to_name=skate_info["assigned_to_name"],
+                    performer_name=performer_name,
+                    action="logged an email",
+                    performer_user_id=current_user.id,
+                )
+
     # Access check: unassigned pool is open to all dealership users
     is_unassigned_pool = lead.dealership_id is None
     if not is_unassigned_pool:
-        # Must have access to assigned leads
+        # Must have access to assigned leads (admins/owners)
         has_access = (
             current_user.role == UserRole.SUPER_ADMIN
             or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
@@ -1047,9 +1346,9 @@ async def log_email(
         )
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to log emails for this lead")
-    
+
     notification_service = NotificationService(db)
-    
+
     # Auto-assignment: if lead is in unassigned pool and user has a dealership (only for sent emails)
     auto_assigned = False
     if email_in.direction == "sent":
@@ -1059,19 +1358,22 @@ async def log_email(
     
     # Update last contacted for sent emails
     if email_in.direction == "sent":
-        lead.last_contacted_at = datetime.utcnow()
-        lead.last_activity_at = datetime.utcnow()
+        lead.last_contacted_at = utc_now()
+        lead.last_activity_at = utc_now()
         if not lead.first_contacted_at:
-            lead.first_contacted_at = datetime.utcnow()
+            lead.first_contacted_at = utc_now()
     
     activity_type = ActivityType.EMAIL_SENT if email_in.direction == "sent" else ActivityType.EMAIL_RECEIVED
         
     # Log email as activity
     performer_name = f"{current_user.first_name} {current_user.last_name}"
+    description = f"Email {email_in.direction} by {performer_name}: {email_in.subject}"
+    if is_skate_action:
+        description = f"[SKATE] {description}"
     await ActivityService.log_activity(
         db,
         activity_type=activity_type,
-        description=f"Email {email_in.direction} by {performer_name}: {email_in.subject}",
+        description=description,
         user_id=current_user.id,
         lead_id=lead.id,
         dealership_id=lead.dealership_id,
@@ -1080,7 +1382,8 @@ async def log_email(
             "body": email_in.body,
             "direction": email_in.direction,
             "performer_name": performer_name,
-            "auto_assigned": auto_assigned
+            "auto_assigned": auto_assigned,
+            "is_skate_action": is_skate_action
         }
     )
     
@@ -1126,7 +1429,7 @@ async def delete_lead(
             "lead_email": lead.email,
             "lead_phone": lead.phone,
             "performer_name": performer_name,
-            "deleted_at": datetime.utcnow().isoformat()
+            "deleted_at": utc_now().isoformat()
         }
     )
     

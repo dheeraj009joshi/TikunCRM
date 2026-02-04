@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, verify_password, get_password_hash, verify_token
+from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User, UserRole
 from app.models.dealership import Dealership
@@ -358,7 +359,7 @@ async def reset_password(
     
     # Update password
     user.password_hash = get_password_hash(request.new_password)
-    user.password_changed_at = datetime.utcnow()
+    user.password_changed_at = utc_now()
     user.must_change_password = False
     
     # Mark token as used
@@ -400,7 +401,7 @@ async def change_password(
     
     # Update password
     current_user.password_hash = get_password_hash(request.new_password)
-    current_user.password_changed_at = datetime.utcnow()
+    current_user.password_changed_at = utc_now()
     current_user.must_change_password = False
     
     await db.commit()

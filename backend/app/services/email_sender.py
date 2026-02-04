@@ -18,6 +18,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.timezone import utc_now
+
 from app.core.config import settings
 from app.core.encryption import decrypt_value
 from app.models.email_log import EmailLog, EmailDirection, EmailDeliveryStatus
@@ -758,7 +760,7 @@ class EmailService:
                 subject=final_subject,
                 body_text=final_body_text,
                 body_html=final_body_html,
-                sent_at=datetime.utcnow(),
+                sent_at=utc_now(),
                 delivery_status=None,
                 attachments=[]
             )

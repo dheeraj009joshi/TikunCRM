@@ -89,7 +89,7 @@ export const ACTIVITY_TYPE_INFO: Record<ActivityType, { label: string; icon: str
 export const ActivityService = {
     // List activities with optional filters
     async listActivities(params: ActivityListParams = {}): Promise<ActivityListResponse> {
-        const response = await apiClient.get(ACTIVITIES_PREFIX, { params });
+        const response = await apiClient.get(`${ACTIVITIES_PREFIX}/`, { params });
         return response.data;
     },
 
@@ -104,8 +104,12 @@ export const ActivityService = {
         duration_seconds?: number;
         outcome: string;
         notes?: string;
+        confirmSkate?: boolean;
     }): Promise<Activity> {
-        const response = await apiClient.post(`/leads/${leadId}/log-call`, data);
+        const response = await apiClient.post(`/leads/${leadId}/log-call`, {
+            ...data,
+            confirm_skate: data.confirmSkate ?? false
+        });
         return response.data;
     },
 
@@ -114,8 +118,12 @@ export const ActivityService = {
         subject: string;
         body?: string;
         direction: 'sent' | 'received';
+        confirmSkate?: boolean;
     }): Promise<Activity> {
-        const response = await apiClient.post(`/leads/${leadId}/log-email`, data);
+        const response = await apiClient.post(`/leads/${leadId}/log-email`, {
+            ...data,
+            confirm_skate: data.confirmSkate ?? false
+        });
         return response.data;
     }
 };

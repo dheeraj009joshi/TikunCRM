@@ -12,20 +12,26 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
+from app.core.timezone import utc_now
 
 if TYPE_CHECKING:
     from app.models.user import User
 
 
 class NotificationType(str, Enum):
-    """Types of notifications"""
-    EMAIL_RECEIVED = "email_received"      # New email reply from a lead
-    LEAD_ASSIGNED = "lead_assigned"        # Lead was assigned to user
-    LEAD_UPDATED = "lead_updated"          # Lead status changed
-    FOLLOW_UP_DUE = "follow_up_due"        # Follow-up reminder
-    FOLLOW_UP_OVERDUE = "follow_up_overdue"  # Missed follow-up
-    SYSTEM = "system"                       # System notifications
-    MENTION = "mention"                     # User was mentioned
+    """Types of notifications. Values must match PostgreSQL notificationtype enum (uppercase)."""
+    EMAIL_RECEIVED = "EMAIL_RECEIVED"      # New email reply from a lead
+    LEAD_ASSIGNED = "LEAD_ASSIGNED"        # Lead was assigned to user
+    LEAD_UPDATED = "LEAD_UPDATED"          # Lead status changed
+    FOLLOW_UP_DUE = "FOLLOW_UP_DUE"        # Follow-up reminder
+    FOLLOW_UP_OVERDUE = "FOLLOW_UP_OVERDUE"  # Missed follow-up
+    SYSTEM = "SYSTEM"                       # System notifications
+    MENTION = "MENTION"                     # User was mentioned
+    APPOINTMENT_REMINDER = "APPOINTMENT_REMINDER"  # Appointment reminder
+    APPOINTMENT_MISSED = "APPOINTMENT_MISSED"      # Missed appointment
+    NEW_LEAD = "NEW_LEAD"                  # New lead in dealership
+    ADMIN_REMINDER = "ADMIN_REMINDER"      # Admin reminder to salesperson
+    SKATE_ALERT = "SKATE_ALERT"            # Another salesperson tried to act on assigned lead
 
 
 class Notification(Base):
@@ -104,7 +110,7 @@ class Notification(Base):
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False,
         index=True  # For sorting by newest
     )

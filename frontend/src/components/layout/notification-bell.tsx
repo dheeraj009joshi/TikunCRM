@@ -9,6 +9,7 @@ import {
     RefreshCw,
     Clock,
     AlertCircle,
+    AlertTriangle,
     Info,
     AtSign,
     Check,
@@ -16,7 +17,7 @@ import {
     Loader2,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useNotificationEvents } from "@/hooks/use-websocket"
 import { formatRelativeTimeInTimezone } from "@/utils/timezone"
 
@@ -31,6 +32,7 @@ import {
     NotificationService,
     Notification,
     NotificationType,
+    normalizeNotificationType,
 } from "@/services/notification-service"
 
 // Icon mapping for notification types
@@ -42,6 +44,11 @@ const typeIcons: Record<NotificationType, React.ComponentType<{ className?: stri
     follow_up_overdue: AlertCircle,
     system: Info,
     mention: AtSign,
+    appointment_reminder: Clock,
+    appointment_missed: AlertCircle,
+    new_lead: UserPlus,
+    admin_reminder: Bell,
+    skate_alert: AlertTriangle,
 }
 
 // Color mapping for notification types
@@ -53,11 +60,16 @@ const typeColors: Record<NotificationType, string> = {
     follow_up_overdue: "text-red-500 bg-red-100",
     system: "text-gray-500 bg-gray-100",
     mention: "text-purple-500 bg-purple-100",
+    appointment_reminder: "text-blue-500 bg-blue-100",
+    appointment_missed: "text-red-500 bg-red-100",
+    new_lead: "text-emerald-500 bg-emerald-100",
+    admin_reminder: "text-indigo-500 bg-indigo-100",
+    skate_alert: "text-amber-500 bg-amber-100",
 }
 
 export function NotificationBell() {
     const router = useRouter()
-    const { timezone } = useDealershipTimezone()
+    const { timezone } = useBrowserTimezone()
     const [open, setOpen] = React.useState(false)
     const [notifications, setNotifications] = React.useState<Notification[]>([])
     const [unreadCount, setUnreadCount] = React.useState(0)
@@ -225,8 +237,9 @@ export function NotificationBell() {
                     ) : (
                         <div className="divide-y">
                             {notifications.map((notification) => {
-                                const Icon = typeIcons[notification.type] || Info
-                                const colorClass = typeColors[notification.type] || "text-gray-500 bg-gray-100"
+                                const typeKey = normalizeNotificationType(notification.type) as NotificationType
+                                const Icon = typeIcons[typeKey] || Info
+                                const colorClass = typeColors[typeKey] || "text-gray-500 bg-gray-100"
                                 
                                 return (
                                     <div

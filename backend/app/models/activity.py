@@ -6,6 +6,8 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Optional, List
 
+from app.core.timezone import utc_now
+
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -117,10 +119,10 @@ class Activity(Base):
     # IP address for security auditing (optional)
     ip_address: Mapped[str] = mapped_column(String(45), nullable=True)
     
-    # Timestamp (immutable)
+    # Timestamp (immutable) - use timezone-aware UTC
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False,
         index=True
     )

@@ -32,7 +32,7 @@ import { UserAvatar } from "@/components/ui/avatar"
 import { DashboardService, DealershipAdminStats } from "@/services/dashboard-service"
 import { TeamService, UserWithStats } from "@/services/team-service"
 import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { BarChart } from "@tremor/react"
 
@@ -41,7 +41,7 @@ export function DealershipAdminDashboard() {
     const [team, setTeam] = React.useState<UserWithStats[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
-    const { timezone } = useDealershipTimezone()
+    const { timezone } = useBrowserTimezone()
 
     React.useEffect(() => {
         const fetchData = async () => {

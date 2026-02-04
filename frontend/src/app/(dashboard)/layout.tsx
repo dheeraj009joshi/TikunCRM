@@ -4,6 +4,8 @@ import * as React from "react"
 import { Sidebar } from "@/components/layout/sidebar"
 import { Header } from "@/components/layout/header"
 import { EmailConfigReminderModal } from "@/components/email-config-reminder-modal"
+import { SkateAlertDialog } from "@/components/skate-alert-dialog"
+import { SkateConfirmDialog } from "@/components/skate-confirm-dialog"
 import { WebSocketProvider } from "@/components/providers/websocket-provider"
 import { useAuthStore } from "@/stores/auth-store"
 
@@ -67,6 +69,8 @@ export default function DashboardLayout({
                     open={showReminder} 
                     onOpenChange={handleReminderClose}
                 />
+                <SkateAlertDialog />
+                <SkateConfirmDialog />
             </div>
         </WebSocketProvider>
     )

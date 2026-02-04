@@ -55,9 +55,11 @@ import { AssignToDealershipModal, AssignToSalespersonModal } from "@/components/
 import { EmailComposerModal } from "@/components/emails/email-composer-modal"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
 import { BookAppointmentModal } from "@/components/appointments/book-appointment-modal"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
 import { useLeadUpdateEvents, useActivityEvents } from "@/hooks/use-websocket"
-import { formatDateInTimezone } from "@/utils/timezone"
+import { LocalTime } from "@/components/ui/local-time"
+import { getSkateAttemptDetail } from "@/lib/skate-alert"
+import { useSkateAlertStore } from "@/stores/skate-alert-store"
+import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
 import {
     AlertDialog,
     AlertDialogAction,
@@ -105,7 +107,6 @@ export default function LeadDetailsPage() {
     const leadId = params.id as string
     const noteIdFromUrl = searchParams.get("note")
     const { canAssignToSalesperson, canAssignToDealership, role, isDealershipLevel, isSuperAdmin } = useRole()
-    const { timezone } = useDealershipTimezone()
     const user = useAuthStore(state => state.user)
     
     const [lead, setLead] = React.useState<Lead | null>(null)
@@ -143,6 +144,8 @@ export default function LeadDetailsPage() {
     const [replyingTo, setReplyingTo] = React.useState<string | null>(null)
     const [replyContent, setReplyContent] = React.useState("")
     const [mentionedUserIds, setMentionedUserIds] = React.useState<string[]>([])
+    // Ref for pending SKATE confirmation data
+    const pendingNoteSkateRef = React.useRef<{ content: string; userIds?: string[] } | null>(null)
     // Which note threads have replies expanded (click to load replies)
     const [expandedReplies, setExpandedReplies] = React.useState<Set<string>>(new Set())
     // Active tab: default to Notes when opening from mention link (?note=activity_id)
@@ -216,8 +219,34 @@ export default function LeadDetailsPage() {
     // Listen for real-time lead updates via WebSocket
     const handleLeadUpdate = React.useCallback((data: any) => {
         if (data.lead_id === leadId) {
-            // Refresh lead data when it's updated
-            fetchLead()
+            console.log("Received lead update:", data)
+            
+            // Handle different update types for optimistic UI updates
+            if (data.update_type === "assigned" && data.assigned_to_user) {
+                // Update assigned user in realtime without full refetch
+                setLead(prev => prev ? {
+                    ...prev,
+                    assigned_to: data.assigned_to,
+                    assigned_to_user: data.assigned_to_user,
+                    dealership: data.dealership || prev.dealership
+                } : null)
+            } else if (data.update_type === "dealership_assigned" && data.dealership) {
+                // Update dealership in realtime
+                setLead(prev => prev ? {
+                    ...prev,
+                    dealership_id: data.dealership_id,
+                    dealership: data.dealership
+                } : null)
+            } else if (data.update_type === "status_changed") {
+                // Update status in realtime
+                setLead(prev => prev ? {
+                    ...prev,
+                    status: data.status
+                } : null)
+            } else {
+                // For other updates, do a full refetch
+                fetchLead()
+            }
         }
     }, [leadId, fetchLead])
     
@@ -226,16 +255,34 @@ export default function LeadDetailsPage() {
     // Listen for real-time activity updates via WebSocket
     const handleNewActivity = React.useCallback((data: any) => {
         if (data.lead_id === leadId) {
-            // Refresh activities and lead data so Lead Context (DEALERSHIP, ASSIGNED TO) updates
-            // e.g. when a note triggers auto-assignment
-            fetchActivities()
-            fetchLead()
+            console.log("Received new activity:", data)
+            
+            // Check if this is an assignment activity that might change Lead Context
+            const assignmentTypes = ["lead_assigned", "lead_reassigned"]
+            if (assignmentTypes.includes(data.activity?.type)) {
+                // Refresh both activities and lead data for assignment changes
+                fetchActivities()
+                fetchLead()
+            } else if (data.activity) {
+                // For other activities, add to timeline optimistically
+                setActivities(prev => {
+                    // Check if activity already exists (avoid duplicates)
+                    if (prev.some(a => a.id === data.activity.id)) {
+                        return prev
+                    }
+                    // Add new activity to the beginning of the list
+                    return [data.activity, ...prev]
+                })
+            } else {
+                // Fallback: refetch if no activity data
+                fetchActivities()
+            }
         }
     }, [leadId, fetchActivities, fetchLead])
     
     useActivityEvents(leadId, handleNewActivity)
 
-    const handleStatusChange = async (newStatus: string, notes?: string) => {
+    const handleStatusChange = async (newStatus: string, notes?: string, confirmSkate?: boolean) => {
         if (!lead) return
         
         // If changing to lost, show the lost reason modal
@@ -246,11 +293,21 @@ export default function LeadDetailsPage() {
         
         setIsUpdatingStatus(true)
         try {
-            await LeadService.updateLeadStatus(lead.id, newStatus, notes)
-            setLead({ ...lead, status: newStatus })
-            fetchActivities() // Refresh to show the status change with reason
+            const result = await LeadService.updateLeadStatus(lead.id, newStatus, notes, confirmSkate)
+            // Check if this is a skate warning response
+            if (isSkateWarningResponse(result)) {
+                useSkateConfirmStore.getState().show(
+                    result as SkateWarningInfo,
+                    () => handleStatusChange(newStatus, notes, true) // Retry with confirmation
+                )
+            } else {
+                setLead({ ...lead, status: newStatus })
+                fetchActivities() // Refresh to show the status change with reason
+            }
         } catch (error) {
-            console.error("Failed to update status:", error)
+            const skate = getSkateAttemptDetail(error)
+            if (skate) useSkateAlertStore.getState().show(skate)
+            else console.error("Failed to update status:", error)
         } finally {
             setIsUpdatingStatus(false)
         }
@@ -278,36 +335,80 @@ export default function LeadDetailsPage() {
         }
     }
 
-    const handleAddNote = async () => {
-        if (!lead || !newNote.trim()) return
+    const handleAddNote = async (confirmSkate?: boolean) => {
+        if (!lead) return
+        
+        // If confirmSkate is true, use the pending values from ref
+        let noteContent: string
+        let userIds: string[] | undefined
+        
+        if (confirmSkate && pendingNoteSkateRef.current) {
+            noteContent = pendingNoteSkateRef.current.content
+            userIds = pendingNoteSkateRef.current.userIds
+        } else {
+            if (!newNote.trim()) return
+            noteContent = String(newNote)
+            userIds = mentionedUserIds.length > 0 ? mentionedUserIds.map(String) : undefined
+        }
+        
         setIsAddingNote(true)
+        const leadId = String(lead.id)
+        
         try {
-            await LeadService.addNote(lead.id, newNote, {
-                mentioned_user_ids: mentionedUserIds.length > 0 ? mentionedUserIds : undefined
+            const result = await LeadService.addNote(leadId, noteContent, {
+                mentioned_user_ids: userIds,
+                confirmSkate: Boolean(confirmSkate)
             })
-            setNewNote("")
-            setMentionedUserIds([])
-            fetchActivities() // Refresh activities to show new note
-        } catch (error) {
-            console.error("Failed to add note:", error)
+            // Check if this is a skate warning response
+            if (isSkateWarningResponse(result)) {
+                // Store the values for retry
+                pendingNoteSkateRef.current = { content: noteContent, userIds }
+                useSkateConfirmStore.getState().show(
+                    result as SkateWarningInfo,
+                    () => {
+                        // Use setTimeout to break out of any potential sync issues
+                        setTimeout(() => handleAddNote(true), 0)
+                    }
+                )
+            } else {
+                pendingNoteSkateRef.current = null
+                setNewNote("")
+                setMentionedUserIds([])
+                fetchActivities() // Refresh activities to show new note
+            }
+        } catch (err) {
+            pendingNoteSkateRef.current = null
+            // Safely log error without causing serialization issues
+            console.error("Failed to add note:", err instanceof Error ? err.message : String(err))
         } finally {
             setIsAddingNote(false)
         }
     }
     
-    const handleLogCall = async (outcome: string, notes?: string, duration?: number) => {
+    const handleLogCall = async (outcome: string, notes?: string, duration?: number, confirmSkate?: boolean) => {
         if (!lead) return
         setIsLoggingCall(true)
         try {
-            await ActivityService.logCall(lead.id, {
+            const result = await ActivityService.logCall(lead.id, {
                 outcome,
                 notes,
-                duration_seconds: duration
+                duration_seconds: duration,
+                confirmSkate
             })
-            fetchActivities() // Refresh activities
-            fetchLead() // Refresh lead to update last_contacted_at
+            // Check if this is a skate warning response
+            if (isSkateWarningResponse(result)) {
+                useSkateConfirmStore.getState().show(
+                    result as SkateWarningInfo,
+                    () => handleLogCall(outcome, notes, duration, true) // Retry with confirmation
+                )
+            } else {
+                fetchActivities() // Refresh activities
+                fetchLead() // Refresh lead to update last_contacted_at
+            }
         } catch (error) {
-            console.error("Failed to log call:", error)
+            const skate = getSkateAttemptDetail(error)
+            if (skate) useSkateAlertStore.getState().show(skate)
+            else console.error("Failed to log call:", error)
         } finally {
             setIsLoggingCall(false)
         }
@@ -356,7 +457,7 @@ export default function LeadDetailsPage() {
                         {lead.source.replace('_', ' ')}
                     </Badge>
                     <span className="text-xs text-muted-foreground">
-                        Created {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
+                        Created <LocalTime date={lead.created_at} />
                     </span>
                     {isSuperAdmin && !isMentionOnly && (
                         <Button
@@ -506,7 +607,7 @@ export default function LeadDetailsPage() {
                                         <Calendar className="h-4 w-4" /> Created
                                     </span>
                                     <span className="font-medium">
-                                        {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
+                                        <LocalTime date={lead.created_at} />
                                     </span>
                                 </div>
                                 {lead.last_contacted_at && (
@@ -515,7 +616,7 @@ export default function LeadDetailsPage() {
                                             <Clock className="h-4 w-4" /> Last Contact
                                         </span>
                                         <span className="font-medium">
-                                            {formatDateInTimezone(lead.last_contacted_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
+                                            <LocalTime date={lead.last_contacted_at} />
                                         </span>
                                     </div>
                                 )}
@@ -767,7 +868,7 @@ export default function LeadDetailsPage() {
                                                             )}
                                                         </div>
                                                         <span className="text-xs text-muted-foreground whitespace-nowrap">
-                                                            {formatDateInTimezone(activity.created_at, timezone, { dateStyle: "short", timeStyle: "short" })}
+                                                            <LocalTime date={activity.created_at} />
                                                         </span>
                                                     </div>
                                                     
@@ -888,7 +989,7 @@ export default function LeadDetailsPage() {
                                                                     </span>
                                                                 </div>
                                                                 <span className="text-xs text-muted-foreground">
-                                                                    {formatDateInTimezone(note.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
+                                                                    <LocalTime date={note.created_at} />
                                                                 </span>
                                                             </div>
                                                             <p className="text-sm text-muted-foreground whitespace-pre-wrap">
@@ -953,7 +1054,7 @@ export default function LeadDetailsPage() {
                                                                                     </span>
                                                                                 </div>
                                                                                 <span className="text-xs text-muted-foreground">
-                                                                                    {formatDateInTimezone(reply.created_at, timezone, { dateStyle: "short", timeStyle: "short" })}
+                                                                                    <LocalTime date={reply.created_at} />
                                                                                 </span>
                                                                             </div>
                                                                             <p className="text-sm text-muted-foreground whitespace-pre-wrap">
@@ -1032,7 +1133,7 @@ export default function LeadDetailsPage() {
                                 />
                                 <div className="flex justify-end">
                                     <Button 
-                                        onClick={handleAddNote}
+                                        onClick={() => handleAddNote()}
                                         disabled={!newNote.trim() || isAddingNote}
                                     >
                                         {isAddingNote ? (

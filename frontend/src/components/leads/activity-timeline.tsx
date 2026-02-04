@@ -13,6 +13,7 @@ import {
     AlertCircle
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { formatDateInTimezone } from "@/utils/timezone"
 
 const activityTypes = {
     LEAD_CREATED: { icon: UserPlus, color: "text-blue-500", bg: "bg-blue-500/10" },
@@ -39,9 +40,10 @@ export interface ActivityItem {
 interface TimelineProps {
     activities: ActivityItem[]
     isLoading?: boolean
+    timezone?: string
 }
 
-export function ActivityTimeline({ activities, isLoading }: TimelineProps) {
+export function ActivityTimeline({ activities, isLoading, timezone = "UTC" }: TimelineProps) {
     if (isLoading) {
         return (
             <div className="flex flex-col gap-8 animate-pulse p-4">
@@ -84,7 +86,7 @@ export function ActivityTimeline({ activities, isLoading }: TimelineProps) {
                         <div className="flex flex-col gap-1 pt-1">
                             <div className="flex items-center gap-2">
                                 <span className="text-sm font-bold">{activity.description}</span>
-                                <span className="text-[10px] text-muted-foreground bg-muted px-1.5 rounded py-0.5 font-medium uppercase">{activity.created_at}</span>
+                                <span className="text-[10px] text-muted-foreground bg-muted px-1.5 rounded py-0.5 font-medium">{formatDateInTimezone(activity.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}</span>
                             </div>
                             <p className="text-sm text-muted-foreground">
                                 By <span className="font-medium text-foreground">{activity.user_name}</span>

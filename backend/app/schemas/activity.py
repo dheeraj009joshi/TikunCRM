@@ -56,3 +56,19 @@ class NoteCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=5000)
     parent_id: Optional[UUID] = None  # For replies to existing notes
     mentioned_user_ids: Optional[List[UUID]] = None  # For @mentions
+    confirm_skate: bool = False  # If True, user confirmed they want to proceed despite SKATE warning
+
+
+class CallLogCreate(BaseModel):
+    """Schema for logging a call"""
+    duration_seconds: Optional[int] = None
+    notes: Optional[str] = None
+    outcome: Optional[str] = None  # e.g., "answered", "no_answer", "voicemail"
+    confirm_skate: bool = False  # If True, user confirmed they want to proceed despite SKATE warning
+
+
+class EmailLogCreate(BaseModel):
+    """Schema for logging an email"""
+    subject: Optional[str] = None
+    notes: Optional[str] = None
+    confirm_skate: bool = False  # If True, user confirmed they want to proceed despite SKATE warning

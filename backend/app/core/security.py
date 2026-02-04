@@ -8,6 +8,7 @@ import bcrypt
 from jose import JWTError, jwt
 
 from app.core.config import settings
+from app.core.timezone import utc_now
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -32,9 +33,9 @@ def create_access_token(
 ) -> str:
     """Create JWT access token"""
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = utc_now() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(
+        expire = utc_now() + timedelta(
             minutes=settings.access_token_expire_minutes
         )
     
@@ -61,9 +62,9 @@ def create_refresh_token(
 ) -> str:
     """Create JWT refresh token"""
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = utc_now() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(
+        expire = utc_now() + timedelta(
             days=settings.refresh_token_expire_days
         )
     

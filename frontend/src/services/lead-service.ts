@@ -75,7 +75,7 @@ export interface LeadListParams {
 export const LeadService = {
     // List leads with role-based filtering applied server-side
     async listLeads(params: LeadListParams = {}): Promise<LeadListResponse> {
-        const response = await apiClient.get(LEADS_PREFIX, { params });
+        const response = await apiClient.get(`${LEADS_PREFIX}/`, { params });
         return response.data;
     },
 
@@ -99,13 +99,17 @@ export const LeadService = {
 
     // Create new lead
     async createLead(data: Partial<Lead>): Promise<Lead> {
-        const response = await apiClient.post(LEADS_PREFIX, data);
+        const response = await apiClient.post(`${LEADS_PREFIX}/`, data);
         return response.data;
     },
 
     // Update lead status
-    async updateLeadStatus(id: string, status: string, notes?: string): Promise<Lead> {
-        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/status`, { status, notes });
+    async updateLeadStatus(id: string, status: string, notes?: string, confirmSkate?: boolean): Promise<Lead> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/status`, { 
+            status, 
+            notes,
+            confirm_skate: confirmSkate ?? false
+        });
         return response.data;
     },
 
@@ -146,13 +150,24 @@ export const LeadService = {
         options?: { 
             parent_id?: string;
             mentioned_user_ids?: string[];
+            confirmSkate?: boolean;
         }
     ): Promise<Lead> {
-        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/notes`, { 
-            content,
-            parent_id: options?.parent_id,
-            mentioned_user_ids: options?.mentioned_user_ids
-        });
+        // Explicitly construct plain object to avoid any circular references
+        const requestBody: Record<string, unknown> = {
+            content: String(content),
+            confirm_skate: options?.confirmSkate === true
+        };
+        
+        if (options?.parent_id) {
+            requestBody.parent_id = String(options.parent_id);
+        }
+        
+        if (options?.mentioned_user_ids && options.mentioned_user_ids.length > 0) {
+            requestBody.mentioned_user_ids = options.mentioned_user_ids.map(id => String(id));
+        }
+        
+        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/notes`, requestBody);
         return response.data;
     },
 

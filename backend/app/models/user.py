@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.permissions import UserRole
+from app.core.timezone import utc_now
 from app.db.database import Base
 
 if TYPE_CHECKING:
@@ -153,12 +154,12 @@ class User(Base):
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         onupdate=datetime.utcnow,
         nullable=False
     )

@@ -9,12 +9,74 @@ interface PushSubscriptionState {
   isLoading: boolean
   error: string | null
   permission: NotificationPermission | null
+  browserInfo: {
+    isSafari: boolean
+    isOldSafari: boolean
+    isIOS: boolean
+    browserName: string
+  } | null
 }
 
 interface UsePushNotificationsReturn extends PushSubscriptionState {
   subscribe: () => Promise<boolean>
   unsubscribe: () => Promise<boolean>
   requestPermission: () => Promise<NotificationPermission>
+}
+
+// Detect browser type and version
+function getBrowserInfo() {
+  if (typeof window === "undefined") return null
+  
+  const ua = navigator.userAgent
+  const isSafari = /^((?!chrome|android).)*safari/i.test(ua)
+  const isIOS = /iPad|iPhone|iPod/.test(ua)
+  
+  // Check Safari version for macOS
+  let isOldSafari = false
+  if (isSafari && !isIOS) {
+    // Safari version is in the UA string like "Version/16.0"
+    const versionMatch = ua.match(/Version\/(\d+)/)
+    if (versionMatch) {
+      const majorVersion = parseInt(versionMatch[1], 10)
+      // Safari 16+ supports Web Push (macOS Ventura 13+)
+      isOldSafari = majorVersion < 16
+    }
+  }
+  
+  // Determine browser name for display
+  let browserName = "your browser"
+  if (isSafari) {
+    browserName = isIOS ? "Safari on iOS" : "Safari"
+  } else if (ua.includes("Chrome")) {
+    browserName = "Chrome"
+  } else if (ua.includes("Firefox")) {
+    browserName = "Firefox"
+  } else if (ua.includes("Edge")) {
+    browserName = "Edge"
+  }
+  
+  return { isSafari, isOldSafari, isIOS, browserName }
+}
+
+// Get user-friendly error message based on browser
+function getUnsupportedMessage(browserInfo: ReturnType<typeof getBrowserInfo>): string {
+  if (!browserInfo) {
+    return "Push notifications are not supported in this browser"
+  }
+  
+  if (browserInfo.isIOS) {
+    return "Push notifications on iOS require adding this app to your home screen first. Tap the Share button and select 'Add to Home Screen'."
+  }
+  
+  if (browserInfo.isOldSafari) {
+    return "Push notifications require Safari 16+ (macOS Ventura or later). Please update your macOS or try Chrome/Firefox."
+  }
+  
+  if (browserInfo.isSafari) {
+    return "Push notifications in Safari require macOS Ventura (13.0) or later. Make sure you've allowed notifications in System Settings > Notifications."
+  }
+  
+  return "Push notifications are not supported in this browser. Please try Chrome, Firefox, or Edge."
 }
 
 // Get VAPID public key from environment or backend
@@ -55,25 +117,32 @@ export function usePushNotifications(): UsePushNotificationsReturn {
     isLoading: true,
     error: null,
     permission: null,
+    browserInfo: null,
   })
 
   // Check support and current subscription status
   useEffect(() => {
     async function checkStatus() {
+      const browserInfo = getBrowserInfo()
+      
       // Check if push is supported
-      const isSupported = 
+      const hasBasicSupport = 
         typeof window !== "undefined" &&
         "serviceWorker" in navigator &&
         "PushManager" in window &&
         "Notification" in window
+      
+      // Additional check for old Safari
+      const isSupported = hasBasicSupport && !(browserInfo?.isOldSafari)
 
       if (!isSupported) {
         setState({
           isSupported: false,
           isSubscribed: false,
           isLoading: false,
-          error: "Push notifications are not supported in this browser",
+          error: getUnsupportedMessage(browserInfo),
           permission: null,
+          browserInfo,
         })
         return
       }
@@ -91,14 +160,17 @@ export function usePushNotifications(): UsePushNotificationsReturn {
           isLoading: false,
           error: null,
           permission,
+          browserInfo,
         })
       } catch (error) {
+        console.error("[Push] Failed to check subscription status:", error)
         setState({
           isSupported: true,
           isSubscribed: false,
           isLoading: false,
-          error: "Failed to check subscription status",
+          error: "Failed to check subscription status. Try refreshing the page.",
           permission: Notification.permission,
+          browserInfo,
         })
       }
     }

@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
+from app.core.timezone import utc_now
 
 if TYPE_CHECKING:
     from app.models.lead import Lead
@@ -126,7 +127,7 @@ class EmailLog(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False
     )
     

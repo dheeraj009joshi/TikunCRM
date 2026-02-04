@@ -22,6 +22,7 @@ class FollowUpBase(BaseModel):
 class FollowUpCreate(FollowUpBase):
     """Schema for creating a follow-up"""
     lead_id: UUID
+    confirm_skate: bool = False  # If True, user confirmed they want to proceed despite SKATE warning
 
 
 class FollowUpUpdate(BaseModel):

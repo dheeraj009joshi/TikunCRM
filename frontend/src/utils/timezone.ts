@@ -1,129 +1,106 @@
 /**
- * Timezone utilities for dealership-based timezone handling
+ * Simple timezone utilities.
+ * Backend stores UTC. Frontend displays in user's local time.
  */
 import { formatDistanceToNow } from "date-fns";
 
 /**
- * Common timezones for dealerships
+ * Parse a date string as UTC.
+ * Backend sends timestamps without timezone suffix, but they ARE in UTC.
  */
-export const COMMON_TIMEZONES = [
-    { value: "UTC", label: "UTC (Coordinated Universal Time)" },
-    { value: "America/New_York", label: "Eastern Time (ET)" },
-    { value: "America/Chicago", label: "Central Time (CT)" },
-    { value: "America/Denver", label: "Mountain Time (MT)" },
-    { value: "America/Los_Angeles", label: "Pacific Time (PT)" },
-    { value: "America/Phoenix", label: "Arizona Time (MST)" },
-    { value: "Europe/London", label: "London (GMT/BST)" },
-    { value: "Europe/Paris", label: "Paris (CET/CEST)" },
-    { value: "Europe/Berlin", label: "Berlin (CET/CEST)" },
-    { value: "Asia/Dubai", label: "Dubai (GST)" },
-    { value: "Asia/Kolkata", label: "India (IST)" },
-    { value: "Asia/Singapore", label: "Singapore (SGT)" },
-    { value: "Asia/Tokyo", label: "Tokyo (JST)" },
-    { value: "Australia/Sydney", label: "Sydney (AEDT/AEST)" },
-    { value: "Australia/Melbourne", label: "Melbourne (AEDT/AEST)" },
-];
+function parseAsUTC(date: Date | string): Date {
+    if (date instanceof Date) return date;
+    
+    let str = String(date).trim();
+    if (!str) return new Date(NaN);
+    
+    // If already has timezone info (Z or +/-offset), parse directly
+    if (/Z$|[+-]\d{2}:?\d{2}$/.test(str)) {
+        return new Date(str);
+    }
+    
+    // No timezone - backend sends UTC, so append Z
+    // Also handle space separator (some APIs use "2026-02-04 05:52:00")
+    str = str.replace(" ", "T");
+    return new Date(str + "Z");
+}
 
 /**
- * Convert a UTC date to a specific timezone
+ * Format a date in the user's LOCAL browser time.
+ * This is the main function to use for all displayed timestamps.
+ * 
+ * Example: If backend stores 05:52 UTC and user is in India (IST = UTC+5:30),
+ * this will display "11:22 AM"
  */
-function convertToTimezone(date: Date, timezone: string): Date {
+export function formatDateInLocal(
+    date: Date | string | null | undefined,
+    _options?: any  // Ignored - kept for backward compatibility
+): string {
+    if (!date) return "—";
+    
     try {
-        // Create a formatter for the target timezone
-        const formatter = new Intl.DateTimeFormat("en-US", {
-            timeZone: timezone,
+        // Parse as UTC first
+        const d = parseAsUTC(date);
+        if (isNaN(d.getTime())) return "—";
+        
+        // toLocaleString WITHOUT timeZone option = uses browser's local timezone
+        return d.toLocaleString("en-US", {
+            month: "short",
+            day: "numeric",
             year: "numeric",
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
+            hour: "numeric",
             minute: "2-digit",
-            second: "2-digit",
-            hour12: false,
+            hour12: true
         });
-        
-        // Format the date in the target timezone
-        const parts = formatter.formatToParts(date);
-        const year = parseInt(parts.find(p => p.type === "year")?.value || "0")
-        const month = parseInt(parts.find(p => p.type === "month")?.value || "0") - 1
-        const day = parseInt(parts.find(p => p.type === "day")?.value || "0")
-        const hour = parseInt(parts.find(p => p.type === "hour")?.value || "0")
-        const minute = parseInt(parts.find(p => p.type === "minute")?.value || "0")
-        const second = parseInt(parts.find(p => p.type === "second")?.value || "0")
-        
-        // Create a new date in local time (this represents the timezone-adjusted time)
-        return new Date(year, month, day, hour, minute, second)
-    } catch (error) {
-        console.error("Error converting to timezone:", error);
-        return date;
+    } catch (e) {
+        console.error("[formatDateInLocal] Error:", e);
+        return "—";
     }
 }
 
 /**
- * Format a date in the dealership timezone
+ * Format relative time (e.g., "2 hours ago").
  */
-export function formatDateInTimezone(
-    date: Date | string,
-    timezone: string = "UTC",
-    options: Intl.DateTimeFormatOptions = {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZoneName: "short",
-    }
-): string {
+export function formatRelativeTime(date: Date | string | null | undefined): string {
+    if (!date) return "unknown";
+    
     try {
-        const dateObj = typeof date === "string" ? new Date(date) : date;
-        const formatter = new Intl.DateTimeFormat("en-US", {
-            ...options,
-            timeZone: timezone,
-        });
-        return formatter.format(dateObj);
-    } catch (error) {
-        console.error("Error formatting date in timezone:", error);
-        const dateObj = typeof date === "string" ? new Date(date) : date;
-        return dateObj.toLocaleString();
-    }
-}
-
-/**
- * Format relative time (e.g., "2 hours ago")
- * Note: Timezone doesn't affect relative time - the difference between two
- * UTC timestamps is the same regardless of timezone. We just use the UTC
- * timestamp directly.
- */
-export function formatRelativeTimeInTimezone(
-    date: Date | string,
-    timezone: string = "UTC"  // Kept for API compatibility, but not used
-): string {
-    try {
-        const dateObj = typeof date === "string" ? new Date(date) : date;
-        
-        // For relative time, timezone doesn't matter - the difference 
-        // between two timestamps is the same in any timezone.
-        // Just compare the UTC timestamps directly.
-        return formatDistanceToNow(dateObj, { addSuffix: true });
-    } catch (error) {
-        console.error("Error formatting relative time:", error);
+        // Parse as UTC first
+        const d = parseAsUTC(date);
+        if (isNaN(d.getTime())) return "unknown";
+        return formatDistanceToNow(d, { addSuffix: true });
+    } catch (e) {
+        console.error("[formatRelativeTime] Error:", e);
         return "unknown";
     }
 }
 
-/**
- * Get timezone abbreviation (e.g., "EST", "PST")
- */
-export function getTimezoneAbbreviation(timezone: string): string {
-    try {
-        const date = new Date();
-        const formatter = new Intl.DateTimeFormat("en-US", {
-            timeZone: timezone,
-            timeZoneName: "short",
-        });
-        const parts = formatter.formatToParts(date);
-        const tzName = parts.find((part) => part.type === "timeZoneName");
-        return tzName?.value || timezone;
-    } catch (error) {
-        return timezone;
-    }
+// Keep these for backward compatibility with existing code
+export const DEFAULT_TIMEZONE = "America/New_York";
+
+export function formatDateInTimezone(
+    date: Date | string | null | undefined,
+    _timezone?: string,
+    _options?: any
+): string {
+    return formatDateInLocal(date);
 }
+
+export function formatRelativeTimeInTimezone(
+    date: Date | string | null | undefined,
+    _timezone?: string
+): string {
+    return formatRelativeTime(date);
+}
+
+export function convertLocalToUTC(date: Date): string {
+    return date.toISOString();
+}
+
+export const COMMON_TIMEZONES = [
+    { value: "America/New_York", label: "Eastern Time (ET)" },
+    { value: "America/Chicago", label: "Central Time (CT)" },
+    { value: "America/Denver", label: "Mountain Time (MT)" },
+    { value: "America/Los_Angeles", label: "Pacific Time (PT)" },
+    { value: "Asia/Kolkata", label: "India (IST)" },
+];

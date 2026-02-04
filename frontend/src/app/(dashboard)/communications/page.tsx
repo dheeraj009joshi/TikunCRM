@@ -37,30 +37,15 @@ import {
 import { UserEmailService } from "@/services/user-email-service"
 import { EmailComposerModal } from "@/components/emails/email-composer-modal"
 import { cn } from "@/lib/utils"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone, formatRelativeTimeInTimezone } from "@/utils/timezone"
 
 function formatDate(dateString: string, timezone: string) {
-    const date = new Date(dateString)
-    const now = new Date()
-    const diffMs = now.getTime() - date.getTime()
-    const diffHours = diffMs / (1000 * 60 * 60)
-    
-    if (diffHours < 24) {
-        return formatDateInTimezone(date, timezone, {
-            hour: '2-digit',
-            minute: '2-digit',
-            timeZone: timezone
-        })
-    } else if (diffHours < 48) {
-        return 'Yesterday'
-    } else {
-        return formatDateInTimezone(date, timezone, {
-            month: 'short',
-            day: 'numeric',
-            timeZone: timezone
-        })
-    }
+    // Always show both date and time for communications
+    return formatDateInTimezone(dateString, timezone, {
+        dateStyle: 'medium',
+        timeStyle: 'short'
+    })
 }
 
 function getDisplayName(email: EmailInboxItem): string {
@@ -145,7 +130,7 @@ type TabType = 'inbox' | 'sent' | 'all'
 export default function CommunicationsPage() {
     const router = useRouter()
     const searchParams = useSearchParams()
-    const { timezone } = useDealershipTimezone()
+    const { timezone } = useBrowserTimezone()
     const initialTab = (searchParams.get('tab') as TabType) || 'inbox'
     
     const [activeTab, setActiveTab] = React.useState<TabType>(initialTab)

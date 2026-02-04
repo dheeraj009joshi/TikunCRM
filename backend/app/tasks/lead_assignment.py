@@ -14,10 +14,13 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, selectinload
 
 from app.core.config import settings
+from app.core.timezone import utc_now
+from app.core.websocket_manager import ws_manager
 from app.models.lead import Lead, LeadStatus
 from app.models.activity import Activity, ActivityType
 from app.models.user import User
 from app.models.notification import Notification, NotificationType
+from app.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +45,15 @@ async def auto_assign_leads_from_activity():
     Check for unassigned leads that have ANY user activity and auto-assign them.
     
     Logic:
-    - Find unassigned leads (assigned_to is NULL AND dealership_id is NULL - in the pool)
+    - Find leads with no salesperson assigned (assigned_to is NULL)
     - That have at least one user-initiated activity (note, call, email, etc.)
     - Assign to the user who performed the FIRST activity
-    - Also assign to that user's dealership
+    - Also assign to that user's dealership if lead is in global pool
     
     This runs every minute as a fallback for inline auto-assignment.
+    Handles both:
+    - Leads in global pool (no dealership)
+    - Leads in a dealership but no salesperson assigned
     """
     logger.debug("Running auto-assign check...")
     
@@ -75,12 +81,11 @@ async def auto_assign_leads_from_activity():
                 .distinct()
             )
             
-            # Get unassigned leads (no assignee AND no dealership = in pool)
+            # Get leads with no salesperson assigned (including leads in dealerships)
             result = await session.execute(
                 select(Lead)
                 .where(
-                    Lead.assigned_to.is_(None),
-                    Lead.dealership_id.is_(None),
+                    Lead.assigned_to.is_(None),  # No salesperson assigned
                     Lead.id.in_(leads_with_activity_subquery)
                 )
             )
@@ -117,10 +122,17 @@ async def auto_assign_leads_from_activity():
                         # User must have a dealership to claim a lead
                         continue
                     
+                    # Check if lead is in a different dealership (user can't claim it)
+                    if lead.dealership_id is not None and lead.dealership_id != activity_user.dealership_id:
+                        logger.debug(f"User {activity_user.id} can't claim lead {lead.id} - belongs to different dealership")
+                        continue
+                    
                     # Auto-assign to the user who performed the first activity
                     lead.assigned_to = first_activity.user_id
-                    lead.dealership_id = activity_user.dealership_id
-                    lead.last_activity_at = datetime.utcnow()
+                    if lead.dealership_id is None:
+                        # Only set dealership if lead is in global pool
+                        lead.dealership_id = activity_user.dealership_id
+                    lead.last_activity_at = utc_now()
                     
                     # Create assignment activity
                     activity = Activity(
@@ -138,19 +150,34 @@ async def auto_assign_leads_from_activity():
                     )
                     session.add(activity)
                     
-                    # Create notification for the assigned user
-                    notification = Notification(
+                    # Create notification for the assigned user using NotificationService
+                    notification_service = NotificationService(session)
+                    lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+                    await notification_service.notify_lead_assigned(
                         user_id=first_activity.user_id,
-                        notification_type=NotificationType.LEAD_ASSIGNED,
-                        title="Lead Auto-Assigned",
-                        message=f"Lead {lead.first_name} {lead.last_name or ''} has been assigned to you based on your activity",
-                        link=f"/leads/{lead.id}",
-                        meta_data={
-                            "lead_id": str(lead.id),
-                            "auto_assigned": True
+                        lead_name=lead_name,
+                        lead_id=lead.id,
+                        assigned_by="System (auto-assignment)"
+                    )
+                    
+                    # Emit WebSocket events for real-time updates
+                    await ws_manager.send_to_user(
+                        first_activity.user_id,
+                        {
+                            "type": "lead:updated",
+                            "payload": {
+                                "lead_id": str(lead.id),
+                                "update_type": "assigned",
+                                "assigned_to": str(first_activity.user_id)
+                            }
                         }
                     )
-                    session.add(notification)
+                    
+                    # Refresh badges
+                    await ws_manager.send_to_user(
+                        first_activity.user_id,
+                        {"type": "badges:refresh", "payload": {}}
+                    )
                     
                     assigned_count += 1
                     logger.info(f"Auto-assigned lead {lead.id} to user {first_activity.user_id} (dealership {activity_user.dealership_id})")
@@ -183,7 +210,7 @@ async def unassign_stale_leads():
     
     async with session_maker() as session:
         try:
-            cutoff_time = datetime.utcnow() - timedelta(hours=STALE_HOURS)
+            cutoff_time = utc_now() - timedelta(hours=STALE_HOURS)
             
             # Find all assigned leads with active statuses
             result = await session.execute(
@@ -255,21 +282,36 @@ async def unassign_stale_leads():
                 )
                 session.add(activity)
                 
-                # Notify the original assignee
+                # Notify the original assignee using NotificationService
                 if old_assignee_id:
-                    notification = Notification(
+                    notification_service = NotificationService(session)
+                    lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+                    await notification_service.create_notification(
                         user_id=old_assignee_id,
                         notification_type=NotificationType.SYSTEM,
                         title="Lead Returned to Pool - No Activity",
-                        message=f"Lead {lead.first_name} {lead.last_name or ''} was returned to the unassigned pool due to {STALE_HOURS} hours of inactivity",
+                        message=f"Lead {lead_name} was returned to the unassigned pool due to {STALE_HOURS} hours of inactivity",
                         link=f"/leads/{lead.id}",
-                        meta_data={
-                            "lead_id": str(lead.id),
-                            "auto_unassigned": True,
-                            "returned_to_pool": True
+                        related_id=lead.id,
+                        related_type="lead",
+                        send_push=True
+                    )
+                    
+                    # Emit WebSocket events
+                    await ws_manager.send_to_user(
+                        old_assignee_id,
+                        {
+                            "type": "lead:updated",
+                            "payload": {
+                                "lead_id": str(lead.id),
+                                "update_type": "unassigned"
+                            }
                         }
                     )
-                    session.add(notification)
+                    await ws_manager.send_to_user(
+                        old_assignee_id,
+                        {"type": "badges:refresh", "payload": {}}
+                    )
                 
                 unassigned_count += 1
                 logger.info(f"Returned stale lead {lead.id} to unassigned pool (was assigned to {old_assignee_id}, dealership {old_dealership_id})")

@@ -4,7 +4,7 @@ const USERS_PREFIX = "/users";
 
 export const UserService = {
     async listUsers() {
-        const response = await apiClient.get(USERS_PREFIX);
+        const response = await apiClient.get(`${USERS_PREFIX}/`);
         return response.data;
     },
 
@@ -14,7 +14,7 @@ export const UserService = {
     },
 
     async createUser(data: any) {
-        const response = await apiClient.post(USERS_PREFIX, data);
+        const response = await apiClient.post(`${USERS_PREFIX}/`, data);
         return response.data;
     },
 

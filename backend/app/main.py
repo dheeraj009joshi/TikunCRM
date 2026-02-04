@@ -1,5 +1,5 @@
 """
-LeadsCRM - FastAPI Main Application
+TikunCRM - FastAPI Main Application
 """
 import logging
 from contextlib import asynccontextmanager
@@ -58,13 +58,13 @@ def create_application() -> FastAPI:
         lifespan=lifespan,
     )
     
-    # Configure CORS - Allow all origins
+    # Configure CORS - Use explicit origins when credentials=True (required by spec)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Allow all origins
+        allow_origins=settings.cors_origins_list or ["http://localhost:3000"],
         allow_credentials=True,
-        allow_methods=["*"],  # Allow all methods
-        allow_headers=["*"],  # Allow all headers
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     
     # Include API router

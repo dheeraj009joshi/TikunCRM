@@ -3,7 +3,7 @@ API v1 Router - combines all route modules
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket
+from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports
 from app.api.v1.endpoints.webhooks import sendgrid as sendgrid_webhook
 
 api_router = APIRouter()
@@ -27,6 +27,7 @@ api_router.include_router(notifications.router, prefix="/notifications", tags=["
 api_router.include_router(google_sheets.router, prefix="/google-sheets", tags=["Google Sheets Sync"])
 api_router.include_router(appointments.router, prefix="/appointments", tags=["Appointments"])
 api_router.include_router(push.router, prefix="/push", tags=["Push Notifications"])
+api_router.include_router(reports.router, prefix="/reports", tags=["Reports & Admin"])
 
 # Webhook endpoints (no auth required - secured by signatures)
 api_router.include_router(sendgrid_webhook.router, prefix="/webhooks/sendgrid", tags=["Webhooks"])

@@ -3,17 +3,18 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ServiceWorkerRegistration } from "@/components/pwa/service-worker-registration";
+import { Toaster } from "@/components/ui/toaster";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "LeadsCRM | Modern Lead Management",
+  title: "TikunCRM | Modern Lead Management",
   description: "Next-gen CRM for multi-level lead management",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "LeadsCRM",
+    title: "TikunCRM",
   },
   formatDetection: {
     telephone: false,
@@ -36,7 +37,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.className} antialiased`}>
+      <body className={`${inter.className} antialiased`} suppressHydrationWarning>
         <ThemeProvider
           attribute="class"
           defaultTheme="dark"
@@ -47,6 +48,7 @@ export default function RootLayout({
           <AuthGuard>
             {children}
           </AuthGuard>
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>

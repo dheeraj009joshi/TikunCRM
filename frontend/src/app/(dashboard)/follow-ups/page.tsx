@@ -66,7 +66,7 @@ import {
     FollowUpStatus,
     FOLLOW_UP_STATUS_INFO,
 } from "@/services/follow-up-service"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone, formatRelativeTimeInTimezone } from "@/utils/timezone"
 import { UserAvatar } from "@/components/ui/avatar"
 import { getRoleDisplayName } from "@/hooks/use-role"
@@ -74,7 +74,7 @@ import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-u
 
 export default function FollowUpsPage() {
     const router = useRouter()
-    const { timezone } = useDealershipTimezone()
+    const { timezone } = useBrowserTimezone()
     
     const [followUps, setFollowUps] = React.useState<FollowUp[]>([])
     const [isLoading, setIsLoading] = React.useState(true)

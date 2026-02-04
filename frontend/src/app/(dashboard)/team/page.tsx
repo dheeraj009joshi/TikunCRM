@@ -15,7 +15,9 @@ import {
     Inbox,
     CheckCircle,
     XCircle,
-    Eye
+    Eye,
+    Bell,
+    ClipboardList,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -58,6 +60,8 @@ import { TeamService, UserWithStats, CreateUserData } from "@/services/team-serv
 import { useRole, getRoleDisplayName } from "@/hooks/use-role"
 import { cn } from "@/lib/utils"
 import { BarChart } from "@tremor/react"
+import { SalespersonPendingTasksModal } from "@/components/team/salesperson-pending-tasks-modal"
+import { NotifySalespersonDialog } from "@/components/team/notify-salesperson-dialog"
 
 export default function TeamPage() {
     const { isSuperAdmin, isDealershipOwner, isDealershipAdmin, isDealershipLevel, user } = useRole()
@@ -73,6 +77,12 @@ export default function TeamPage() {
     const [newMember, setNewMember] = React.useState<Partial<CreateUserData>>({
         role: "salesperson"
     })
+    
+    // Pending tasks and notify modals
+    const [pendingTasksOpen, setPendingTasksOpen] = React.useState(false)
+    const [notifyDialogOpen, setNotifyDialogOpen] = React.useState(false)
+    const [selectedUserId, setSelectedUserId] = React.useState<string | null>(null)
+    const [selectedUserName, setSelectedUserName] = React.useState<string>("")
 
     const fetchTeam = React.useCallback(async () => {
         try {
@@ -355,6 +365,32 @@ export default function TeamPage() {
                                                 </Button>
                                             </DropdownMenuTrigger>
                                             <DropdownMenuContent align="end">
+                                                {/* Show pending tasks for salespersons */}
+                                                {member.role === "salesperson" && (isDealershipOwner || isDealershipAdmin) && (
+                                                    <>
+                                                        <DropdownMenuItem
+                                                            onClick={() => {
+                                                                setSelectedUserId(member.id)
+                                                                setSelectedUserName(`${member.first_name} ${member.last_name}`)
+                                                                setPendingTasksOpen(true)
+                                                            }}
+                                                        >
+                                                            <ClipboardList className="mr-2 h-4 w-4" />
+                                                            View Pending Tasks
+                                                        </DropdownMenuItem>
+                                                        <DropdownMenuItem
+                                                            onClick={() => {
+                                                                setSelectedUserId(member.id)
+                                                                setSelectedUserName(`${member.first_name} ${member.last_name}`)
+                                                                setNotifyDialogOpen(true)
+                                                            }}
+                                                        >
+                                                            <Bell className="mr-2 h-4 w-4" />
+                                                            Send Notification
+                                                        </DropdownMenuItem>
+                                                        <DropdownMenuSeparator />
+                                                    </>
+                                                )}
                                                 <DropdownMenuItem>
                                                     <Eye className="mr-2 h-4 w-4" />
                                                     View Profile
@@ -500,6 +536,30 @@ export default function TeamPage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* Pending Tasks Modal */}
+            {selectedUserId && (
+                <SalespersonPendingTasksModal
+                    open={pendingTasksOpen}
+                    onOpenChange={setPendingTasksOpen}
+                    userId={selectedUserId}
+                    userName={selectedUserName}
+                    onNotifyClick={() => {
+                        setPendingTasksOpen(false)
+                        setNotifyDialogOpen(true)
+                    }}
+                />
+            )}
+
+            {/* Notify Salesperson Dialog */}
+            {selectedUserId && (
+                <NotifySalespersonDialog
+                    open={notifyDialogOpen}
+                    onOpenChange={setNotifyDialogOpen}
+                    userId={selectedUserId}
+                    userName={selectedUserName}
+                />
+            )}
         </div>
     )
 }

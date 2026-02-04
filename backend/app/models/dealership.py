@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
+from app.core.timezone import utc_now
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -61,12 +62,12 @@ class Dealership(Base):
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         onupdate=datetime.utcnow,
         nullable=False
     )

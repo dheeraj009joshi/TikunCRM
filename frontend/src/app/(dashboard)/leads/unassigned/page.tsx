@@ -40,8 +40,9 @@ import {
 import { LeadService, Lead, LeadListResponse } from "@/services/lead-service"
 import { AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { useRole } from "@/hooks/use-role"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
+import { useWebSocketEvent } from "@/hooks/use-websocket"
 
 const LEAD_SOURCES = [
     { value: "all", label: "All Sources" },
@@ -54,8 +55,8 @@ const LEAD_SOURCES = [
 ]
 
 export default function UnassignedLeadsPage() {
-    const { isSuperAdmin } = useRole()
-    const { timezone } = useDealershipTimezone()
+    const { isSuperAdmin, isDealershipAdmin, isDealershipOwner, isSalesperson, canAssignToSalesperson } = useRole()
+    const { timezone } = useBrowserTimezone()
     const [leads, setLeads] = React.useState<Lead[]>([])
     const [total, setTotal] = React.useState(0)
     const [page, setPage] = React.useState(1)
@@ -65,6 +66,9 @@ export default function UnassignedLeadsPage() {
     const [selectedLeads, setSelectedLeads] = React.useState<Lead[]>([])
     const [isAssignModalOpen, setIsAssignModalOpen] = React.useState(false)
 
+    // Determine if user is a dealership-level user (not super admin)
+    const isDealershipLevel = isDealershipAdmin || isDealershipOwner || isSalesperson
+
     const fetchLeads = React.useCallback(async () => {
         setIsLoading(true)
         try {
@@ -72,7 +76,13 @@ export default function UnassignedLeadsPage() {
             if (search) params.search = search
             if (source && source !== "all") params.source = source
 
-            const data = await LeadService.listUnassignedLeads(params)
+            // Use different API based on user role:
+            // - Super Admin: leads with no dealership (for dealership assignment)
+            // - Dealership Admin/Owner: leads in their dealership with no salesperson assigned
+            const data = isSuperAdmin 
+                ? await LeadService.listUnassignedLeads(params)
+                : await LeadService.listUnassignedToSalesperson(params)
+            
             setLeads(data.items)
             setTotal(data.total)
         } catch (error) {
@@ -80,13 +90,29 @@ export default function UnassignedLeadsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [page, search, source])
+    }, [page, search, source, isSuperAdmin])
 
     React.useEffect(() => {
         const timer = setTimeout(() => {
             fetchLeads()
         }, 300)
         return () => clearTimeout(timer)
+    }, [fetchLeads])
+
+    // WebSocket: Listen for lead updates to refresh the list in real-time
+    // This covers all update types: assigned, dealership_assigned, status_changed, etc.
+    useWebSocketEvent("lead:updated", () => {
+        fetchLeads()
+    }, [fetchLeads])
+
+    // WebSocket: Listen for new leads to refresh the list in real-time
+    useWebSocketEvent("lead:created", () => {
+        fetchLeads()
+    }, [fetchLeads])
+
+    // WebSocket: Listen for badge refresh (triggers when assignments change)
+    useWebSocketEvent("badges:refresh", () => {
+        fetchLeads()
     }, [fetchLeads])
 
     const handleSelectAll = () => {
@@ -300,7 +326,11 @@ export default function UnassignedLeadsPage() {
                                             <div className="flex items-center gap-1 text-xs text-muted-foreground">
                                                 <Calendar className="h-3 w-3" />
                                                 {formatDateInTimezone(lead.created_at, timezone, {
-                                                    dateStyle: "medium"
+                                                    year: "numeric",
+                                                    month: "short",
+                                                    day: "numeric",
+                                                    hour: "2-digit",
+                                                    minute: "2-digit"
                                                 })}
                                             </div>
                                         </TableCell>

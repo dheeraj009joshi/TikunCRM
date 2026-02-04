@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
+from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.lead import Lead, LeadStatus, LeadSource
 from app.models.dealership import Dealership
@@ -284,7 +285,7 @@ async def get_dealership_admin_stats(
     team_ids = [row[0] for row in team_ids_result.fetchall()]
     
     # Follow-ups due today
-    today = datetime.utcnow().date()
+    today = utc_now().date()
     pending_followups_result = await db.execute(
         select(func.count()).select_from(FollowUp).where(
             and_(
@@ -302,7 +303,7 @@ async def get_dealership_admin_stats(
             and_(
                 FollowUp.assigned_to.in_(team_ids),
                 FollowUp.status == FollowUpStatus.PENDING,
-                FollowUp.scheduled_at < datetime.utcnow()
+                FollowUp.scheduled_at < utc_now()
             )
         )
     )
@@ -357,7 +358,7 @@ async def get_salesperson_stats(
     conversion_rate = (converted_leads / total_leads * 100) if total_leads > 0 else 0
     
     # Today's follow-ups
-    today = datetime.utcnow().date()
+    today = utc_now().date()
     todays_followups_result = await db.execute(
         select(func.count()).select_from(FollowUp).where(
             and_(
@@ -375,7 +376,7 @@ async def get_salesperson_stats(
             and_(
                 FollowUp.assigned_to == user_id,
                 FollowUp.status == FollowUpStatus.PENDING,
-                FollowUp.scheduled_at < datetime.utcnow()
+                FollowUp.scheduled_at < utc_now()
             )
         )
     )

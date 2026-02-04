@@ -29,6 +29,8 @@ const processQueue = (error: AxiosError | null, token: string | null = null) => 
 };
 
 // Request interceptor for adding the auth token
+// Note: Do NOT add trailing slashes - backend routes are defined without them.
+// A 307 redirect (slash normalization) would drop the Authorization header in Safari.
 apiClient.interceptors.request.use(
     (config) => {
         const token = localStorage.getItem("auth_token");

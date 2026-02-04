@@ -9,6 +9,7 @@ from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
 from app.models.notification import Notification, NotificationType
@@ -29,7 +30,7 @@ async def list_notifications(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     unread_only: bool = Query(False, description="Only show unread notifications"),
-    notification_type: Optional[NotificationType] = Query(None, description="Filter by notification type"),
+    notification_type: Optional[str] = Query(None, description="Filter by notification type (e.g. mention, MENTION)"),
 ) -> Any:
     """
     Get list of notifications for the current user.
@@ -42,8 +43,15 @@ async def list_notifications(
     if unread_only:
         query = query.where(Notification.is_read == False)
     
+    # Normalize type filter (API may receive lowercase; DB stores uppercase)
+    type_enum = None
     if notification_type:
-        query = query.where(Notification.type == notification_type)
+        try:
+            type_enum = NotificationType(notification_type.upper())
+        except ValueError:
+            pass
+    if type_enum is not None:
+        query = query.where(Notification.type == type_enum)
     
     # Get total count
     count_query = select(func.count()).select_from(query.subquery())
@@ -164,7 +172,7 @@ async def mark_notification_read(
     
     if not notification.is_read:
         notification.is_read = True
-        notification.read_at = datetime.utcnow()
+        notification.read_at = utc_now()
         await db.commit()
         await db.refresh(notification)
     
@@ -180,7 +188,7 @@ async def mark_notifications_read(
     """
     Mark multiple notifications as read.
     """
-    now = datetime.utcnow()
+    now = utc_now()
     
     stmt = (
         update(Notification)
@@ -206,7 +214,7 @@ async def mark_all_notifications_read(
     """
     Mark all notifications as read for the current user.
     """
-    now = datetime.utcnow()
+    now = utc_now()
     
     stmt = (
         update(Notification)

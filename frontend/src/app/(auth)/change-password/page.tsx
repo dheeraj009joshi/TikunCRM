@@ -104,7 +104,7 @@ export default function ChangePasswordPage() {
                         <div className="mr-2 flex h-8 w-8 items-center justify-center rounded bg-white text-primary">
                             <span className="font-bold">L</span>
                         </div>
-                        LeadsCRM
+                        TikunCRM
                     </div>
                 </div>
 
@@ -134,7 +134,7 @@ export default function ChangePasswordPage() {
                     <div className="mr-2 flex h-8 w-8 items-center justify-center rounded bg-white text-primary">
                         <span className="font-bold">L</span>
                     </div>
-                    LeadsCRM
+                    TikunCRM
                 </div>
                 <div className="relative z-20 mt-auto">
                     <blockquote className="space-y-2">

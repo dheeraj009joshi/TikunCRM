@@ -6,20 +6,23 @@ from typing import Any, Optional
 from uuid import UUID
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select, func, and_, or_, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.permissions import UserRole
+from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
 from app.models.appointment import Appointment, AppointmentStatus, AppointmentType
 from app.models.activity import ActivityType
 from app.models.notification import NotificationType
 from app.services.activity import ActivityService
-from app.services.notification_service import NotificationService
+from app.services.notification_service import NotificationService, send_skate_alert_background
+from app.utils.skate_helper import check_skate_condition
 from app.schemas.appointment import (
     AppointmentCreate,
     AppointmentUpdate,
@@ -36,7 +39,7 @@ router = APIRouter()
 
 def get_date_range_for_today():
     """Get start and end of today (UTC)"""
-    now = datetime.utcnow()
+    now = utc_now()
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_day = start_of_day + timedelta(days=1)
     return start_of_day, end_of_day
@@ -44,7 +47,7 @@ def get_date_range_for_today():
 
 def get_start_of_week():
     """Get start of current week (Monday, UTC)"""
-    now = datetime.utcnow()
+    now = utc_now()
     start_of_week = now - timedelta(days=now.weekday())
     return start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -52,15 +55,52 @@ def get_start_of_week():
 @router.post("", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
 async def create_appointment(
     appointment_in: AppointmentCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user)
 ) -> Any:
     """
     Create a new appointment.
     """
+    is_skate_action = False
+    
+    # Soft SKATE check: check if this is a SKATE scenario
+    if appointment_in.lead_id:
+        from app.models.lead import Lead
+        lead_result = await db.execute(select(Lead).where(Lead.id == appointment_in.lead_id))
+        lead = lead_result.scalar_one_or_none()
+        
+        if lead:
+            skate_info = await check_skate_condition(db, current_user, lead, "book appointment")
+            
+            if skate_info:
+                if not appointment_in.confirm_skate:
+                    # Return skate warning for confirmation
+                    return JSONResponse(
+                        status_code=200,
+                        content=skate_info,
+                    )
+                else:
+                    # User confirmed SKATE - proceed but send notifications
+                    is_skate_action = True
+                    dealership_id = lead.dealership_id or current_user.dealership_id
+                    if dealership_id:
+                        performer_name = f"{current_user.first_name} {current_user.last_name}"
+                        background_tasks.add_task(
+                            send_skate_alert_background,
+                            lead_id=lead.id,
+                            lead_name=skate_info["lead_name"],
+                            dealership_id=dealership_id,
+                            assigned_to_user_id=lead.assigned_to,
+                            assigned_to_name=skate_info["assigned_to_name"],
+                            performer_name=performer_name,
+                            action="booked an appointment",
+                            performer_user_id=current_user.id,
+                        )
+
     # Determine dealership
     dealership_id = current_user.dealership_id
-    
+
     # Create appointment
     appointment = Appointment(
         title=appointment_in.title,
@@ -83,10 +123,13 @@ async def create_appointment(
     # Log activity if associated with a lead
     if appointment.lead_id:
         appointment_title = appointment.title or "Appointment"
+        description = f"Appointment scheduled: {appointment_title}"
+        if is_skate_action:
+            description = f"[SKATE] {description}"
         await ActivityService.log_activity(
             db,
             activity_type=ActivityType.APPOINTMENT_SCHEDULED,
-            description=f"Appointment scheduled: {appointment_title}",
+            description=description,
             user_id=current_user.id,
             lead_id=appointment.lead_id,
             dealership_id=dealership_id,
@@ -94,7 +137,8 @@ async def create_appointment(
                 "appointment_id": str(appointment.id),
                 "appointment_type": appointment.appointment_type.value,
                 "scheduled_at": appointment.scheduled_at.isoformat(),
-                "performer_name": current_user.full_name
+                "performer_name": current_user.full_name,
+                "is_skate_action": is_skate_action
             }
         )
     
@@ -114,6 +158,28 @@ async def create_appointment(
         )
     
     await db.commit()
+    
+    # Send SMS confirmation to lead
+    if appointment.lead_id:
+        from app.models.lead import Lead
+        lead_result = await db.execute(select(Lead).where(Lead.id == appointment.lead_id))
+        lead = lead_result.scalar_one_or_none()
+        
+        if lead and lead.phone:
+            from app.services.sms_service import sms_service
+            
+            if sms_service.is_configured:
+                try:
+                    # Format datetime for SMS
+                    scheduled_time = appointment.scheduled_at.strftime("%B %d at %I:%M %p")
+                    location_text = f" at {appointment.location}" if appointment.location else ""
+                    
+                    sms_message = f"Appointment confirmed for {scheduled_time}{location_text}. We'll see you then!"
+                    
+                    await sms_service.send_sms(lead.phone, sms_message)
+                    logger.info(f"Sent appointment confirmation SMS to lead {lead.id}")
+                except Exception as e:
+                    logger.error(f"Failed to send appointment confirmation SMS: {e}")
     
     # Re-fetch with relationships
     result = await db.execute(
@@ -198,7 +264,7 @@ async def list_appointments(
         query = query.where(Appointment.scheduled_at <= date_to)
         count_query = count_query.where(Appointment.scheduled_at <= date_to)
     
-    now = datetime.utcnow()
+    now = utc_now()
     
     if today_only:
         start_of_day, end_of_day = get_date_range_for_today()
@@ -274,7 +340,7 @@ async def get_appointment_stats(
     """
     Get appointment statistics for dashboard badges.
     """
-    now = datetime.utcnow()
+    now = utc_now()
     start_of_day, end_of_day = get_date_range_for_today()
     start_of_week = get_start_of_week()
     
@@ -506,7 +572,7 @@ async def complete_appointment(
     # Update appointment
     appointment.status = complete_data.status
     appointment.outcome_notes = complete_data.outcome_notes
-    appointment.completed_at = datetime.utcnow()
+    appointment.completed_at = utc_now()
     
     # Log activity if associated with a lead
     if appointment.lead_id:

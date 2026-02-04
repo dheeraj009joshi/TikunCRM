@@ -62,8 +62,9 @@ import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
 import { useRole } from "@/hooks/use-role"
 import { cn } from "@/lib/utils"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
+import { useWebSocketEvent } from "@/hooks/use-websocket"
 
 const LEAD_STATUSES = [
     { value: "all", label: "All Statuses" },
@@ -89,7 +90,7 @@ const LEAD_SOURCES = [
 export default function LeadsPage() {
     const searchParams = useSearchParams()
     const filterParam = searchParams.get('filter')
-    const { timezone } = useDealershipTimezone()
+    const { timezone } = useBrowserTimezone()
     
     const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, canAssignToSalesperson, hasPermission } = useRole()
     const canCreateLead = hasPermission("create_lead")
@@ -100,10 +101,18 @@ export default function LeadsPage() {
     const [search, setSearch] = React.useState("")
     const [status, setStatus] = React.useState("all")
     const [source, setSource] = React.useState("all")
-    const [viewMode, setViewMode] = React.useState<"all" | "unassigned">(
-        filterParam === "unassigned" ? "unassigned" : "all"
+    const [viewMode, setViewMode] = React.useState<"mine" | "unassigned" | "all">(
+        filterParam === "unassigned" ? "unassigned" : filterParam === "all" ? "all" : "mine"
     )
     const [isLoading, setIsLoading] = React.useState(true)
+
+    // Sync view mode with URL when user navigates via sidebar (e.g. "Unassigned Pool" link)
+    React.useEffect(() => {
+        const filter = searchParams.get("filter")
+        if (filter === "unassigned") setViewMode("unassigned")
+        else if (filter === "all") setViewMode("all")
+        else if (filter === "mine") setViewMode("mine")
+    }, [searchParams])
     
     // Assignment modal state
     const [assignModalOpen, setAssignModalOpen] = React.useState(false)
@@ -126,8 +135,14 @@ export default function LeadsPage() {
             if (search) params.search = search
             if (status && status !== "all") params.status = status
             if (source && source !== "all") params.source = source
-            // Unassigned pool (no dealership) - visible to all users
-            if (viewMode === "unassigned") params.pool = "unassigned"
+            
+            // Filter by view mode
+            if (viewMode === "unassigned") {
+                params.pool = "unassigned"  // Unassigned pool (no dealership)
+            } else if (viewMode === "mine") {
+                params.pool = "mine"  // Only leads assigned to current user
+            }
+            // "all" mode shows all leads in the dealership (default behavior)
 
             const data = await LeadService.listLeads(params)
             setLeads(data.items)
@@ -144,6 +159,22 @@ export default function LeadsPage() {
             fetchLeads()
         }, 300)
         return () => clearTimeout(timer)
+    }, [fetchLeads])
+
+    // WebSocket: Listen for lead updates to refresh the list in real-time
+    // This covers all update types: assigned, dealership_assigned, status_changed, etc.
+    useWebSocketEvent("lead:updated", () => {
+        fetchLeads()
+    }, [fetchLeads])
+
+    // WebSocket: Listen for new leads to refresh the list in real-time
+    useWebSocketEvent("lead:created", () => {
+        fetchLeads()
+    }, [fetchLeads])
+
+    // WebSocket: Listen for badge refresh (triggers when assignments change)
+    useWebSocketEvent("badges:refresh", () => {
+        fetchLeads()
     }, [fetchLeads])
 
     const handleAssignClick = (lead: Lead) => {
@@ -196,11 +227,12 @@ export default function LeadsPage() {
                 )}
             </div>
 
-            {/* Leads / Unassigned Pool toggles - visible to all users */}
-            <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as "all" | "unassigned")}>
+            {/* Lead filter tabs */}
+            <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as "mine" | "unassigned" | "all")}>
                 <TabsList>
-                    <TabsTrigger value="all">Leads</TabsTrigger>
-                    <TabsTrigger value="unassigned">Unassigned Pool</TabsTrigger>
+                    <TabsTrigger value="mine">Your Leads</TabsTrigger>
+                    <TabsTrigger value="unassigned">Unassigned</TabsTrigger>
+                    <TabsTrigger value="all">All Leads</TabsTrigger>
                 </TabsList>
             </Tabs>
 
@@ -271,13 +303,21 @@ export default function LeadsPage() {
                         ) : leads.length === 0 ? (
                             <TableEmpty
                                 icon={<Inbox className="h-10 w-10" />}
-                                title={viewMode === "unassigned" ? "No unassigned leads" : "No leads found"}
+                                title={
+                                    viewMode === "mine" 
+                                        ? "No leads assigned to you" 
+                                        : viewMode === "unassigned" 
+                                            ? "No unassigned leads" 
+                                            : "No leads found"
+                                }
                                 description={
                                     search || status !== "all" || source !== "all"
                                         ? "Try adjusting your filters"
-                                        : viewMode === "unassigned"
-                                            ? "No leads in the unassigned pool"
-                                            : "Create your first lead to get started"
+                                        : viewMode === "mine"
+                                            ? "Leads assigned to you will appear here"
+                                            : viewMode === "unassigned"
+                                                ? "No leads in the unassigned pool"
+                                                : "Create your first lead to get started"
                                 }
                                 action={
                                     viewMode !== "unassigned" && canCreateLead && (
@@ -358,7 +398,7 @@ export default function LeadsPage() {
                                     <TableCell>
                                         <div className="flex items-center gap-1 text-xs text-muted-foreground">
                                             <Calendar className="h-3 w-3" />
-                                            {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium" })}
+                                            {formatDateInTimezone(lead.created_at, timezone, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                                         </div>
                                     </TableCell>
                                     <TableCell>

@@ -1,5 +1,5 @@
 /**
- * LeadsCRM Service Worker
+ * TikunCRM Service Worker
  * Handles push notifications and basic offline caching
  */
 
@@ -97,7 +97,7 @@ self.addEventListener('push', (event) => {
   console.log('[SW] ========================================');
   
   let data = {
-    title: 'LeadsCRM',
+    title: 'TikunCRM',
     body: 'You have a new notification',
     icon: '/icon.svg',
     badge: '/icon.svg',

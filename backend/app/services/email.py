@@ -8,6 +8,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.core.timezone import utc_now
 from app.models.email_log import EmailLog
 from app.models.activity import ActivityType
 from app.services.activity import ActivityService
@@ -37,7 +38,7 @@ class EmailService:
             body=body,
             direction=direction,
             gmail_message_id=gmail_message_id,
-            sent_at=datetime.utcnow()
+            sent_at=utc_now()
         )
         
         db.add(email_log)

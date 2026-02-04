@@ -22,18 +22,29 @@ export function PushNotificationToggle({
     isLoading,
     error,
     permission,
+    browserInfo,
     subscribe,
     unsubscribe,
   } = usePushNotifications()
   
   const [isTesting, setIsTesting] = useState(false)
-  const [testResult, setTestResult] = useState<string | null>(null)
+  const [testResult, setTestResult] = useState<{ message: string; isError: boolean } | null>(null)
 
   if (!isSupported) {
     return (
-      <div className={`flex items-center gap-2 text-muted-foreground text-sm ${className}`}>
-        <AlertCircle className="h-4 w-4" />
-        <span>Push notifications not supported</span>
+      <div className={`space-y-2 ${className}`}>
+        <div className="flex items-start gap-2 text-muted-foreground text-sm">
+          <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          <div>
+            <div className="font-medium">Push notifications not available</div>
+            {error && <div className="text-xs mt-1">{error}</div>}
+            {browserInfo?.isSafari && (
+              <div className="text-xs mt-1 text-amber-600">
+                For Safari, make sure you&apos;re on macOS Ventura (13.0) or later.
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     )
   }
@@ -51,9 +62,14 @@ export function PushNotificationToggle({
     setTestResult(null)
     try {
       const response = await apiClient.post("/push/test")
-      setTestResult(response.data.message || "Test notification sent!")
+      setTestResult({ 
+        message: response.data.message || "Test notification sent! Check your notifications.", 
+        isError: false 
+      })
     } catch (err: any) {
-      setTestResult(err.response?.data?.detail || "Failed to send test notification")
+      const errorMessage = err.response?.data?.detail || "Failed to send test notification"
+      setTestResult({ message: errorMessage, isError: true })
+      console.error("[Push] Test notification failed:", err)
     } finally {
       setIsTesting(false)
     }
@@ -104,22 +120,29 @@ export function PushNotificationToggle({
       
       {/* Test Notification Button */}
       {showTestButton && isSubscribed && (
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleTestNotification}
-            disabled={isTesting}
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm bg-muted hover:bg-muted/80 rounded-md transition-colors disabled:opacity-50"
-          >
-            {isTesting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-            Send Test Notification
-          </button>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleTestNotification}
+              disabled={isTesting}
+              className="inline-flex items-center gap-2 px-3 py-1.5 text-sm bg-muted hover:bg-muted/80 rounded-md transition-colors disabled:opacity-50"
+            >
+              {isTesting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+              Send Test Notification
+            </button>
+          </div>
           {testResult && (
-            <span className="text-xs text-muted-foreground">{testResult}</span>
+            <div className={`text-xs ${testResult.isError ? "text-destructive" : "text-green-600"}`}>
+              {testResult.message}
+            </div>
           )}
+          <div className="text-xs text-muted-foreground">
+            If you don&apos;t see the notification, check that notifications are allowed in your browser/system settings.
+          </div>
         </div>
       )}
     </div>

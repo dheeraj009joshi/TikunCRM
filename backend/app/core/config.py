@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     )
     
     # Application
-    app_name: str = "LeadsCRM"
+    app_name: str = "TikunCRM"
     app_env: str = "development"
     debug: bool = True
     
@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     
     # Default sender (used when sending on behalf of users)
     email_from_address: str = ""  # e.g., noreply@yourcompany.com
-    email_from_name: str = "LeadsCRM"
+    email_from_name: str = "TikunCRM"
     
     # SendGrid (Recommended for production)
     sendgrid_api_key: str = ""

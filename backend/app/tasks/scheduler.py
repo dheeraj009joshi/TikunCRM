@@ -81,11 +81,47 @@ def setup_scheduler():
         max_instances=1,
     )
     
+    # Appointment reminders - runs every 5 minutes to send 1-hour advance reminders
+    from app.tasks.reminder_tasks import send_appointment_reminders
+    scheduler.add_job(
+        send_appointment_reminders,
+        trigger=IntervalTrigger(minutes=5),
+        id="appointment_reminders",
+        name="Send appointment reminders (1 hour before)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    
+    # Follow-up reminders - runs every 15 minutes to send 1-hour advance reminders
+    from app.tasks.reminder_tasks import send_followup_reminders
+    scheduler.add_job(
+        send_followup_reminders,
+        trigger=IntervalTrigger(minutes=15),
+        id="followup_reminders",
+        name="Send follow-up reminders (1 hour before)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    
+    # Missed appointment detection - runs every 30 minutes
+    from app.tasks.reminder_tasks import detect_missed_appointments
+    scheduler.add_job(
+        detect_missed_appointments,
+        trigger=IntervalTrigger(minutes=30),
+        id="missed_appointments",
+        name="Detect and process missed appointments",
+        replace_existing=True,
+        max_instances=1,
+    )
+    
     logger.info("Background scheduler configured:")
     logger.info("  - IMAP email sync (every 1 minute)")
     logger.info("  - Google Sheets lead sync (every 1 minute)")
     logger.info("  - Lead auto-assignment (every 1 minute)")
     logger.info("  - Stale lead unassignment (every hour)")
+    logger.info("  - Appointment reminders (every 5 minutes)")
+    logger.info("  - Follow-up reminders (every 15 minutes)")
+    logger.info("  - Missed appointment detection (every 30 minutes)")
 
 
 def start_scheduler():

@@ -23,7 +23,10 @@ import {
 } from "@/components/ui/select"
 import { LeadService, Lead } from "@/services/lead-service"
 import { FollowUpService, FollowUpCreate } from "@/services/follow-up-service"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
+import { getSkateAttemptDetail } from "@/lib/skate-alert"
+import { useSkateAlertStore } from "@/stores/skate-alert-store"
+import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
 
 interface ScheduleFollowUpModalProps {
     isOpen: boolean
@@ -38,7 +41,7 @@ export function ScheduleFollowUpModal({
     onSuccess,
     preselectedLeadId
 }: ScheduleFollowUpModalProps) {
-    const { timezone } = useDealershipTimezone()
+    const { timezone } = useBrowserTimezone()
     
     const [isLoading, setIsLoading] = React.useState(false)
     const [isLoadingLeads, setIsLoadingLeads] = React.useState(false)
@@ -101,8 +104,8 @@ export function ScheduleFollowUpModal({
         setPreselectedLead(null)
     }
     
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault()
+    const handleSubmit = async (e?: React.FormEvent, confirmSkate?: boolean) => {
+        if (e) e.preventDefault()
         
         if (!formData.lead_id) {
             setError("Please select a lead")
@@ -147,15 +150,30 @@ export function ScheduleFollowUpModal({
                 lead_id: formData.lead_id,
                 scheduled_at: scheduledDateTime.toISOString(),
                 notes: formData.notes || undefined,
+                confirmSkate,
             }
             
-            await FollowUpService.scheduleFollowUp(formData.lead_id, followUpData)
-            resetForm()
-            onSuccess?.()
-            onClose()
+            const result = await FollowUpService.scheduleFollowUp(formData.lead_id, followUpData)
+            
+            // Check if this is a skate warning response
+            if (isSkateWarningResponse(result)) {
+                useSkateConfirmStore.getState().show(
+                    result as SkateWarningInfo,
+                    () => handleSubmit(undefined, true) // Retry with confirmation
+                )
+            } else {
+                resetForm()
+                onSuccess?.()
+                onClose()
+            }
         } catch (err: any) {
-            console.error("Failed to schedule follow-up:", err)
-            setError(err?.response?.data?.detail || "Failed to schedule follow-up. Please try again.")
+            const skate = getSkateAttemptDetail(err)
+            if (skate) {
+                useSkateAlertStore.getState().show(skate)
+                onClose()
+            } else {
+                setError(err?.response?.data?.detail || "Failed to schedule follow-up. Please try again.")
+            }
         } finally {
             setIsLoading(false)
         }

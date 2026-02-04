@@ -4,7 +4,7 @@ User Endpoints
 from typing import Any, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,7 @@ from app.models.lead import Lead, LeadStatus
 from app.models.dealership import Dealership
 from app.schemas.user import UserResponse, UserCreate, UserUpdate, UserBrief, UserWithStats, TeamListResponse
 from app.core.security import get_password_hash
+from app.services.email_notifier import send_new_member_welcome_email
 
 router = APIRouter()
 
@@ -220,11 +221,15 @@ async def list_salespersons(
 async def create_user(
     *,
     db: AsyncSession = Depends(get_db),
+    background_tasks: BackgroundTasks,
     user_in: UserCreate,
     current_user: User = Depends(deps.require_permission(Permission.CREATE_USER))
 ) -> Any:
     """
     Create new user.
+    
+    Sends a welcome email to the new user with their temporary login credentials.
+    User is required to change password on first login.
     
     Role creation restrictions:
     - Super Admin: can create any role
@@ -287,6 +292,18 @@ async def create_user(
     
     db.add(user)
     await db.flush()
+
+    # Send welcome email with login credentials in background (after response, session will have committed)
+    to_name = f"{user.first_name} {user.last_name}".strip() or user.email
+    added_by_name = current_user.full_name or current_user.email
+    background_tasks.add_task(
+        send_new_member_welcome_email,
+        user.email,
+        to_name,
+        user_in.password,
+        added_by_name,
+    )
+
     return user
 
 

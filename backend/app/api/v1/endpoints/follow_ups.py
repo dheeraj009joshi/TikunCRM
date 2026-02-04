@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Any, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select, desc
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from pydantic import BaseModel
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
+from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
 from app.models.follow_up import FollowUp, FollowUpStatus
@@ -22,6 +24,8 @@ from app.schemas.follow_up import FollowUpResponse, FollowUpCreate, FollowUpUpda
 from app.schemas.lead import LeadBrief
 from app.schemas.user import UserBrief
 from app.services.activity import ActivityService
+from app.services.notification_service import NotificationService, send_skate_alert_background
+from app.utils.skate_helper import check_skate_condition
 
 router = APIRouter()
 
@@ -54,7 +58,7 @@ async def list_follow_ups(
     
     if overdue:
         query = query.where(
-            FollowUp.scheduled_at < datetime.utcnow(),
+            FollowUp.scheduled_at < utc_now(),
             FollowUp.status == FollowUpStatus.PENDING
         )
         
@@ -98,6 +102,7 @@ async def list_follow_ups(
 async def schedule_follow_up(
     lead_id: UUID,
     follow_up_in: FollowUpCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user)
 ) -> Any:
@@ -111,11 +116,40 @@ async def schedule_follow_up(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
+    # Soft SKATE check: check if this is a SKATE scenario
+    skate_info = await check_skate_condition(db, current_user, lead, "schedule follow-up")
+    is_skate_action = False
+    
+    if skate_info:
+        if not follow_up_in.confirm_skate:
+            # Return skate warning for confirmation
+            return JSONResponse(
+                status_code=200,
+                content=skate_info,
+            )
+        else:
+            # User confirmed SKATE - proceed but send notifications
+            is_skate_action = True
+            dealership_id = lead.dealership_id or current_user.dealership_id
+            if dealership_id:
+                performer_name = f"{current_user.first_name} {current_user.last_name}"
+                background_tasks.add_task(
+                    send_skate_alert_background,
+                    lead_id=lead_id,
+                    lead_name=skate_info["lead_name"],
+                    dealership_id=dealership_id,
+                    assigned_to_user_id=lead.assigned_to,
+                    assigned_to_name=skate_info["assigned_to_name"],
+                    performer_name=performer_name,
+                    action="scheduled a follow-up",
+                    performer_user_id=current_user.id,
+                )
+
     # RBAC: Check if user has access to this lead
     if current_user.role == UserRole.SALESPERSON:
-        # Salesperson can only schedule for leads assigned to them
-        if lead.assigned_to != current_user.id:
-            raise HTTPException(status_code=403, detail="You can only schedule follow-ups for leads assigned to you")
+        # Salesperson can schedule for any lead in their dealership (with SKATE warning above)
+        if lead.dealership_id != current_user.dealership_id and lead.dealership_id is not None:
+            raise HTTPException(status_code=403, detail="You can only schedule follow-ups for leads in your dealership")
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
         # Dealership admin/owner can schedule for leads in their dealership
         if lead.dealership_id != current_user.dealership_id:
@@ -134,14 +168,17 @@ async def schedule_follow_up(
     await db.flush()
     
     # Log activity
+    description = f"Follow-up scheduled for {follow_up_in.scheduled_at.strftime('%Y-%m-%d %H:%M')}"
+    if is_skate_action:
+        description = f"[SKATE] {description}"
     await ActivityService.log_activity(
         db,
         activity_type=ActivityType.FOLLOW_UP_SCHEDULED,
-        description=f"Follow-up scheduled for {follow_up_in.scheduled_at.strftime('%Y-%m-%d %H:%M')}",
+        description=description,
         user_id=current_user.id,
         lead_id=lead_id,
         dealership_id=lead.dealership_id,
-        meta_data={"scheduled_at": follow_up_in.scheduled_at.isoformat()}
+        meta_data={"scheduled_at": follow_up_in.scheduled_at.isoformat(), "is_skate_action": is_skate_action}
     )
     
     await db.commit()
@@ -212,7 +249,7 @@ async def complete_follow_up(
          
     completion_notes = request.notes if request else None
     follow_up.status = FollowUpStatus.COMPLETED
-    follow_up.completed_at = datetime.utcnow()
+    follow_up.completed_at = utc_now()
     follow_up.completion_notes = completion_notes
     
     await db.flush()

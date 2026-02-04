@@ -15,6 +15,8 @@ import {
     Mail,
     Sparkles,
 } from "lucide-react"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
+import { formatDateInTimezone } from "@/utils/timezone"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -56,6 +58,7 @@ export default function EmailTemplatesPage() {
     const [isLoading, setIsLoading] = React.useState(true)
     const [search, setSearch] = React.useState("")
     const [categoryFilter, setCategoryFilter] = React.useState<string>("all")
+    const { timezone } = useBrowserTimezone()
     
     // Editor states
     const [isEditorOpen, setIsEditorOpen] = React.useState(false)
@@ -489,7 +492,7 @@ export default function EmailTemplatesPage() {
                                 </div>
                                 
                                 <div className="text-xs text-muted-foreground">
-                                    Updated {new Date(template.updated_at).toLocaleDateString()}
+                                    Updated {formatDateInTimezone(template.updated_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
                                 </div>
                             </CardContent>
                         </Card>

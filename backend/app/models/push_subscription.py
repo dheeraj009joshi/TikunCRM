@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
+from app.core.timezone import utc_now
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -100,12 +101,12 @@ class PushSubscription(Base):
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         onupdate=datetime.utcnow,
         nullable=False
     )
@@ -125,12 +126,12 @@ class PushSubscription(Base):
     
     def mark_success(self):
         """Mark a successful push delivery"""
-        self.last_success_at = datetime.utcnow()
+        self.last_success_at = utc_now()
         self.failed_count = 0
     
     def mark_failed(self):
         """Mark a failed push delivery"""
-        self.last_failed_at = datetime.utcnow()
+        self.last_failed_at = utc_now()
         self.failed_count += 1
         
         # Deactivate if too many failures

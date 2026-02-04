@@ -1,6 +1,6 @@
 {
-  "name": "LeedsCRM",
-  "short_name": "LeedsCRM",
+  "name": "TikunCRM",
+  "short_name": "TikunCRM",
   "description": "Multi-level Lead Management CRM for Dealerships",
   "start_url": "/dashboard",
   "display": "standalone",

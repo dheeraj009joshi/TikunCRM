@@ -39,6 +39,7 @@ export interface FollowUpCreate {
     lead_id: string;
     scheduled_at: string;
     notes?: string;
+    confirmSkate?: boolean;
 }
 
 export interface FollowUpUpdate {
@@ -83,7 +84,10 @@ export const FollowUpService = {
      * Schedule a new follow-up for a lead
      */
     async scheduleFollowUp(leadId: string, data: FollowUpCreate): Promise<FollowUp> {
-        const response = await apiClient.post<FollowUp>(`/follow-ups/${leadId}`, data);
+        const response = await apiClient.post<FollowUp>(`/follow-ups/${leadId}`, {
+            ...data,
+            confirm_skate: data.confirmSkate ?? false
+        });
         return response.data;
     },
 

@@ -13,6 +13,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.encryption import decrypt_value
+from app.core.timezone import utc_now
 from app.models.user import User
 from app.models.lead import Lead
 from app.models.email_log import EmailLog, EmailDirection
@@ -248,7 +249,7 @@ async def sync_user_inbox(db: AsyncSession, user: User) -> Dict[str, Any]:
                         try:
                             received_at = email.utils.parsedate_to_datetime(date_str)
                         except:
-                            received_at = datetime.utcnow()
+                            received_at = utc_now()
                         
                         # Try to match to a lead
                         lead = None
@@ -299,7 +300,7 @@ async def sync_user_inbox(db: AsyncSession, user: User) -> Dict[str, Any]:
         imap.logout()
         
         # Update last sync time
-        user.imap_last_sync_at = datetime.utcnow()
+        user.imap_last_sync_at = utc_now()
         db.add(user)
         await db.commit()
         

@@ -31,7 +31,7 @@ import {
 import { DashboardService, SalespersonStats } from "@/services/dashboard-service"
 import { LeadService, Lead } from "@/services/lead-service"
 import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { DonutChart } from "@tremor/react"
 
@@ -40,7 +40,7 @@ export function SalespersonDashboard() {
     const [recentLeads, setRecentLeads] = React.useState<Lead[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
-    const { timezone } = useDealershipTimezone()
+    const { timezone } = useBrowserTimezone()
 
     React.useEffect(() => {
         const fetchData = async () => {
@@ -323,7 +323,7 @@ export function SalespersonDashboard() {
                                                         {lead.first_name} {lead.last_name}
                                                     </p>
                                                     <p className="text-xs text-muted-foreground">
-                                                        {new Date(lead.created_at).toLocaleDateString()}
+                                                        {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
                                                     </p>
                                                 </div>
                                             </div>

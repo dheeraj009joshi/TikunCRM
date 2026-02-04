@@ -61,6 +61,7 @@ export interface AppointmentCreate {
     meeting_link?: string
     lead_id?: string
     assigned_to?: string
+    confirmSkate?: boolean
 }
 
 export interface AppointmentUpdate {
@@ -157,7 +158,10 @@ export const AppointmentService = {
      * Create a new appointment
      */
     async create(data: AppointmentCreate): Promise<Appointment> {
-        const response = await apiClient.post("/appointments", data)
+        const response = await apiClient.post("/appointments", {
+            ...data,
+            confirm_skate: data.confirmSkate ?? false
+        })
         return response.data
     },
     

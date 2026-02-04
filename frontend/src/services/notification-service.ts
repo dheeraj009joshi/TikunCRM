@@ -8,7 +8,12 @@ export type NotificationType =
     | "follow_up_due"
     | "follow_up_overdue"
     | "system"
-    | "mention";
+    | "mention"
+    | "appointment_reminder"
+    | "appointment_missed"
+    | "new_lead"
+    | "admin_reminder"
+    | "skate_alert";
 
 export interface Notification {
     id: string;
@@ -43,8 +48,8 @@ export interface NotificationListParams {
     notification_type?: NotificationType;
 }
 
-// Notification type display info
-export const NOTIFICATION_TYPE_INFO: Record<NotificationType, { label: string; color: string; icon: string }> = {
+// Notification type display info (keys lowercase; API may return uppercase e.g. MENTION)
+export const NOTIFICATION_TYPE_INFO: Record<string, { label: string; color: string; icon: string }> = {
     email_received: { label: "Email", color: "blue", icon: "mail" },
     lead_assigned: { label: "Lead Assigned", color: "green", icon: "user-plus" },
     lead_updated: { label: "Lead Updated", color: "yellow", icon: "refresh-cw" },
@@ -52,7 +57,17 @@ export const NOTIFICATION_TYPE_INFO: Record<NotificationType, { label: string; c
     follow_up_overdue: { label: "Overdue", color: "red", icon: "alert-circle" },
     system: { label: "System", color: "gray", icon: "info" },
     mention: { label: "Mention", color: "purple", icon: "at-sign" },
+    appointment_reminder: { label: "Appointment Reminder", color: "blue", icon: "calendar" },
+    appointment_missed: { label: "Missed Appointment", color: "red", icon: "alert-circle" },
+    new_lead: { label: "New Lead", color: "emerald", icon: "user-plus" },
+    admin_reminder: { label: "Admin Reminder", color: "indigo", icon: "bell" },
+    skate_alert: { label: "SKATE Alert", color: "amber", icon: "alert-triangle" },
 };
+
+/** Normalize API notification type (may be uppercase) for display lookup */
+export function normalizeNotificationType(type: string | null | undefined): string {
+    return (type || "").toLowerCase();
+}
 
 // Service methods
 export const NotificationService = {

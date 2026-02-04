@@ -27,6 +27,87 @@ class EmailNotifier:
     Used to alert users when they receive email replies from leads.
     """
     
+    @property
+    def is_configured(self) -> bool:
+        """Check if email service is configured (system SMTP)."""
+        return bool(settings.smtp_user and settings.smtp_password)
+    
+    async def send_notification_email(
+        self,
+        to_email: str,
+        to_name: str,
+        subject: str,
+        message: str,
+        link: Optional[str] = None
+    ) -> bool:
+        """
+        Send a generic notification email.
+        
+        Args:
+            to_email: Recipient email address
+            to_name: Recipient name
+            subject: Email subject
+            message: Email message content
+            link: Optional CRM link
+            
+        Returns:
+            True if sent successfully
+        """
+        try:
+            # Build email body
+            body_text = f"""
+Hello {to_name},
+
+{message}
+
+{f'View details: {settings.frontend_url}{link}' if link else ''}
+
+---
+This is an automated notification from LeedsCRM.
+            """.strip()
+            
+            # HTML version
+            body_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }}
+        .content {{ background: #f9fafb; padding: 20px; border: 1px solid #e5e7eb; }}
+        .message {{ background: white; padding: 15px; border-radius: 8px; margin: 15px 0; }}
+        .button {{ display: inline-block; background: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 15px; }}
+        .footer {{ color: #6b7280; font-size: 12px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2 style="margin: 0;">{subject}</h2>
+        </div>
+        <div class="content">
+            <p>Hello {to_name},</p>
+            <div class="message">
+                <p style="margin: 0; color: #4b5563;">{message}</p>
+            </div>
+            {f'<a href="{settings.frontend_url}{link}" class="button">View Details</a>' if link else ''}
+            <div class="footer">
+                <p>This is an automated notification from LeedsCRM.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+            """
+            
+            # Send via system SMTP
+            return self._send_via_system(to_email, subject, body_text, body_html)
+            
+        except Exception as e:
+            logger.error(f"Error sending notification email: {e}")
+            return False
+    
     @staticmethod
     async def send_reply_notification(
         db: AsyncSession,
@@ -233,3 +314,88 @@ This is an automated notification from LeedsCRM.
         except Exception as e:
             logger.error(f"Error sending via system SMTP: {e}")
             return False
+
+
+def send_new_member_welcome_email(
+    to_email: str,
+    to_name: str,
+    temp_password: str,
+    added_by_name: str,
+) -> None:
+    """
+    Send welcome email to a new team member with their temporary login credentials.
+    Called when an admin/superadmin creates a new user. The user should change
+    their password after first login.
+    """
+    from app.core.config import settings
+    login_url = f"{settings.frontend_url}/login"
+    change_password_note = (
+        "After logging in, go to Profile or Settings to change your password."
+    )
+    app_name = settings.email_from_name or "TikunCRM"
+    subject = f"Welcome to {app_name} – Your login details"
+    body_text = f"""
+Hello {to_name},
+
+You have been added to {app_name} by {added_by_name}.
+
+Your temporary login credentials:
+
+  Email:    {to_email}
+  Password: {temp_password}
+
+Log in here: {login_url}
+
+{change_password_note}
+
+Please keep your credentials secure and change your password after your first login.
+
+—
+This is an automated message from {app_name}.
+""".strip()
+    body_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 560px; margin: 0 auto; }}
+        .header {{ background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }}
+        .content {{ background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; }}
+        .credentials {{ background: white; padding: 16px; border-radius: 8px; margin: 16px 0; border: 1px solid #e5e7eb; }}
+        .credential-row {{ margin: 8px 0; }}
+        .label {{ font-weight: 600; color: #4b5563; }}
+        .button {{ display: inline-block; background: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 16px 0; }}
+        .footer {{ color: #6b7280; font-size: 12px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }}
+    </style>
+</head>
+<body>
+    <div class="header"><h2 style="margin: 0;">Welcome to {app_name}</h2></div>
+    <div class="content">
+        <p>Hello {to_name},</p>
+        <p>You have been added to {app_name} by <strong>{added_by_name}</strong>.</p>
+        <p><strong>Your temporary login credentials:</strong></p>
+        <div class="credentials">
+            <div class="credential-row"><span class="label">Email:</span> {to_email}</div>
+            <div class="credential-row"><span class="label">Password:</span> {temp_password}</div>
+        </div>
+        <p><a href="{login_url}" class="button">Log in to {app_name}</a></p>
+        <p>{change_password_note}</p>
+        <p style="color: #6b7280; font-size: 14px;">Please keep your credentials secure and change your password after your first login.</p>
+        <div class="footer">This is an automated message from {app_name}.</div>
+    </div>
+</body>
+</html>
+"""
+    try:
+        ok = EmailNotifier._send_via_system(to_email, subject, body_text, body_html)
+        if ok:
+            logger.info("New member welcome email sent to %s", to_email)
+        else:
+            logger.warning("Failed to send new member welcome email to %s (SMTP not configured?)", to_email)
+    except Exception as e:
+        logger.exception("Error sending new member welcome email to %s: %s", to_email, e)
+
+
+# Global instance
+email_notifier = EmailNotifier()

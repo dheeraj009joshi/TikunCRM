@@ -323,7 +323,7 @@ export function Sidebar() {
                     <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                         <span className="font-bold">L</span>
                     </div>
-                    <span className="ml-3 text-xl font-bold tracking-tight">LeadsCRM</span>
+                    <span className="ml-3 text-xl font-bold tracking-tight">TikunCRM</span>
                 </div>
 
                 {/* Search */}

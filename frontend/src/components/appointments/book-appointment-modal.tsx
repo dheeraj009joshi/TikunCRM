@@ -17,6 +17,9 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { AppointmentService } from "@/services/appointment-service"
+import { getSkateAttemptDetail } from "@/lib/skate-alert"
+import { useSkateAlertStore } from "@/stores/skate-alert-store"
+import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
 import { cn } from "@/lib/utils"
 
 interface BookAppointmentModalProps {
@@ -81,8 +84,8 @@ export function BookAppointmentModal({
         }
     }, [isOpen, leadName])
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault()
+    const handleSubmit = async (e?: React.FormEvent, confirmSkate?: boolean) => {
+        if (e) e.preventDefault()
         setError(null)
         
         if (!date || !time) {
@@ -98,7 +101,7 @@ export function BookAppointmentModal({
             const scheduledAt = new Date(date)
             scheduledAt.setHours(hours, minutes, 0, 0)
             
-            await AppointmentService.create({
+            const result = await AppointmentService.create({
                 lead_id: leadId,
                 title: title.trim() || "Appointment",
                 description: notes || undefined,
@@ -106,13 +109,28 @@ export function BookAppointmentModal({
                 scheduled_at: scheduledAt.toISOString(),
                 duration_minutes: parseInt(duration),
                 location: location || undefined,
+                confirmSkate,
             })
 
-            onSuccess?.()
-            onClose()
+            // Check if this is a skate warning response
+            if (isSkateWarningResponse(result)) {
+                useSkateConfirmStore.getState().show(
+                    result as SkateWarningInfo,
+                    () => handleSubmit(undefined, true) // Retry with confirmation
+                )
+            } else {
+                onSuccess?.()
+                onClose()
+            }
         } catch (err: any) {
-            console.error("Failed to book appointment:", err)
-            setError(err.response?.data?.detail || "Failed to book appointment")
+            const skate = getSkateAttemptDetail(err)
+            if (skate) {
+                useSkateAlertStore.getState().show(skate)
+                onClose()
+            } else {
+                const detail = err.response?.data?.detail
+                setError(typeof detail === "string" ? detail : detail?.message || "Failed to book appointment")
+            }
         } finally {
             setIsLoading(false)
         }

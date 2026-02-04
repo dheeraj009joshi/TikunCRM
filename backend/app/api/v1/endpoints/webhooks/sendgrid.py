@@ -11,7 +11,7 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Form, UploadFile, File
@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.core.config import settings
+from app.core.timezone import utc_now
 from app.models.email_log import EmailLog, EmailDirection, EmailDeliveryStatus
 from app.models.user import User
 from app.models.lead import Lead
@@ -317,7 +318,7 @@ async def receive_inbound_email(
             body_text=str(text_body) if text_body else None,
             body_html=str(html_body) if html_body else None,
             is_read=False,
-            received_at=datetime.utcnow(),
+            received_at=utc_now(),
             delivery_status=EmailDeliveryStatus.DELIVERED
         )
         
@@ -437,7 +438,7 @@ async def receive_events(
             # Update status
             email_log.delivery_status = new_status
             
-            event_time = datetime.utcfromtimestamp(timestamp_unix) if timestamp_unix else datetime.utcnow()
+            event_time = datetime.fromtimestamp(timestamp_unix, tz=timezone.utc) if timestamp_unix else utc_now()
             
             if event_type == "delivered":
                 email_log.delivered_at = event_time

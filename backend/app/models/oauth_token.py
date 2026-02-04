@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
+from app.core.timezone import utc_now
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -59,12 +60,12 @@ class OAuthToken(Base):
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=utc_now,
         onupdate=datetime.utcnow,
         nullable=False
     )
@@ -81,7 +82,7 @@ class OAuthToken(Base):
         """Check if token is expired"""
         if self.expires_at is None:
             return False
-        return datetime.utcnow() > self.expires_at
+        return utc_now() > self.expires_at
     
     def __repr__(self) -> str:
         return f"<OAuthToken {self.provider.value} for User {self.user_id}>"
