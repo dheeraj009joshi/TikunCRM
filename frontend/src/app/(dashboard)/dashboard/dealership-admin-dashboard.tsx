@@ -40,20 +40,23 @@ export function DealershipAdminDashboard() {
     const [stats, setStats] = React.useState<DealershipAdminStats | null>(null)
     const [team, setTeam] = React.useState<UserWithStats[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
+    const [upcomingAppointments, setUpcomingAppointments] = React.useState<Appointment[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const { timezone } = useBrowserTimezone()
 
     React.useEffect(() => {
         const fetchData = async () => {
             try {
-                const [statsData, teamData, appointmentsData] = await Promise.all([
+                const [statsData, teamData, todayData, upcomingData] = await Promise.all([
                     DashboardService.getDealershipAdminStats(),
                     TeamService.getTeamWithStats(),
-                    AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] }))
+                    AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] })),
+                    AppointmentService.list({ upcoming_only: true, page_size: 3 }).catch(() => ({ items: [] }))
                 ])
                 setStats(statsData)
                 setTeam(teamData.items)
-                setTodayAppointments(appointmentsData.items || [])
+                setTodayAppointments(todayData.items || [])
+                setUpcomingAppointments(upcomingData.items || [])
             } catch (error) {
                 console.error("Failed to fetch dashboard stats:", error)
             } finally {
@@ -68,38 +71,44 @@ export function DealershipAdminDashboard() {
             name: "Total Leads",
             value: stats.total_leads.toLocaleString(),
             icon: Inbox,
-            color: "blue" as const
+            color: "blue" as const,
+            href: "/leads"
         },
         {
             name: "Unassigned Leads",
             value: stats.unassigned_to_salesperson.toLocaleString(),
             icon: ClipboardList,
             color: "amber" as const,
-            urgent: stats.unassigned_to_salesperson > 10
+            urgent: stats.unassigned_to_salesperson > 10,
+            href: "/leads?filter=unassigned"
         },
         {
             name: "Active Leads",
             value: stats.active_leads.toLocaleString(),
             icon: Clock,
-            color: "purple" as const
+            color: "purple" as const,
+            href: "/leads?status=active"
         },
         {
             name: "Converted",
             value: stats.converted_leads.toLocaleString(),
             icon: CheckCircle,
-            color: "emerald" as const
+            color: "emerald" as const,
+            href: "/leads?status=converted"
         },
         {
             name: "Conversion Rate",
             value: stats.conversion_rate,
             icon: ArrowUpRight,
-            color: "emerald" as const
+            color: "emerald" as const,
+            href: "/leads?status=converted"
         },
         {
             name: "Team Size",
             value: stats.team_size.toString(),
             icon: Users,
-            color: "blue" as const
+            color: "blue" as const,
+            href: "/team"
         },
     ] : []
 
@@ -185,8 +194,9 @@ export function DealershipAdminDashboard() {
                 </div>
             )}
 
-            {/* Today's Appointments Widget */}
-            {todayAppointments.length > 0 && (
+            {/* Appointments Widgets - Today and Upcoming */}
+            <div className="grid gap-4 md:grid-cols-2">
+                {/* Today's Appointments */}
                 <Card className="border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950">
                     <CardHeader className="flex flex-row items-center justify-between pb-2">
                         <div className="flex items-center gap-2">
@@ -206,40 +216,103 @@ export function DealershipAdminDashboard() {
                         </Link>
                     </CardHeader>
                     <CardContent>
-                        <div className="space-y-2">
-                            {todayAppointments.slice(0, 4).map((apt) => (
-                                <div 
-                                    key={apt.id} 
-                                    className="flex items-center justify-between bg-white dark:bg-blue-900/50 rounded-lg p-3"
-                                >
-                                    <div className="flex items-center gap-3">
-                                        <div className="text-center min-w-[50px]">
-                                            <p className="text-sm font-bold text-blue-600">
-                                                {formatDateInTimezone(apt.scheduled_at, timezone, { timeStyle: "short" })}
-                                            </p>
+                        {todayAppointments.length === 0 ? (
+                            <p className="text-sm text-muted-foreground text-center py-4">No appointments today</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {todayAppointments.slice(0, 4).map((apt) => (
+                                    <Link key={apt.id} href={`/leads/${apt.lead_id}`}>
+                                        <div 
+                                            className="flex items-center justify-between bg-white dark:bg-blue-900/50 rounded-lg p-3 hover:bg-blue-100 dark:hover:bg-blue-800/50 transition-colors cursor-pointer"
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <div className="text-center min-w-[50px]">
+                                                    <p className="text-sm font-bold text-blue-600">
+                                                        {formatDateInTimezone(apt.scheduled_at, timezone, { timeStyle: "short" })}
+                                                    </p>
+                                                </div>
+                                                <div>
+                                                    <p className="font-medium text-sm">{apt.title}</p>
+                                                    {apt.lead && (
+                                                        <p className="text-xs text-muted-foreground">
+                                                            with {apt.lead.first_name} {apt.lead.last_name || ""}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <Badge variant={
+                                                apt.status === "completed" ? "converted" :
+                                                apt.status === "cancelled" ? "destructive" :
+                                                "outline"
+                                            }>
+                                                {getAppointmentStatusLabel(apt.status)}
+                                            </Badge>
                                         </div>
-                                        <div>
-                                            <p className="font-medium text-sm">{apt.title}</p>
-                                            {apt.lead && (
-                                                <p className="text-xs text-muted-foreground">
-                                                    with {apt.lead.first_name} {apt.lead.last_name || ""}
-                                                </p>
-                                            )}
-                                        </div>
-                                    </div>
-                                    <Badge variant={
-                                        apt.status === "completed" ? "converted" :
-                                        apt.status === "cancelled" ? "destructive" :
-                                        "outline"
-                                    }>
-                                        {getAppointmentStatusLabel(apt.status)}
-                                    </Badge>
-                                </div>
-                            ))}
-                        </div>
+                                    </Link>
+                                ))}
+                            </div>
+                        )}
                     </CardContent>
                 </Card>
-            )}
+
+                {/* Upcoming Appointments (next 3 days) */}
+                <Card className="border-purple-200 bg-purple-50 dark:border-purple-900 dark:bg-purple-950">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                        <div className="flex items-center gap-2">
+                            <div className="rounded-full bg-purple-100 p-2 dark:bg-purple-900">
+                                <Clock className="h-5 w-5 text-purple-600" />
+                            </div>
+                            <div>
+                                <CardTitle className="text-base font-semibold text-purple-700 dark:text-purple-300">
+                                    Upcoming Appointments
+                                </CardTitle>
+                            </div>
+                        </div>
+                        <Link href="/appointments">
+                            <Button variant="outline" size="sm" className="border-purple-300 text-purple-700">
+                                View All
+                            </Button>
+                        </Link>
+                    </CardHeader>
+                    <CardContent>
+                        {upcomingAppointments.length === 0 ? (
+                            <p className="text-sm text-muted-foreground text-center py-4">No upcoming appointments</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {upcomingAppointments.map((apt) => (
+                                    <Link key={apt.id} href={`/leads/${apt.lead_id}`}>
+                                        <div 
+                                            className="flex items-center justify-between bg-white dark:bg-purple-900/50 rounded-lg p-3 hover:bg-purple-100 dark:hover:bg-purple-800/50 transition-colors cursor-pointer"
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <div className="text-center min-w-[70px]">
+                                                    <p className="text-xs text-purple-500">
+                                                        {formatDateInTimezone(apt.scheduled_at, timezone, { dateStyle: "short" })}
+                                                    </p>
+                                                    <p className="text-sm font-bold text-purple-600">
+                                                        {formatDateInTimezone(apt.scheduled_at, timezone, { timeStyle: "short" })}
+                                                    </p>
+                                                </div>
+                                                <div>
+                                                    <p className="font-medium text-sm">{apt.title}</p>
+                                                    {apt.lead && (
+                                                        <p className="text-xs text-muted-foreground">
+                                                            with {apt.lead.first_name} {apt.lead.last_name || ""}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <Badge variant="outline">
+                                                {getAppointmentStatusLabel(apt.status)}
+                                            </Badge>
+                                        </div>
+                                    </Link>
+                                ))}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
 
             {/* Stats Grid */}
             <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
@@ -259,6 +332,7 @@ export function DealershipAdminDashboard() {
                             metric={stat.value}
                             icon={<stat.icon className="h-5 w-5" />}
                             color={stat.color}
+                            href={stat.href}
                         />
                     ))
                 )}

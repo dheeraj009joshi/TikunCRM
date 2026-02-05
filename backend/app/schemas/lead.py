@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.models.lead import LeadSource, LeadStatus
 from app.schemas.user import UserBrief
@@ -18,6 +18,14 @@ class LeadBase(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = Field(None, max_length=20)
     alternate_phone: Optional[str] = Field(None, max_length=20)
+    
+    @field_validator('email', 'last_name', 'phone', 'alternate_phone', mode='before')
+    @classmethod
+    def empty_string_to_none(cls, v):
+        """Convert empty string to None for optional fields"""
+        if v == '' or v is None:
+            return None
+        return v
 
 
 class LeadCreate(LeadBase):
@@ -29,6 +37,26 @@ class LeadCreate(LeadBase):
     budget_range: Optional[str] = None
     dealership_id: Optional[UUID] = None
     assigned_to: Optional[UUID] = None
+    # Address fields
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    # Additional details
+    date_of_birth: Optional[datetime] = None
+    company: Optional[str] = None
+    job_title: Optional[str] = None
+    preferred_contact_method: Optional[str] = None
+    preferred_contact_time: Optional[str] = None
+    
+    @field_validator('notes', 'interested_in', 'budget_range', 'address', 'city', 'state', 'postal_code', 'country', 'company', 'job_title', 'preferred_contact_method', 'preferred_contact_time', mode='before')
+    @classmethod
+    def empty_string_to_none(cls, v):
+        """Convert empty string to None for optional fields"""
+        if v == '' or v is None:
+            return None
+        return v
 
 
 class LeadUpdate(BaseModel):
@@ -42,6 +70,26 @@ class LeadUpdate(BaseModel):
     meta_data: Optional[Dict[str, Any]] = None
     interested_in: Optional[str] = None
     budget_range: Optional[str] = None
+    # Address fields
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    # Additional details
+    date_of_birth: Optional[datetime] = None
+    company: Optional[str] = None
+    job_title: Optional[str] = None
+    preferred_contact_method: Optional[str] = None
+    preferred_contact_time: Optional[str] = None
+    
+    @field_validator('email', 'first_name', 'last_name', 'phone', 'alternate_phone', 'notes', 'interested_in', 'budget_range', 'address', 'city', 'state', 'postal_code', 'country', 'company', 'job_title', 'preferred_contact_method', 'preferred_contact_time', mode='before')
+    @classmethod
+    def empty_string_to_none(cls, v):
+        """Convert empty string to None for optional fields"""
+        if v == '' or v is None:
+            return None
+        return v
 
 
 class LeadStatusUpdate(BaseModel):
@@ -83,6 +131,19 @@ class LeadResponse(LeadBase):
     meta_data: Dict[str, Any]
     interested_in: Optional[str] = None
     budget_range: Optional[str] = None
+    # Address fields
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    # Additional details
+    date_of_birth: Optional[datetime] = None
+    company: Optional[str] = None
+    job_title: Optional[str] = None
+    preferred_contact_method: Optional[str] = None
+    preferred_contact_time: Optional[str] = None
+    # Timestamps
     first_contacted_at: Optional[datetime] = None
     last_contacted_at: Optional[datetime] = None
     converted_at: Optional[datetime] = None

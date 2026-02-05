@@ -29,6 +29,7 @@ class ActivityType(str, Enum):
     LEAD_UNASSIGNED = "lead_unassigned"
     STATUS_CHANGED = "status_changed"
     LEAD_DELETED = "lead_deleted"
+    LEAD_UPDATED = "lead_updated"
     
     # Communication
     NOTE_ADDED = "note_added"

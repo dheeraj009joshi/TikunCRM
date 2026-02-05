@@ -134,6 +134,7 @@ ROLE_PERMISSIONS: dict[UserRole, Set[Permission]] = {
     UserRole.SALESPERSON: {
         # Lead permissions
         Permission.VIEW_OWN_LEADS,
+        Permission.CREATE_LEAD,  # Salesperson can create leads
         Permission.UPDATE_LEAD,
         
         # Activity permissions

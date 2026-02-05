@@ -502,6 +502,63 @@ async def create_lead(
     return lead
 
 
+@router.patch("/{lead_id}", response_model=LeadResponse)
+async def update_lead(
+    lead_id: UUID,
+    lead_in: LeadUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Update lead details (contact info, address, personal details).
+    Available to dealership users who can access the lead.
+    """
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    
+    # Access check: unassigned pool is open to all dealership users
+    is_unassigned_pool = lead.dealership_id is None
+    if not is_unassigned_pool:
+        # Must have access to assigned leads
+        has_access = (
+            current_user.role == UserRole.SUPER_ADMIN
+            or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
+            or (current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and lead.dealership_id == current_user.dealership_id)
+        )
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Not authorized to update this lead")
+    
+    # Update lead fields
+    update_data = lead_in.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(lead, field, value)
+    
+    lead.updated_at = utc_now()
+    
+    # Log update activity
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
+    updated_fields = list(update_data.keys())
+    
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.LEAD_UPDATED,
+        description=f"Lead details updated by {performer_name}",
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=lead.dealership_id,
+        meta_data={
+            "performer_name": performer_name,
+            "updated_fields": updated_fields
+        }
+    )
+    
+    await db.flush()
+    return lead
+
+
 @router.get("/{lead_id}", response_model=LeadDetail)
 async def get_lead(
     lead_id: UUID,
@@ -572,6 +629,19 @@ async def get_lead(
         "meta_data": lead.meta_data,
         "interested_in": lead.interested_in,
         "budget_range": lead.budget_range,
+        # Address fields
+        "address": lead.address,
+        "city": lead.city,
+        "state": lead.state,
+        "postal_code": lead.postal_code,
+        "country": lead.country,
+        # Additional details
+        "date_of_birth": lead.date_of_birth,
+        "company": lead.company,
+        "job_title": lead.job_title,
+        "preferred_contact_method": lead.preferred_contact_method,
+        "preferred_contact_time": lead.preferred_contact_time,
+        # Timestamps
         "first_contacted_at": lead.first_contacted_at,
         "last_contacted_at": lead.last_contacted_at,
         "converted_at": lead.converted_at,
@@ -684,6 +754,14 @@ async def update_lead_status(
         )
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to update this lead")
+    
+    # Salesperson cannot set status to LOST or CLOSED - only admin/owner/superadmin can
+    restricted_statuses = [LeadStatus.LOST, LeadStatus.CLOSED]
+    if status_in.status in restricted_statuses and current_user.role == UserRole.SALESPERSON:
+        raise HTTPException(
+            status_code=403, 
+            detail="Only admins or owners can mark leads as lost or closed"
+        )
 
     notification_service = NotificationService(db)
 

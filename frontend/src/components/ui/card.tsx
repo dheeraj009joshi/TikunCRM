@@ -113,6 +113,8 @@ interface MetricCardProps {
     }
     color?: "blue" | "emerald" | "amber" | "rose" | "purple"
     className?: string
+    href?: string  // Optional navigation link
+    onClick?: () => void  // Optional click handler
 }
 
 const colorClasses = {
@@ -123,9 +125,13 @@ const colorClasses = {
     purple: "bg-purple-500/10 text-purple-500",
 }
 
-function MetricCard({ title, metric, icon, trend, color = "blue", className }: MetricCardProps) {
-    return (
-        <Card className={cn("relative overflow-hidden hover:shadow-lg transition-all", className)}>
+function MetricCard({ title, metric, icon, trend, color = "blue", className, href, onClick }: MetricCardProps) {
+    const cardContent = (
+        <Card className={cn(
+            "relative overflow-hidden hover:shadow-lg transition-all",
+            (href || onClick) && "cursor-pointer hover:scale-[1.02]",
+            className
+        )} onClick={onClick}>
             <CardContent className="p-6">
                 <div className="flex items-center justify-between">
                     {icon && (
@@ -171,6 +177,14 @@ function MetricCard({ title, metric, icon, trend, color = "blue", className }: M
             </CardContent>
         </Card>
     )
+    
+    if (href) {
+        // Import Link dynamically to avoid issues
+        const Link = require("next/link").default
+        return <Link href={href}>{cardContent}</Link>
+    }
+    
+    return cardContent
 }
 
 export { Card, CardHeader, CardFooter, CardTitle, CardDescription, CardContent, MetricCard }

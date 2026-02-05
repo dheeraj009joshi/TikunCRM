@@ -107,6 +107,20 @@ class Lead(Base):
     interested_in: Mapped[str] = mapped_column(String(255), nullable=True)
     budget_range: Mapped[str] = mapped_column(String(100), nullable=True)
     
+    # Address information
+    address: Mapped[str] = mapped_column(String(500), nullable=True)
+    city: Mapped[str] = mapped_column(String(100), nullable=True)
+    state: Mapped[str] = mapped_column(String(100), nullable=True)
+    postal_code: Mapped[str] = mapped_column(String(20), nullable=True)
+    country: Mapped[str] = mapped_column(String(100), nullable=True)
+    
+    # Additional lead details
+    date_of_birth: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    company: Mapped[str] = mapped_column(String(200), nullable=True)
+    job_title: Mapped[str] = mapped_column(String(100), nullable=True)
+    preferred_contact_method: Mapped[str] = mapped_column(String(50), nullable=True)  # phone, email, text
+    preferred_contact_time: Mapped[str] = mapped_column(String(100), nullable=True)  # morning, afternoon, evening
+    
     # Timestamps
     first_contacted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),

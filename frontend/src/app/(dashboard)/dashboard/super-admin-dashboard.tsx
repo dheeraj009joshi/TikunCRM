@@ -76,7 +76,8 @@ export function SuperAdminDashboard() {
             change: stats.leads_change,
             trend: stats.leads_change.startsWith("+") ? "up" : "down",
             icon: Inbox,
-            color: "blue" as const
+            color: "blue" as const,
+            href: "/leads"
         },
         {
             name: "Unassigned Leads",
@@ -92,7 +93,8 @@ export function SuperAdminDashboard() {
             change: stats.dealerships_change,
             trend: "up",
             icon: Building2,
-            color: "purple" as const
+            color: "purple" as const,
+            href: "/dealerships"
         },
         {
             name: "Conversion Rate",
@@ -100,7 +102,8 @@ export function SuperAdminDashboard() {
             change: stats.conversion_change,
             trend: stats.conversion_change.startsWith("+") ? "up" : "down",
             icon: TrendingUp,
-            color: "emerald" as const
+            color: "emerald" as const,
+            href: "/leads?status=converted"
         },
         {
             name: "Sales Force",
@@ -108,7 +111,8 @@ export function SuperAdminDashboard() {
             change: stats.salesforce_change,
             trend: "up",
             icon: Users,
-            color: "blue" as const
+            color: "blue" as const,
+            href: "/team"
         },
     ] : []
 
@@ -221,6 +225,7 @@ export function SuperAdminDashboard() {
                                 isPositive: stat.trend === "up"
                             } : undefined}
                             color={stat.color}
+                            href={stat.href}
                         />
                     ))
                 )}
