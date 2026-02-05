@@ -96,9 +96,9 @@ class PushService:
                     else:
                         fcm_token.mark_failed()
                 except InvalidFCMTokenError:
-                    # Token is definitively invalid - deactivate immediately
-                    logger.info(f"Deactivating invalid FCM token {fcm_token.id} for user {user_id}")
-                    fcm_token.is_active = False
+                    # Token is definitively invalid - delete it immediately
+                    logger.info(f"Deleting invalid FCM token {fcm_token.id} for user {user_id}")
+                    await db.delete(fcm_token)
                     
         except Exception as e:
             logger.exception(f"FCM send_to_user error: {e}")

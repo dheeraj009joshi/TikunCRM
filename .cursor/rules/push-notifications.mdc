@@ -1,0 +1,52 @@
+---
+description: TikunCRM push notification system - FCM integration and multi-channel delivery
+alwaysApply: true
+---
+
+# Push Notification System
+
+TikunCRM uses Firebase Cloud Messaging (FCM) for push notifications with multi-channel delivery.
+
+## Architecture
+
+- **Backend**: `backend/app/services/fcm_service.py` sends FCM messages
+- **Frontend**: `frontend/public/firebase-messaging-sw.js` handles display
+- **Hook**: `frontend/src/hooks/use-fcm-notifications.ts` manages token registration
+
+## Notification Events
+
+All events that send email also send push notifications:
+
+| Event | Push | Email | SMS |
+|-------|------|-------|-----|
+| New Lead | Yes | Yes | Yes |
+| Lead Assigned | Yes | Yes | No |
+| SKATE Alert | Yes | Yes | No |
+| Follow-up Due/Overdue | Yes | Yes | No |
+| Appointment Reminder | Yes | Yes | Yes |
+| Appointment Missed | Yes | Yes | No |
+| Email Received | Yes | Yes | No |
+| Admin Reminder | Yes | Yes | Yes |
+
+## Key Implementation Details
+
+1. **Data-only messages**: Backend sends data-only FCM payloads for cross-browser reliability
+2. **Raw push listener**: Service worker uses `addEventListener('push', ...)` for explicit control
+3. **Token management**: Tokens registered on login and app load; max 10 tokens per user
+4. **Foreground handling**: `use-fcm-notifications.ts` shows in-app notifications when app is open
+
+## Adding New Notification Events
+
+```python
+# In notification_service.py
+await self.create_notification(
+    user_id=user_id,
+    notification_type=NotificationType.YOUR_TYPE,
+    title="Title",
+    message="Body text",
+    link="/path/to/navigate",
+    send_push=True,   # Enable push
+    send_email=True,  # Enable email
+    send_sms=False,   # Enable SMS (use sparingly)
+)
+```
