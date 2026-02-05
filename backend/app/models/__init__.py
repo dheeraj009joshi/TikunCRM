@@ -14,7 +14,7 @@ from app.models.dealership_email_config import DealershipEmailConfig
 from app.models.notification import Notification, NotificationType
 from app.models.password_reset import PasswordResetToken
 from app.models.appointment import Appointment, AppointmentType, AppointmentStatus
-from app.models.push_subscription import PushSubscription
+from app.models.fcm_token import FCMToken
 
 __all__ = [
     "Dealership",
@@ -40,5 +40,5 @@ __all__ = [
     "Appointment",
     "AppointmentType",
     "AppointmentStatus",
-    "PushSubscription",
+    "FCMToken",
 ]

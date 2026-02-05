@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import { Mail, Lock } from "lucide-react"
 
 import { useAuthStore } from "@/stores/auth-store"
+import { registerFCMToken } from "@/hooks/use-fcm-notifications"
 
 export default function LoginPage() {
     const router = useRouter()
@@ -41,6 +42,9 @@ export default function LoginPage() {
 
             // Store auth in Zustand store (includes token + refresh token + user)
             setAuth(data.user, data.access_token, data.refresh_token)
+
+            // Register FCM token for push notifications (non-blocking)
+            registerFCMToken().catch(console.error)
 
             // Check if user must change password
             if (data.user?.must_change_password) {

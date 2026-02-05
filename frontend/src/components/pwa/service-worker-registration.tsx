@@ -5,9 +5,9 @@ import { useEffect } from "react"
 export function ServiceWorkerRegistration() {
   useEffect(() => {
     if (typeof window !== "undefined" && "serviceWorker" in navigator) {
-      // Register service worker
+      // Register the unified service worker (handles both PWA caching and FCM)
       navigator.serviceWorker
-        .register("/sw.js")
+        .register("/firebase-messaging-sw.js")
         .then((registration) => {
           console.log("[PWA] Service Worker registered:", registration.scope)
           

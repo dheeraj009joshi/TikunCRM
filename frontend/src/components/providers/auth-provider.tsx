@@ -3,6 +3,7 @@
 import * as React from "react"
 import { useRouter, usePathname } from "next/navigation"
 import { useAuthStore } from "@/stores/auth-store"
+import { registerFCMToken } from "@/hooks/use-fcm-notifications"
 
 const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password"]
 
@@ -11,6 +12,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const pathname = usePathname()
     const { isAuthenticated, token, user, setLoading } = useAuthStore()
     const [isChecking, setIsChecking] = React.useState(true)
+    const fcmRegisteredRef = React.useRef(false)
+
+    // Register FCM token when user is authenticated
+    React.useEffect(() => {
+        if (isAuthenticated && user && !fcmRegisteredRef.current) {
+            fcmRegisteredRef.current = true
+            // Register FCM token in background (non-blocking)
+            registerFCMToken().catch(console.error)
+        }
+    }, [isAuthenticated, user])
 
     React.useEffect(() => {
         const checkAuth = async () => {

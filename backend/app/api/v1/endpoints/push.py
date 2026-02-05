@@ -1,20 +1,21 @@
 """
-Push Notification Endpoints
+Push Notification Endpoints - FCM Only
+Firebase Cloud Messaging (FCM) token registration and testing.
 """
-from typing import Any, Optional
+from typing import Any, List, Optional
 from uuid import UUID
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from pydantic import BaseModel
-from sqlalchemy import select, delete
+from pydantic import BaseModel, Field
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.config import settings
 from app.db.database import get_db
 from app.models.user import User
-from app.models.push_subscription import PushSubscription
+from app.models.fcm_token import FCMToken
 
 logger = logging.getLogger(__name__)
 
@@ -23,33 +24,15 @@ router = APIRouter()
 
 # ============== Schemas ==============
 
-class PushSubscriptionKeys(BaseModel):
-    """Push subscription keys from browser"""
-    p256dh: str
-    auth: str
-
-
-class PushSubscriptionData(BaseModel):
-    """Push subscription from browser"""
-    endpoint: str
-    keys: PushSubscriptionKeys
-    expirationTime: Optional[int] = None
-
-
-class SubscribeRequest(BaseModel):
-    """Request to subscribe to push notifications"""
-    subscription: PushSubscriptionData
+class FCMRegisterRequest(BaseModel):
+    """Request to register an FCM device token"""
+    token: str = Field(..., min_length=1, description="FCM registration token from Firebase SDK")
     device_name: Optional[str] = None
 
 
-class UnsubscribeRequest(BaseModel):
-    """Request to unsubscribe from push notifications"""
-    endpoint: str
-
-
-class VapidPublicKeyResponse(BaseModel):
-    """VAPID public key for client"""
-    public_key: str
+class FCMUnregisterRequest(BaseModel):
+    """Request to unregister an FCM token"""
+    token: str = Field(..., min_length=1)
 
 
 class SubscriptionResponse(BaseModel):
@@ -67,160 +50,158 @@ class SubscriptionListItem(BaseModel):
     is_active: bool
     created_at: str
     last_success_at: Optional[str]
-    
+    provider: str = "fcm"
+
     class Config:
         from_attributes = True
 
 
-# ============== Endpoints ==============
+# ============== FCM Endpoints ==============
 
-@router.get("/vapid-public-key", response_model=VapidPublicKeyResponse)
-async def get_vapid_public_key() -> Any:
+@router.post("/fcm/register", response_model=SubscriptionResponse)
+async def register_fcm_token(
+    request: Request,
+    body: FCMRegisterRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
     """
-    Get the VAPID public key for push subscription.
-    This is needed by the frontend to subscribe to push notifications.
+    Register an FCM device token for the current user.
+    Call this after getting the token from Firebase SDK (e.g. getToken()).
+    
+    Multi-browser support:
+    - Each browser gets its own FCM token (Chrome token != Safari token)
+    - We keep multiple active tokens per user (up to MAX_TOKENS_PER_USER)
+    - Invalid tokens are cleaned up when FCM returns errors during send
     """
-    if not settings.vapid_public_key:
+    MAX_TOKENS_PER_USER = 10  # Keep last 10 tokens per user
+    
+    if not settings.is_fcm_configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Push notifications not configured"
+            detail="FCM is not configured. Set FCM_SERVICE_ACCOUNT_PATH or GOOGLE_APPLICATION_CREDENTIALS.",
         )
-    
-    return VapidPublicKeyResponse(public_key=settings.vapid_public_key)
+    token = body.token.strip()
+    if not token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Token is required")
 
-
-@router.post("/subscribe", response_model=SubscriptionResponse)
-async def subscribe_to_push(
-    request: Request,
-    subscribe_data: SubscribeRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.get_current_active_user)
-) -> Any:
-    """
-    Subscribe to push notifications.
-    Creates or updates a push subscription for the current user.
-    """
-    subscription = subscribe_data.subscription
+    user_agent = (request.headers.get("user-agent") or "")[:500]
     
-    # Check if subscription already exists (by endpoint)
-    result = await db.execute(
-        select(PushSubscription).where(
-            PushSubscription.endpoint == subscription.endpoint
-        )
-    )
+    # Log the token being registered for debugging
+    logger.info("FCM token registration - user: %s, token (first 60): %s..., ua: %s", 
+                current_user.id, token[:60], user_agent[:50])
+
+    # Check if this exact token already exists
+    result = await db.execute(select(FCMToken).where(FCMToken.token == token))
     existing = result.scalar_one_or_none()
-    
+
     if existing:
-        # Update existing subscription
+        # Update existing token
         existing.user_id = current_user.id
-        existing.p256dh_key = subscription.keys.p256dh
-        existing.auth_key = subscription.keys.auth
-        existing.subscription_json = subscription.model_dump()
+        existing.device_name = body.device_name or existing.device_name
+        existing.user_agent = user_agent
         existing.is_active = True
         existing.failed_count = 0
-        
-        if subscribe_data.device_name:
-            existing.device_name = subscribe_data.device_name
-        
-        # Update user agent
-        user_agent = request.headers.get("user-agent")
-        if user_agent:
-            existing.user_agent = user_agent[:500]
-        
         await db.commit()
-        
-        logger.info(f"Updated push subscription for user {current_user.id}")
-        
-        return SubscriptionResponse(
-            success=True,
-            message="Push subscription updated",
-            subscription_id=str(existing.id)
+        logger.info("Updated existing FCM token for user %s", current_user.id)
+        response_msg = "FCM token updated"
+        subscription_id = str(existing.id)
+    else:
+        # Create new token
+        new_token = FCMToken(
+            user_id=current_user.id,
+            token=token,
+            device_name=body.device_name,
+            user_agent=user_agent,
+            is_active=True,
         )
+        db.add(new_token)
+        await db.commit()
+        await db.refresh(new_token)
+        logger.info("Registered new FCM token for user %s", current_user.id)
+        response_msg = "FCM token registered successfully"
+        subscription_id = str(new_token.id)
     
-    # Create new subscription
-    user_agent = request.headers.get("user-agent", "")[:500]
+    # Clean up old tokens: keep only the last MAX_TOKENS_PER_USER tokens
+    # This prevents unbounded growth while supporting multiple browsers
     
-    new_subscription = PushSubscription(
-        user_id=current_user.id,
-        endpoint=subscription.endpoint,
-        p256dh_key=subscription.keys.p256dh,
-        auth_key=subscription.keys.auth,
-        subscription_json=subscription.model_dump(),
-        user_agent=user_agent,
-        device_name=subscribe_data.device_name,
-        is_active=True
+    # Get count of tokens for this user
+    count_result = await db.execute(
+        select(func.count(FCMToken.id)).where(FCMToken.user_id == current_user.id)
     )
+    token_count = count_result.scalar() or 0
     
-    db.add(new_subscription)
-    await db.commit()
-    await db.refresh(new_subscription)
+    if token_count > MAX_TOKENS_PER_USER:
+        # Get IDs of tokens to keep (most recent ones)
+        keep_query = (
+            select(FCMToken.id)
+            .where(FCMToken.user_id == current_user.id)
+            .order_by(FCMToken.created_at.desc())
+            .limit(MAX_TOKENS_PER_USER)
+        )
+        keep_result = await db.execute(keep_query)
+        keep_ids = [row[0] for row in keep_result.fetchall()]
+        
+        # Delete old tokens
+        if keep_ids:
+            await db.execute(
+                delete(FCMToken)
+                .where(FCMToken.user_id == current_user.id)
+                .where(FCMToken.id.not_in(keep_ids))
+            )
+            await db.commit()
+            logger.info("Cleaned up old FCM tokens for user %s (kept %d)", current_user.id, MAX_TOKENS_PER_USER)
     
-    logger.info(f"Created push subscription for user {current_user.id}")
-    
-    return SubscriptionResponse(
-        success=True,
-        message="Successfully subscribed to push notifications",
-        subscription_id=str(new_subscription.id)
-    )
+    return SubscriptionResponse(success=True, message=response_msg, subscription_id=subscription_id)
 
 
-@router.post("/unsubscribe", response_model=SubscriptionResponse)
-async def unsubscribe_from_push(
-    unsubscribe_data: UnsubscribeRequest,
+@router.post("/fcm/unregister", response_model=SubscriptionResponse)
+async def unregister_fcm_token(
+    body: FCMUnregisterRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.get_current_active_user)
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """
-    Unsubscribe from push notifications.
-    Removes the push subscription for the specified endpoint.
-    """
-    # Find and delete the subscription
+    """Remove an FCM token for the current user."""
     result = await db.execute(
-        select(PushSubscription).where(
-            PushSubscription.endpoint == unsubscribe_data.endpoint,
-            PushSubscription.user_id == current_user.id
+        select(FCMToken).where(
+            FCMToken.token == body.token.strip(),
+            FCMToken.user_id == current_user.id,
         )
     )
-    subscription = result.scalar_one_or_none()
-    
-    if subscription:
-        await db.delete(subscription)
+    token_row = result.scalar_one_or_none()
+    if token_row:
+        await db.delete(token_row)
         await db.commit()
-        logger.info(f"Deleted push subscription for user {current_user.id}")
-    
-    return SubscriptionResponse(
-        success=True,
-        message="Successfully unsubscribed from push notifications"
-    )
+        logger.info("Unregistered FCM token for user %s", current_user.id)
+    return SubscriptionResponse(success=True, message="FCM token unregistered")
 
 
-@router.get("/subscriptions", response_model=list[SubscriptionListItem])
+@router.get("/subscriptions", response_model=List[SubscriptionListItem])
 async def list_subscriptions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user)
 ) -> Any:
     """
-    List all push subscriptions for the current user.
-    Useful for managing devices.
+    List all FCM push subscriptions for the current user.
     """
-    result = await db.execute(
-        select(PushSubscription).where(
-            PushSubscription.user_id == current_user.id
-        ).order_by(PushSubscription.created_at.desc())
+    items: List[SubscriptionListItem] = []
+
+    # Get FCM tokens
+    fcm_result = await db.execute(
+        select(FCMToken).where(FCMToken.user_id == current_user.id).order_by(FCMToken.created_at.desc())
     )
-    subscriptions = result.scalars().all()
-    
-    return [
-        SubscriptionListItem(
-            id=str(sub.id),
-            device_name=sub.device_name,
-            user_agent=sub.user_agent,
-            is_active=sub.is_active,
-            created_at=sub.created_at.isoformat(),
-            last_success_at=sub.last_success_at.isoformat() if sub.last_success_at else None
-        )
-        for sub in subscriptions
-    ]
+    for t in fcm_result.scalars().all():
+        items.append(SubscriptionListItem(
+            id=str(t.id),
+            device_name=t.device_name,
+            user_agent=t.user_agent,
+            is_active=t.is_active,
+            created_at=t.created_at.isoformat(),
+            last_success_at=t.last_success_at.isoformat() if t.last_success_at else None,
+            provider="fcm",
+        ))
+
+    return items
 
 
 @router.delete("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
@@ -230,28 +211,23 @@ async def delete_subscription(
     current_user: User = Depends(deps.get_current_active_user)
 ) -> Any:
     """
-    Delete a specific push subscription.
+    Delete a specific FCM token subscription.
     """
     result = await db.execute(
-        select(PushSubscription).where(
-            PushSubscription.id == subscription_id,
-            PushSubscription.user_id == current_user.id
+        select(FCMToken).where(
+            FCMToken.id == subscription_id,
+            FCMToken.user_id == current_user.id
         )
     )
-    subscription = result.scalar_one_or_none()
-    
-    if not subscription:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Subscription not found"
-        )
-    
-    await db.delete(subscription)
-    await db.commit()
-    
-    return SubscriptionResponse(
-        success=True,
-        message="Subscription deleted"
+    fcm = result.scalar_one_or_none()
+    if fcm:
+        await db.delete(fcm)
+        await db.commit()
+        return SubscriptionResponse(success=True, message="FCM token deleted")
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Subscription not found"
     )
 
 
@@ -261,43 +237,42 @@ async def send_test_notification(
     current_user: User = Depends(deps.get_current_active_user)
 ) -> Any:
     """
-    Send a test push notification to the current user.
-    Useful for verifying push notifications are working.
+    Send a test push notification to the current user via FCM.
     """
     from app.services.push_service import push_service
-    
+
     if not push_service.is_configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Push notifications not configured"
+            detail="Push notifications not configured. Please configure FCM in backend settings."
         )
-    
-    # Count subscriptions
-    result = await db.execute(
-        select(PushSubscription).where(
-            PushSubscription.user_id == current_user.id,
-            PushSubscription.is_active == True
+
+    # Count FCM devices
+    r = await db.execute(
+        select(FCMToken).where(
+            FCMToken.user_id == current_user.id,
+            FCMToken.is_active == True,
         )
     )
-    subscriptions = result.scalars().all()
-    
-    if not subscriptions:
+    fcm_tokens = r.scalars().all()
+    total_devices = len(fcm_tokens)
+
+    if total_devices == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No active push subscriptions found. Please enable push notifications first."
+            detail="No active push subscriptions found. Enable push notifications in Settings first.",
         )
-    
-    # Send test notification
+
     success_count = await push_service.send_to_user(
         db=db,
         user_id=current_user.id,
-        title="Test Notification 🔔",
-        body=f"Hello {current_user.first_name}! Push notifications are working correctly.",
+        title="Test Notification",
+        body=f"Hello {current_user.first_name}! Push notifications are working.",
         url="/notifications",
         tag="test-notification"
     )
-    
+
     return SubscriptionResponse(
         success=success_count > 0,
-        message=f"Test notification sent to {success_count}/{len(subscriptions)} devices"
+        message=f"Test notification sent to {success_count}/{total_devices} device(s)"
     )

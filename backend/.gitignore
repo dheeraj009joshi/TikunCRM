@@ -133,3 +133,7 @@ coverage.xml
 uploads/
 media/
 staticfiles/
+
+# Firebase service account (sensitive credentials)
+firebase-service-account.json
+*-firebase-adminsdk-*.json

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>FCM Web Push Demo</title>
+</head>
+<body>
+  <h2>Firebase Push Test</h2>
+  <button id="enable">Enable Notifications</button>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import {
+      getMessaging,
+      getToken,
+      onMessage
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js";
+    const registration = navigator.serviceWorker.register("/firebase-messaging-sw.js");
+    console.log("Service worker registered:", registration);
+    // 🔹 Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyCubNWyMpGr9PwjjrMXHF0NKzmtcLpZ_oA",
+      authDomain: "tikuncrm.firebaseapp.com",
+      projectId: "tikuncrm",
+      storageBucket: "tikuncrm.firebasestorage.app",
+      messagingSenderId: "241604704783",
+      appId: "1:241604704783:web:cc054d12805a9bcbfe417a"
+    };
+
+    const VAPID_KEY = "BGD_FPovlvqQF9YnEtuBlrInOtXyUI1BqzzJGs7IV2tjJnTCwmm4bHBjdstPqD76KjiHa8pgN-0dIYtHABluibw";
+
+    // ✅ 1. Initialize
+    const app = initializeApp(firebaseConfig);
+
+    // ✅ 2. Get messaging
+    const messaging = getMessaging(app);
+
+    // ✅ 3. Foreground handler (AFTER messaging exists)
+    onMessage(messaging, (payload) => {
+      console.log("🔥 Foreground message:", payload);
+
+      new Notification(payload.notification.title, {
+        body: payload.notification.body
+      });
+    });
+
+    // ✅ Button click
+    document.getElementById("enable").onclick = async () => {
+      const permission = await Notification.requestPermission();
+
+      if (permission !== "granted") {
+        alert("Permission denied");
+        return;
+      }
+
+      const token = await getToken(messaging, {
+        vapidKey: VAPID_KEY
+      });
+
+      console.log("FCM TOKEN:", token);
+      console.log("Token printed in console");
+    };
+  </script>
+</body>
+</html>

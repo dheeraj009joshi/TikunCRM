@@ -108,19 +108,23 @@ class Settings(BaseSettings):
             self.sms_notifications_enabled
         )
     
-    # Web Push (VAPID) Settings
-    vapid_public_key: str = ""
-    vapid_private_key: str = ""
-    vapid_claims_email: str = ""  # Email for VAPID claims (e.g., mailto:admin@yoursite.com)
-    
+    # Firebase Cloud Messaging (FCM) HTTP V1 - for push notifications
+    # Path to the service account JSON file from Firebase Console (Project Settings > Service accounts)
+    fcm_service_account_path: str = ""  # e.g. /path/to/firebase-service-account.json
+    # Or set GOOGLE_APPLICATION_CREDENTIALS env var to the same path
+    fcm_project_id: str = ""  # Optional: Firebase project ID (can be read from JSON if not set)
+
+    @property
+    def is_fcm_configured(self) -> bool:
+        """Check if FCM is configured (service account path or GOOGLE_APPLICATION_CREDENTIALS)"""
+        import os
+        path = self.fcm_service_account_path or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+        return bool(path and os.path.isfile(path))
+
     @property
     def is_push_configured(self) -> bool:
-        """Check if Web Push is properly configured"""
-        return bool(
-            self.vapid_public_key and 
-            self.vapid_private_key and
-            self.vapid_claims_email
-        )
+        """Check if push notifications are configured (FCM only)"""
+        return self.is_fcm_configured
 
 
 @lru_cache()

@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { Bell, BellOff, Loader2, AlertCircle, Send } from "lucide-react"
-import { usePushNotifications } from "@/hooks/use-push-notifications"
+import { useFCMNotifications } from "@/hooks/use-fcm-notifications"
 import apiClient from "@/lib/api-client"
 
 interface PushNotificationToggleProps {
@@ -22,13 +22,24 @@ export function PushNotificationToggle({
     isLoading,
     error,
     permission,
-    browserInfo,
     subscribe,
     unsubscribe,
-  } = usePushNotifications()
+  } = useFCMNotifications()
   
   const [isTesting, setIsTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ message: string; isError: boolean } | null>(null)
+
+  // Show loading while checking support
+  if (isLoading) {
+    return (
+      <div className={`space-y-2 ${className}`}>
+        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Checking push notification support...</span>
+        </div>
+      </div>
+    )
+  }
 
   if (!isSupported) {
     return (
@@ -38,11 +49,6 @@ export function PushNotificationToggle({
           <div>
             <div className="font-medium">Push notifications not available</div>
             {error && <div className="text-xs mt-1">{error}</div>}
-            {browserInfo?.isSafari && (
-              <div className="text-xs mt-1 text-amber-600">
-                For Safari, make sure you&apos;re on macOS Ventura (13.0) or later.
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -157,7 +163,7 @@ export function PushNotificationButton() {
     isLoading,
     subscribe,
     unsubscribe,
-  } = usePushNotifications()
+  } = useFCMNotifications()
 
   if (!isSupported) return null
 
