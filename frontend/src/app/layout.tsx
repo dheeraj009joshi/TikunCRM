@@ -9,9 +9,10 @@ const inter = Inter({ subsets: ["latin"] });
 
 const APP_NAME = "TikunCRM";
 const APP_DESCRIPTION = "Next-gen CRM for multi-level lead management";
+const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://tikuncrm.com";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://tikuncrm.com"),
+  metadataBase: new URL(BASE_URL),
   title: {
     default: `${APP_NAME} | Modern Lead Management`,
     template: `%s | ${APP_NAME}`,
@@ -33,6 +34,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
+    url: BASE_URL,
     siteName: APP_NAME,
     title: `${APP_NAME} | Modern Lead Management`,
     description: APP_DESCRIPTION,
@@ -42,6 +44,10 @@ export const metadata: Metadata = {
     title: `${APP_NAME} | Modern Lead Management`,
     description: APP_DESCRIPTION,
   },
+  // Optional: set NEXT_PUBLIC_FB_APP_ID in .env to remove fb:app_id warning in Facebook Debugger
+  ...(process.env.NEXT_PUBLIC_FB_APP_ID && {
+    other: { "fb:app_id": process.env.NEXT_PUBLIC_FB_APP_ID },
+  }),
 };
 
 export const viewport: Viewport = {
