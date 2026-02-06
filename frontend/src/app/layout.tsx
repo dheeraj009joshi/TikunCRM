@@ -40,8 +40,8 @@ export const metadata: Metadata = {
     images: [
       {
         url: OG_IMAGE,
-        width: 512,
-        height: 512,
+        width: 1200,
+        height: 630,
         alt: APP_NAME,
       },
     ],
@@ -50,7 +50,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: `${APP_NAME} | Modern Lead Management`,
     description: APP_DESCRIPTION,
-    images: [OG_IMAGE],
+    images: [{ url: OG_IMAGE, width: 1200, height: 630, alt: APP_NAME }],
   },
 };
 

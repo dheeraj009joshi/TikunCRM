@@ -324,9 +324,9 @@ export function Sidebar() {
                     <Image
                         src="/Gemini_Generated_Image_iauae6iauae6iaua.png"
                         alt="TikunCRM"
-                        width={32}
-                        height={32}
-                        className="h-8 w-8 rounded-lg object-contain"
+                        width={40}
+                        height={40}
+                        className="h-10 w-10 rounded-lg object-contain"
                     />
                     <span className="ml-3 text-xl font-bold tracking-tight">TikunCRM</span>
                 </Link>
