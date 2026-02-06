@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { Mail, Lock, Eye, EyeOff } from "lucide-react"
 
@@ -68,9 +69,13 @@ export default function LoginPage() {
             <div className="relative hidden h-full flex-col bg-muted p-10 text-white dark:border-r lg:flex">
                 <div className="absolute inset-0 bg-primary" />
                 <div className="relative z-20 flex items-center text-lg font-medium">
-                    <div className="mr-2 flex h-8 w-8 items-center justify-center rounded bg-white text-primary">
-                        <span className="font-bold">L</span>
-                    </div>
+                    <Image
+                        src="/Gemini_Generated_Image_iauae6iauae6iaua.png"
+                        alt="TikunCRM"
+                        width={32}
+                        height={32}
+                        className="mr-2 h-8 w-8 rounded object-contain"
+                    />
                     TikunCRM
                 </div>
                 <div className="relative z-20 mt-auto">

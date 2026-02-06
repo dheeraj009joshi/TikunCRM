@@ -7,17 +7,50 @@ import { Toaster } from "@/components/ui/toaster";
 
 const inter = Inter({ subsets: ["latin"] });
 
+const APP_NAME = "TikunCRM";
+const APP_DESCRIPTION = "Next-gen CRM for multi-level lead management";
+const OG_IMAGE = "/Gemini_Generated_Image_iauae6iauae6iaua.png";
+
 export const metadata: Metadata = {
-  title: "TikunCRM | Modern Lead Management",
-  description: "Next-gen CRM for multi-level lead management",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://tikuncrm.com"),
+  title: {
+    default: `${APP_NAME} | Modern Lead Management`,
+    template: `%s | ${APP_NAME}`,
+  },
+  description: APP_DESCRIPTION,
   manifest: "/manifest.json",
+  icons: {
+    icon: OG_IMAGE,
+    shortcut: OG_IMAGE,
+    apple: OG_IMAGE,
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "TikunCRM",
+    title: APP_NAME,
   },
   formatDetection: {
     telephone: false,
+  },
+  openGraph: {
+    type: "website",
+    siteName: APP_NAME,
+    title: `${APP_NAME} | Modern Lead Management`,
+    description: APP_DESCRIPTION,
+    images: [
+      {
+        url: OG_IMAGE,
+        width: 512,
+        height: 512,
+        alt: APP_NAME,
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: `${APP_NAME} | Modern Lead Management`,
+    description: APP_DESCRIPTION,
+    images: [OG_IMAGE],
   },
 };
 

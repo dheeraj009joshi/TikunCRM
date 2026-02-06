@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import Image from "next/image"
 import { usePathname } from "next/navigation"
 import {
     BarChart3,
@@ -318,13 +319,17 @@ export function Sidebar() {
     return (
         <aside className="fixed left-0 top-0 z-40 h-screen w-64 border-r bg-background transition-transform">
             <div className="flex h-full flex-col px-3 py-4">
-                {/* Logo */}
-                <div className="mb-10 flex items-center px-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                        <span className="font-bold">L</span>
-                    </div>
+                {/* Logo - click navigates to dashboard */}
+                <Link href="/dashboard" className="mb-10 flex items-center px-2 hover:opacity-90 transition-opacity">
+                    <Image
+                        src="/Gemini_Generated_Image_iauae6iauae6iaua.png"
+                        alt="TikunCRM"
+                        width={32}
+                        height={32}
+                        className="h-8 w-8 rounded-lg object-contain"
+                    />
                     <span className="ml-3 text-xl font-bold tracking-tight">TikunCRM</span>
-                </div>
+                </Link>
 
                 {/* Search */}
                 <button
