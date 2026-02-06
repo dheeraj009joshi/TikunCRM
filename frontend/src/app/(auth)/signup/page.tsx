@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Mail, Lock, User, Building2 } from "lucide-react"
+import { Mail, Lock, User, Building2, Eye, EyeOff } from "lucide-react"
 
 import { useAuthStore } from "@/stores/auth-store"
 
@@ -19,6 +19,7 @@ export default function SignupPage() {
         password: "",
         dealership_name: ""
     })
+    const [showPassword, setShowPassword] = React.useState(false)
 
     async function onSubmit(event: React.SyntheticEvent) {
         event.preventDefault()
@@ -154,12 +155,20 @@ export default function SignupPage() {
                                         <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                                         <input
                                             id="password"
-                                            type="password"
-                                            className="flex h-10 w-full rounded-md border border-input bg-transparent px-10 py-2 text-sm focus:ring-2 focus:ring-primary outline-none"
+                                            type={showPassword ? "text" : "password"}
+                                            className="flex h-10 w-full rounded-md border border-input bg-transparent pl-10 pr-10 py-2 text-sm focus:ring-2 focus:ring-primary outline-none"
                                             value={formData.password}
                                             onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                                             required
                                         />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPassword(!showPassword)}
+                                            className="absolute right-3 top-3 h-4 w-4 text-muted-foreground hover:text-foreground transition-colors"
+                                            tabIndex={-1}
+                                        >
+                                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                        </button>
                                     </div>
                                 </div>
 

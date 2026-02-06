@@ -13,6 +13,8 @@ import {
     Send,
     AlertTriangle,
     Info,
+    Eye,
+    EyeOff,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -65,6 +67,8 @@ export default function DealershipEmailConfigPage() {
     const [testResult, setTestResult] = React.useState<{ success: boolean; message: string; details?: string | null } | null>(null)
     const [error, setError] = React.useState<string | null>(null)
     const [successMessage, setSuccessMessage] = React.useState<string | null>(null)
+    const [showSmtpPassword, setShowSmtpPassword] = React.useState(false)
+    const [showImapPassword, setShowImapPassword] = React.useState(false)
     
     // Form data
     const [formData, setFormData] = React.useState<DealershipEmailConfigCreate>({
@@ -417,13 +421,24 @@ export default function DealershipEmailConfigPage() {
                             <Label htmlFor="smtp_password">
                                 Password {existingConfig ? "(leave blank to keep current)" : "*"}
                             </Label>
-                            <Input
-                                id="smtp_password"
-                                type="password"
-                                placeholder={existingConfig ? "••••••••" : "Enter password"}
-                                value={formData.smtp_password}
-                                onChange={(e) => handleInputChange("smtp_password", e.target.value)}
-                            />
+                            <div className="relative">
+                                <Input
+                                    id="smtp_password"
+                                    type={showSmtpPassword ? "text" : "password"}
+                                    placeholder={existingConfig ? "••••••••" : "Enter password"}
+                                    value={formData.smtp_password}
+                                    onChange={(e) => handleInputChange("smtp_password", e.target.value)}
+                                    className="pr-10"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowSmtpPassword(!showSmtpPassword)}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                                    tabIndex={-1}
+                                >
+                                    {showSmtpPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                </button>
+                            </div>
                         </div>
                     </div>
                     

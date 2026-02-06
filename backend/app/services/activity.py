@@ -88,7 +88,7 @@ class ActivityService:
         *,
         user_id: UUID,
         lead_id: UUID,
-        dealership_id: UUID,
+        dealership_id: Optional[UUID],
         old_status: str,
         new_status: str,
         performer_name: str,
@@ -124,7 +124,7 @@ class ActivityService:
         *,
         user_id: UUID,  # Performer
         lead_id: UUID,
-        dealership_id: UUID,
+        dealership_id: Optional[UUID],
         assigned_to_id: UUID,
         assigned_to_name: str,  # Name of user being assigned
         performer_name: str,  # Name of user performing the action

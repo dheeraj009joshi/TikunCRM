@@ -16,6 +16,7 @@ import {
     CheckCircle,
     XCircle,
     Eye,
+    EyeOff,
     Bell,
     ClipboardList,
 } from "lucide-react"
@@ -77,6 +78,7 @@ export default function TeamPage() {
     const [newMember, setNewMember] = React.useState<Partial<CreateUserData>>({
         role: "salesperson"
     })
+    const [showPassword, setShowPassword] = React.useState(false)
     
     // Pending tasks and notify modals
     const [pendingTasksOpen, setPendingTasksOpen] = React.useState(false)
@@ -481,12 +483,23 @@ export default function TeamPage() {
 
                         <div>
                             <label className="text-sm font-medium mb-2 block">Password</label>
-                            <Input
-                                type="password"
-                                value={newMember.password || ""}
-                                onChange={(e) => setNewMember({ ...newMember, password: e.target.value })}
-                                placeholder="Minimum 6 characters"
-                            />
+                            <div className="relative">
+                                <Input
+                                    type={showPassword ? "text" : "password"}
+                                    value={newMember.password || ""}
+                                    onChange={(e) => setNewMember({ ...newMember, password: e.target.value })}
+                                    placeholder="Minimum 6 characters"
+                                    className="pr-10"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPassword(!showPassword)}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                                    tabIndex={-1}
+                                >
+                                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                </button>
+                            </div>
                         </div>
 
                         <div>

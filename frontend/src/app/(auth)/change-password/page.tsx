@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { Lock, CheckCircle, AlertTriangle } from "lucide-react"
+import { Lock, CheckCircle, AlertTriangle, Eye, EyeOff } from "lucide-react"
 
 import { useAuthStore } from "@/stores/auth-store"
 
@@ -21,6 +21,9 @@ export default function ChangePasswordPage() {
         newPassword: "",
         confirmPassword: ""
     })
+    const [showCurrentPassword, setShowCurrentPassword] = React.useState(false)
+    const [showNewPassword, setShowNewPassword] = React.useState(false)
+    const [showConfirmPassword, setShowConfirmPassword] = React.useState(false)
 
     // Redirect to login if not authenticated
     React.useEffect(() => {
@@ -183,13 +186,21 @@ export default function ChangePasswordPage() {
                                         <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                                         <input
                                             id="currentPassword"
-                                            type="password"
+                                            type={showCurrentPassword ? "text" : "password"}
                                             disabled={isLoading}
                                             value={formData.currentPassword}
                                             onChange={(e) => setFormData({ ...formData, currentPassword: e.target.value })}
-                                            className="flex h-10 w-full rounded-md border border-input bg-transparent px-10 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                            className="flex h-10 w-full rounded-md border border-input bg-transparent pl-10 pr-10 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                             required
                                         />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                                            className="absolute right-3 top-3 h-4 w-4 text-muted-foreground hover:text-foreground transition-colors"
+                                            tabIndex={-1}
+                                        >
+                                            {showCurrentPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                        </button>
                                     </div>
                                 </div>
                                 <div className="grid gap-2">
@@ -200,15 +211,23 @@ export default function ChangePasswordPage() {
                                         <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                                         <input
                                             id="newPassword"
-                                            type="password"
+                                            type={showNewPassword ? "text" : "password"}
                                             placeholder="At least 8 characters"
                                             disabled={isLoading}
                                             value={formData.newPassword}
                                             onChange={(e) => setFormData({ ...formData, newPassword: e.target.value })}
-                                            className="flex h-10 w-full rounded-md border border-input bg-transparent px-10 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                            className="flex h-10 w-full rounded-md border border-input bg-transparent pl-10 pr-10 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                             required
                                             minLength={8}
                                         />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowNewPassword(!showNewPassword)}
+                                            className="absolute right-3 top-3 h-4 w-4 text-muted-foreground hover:text-foreground transition-colors"
+                                            tabIndex={-1}
+                                        >
+                                            {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                        </button>
                                     </div>
                                 </div>
                                 <div className="grid gap-2">
@@ -219,15 +238,23 @@ export default function ChangePasswordPage() {
                                         <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                                         <input
                                             id="confirmPassword"
-                                            type="password"
+                                            type={showConfirmPassword ? "text" : "password"}
                                             placeholder="Repeat new password"
                                             disabled={isLoading}
                                             value={formData.confirmPassword}
                                             onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                                            className="flex h-10 w-full rounded-md border border-input bg-transparent px-10 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                            className="flex h-10 w-full rounded-md border border-input bg-transparent pl-10 pr-10 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                             required
                                             minLength={8}
                                         />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                                            className="absolute right-3 top-3 h-4 w-4 text-muted-foreground hover:text-foreground transition-colors"
+                                            tabIndex={-1}
+                                        >
+                                            {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                        </button>
                                     </div>
                                 </div>
                                 <button

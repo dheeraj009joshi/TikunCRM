@@ -301,9 +301,12 @@ async def list_leads(
     if source:
         query = query.where(Lead.source == source)
     if search:
+        # Search across first_name, last_name, full name (concatenated), email, and phone
+        full_name = func.concat(Lead.first_name, ' ', func.coalesce(Lead.last_name, ''))
         search_filter = or_(
             Lead.first_name.ilike(f"%{search}%"),
             Lead.last_name.ilike(f"%{search}%"),
+            full_name.ilike(f"%{search}%"),
             Lead.email.ilike(f"%{search}%"),
             Lead.phone.ilike(f"%{search}%")
         )
@@ -351,9 +354,12 @@ async def list_unassigned_leads(
     if source:
         query = query.where(Lead.source == source)
     if search:
+        # Search across first_name, last_name, full name (concatenated), email, and phone
+        full_name = func.concat(Lead.first_name, ' ', func.coalesce(Lead.last_name, ''))
         search_filter = or_(
             Lead.first_name.ilike(f"%{search}%"),
             Lead.last_name.ilike(f"%{search}%"),
+            full_name.ilike(f"%{search}%"),
             Lead.email.ilike(f"%{search}%"),
             Lead.phone.ilike(f"%{search}%")
         )
@@ -412,9 +418,12 @@ async def list_leads_unassigned_to_salesperson(
     # Super Admin can see all
     
     if search:
+        # Search across first_name, last_name, full name (concatenated), email, and phone
+        full_name = func.concat(Lead.first_name, ' ', func.coalesce(Lead.last_name, ''))
         search_filter = or_(
             Lead.first_name.ilike(f"%{search}%"),
             Lead.last_name.ilike(f"%{search}%"),
+            full_name.ilike(f"%{search}%"),
             Lead.email.ilike(f"%{search}%"),
             Lead.phone.ilike(f"%{search}%")
         )
@@ -770,12 +779,12 @@ async def update_lead_status(
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to update this lead")
     
-    # Salesperson cannot set status to LOST or CLOSED - only admin/owner/superadmin can
-    restricted_statuses = [LeadStatus.LOST, LeadStatus.CLOSED]
+    # Salesperson cannot set status to LOST or CONVERTED - only admin/owner/superadmin can
+    restricted_statuses = [LeadStatus.LOST, LeadStatus.CONVERTED]
     if status_in.status in restricted_statuses and current_user.role == UserRole.SALESPERSON:
         raise HTTPException(
             status_code=403, 
-            detail="Only admins or owners can mark leads as lost or closed"
+            detail="Only admins or owners can mark leads as lost or converted"
         )
 
     notification_service = NotificationService(db)

@@ -112,7 +112,7 @@ export default function LeadDetailsPage() {
     const searchParams = useSearchParams()
     const leadId = params.id as string
     const noteIdFromUrl = searchParams.get("note")
-    const { canAssignToSalesperson, canAssignToDealership, role, isDealershipLevel, isSuperAdmin } = useRole()
+    const { canAssignToSalesperson, canAssignToDealership, role, isDealershipLevel, isSuperAdmin, isSalesperson } = useRole()
     const user = useAuthStore(state => state.user)
     
     const [lead, setLead] = React.useState<Lead | null>(null)
@@ -600,7 +600,13 @@ export default function LeadDetailsPage() {
                                             </div>
                                         </SelectTrigger>
                                         <SelectContent>
-                                            {LEAD_STATUSES.map((status) => (
+                                            {LEAD_STATUSES
+                                                .filter(status => {
+                                                    // Salespersons cannot set status to "lost" or "converted" - only admin/owner can
+                                                    if (isSalesperson && (status.value === "lost" || status.value === "converted")) return false
+                                                    return true
+                                                })
+                                                .map((status) => (
                                                 <SelectItem key={status.value} value={status.value}>
                                                     <div className="flex items-center gap-2">
                                                         <Badge variant={getStatusVariant(status.value)} size="sm">
@@ -1203,7 +1209,8 @@ export default function LeadDetailsPage() {
                                 <CalendarClock className="h-4 w-4 mr-2 text-purple-500" />
                                 Book Appointment
                             </Button>
-                            {lead.status !== "converted" && (
+                            {/* Mark as Converted - only visible to admin/owner, not salesperson */}
+                            {!isSalesperson && lead.status !== "converted" && (
                                 <Button 
                                     className="w-full justify-start" 
                                     variant="outline"
@@ -1214,7 +1221,8 @@ export default function LeadDetailsPage() {
                                     Mark as Converted
                                 </Button>
                             )}
-                            {lead.status !== "lost" && lead.status !== "converted" && (
+                            {/* Mark as Lost - only visible to admin/owner, not salesperson */}
+                            {!isSalesperson && lead.status !== "lost" && lead.status !== "converted" && (
                                 <Button 
                                     className="w-full justify-start" 
                                     variant="outline"

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, UserPlus, Mail, Phone, Shield } from "lucide-react"
+import { Loader2, UserPlus, Mail, Phone, Shield, Eye, EyeOff } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -46,6 +46,7 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState("")
     const [dealerships, setDealerships] = React.useState<any[]>([])
+    const [showPassword, setShowPassword] = React.useState(false)
     
     const [formData, setFormData] = React.useState({
         email: "",
@@ -193,13 +194,24 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
                     {/* Password */}
                     <div className="space-y-2">
                         <Label htmlFor="password">Password *</Label>
-                        <Input
-                            id="password"
-                            type="password"
-                            placeholder="Min 6 characters"
-                            value={formData.password}
-                            onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
-                        />
+                        <div className="relative">
+                            <Input
+                                id="password"
+                                type={showPassword ? "text" : "password"}
+                                placeholder="Min 6 characters"
+                                value={formData.password}
+                                onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
+                                className="pr-10"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword(!showPassword)}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                                tabIndex={-1}
+                            >
+                                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </button>
+                        </div>
                     </div>
 
                     {/* Phone */}

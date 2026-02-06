@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Mail, Lock } from "lucide-react"
+import { Mail, Lock, Eye, EyeOff } from "lucide-react"
 
 import { useAuthStore } from "@/stores/auth-store"
 import { registerFCMToken } from "@/hooks/use-fcm-notifications"
@@ -14,6 +14,7 @@ export default function LoginPage() {
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const [formData, setFormData] = React.useState({ email: "", password: "" })
+    const [showPassword, setShowPassword] = React.useState(false)
 
     async function onSubmit(event: React.SyntheticEvent) {
         event.preventDefault()
@@ -134,13 +135,21 @@ export default function LoginPage() {
                                         <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                                         <input
                                             id="password"
-                                            type="password"
+                                            type={showPassword ? "text" : "password"}
                                             disabled={isLoading}
                                             value={formData.password}
                                             onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                                            className="flex h-10 w-full rounded-md border border-input bg-transparent px-10 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                            className="flex h-10 w-full rounded-md border border-input bg-transparent pl-10 pr-10 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                             required
                                         />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPassword(!showPassword)}
+                                            className="absolute right-3 top-3 h-4 w-4 text-muted-foreground hover:text-foreground transition-colors"
+                                            tabIndex={-1}
+                                        >
+                                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                        </button>
                                     </div>
                                 </div>
                                 <button
