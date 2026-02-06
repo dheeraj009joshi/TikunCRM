@@ -9,7 +9,6 @@ const inter = Inter({ subsets: ["latin"] });
 
 const APP_NAME = "TikunCRM";
 const APP_DESCRIPTION = "Next-gen CRM for multi-level lead management";
-const OG_IMAGE = "/Gemini_Generated_Image_iauae6iauae6iaua.png";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://tikuncrm.com"),
@@ -20,9 +19,9 @@ export const metadata: Metadata = {
   description: APP_DESCRIPTION,
   manifest: "/manifest.json",
   icons: {
-    icon: OG_IMAGE,
-    shortcut: OG_IMAGE,
-    apple: OG_IMAGE,
+    icon: "/icon.png",
+    shortcut: "/icon.png",
+    apple: "/apple-icon.png",
   },
   appleWebApp: {
     capable: true,
@@ -37,20 +36,11 @@ export const metadata: Metadata = {
     siteName: APP_NAME,
     title: `${APP_NAME} | Modern Lead Management`,
     description: APP_DESCRIPTION,
-    images: [
-      {
-        url: OG_IMAGE,
-        width: 1200,
-        height: 630,
-        alt: APP_NAME,
-      },
-    ],
   },
   twitter: {
     card: "summary_large_image",
     title: `${APP_NAME} | Modern Lead Management`,
     description: APP_DESCRIPTION,
-    images: [{ url: OG_IMAGE, width: 1200, height: 630, alt: APP_NAME }],
   },
 };
 
