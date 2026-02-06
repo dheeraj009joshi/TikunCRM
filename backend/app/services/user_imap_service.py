@@ -1,13 +1,18 @@
 """
 User IMAP Service - Fetches emails from each user's inbox
+
+NOTE: IMAP operations are blocking (imaplib). We run them in a thread pool
+to avoid blocking the FastAPI event loop.
 """
+import asyncio
 import imaplib
 import email
 from email.header import decode_header
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +29,9 @@ logger = logging.getLogger(__name__)
 # Hostinger IMAP settings
 IMAP_HOST = "imap.hostinger.com"
 IMAP_PORT = 993
+
+# Thread pool for blocking IMAP operations
+_imap_thread_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="imap_sync")
 
 
 def decode_email_header(header_value: str) -> str:
@@ -178,10 +186,87 @@ async def create_notification(db: AsyncSession, user_id, lead_id, subject: str, 
     db.add(notification)
 
 
+def _fetch_emails_from_imap_blocking(smtp_email: str, password: str) -> Tuple[List[Dict], List[str]]:
+    """
+    Blocking function to fetch emails from IMAP.
+    Runs in a thread pool to avoid blocking the event loop.
+    
+    Returns:
+        Tuple of (list of parsed email dicts, list of errors)
+    """
+    emails_data = []
+    errors = []
+    
+    try:
+        # Connect to IMAP (blocking)
+        imap = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        imap.login(smtp_email, password)
+        imap.select('INBOX')
+        
+        # Search for recent emails (last 7 days)
+        since_date = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
+        _, message_numbers = imap.search(None, f'(SINCE {since_date})')
+        
+        email_ids = message_numbers[0].split()
+        
+        for email_id in email_ids[-50:]:  # Process last 50 emails max
+            try:
+                _, msg_data = imap.fetch(email_id, '(RFC822)')
+                
+                for response_part in msg_data:
+                    if isinstance(response_part, tuple):
+                        msg = email.message_from_bytes(response_part[1])
+                        
+                        # Get message ID
+                        message_id = msg.get('Message-ID', '')
+                        from_email_addr = extract_email_address(msg.get('From', ''))
+                        to_email = extract_email_address(msg.get('To', ''))
+                        subject = decode_email_header(msg.get('Subject', ''))
+                        in_reply_to = msg.get('In-Reply-To', '')
+                        references = msg.get('References', '')
+                        body_text, body_html = get_email_body(msg)
+                        
+                        # Parse date
+                        date_str = msg.get('Date', '')
+                        try:
+                            received_at = email.utils.parsedate_to_datetime(date_str)
+                        except:
+                            received_at = None  # Will use utc_now() in async code
+                        
+                        emails_data.append({
+                            "message_id": message_id,
+                            "from_email": from_email_addr,
+                            "to_email": to_email,
+                            "subject": subject,
+                            "in_reply_to": in_reply_to,
+                            "references": references,
+                            "body_text": body_text,
+                            "body_html": body_html,
+                            "received_at": received_at,
+                        })
+                        
+            except Exception as e:
+                logger.warning(f"Error processing email {email_id}: {e}")
+                errors.append(str(e))
+        
+        imap.logout()
+        
+    except imaplib.IMAP4.error as e:
+        errors.append(f"IMAP error: {e}")
+        logger.error(f"IMAP error for {smtp_email}: {e}")
+    except Exception as e:
+        errors.append(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error fetching from IMAP for {smtp_email}: {e}")
+    
+    return emails_data, errors
+
+
 async def sync_user_inbox(db: AsyncSession, user: User) -> Dict[str, Any]:
     """
     Sync a single user's IMAP inbox
     Returns stats about the sync
+    
+    NOTE: IMAP operations run in a thread pool to avoid blocking the event loop.
     """
     stats = {
         "user_email": user.smtp_email,
@@ -202,111 +287,88 @@ async def sync_user_inbox(db: AsyncSession, user: User) -> Dict[str, Any]:
         return stats
     
     try:
-        # Connect to IMAP
-        imap = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
-        imap.login(user.smtp_email, password)
-        imap.select('INBOX')
+        # Run blocking IMAP operations in thread pool
+        loop = asyncio.get_event_loop()
+        emails_data, imap_errors = await loop.run_in_executor(
+            _imap_thread_pool,
+            _fetch_emails_from_imap_blocking,
+            user.smtp_email,
+            password
+        )
         
-        # Search for recent emails (last 7 days)
-        since_date = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
-        _, message_numbers = imap.search(None, f'(SINCE {since_date})')
+        stats["errors"].extend(imap_errors)
         
-        email_ids = message_numbers[0].split()
-        
-        for email_id in email_ids[-50:]:  # Process last 50 emails max
+        # Process fetched emails asynchronously (database operations)
+        for email_data in emails_data:
             try:
-                _, msg_data = imap.fetch(email_id, '(RFC822)')
+                message_id = email_data["message_id"]
+                from_email_addr = email_data["from_email"]
                 
-                for response_part in msg_data:
-                    if isinstance(response_part, tuple):
-                        msg = email.message_from_bytes(response_part[1])
-                        
-                        # Get message ID
-                        message_id = msg.get('Message-ID', '')
-                        
-                        # Skip if already processed
-                        if await email_already_exists(db, message_id, user.id):
-                            continue
-                        
-                        stats["emails_fetched"] += 1
-                        
-                        # Extract email details
-                        from_email_addr = extract_email_address(msg.get('From', ''))
-                        to_email = extract_email_address(msg.get('To', ''))
-                        subject = decode_email_header(msg.get('Subject', ''))
-                        in_reply_to = msg.get('In-Reply-To', '')
-                        references = msg.get('References', '')
-                        
-                        # Skip emails we sent (they appear in inbox too sometimes)
-                        if from_email_addr.lower() == user.smtp_email.lower():
-                            continue
-                        
-                        # Get email body
-                        body_text, body_html = get_email_body(msg)
-                        
-                        # Parse date
-                        date_str = msg.get('Date', '')
-                        try:
-                            received_at = email.utils.parsedate_to_datetime(date_str)
-                        except:
-                            received_at = utc_now()
-                        
-                        # Try to match to a lead
-                        lead = None
-                        
-                        # First try thread matching (most accurate for replies)
-                        if in_reply_to or references:
-                            lead = await find_lead_by_thread(db, in_reply_to, references, user.id)
-                        
-                        # Fall back to email address matching
-                        if not lead:
-                            lead = await find_lead_by_email(db, from_email_addr, user.id)
-                        
-                        # Create email log
-                        email_log = EmailLog(
-                            lead_id=lead.id if lead else None,
-                            user_id=user.id,
-                            direction=EmailDirection.RECEIVED,
-                            from_email=from_email_addr,
-                            to_email=to_email,
-                            subject=subject,
-                            body_text=body_text,
-                            body_html=body_html,
-                            message_id=message_id.strip('<>') if message_id else None,
-                            in_reply_to=in_reply_to.strip('<>') if in_reply_to else None,
-                            received_at=received_at,
-                            is_read=False
-                        )
-                        db.add(email_log)
-                        await db.flush()  # Flush to get the email_log.id
-                        
-                        if lead:
-                            stats["emails_matched"] += 1
-                        
-                        # Create notification for new email (whether matched to lead or not)
-                        await create_notification(
-                            db, 
-                            user.id, 
-                            lead.id if lead else None, 
-                            subject, 
-                            from_email_addr,
-                            email_log.id
-                        )
-                        
+                # Skip if already processed
+                if await email_already_exists(db, message_id, user.id):
+                    continue
+                
+                # Skip emails we sent
+                if from_email_addr.lower() == user.smtp_email.lower():
+                    continue
+                
+                stats["emails_fetched"] += 1
+                
+                in_reply_to = email_data["in_reply_to"]
+                references = email_data["references"]
+                received_at = email_data["received_at"] or utc_now()
+                
+                # Try to match to a lead
+                lead = None
+                
+                # First try thread matching (most accurate for replies)
+                if in_reply_to or references:
+                    lead = await find_lead_by_thread(db, in_reply_to, references, user.id)
+                
+                # Fall back to email address matching
+                if not lead:
+                    lead = await find_lead_by_email(db, from_email_addr, user.id)
+                
+                # Create email log
+                email_log = EmailLog(
+                    lead_id=lead.id if lead else None,
+                    user_id=user.id,
+                    direction=EmailDirection.RECEIVED,
+                    from_email=from_email_addr,
+                    to_email=email_data["to_email"],
+                    subject=email_data["subject"],
+                    body_text=email_data["body_text"],
+                    body_html=email_data["body_html"],
+                    message_id=message_id.strip('<>') if message_id else None,
+                    in_reply_to=in_reply_to.strip('<>') if in_reply_to else None,
+                    received_at=received_at,
+                    is_read=False
+                )
+                db.add(email_log)
+                await db.flush()
+                
+                if lead:
+                    stats["emails_matched"] += 1
+                
+                # Create notification
+                await create_notification(
+                    db, 
+                    user.id, 
+                    lead.id if lead else None, 
+                    email_data["subject"], 
+                    from_email_addr,
+                    email_log.id
+                )
+                
             except Exception as e:
-                logger.warning(f"Error processing email {email_id}: {e}")
+                logger.warning(f"Error processing email data: {e}")
                 stats["errors"].append(str(e))
-        
-        imap.logout()
         
         # Update last sync time
         user.imap_last_sync_at = utc_now()
         db.add(user)
         await db.commit()
         
-    except imaplib.IMAP4.error as e:
-        stats["errors"].append(f"IMAP error: {e}")
-        logger.error(f"IMAP error for user {user.smtp_email}: {e}")
     except Exception as e:
         stats["errors"].append(f"Unexpected error: {e}")
         logger.error(f"Unexpected error syncing inbox for {user.smtp_email}: {e}")

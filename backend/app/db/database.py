@@ -1,19 +1,34 @@
 """
 Database configuration and session management
+
+NOTE: When running with multiple workers (uvicorn --workers N), each worker
+gets its own copy of the engine. Using NullPool prevents connection exhaustion
+by creating connections on-demand and closing them immediately after use.
+
+Connection timeouts are set to prevent stuck transactions from blocking the database.
 """
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 
 
-# Create async engine
+# Create async engine with NullPool for multi-worker compatibility
+# NullPool creates connections on-demand and closes them immediately after use
+# This prevents connection exhaustion when running with multiple workers
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.debug,
+    echo=False,  # Disable SQL logging for better performance
     future=True,
+    poolclass=NullPool,  # Each query gets a fresh connection - works with multi-worker
+    # Connection options to prevent stuck transactions
+    connect_args={
+        "command_timeout": 30,  # Timeout individual statements after 30 seconds
+        "timeout": 15,  # Connection timeout
+    },
 )
 
 # Create async session factory

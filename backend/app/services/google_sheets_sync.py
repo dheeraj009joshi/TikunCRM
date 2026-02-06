@@ -32,12 +32,11 @@ SHEET_EXPORT_URL = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/ex
 
 def get_sync_session_maker():
     """Create a dedicated engine and session maker for sync operations."""
+    from sqlalchemy.pool import NullPool
     engine = create_async_engine(
         settings.database_url,
         echo=False,
-        pool_size=2,
-        max_overflow=0,
-        pool_pre_ping=True,
+        poolclass=NullPool,  # Use NullPool for background tasks
     )
     return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

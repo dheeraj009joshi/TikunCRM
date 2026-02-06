@@ -2,7 +2,10 @@
 TikunCRM - FastAPI Main Application
 """
 import logging
+import os
+import fcntl
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,32 +21,81 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Lock file for scheduler (only one worker should run scheduler)
+SCHEDULER_LOCK_FILE = Path("/tmp/tikuncrm_scheduler.lock")
+_scheduler_lock_fd = None
+_is_scheduler_worker = False
+
+
+def try_acquire_scheduler_lock() -> bool:
+    """
+    Try to acquire the scheduler lock.
+    Only one worker should run the scheduler to avoid duplicate jobs.
+    Returns True if this worker should run the scheduler.
+    """
+    global _scheduler_lock_fd, _is_scheduler_worker
+    
+    try:
+        _scheduler_lock_fd = open(SCHEDULER_LOCK_FILE, 'w')
+        fcntl.flock(_scheduler_lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _scheduler_lock_fd.write(str(os.getpid()))
+        _scheduler_lock_fd.flush()
+        _is_scheduler_worker = True
+        return True
+    except (IOError, OSError):
+        # Another worker has the lock
+        if _scheduler_lock_fd:
+            _scheduler_lock_fd.close()
+            _scheduler_lock_fd = None
+        return False
+
+
+def release_scheduler_lock():
+    """Release the scheduler lock."""
+    global _scheduler_lock_fd, _is_scheduler_worker
+    
+    if _scheduler_lock_fd:
+        try:
+            fcntl.flock(_scheduler_lock_fd.fileno(), fcntl.LOCK_UN)
+            _scheduler_lock_fd.close()
+        except:
+            pass
+        _scheduler_lock_fd = None
+    _is_scheduler_worker = False
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
+    global _is_scheduler_worker
+    
     # Startup
     logger.info(f"Starting {settings.app_name} in {settings.app_env} mode")
     
-    # Start background scheduler
-    try:
-        setup_scheduler()
-        start_scheduler()
-        logger.info("Background scheduler started")
-    except Exception as e:
-        logger.error(f"Failed to start scheduler: {e}")
+    # Only one worker should run the scheduler
+    if try_acquire_scheduler_lock():
+        try:
+            setup_scheduler()
+            start_scheduler()
+            logger.info("Background scheduler started (this worker is the scheduler leader)")
+        except Exception as e:
+            logger.error(f"Failed to start scheduler: {e}")
+    else:
+        logger.info("Background scheduler skipped (another worker is the scheduler leader)")
     
     yield
     
     # Shutdown
     logger.info(f"Shutting down {settings.app_name}")
     
-    # Stop background scheduler
-    try:
-        stop_scheduler()
-        logger.info("Background scheduler stopped")
-    except Exception as e:
-        logger.error(f"Error stopping scheduler: {e}")
+    # Stop background scheduler only if this worker is running it
+    if _is_scheduler_worker:
+        try:
+            stop_scheduler()
+            release_scheduler_lock()
+            logger.info("Background scheduler stopped")
+        except Exception as e:
+            logger.error(f"Error stopping scheduler: {e}")
 
 
 def create_application() -> FastAPI:

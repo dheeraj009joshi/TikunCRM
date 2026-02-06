@@ -31,9 +31,11 @@ class EmailSyncTask:
     def _get_session_factory(self):
         """Create async session factory."""
         if self._engine is None:
+            from sqlalchemy.pool import NullPool
             self._engine = create_async_engine(
                 settings.database_url,
                 echo=False,
+                poolclass=NullPool,  # Use NullPool for background tasks
             )
             self._session_factory = sessionmaker(
                 self._engine,

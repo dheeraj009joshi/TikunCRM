@@ -758,5 +758,30 @@ async def emit_lead_created(lead_id: str, dealership_id: Optional[str], lead_dat
         else:
             # Broadcast to all connected users (for unassigned pool leads)
             await ws_manager.broadcast_all(message)
+        
+        # Also trigger stats refresh for dashboards
+        await emit_stats_refresh(dealership_id)
     except Exception as e:
         logger.warning(f"Failed to emit lead:created WebSocket event: {e}")
+
+
+async def emit_stats_refresh(dealership_id: Optional[str] = None):
+    """
+    Emit a stats refresh event when dashboard stats should be updated.
+    Called after lead creation, status changes, appointments, etc.
+    """
+    try:
+        message = {
+            "type": "stats:refresh",
+            "data": {
+                "dealership_id": dealership_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        }
+        
+        if dealership_id:
+            await ws_manager.broadcast_to_dealership(dealership_id, message)
+        else:
+            await ws_manager.broadcast_all(message)
+    except Exception as e:
+        logger.warning(f"Failed to emit stats:refresh WebSocket event: {e}")

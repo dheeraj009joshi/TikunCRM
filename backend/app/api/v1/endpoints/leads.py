@@ -454,14 +454,22 @@ async def create_lead(
     """
     Create a new lead.
     """
-    # Use current user's dealership if not specified (for dealer admin)
+    # Use current user's dealership if not specified (for dealer admin/owner/salesperson)
     dealership_id = lead_in.dealership_id
-    if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+    assigned_to = None
+    
+    if current_user.role == UserRole.SALESPERSON:
+        # Salesperson creates lead: auto-assign to themselves and their dealership
+        dealership_id = current_user.dealership_id
+        assigned_to = current_user.id
+    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+        # Admin/Owner: use their dealership
         dealership_id = current_user.dealership_id
         
     lead = Lead(
-        **lead_in.model_dump(exclude={"dealership_id", "meta_data"}),
+        **lead_in.model_dump(exclude={"dealership_id", "meta_data", "assigned_to"}),
         dealership_id=dealership_id,
+        assigned_to=assigned_to,
         created_by=current_user.id,
         meta_data=lead_in.meta_data
     )
@@ -470,10 +478,15 @@ async def create_lead(
     await db.flush()
     
     # Log activity
+    if assigned_to:
+        description = f"Lead created and auto-assigned to {current_user.first_name} {current_user.last_name}"
+    else:
+        description = f"Lead created by {current_user.email}"
+    
     await ActivityService.log_activity(
         db,
         activity_type=ActivityType.LEAD_CREATED,
-        description=f"Lead created by {current_user.email}",
+        description=description,
         user_id=current_user.id,
         lead_id=lead.id,
         dealership_id=dealership_id
@@ -491,13 +504,15 @@ async def create_lead(
             source=source_display,
         )
     
-    # Emit WebSocket event so sidebar unassigned count updates when new unassigned lead is created
-    if lead.dealership_id is None:
-        try:
-            from app.services.notification_service import emit_badges_refresh
+    # Emit WebSocket events for real-time updates
+    try:
+        from app.services.notification_service import emit_badges_refresh, emit_stats_refresh
+        if lead.dealership_id is None:
             await emit_badges_refresh(unassigned=True)
-        except Exception:
-            pass
+        # Trigger dashboard stats refresh for all dashboards
+        await emit_stats_refresh(str(dealership_id) if dealership_id else None)
+    except Exception:
+        pass
     
     return lead
 
@@ -790,9 +805,9 @@ async def update_lead_status(
     
     await db.flush()
     
-    # Emit real-time WebSocket event with updated lead status
+    # Emit real-time WebSocket events
     try:
-        from app.services.notification_service import emit_lead_updated
+        from app.services.notification_service import emit_lead_updated, emit_stats_refresh, emit_activity_added
         await emit_lead_updated(
             str(lead.id),
             str(lead.dealership_id) if lead.dealership_id else None,
@@ -802,8 +817,22 @@ async def update_lead_status(
                 "old_status": old_status
             }
         )
+        # Emit activity event for real-time timeline update
+        await emit_activity_added(
+            str(lead.id),
+            str(lead.dealership_id) if lead.dealership_id else None,
+            {
+                "type": "status_changed",
+                "performer_name": performer_name,
+                "old_status": old_status,
+                "new_status": status_in.status.value,
+                "timestamp": utc_now().isoformat(),
+            }
+        )
+        # Trigger dashboard stats refresh
+        await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None)
     except Exception as e:
-        logger.error(f"Failed to emit lead:updated WebSocket event: {e}")
+        logger.error(f"Failed to emit WebSocket events: {e}")
     
     return lead
 
@@ -913,8 +942,21 @@ async def assign_lead(
                 "dealership": dealership_data
             }
         )
+        # Emit activity event for real-time timeline update
+        from app.services.notification_service import emit_activity_added
+        await emit_activity_added(
+            str(lead.id),
+            str(lead.dealership_id) if lead.dealership_id else None,
+            {
+                "type": "lead_assigned",
+                "performer_name": performer_name,
+                "assigned_to_name": assigned_to_name,
+                "is_reassignment": is_reassignment,
+                "timestamp": utc_now().isoformat(),
+            }
+        )
     except Exception as e:
-        logger.error(f"Failed to emit lead:updated WebSocket event: {e}")
+        logger.error(f"Failed to emit WebSocket events: {e}")
     
     return lead
 
@@ -1159,7 +1201,7 @@ async def add_lead_note(
     notification_service = NotificationService(db)
     
     # Auto-assignment: if lead is in unassigned pool and user has a dealership
-    auto_assigned = await auto_assign_lead_on_activity(
+    await auto_assign_lead_on_activity(
         db, lead, current_user, "note", notification_service
     )
     
@@ -1244,19 +1286,25 @@ async def add_lead_note(
                         "note_preview": note_in.content[:100] + "..." if len(note_in.content) > 100 else note_in.content
                     }
                 )
-        # Emit WebSocket events so mentioned users see the new note and notification badge updates
-        from app.services.notification_service import emit_activity_added, emit_badges_refresh
-        await emit_activity_added(
-            str(lead.id),
-            str(lead.dealership_id) if lead.dealership_id else None,
-            {
-                "activity_id": str(note_activity.id),
-                "type": "note_added",
-                "performer_name": performer_name,
-                "has_mentions": True,
-            }
-        )
+        # Emit badge refresh for mentioned users
+        from app.services.notification_service import emit_badges_refresh
         await emit_badges_refresh(notifications=True)
+    
+    # ALWAYS emit WebSocket event for real-time timeline update (not just for mentions)
+    from app.services.notification_service import emit_activity_added
+    await emit_activity_added(
+        str(lead.id),
+        str(lead.dealership_id) if lead.dealership_id else None,
+        {
+            "activity_id": str(note_activity.id),
+            "type": "note_added",
+            "performer_name": performer_name,
+            "content_preview": note_in.content[:100] if note_in.content else "",
+            "has_mentions": bool(note_in.mentioned_user_ids),
+            "is_reply": note_in.parent_id is not None,
+            "timestamp": utc_now().isoformat(),
+        }
+    )
     
     await db.flush()
     return lead
@@ -1353,6 +1401,19 @@ async def log_call(
             "performer_name": performer_name,
             "auto_assigned": auto_assigned,
             "is_skate_action": is_skate_action
+        }
+    )
+    
+    # Emit WebSocket event for real-time timeline update
+    from app.services.notification_service import emit_activity_added
+    await emit_activity_added(
+        str(lead.id),
+        str(lead.dealership_id) if lead.dealership_id else None,
+        {
+            "type": "call_logged",
+            "performer_name": performer_name,
+            "outcome": call_in.outcome,
+            "timestamp": utc_now().isoformat(),
         }
     )
     
