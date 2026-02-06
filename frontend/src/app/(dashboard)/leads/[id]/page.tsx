@@ -21,11 +21,17 @@ import {
     PhoneCall,
     RefreshCw,
     PlusCircle,
-    Trash2
+    Trash2,
+    MapPin,
+    Briefcase,
+    Pencil,
+    Save,
+    X
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
     Dialog,
@@ -152,6 +158,30 @@ export default function LeadDetailsPage() {
     const [activeActivityTab, setActiveActivityTab] = React.useState<"timeline" | "notes">(
         noteIdFromUrl ? "notes" : "timeline"
     )
+    
+    // Lead details editing
+    const [isEditingDetails, setIsEditingDetails] = React.useState(false)
+    const [isSavingDetails, setIsSavingDetails] = React.useState(false)
+    const [editForm, setEditForm] = React.useState({
+        first_name: "",
+        last_name: "",
+        email: "",
+        phone: "",
+        alternate_phone: "",
+        address: "",
+        city: "",
+        state: "",
+        postal_code: "",
+        country: "",
+        company: "",
+        job_title: "",
+        date_of_birth: "",
+        preferred_contact_method: "",
+        preferred_contact_time: "",
+        interested_in: "",
+        budget_range: "",
+        notes: "",
+    })
 
     const fetchLead = React.useCallback(async () => {
         try {
@@ -255,26 +285,20 @@ export default function LeadDetailsPage() {
     // Listen for real-time activity updates via WebSocket
     const handleNewActivity = React.useCallback((data: any) => {
         if (data.lead_id === leadId) {
-            console.log("Received new activity:", data)
+            console.log("Received new activity via WebSocket:", data)
+            
+            // Get activity type from either nested or root level
+            const activityType = data.activity?.type || data.type
             
             // Check if this is an assignment activity that might change Lead Context
             const assignmentTypes = ["lead_assigned", "lead_reassigned"]
-            if (assignmentTypes.includes(data.activity?.type)) {
+            if (assignmentTypes.includes(activityType)) {
                 // Refresh both activities and lead data for assignment changes
                 fetchActivities()
                 fetchLead()
-            } else if (data.activity) {
-                // For other activities, add to timeline optimistically
-                setActivities(prev => {
-                    // Check if activity already exists (avoid duplicates)
-                    if (prev.some(a => a.id === data.activity.id)) {
-                        return prev
-                    }
-                    // Add new activity to the beginning of the list
-                    return [data.activity, ...prev]
-                })
             } else {
-                // Fallback: refetch if no activity data
+                // For all other activities, refetch the activities to get the full data
+                // This ensures we always have the complete activity with proper formatting
                 fetchActivities()
             }
         }
@@ -411,6 +435,72 @@ export default function LeadDetailsPage() {
             else console.error("Failed to log call:", error)
         } finally {
             setIsLoggingCall(false)
+        }
+    }
+    
+    const handleEditStart = () => {
+        if (!lead) return
+        setEditForm({
+            first_name: lead.first_name || "",
+            last_name: lead.last_name || "",
+            email: lead.email || "",
+            phone: lead.phone || "",
+            alternate_phone: lead.alternate_phone || "",
+            address: lead.address || "",
+            city: lead.city || "",
+            state: lead.state || "",
+            postal_code: lead.postal_code || "",
+            country: lead.country || "",
+            company: lead.company || "",
+            job_title: lead.job_title || "",
+            date_of_birth: lead.date_of_birth ? lead.date_of_birth.split("T")[0] : "",
+            preferred_contact_method: lead.preferred_contact_method || "",
+            preferred_contact_time: lead.preferred_contact_time || "",
+            interested_in: lead.interested_in || "",
+            budget_range: lead.budget_range || "",
+            notes: lead.notes || "",
+        })
+        setIsEditingDetails(true)
+    }
+    
+    const handleCancelEdit = () => {
+        setIsEditingDetails(false)
+    }
+    
+    const handleSaveDetails = async () => {
+        if (!lead) return
+        setIsSavingDetails(true)
+        try {
+            const updateData: Partial<typeof editForm> = {}
+            // Only include fields that changed
+            if (editForm.first_name !== (lead.first_name || "")) updateData.first_name = editForm.first_name
+            if (editForm.last_name !== (lead.last_name || "")) updateData.last_name = editForm.last_name || undefined
+            if (editForm.email !== (lead.email || "")) updateData.email = editForm.email || undefined
+            if (editForm.phone !== (lead.phone || "")) updateData.phone = editForm.phone || undefined
+            if (editForm.alternate_phone !== (lead.alternate_phone || "")) updateData.alternate_phone = editForm.alternate_phone || undefined
+            if (editForm.address !== (lead.address || "")) updateData.address = editForm.address || undefined
+            if (editForm.city !== (lead.city || "")) updateData.city = editForm.city || undefined
+            if (editForm.state !== (lead.state || "")) updateData.state = editForm.state || undefined
+            if (editForm.postal_code !== (lead.postal_code || "")) updateData.postal_code = editForm.postal_code || undefined
+            if (editForm.country !== (lead.country || "")) updateData.country = editForm.country || undefined
+            if (editForm.company !== (lead.company || "")) updateData.company = editForm.company || undefined
+            if (editForm.job_title !== (lead.job_title || "")) updateData.job_title = editForm.job_title || undefined
+            if (editForm.preferred_contact_method !== (lead.preferred_contact_method || "")) updateData.preferred_contact_method = editForm.preferred_contact_method || undefined
+            if (editForm.preferred_contact_time !== (lead.preferred_contact_time || "")) updateData.preferred_contact_time = editForm.preferred_contact_time || undefined
+            if (editForm.interested_in !== (lead.interested_in || "")) updateData.interested_in = editForm.interested_in || undefined
+            if (editForm.budget_range !== (lead.budget_range || "")) updateData.budget_range = editForm.budget_range || undefined
+            if (editForm.notes !== (lead.notes || "")) updateData.notes = editForm.notes || undefined
+            
+            if (Object.keys(updateData).length > 0) {
+                await LeadService.updateLead(lead.id, updateData)
+                await fetchLead()
+                fetchActivities() // Refresh to show update activity
+            }
+            setIsEditingDetails(false)
+        } catch (error) {
+            console.error("Failed to update lead:", error)
+        } finally {
+            setIsSavingDetails(false)
         }
     }
 
@@ -733,13 +823,359 @@ export default function LeadDetailsPage() {
                                 </div>
                             )}
 
-                            {lead.notes && (
+                            {lead.notes && !isEditingDetails && (
                                 <div>
                                     <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
                                         Notes
                                     </p>
                                     <p className="text-sm text-muted-foreground">{lead.notes}</p>
                                 </div>
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    {/* Lead Details Card - Editable */}
+                    <Card>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                            <CardTitle className="text-base flex items-center gap-2">
+                                <User className="h-4 w-4 text-primary" />
+                                Lead Details
+                            </CardTitle>
+                            {!isMentionOnly && !isEditingDetails && (
+                                <Button 
+                                    size="sm" 
+                                    variant="ghost"
+                                    onClick={handleEditStart}
+                                >
+                                    <Pencil className="h-3.5 w-3.5 mr-1" />
+                                    Edit
+                                </Button>
+                            )}
+                            {isEditingDetails && (
+                                <div className="flex gap-1">
+                                    <Button 
+                                        size="sm" 
+                                        variant="ghost"
+                                        onClick={handleCancelEdit}
+                                        disabled={isSavingDetails}
+                                    >
+                                        <X className="h-3.5 w-3.5 mr-1" />
+                                        Cancel
+                                    </Button>
+                                    <Button 
+                                        size="sm" 
+                                        onClick={handleSaveDetails}
+                                        disabled={isSavingDetails}
+                                    >
+                                        {isSavingDetails ? (
+                                            <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                        ) : (
+                                            <Save className="h-3.5 w-3.5 mr-1" />
+                                        )}
+                                        Save
+                                    </Button>
+                                </div>
+                            )}
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            {isEditingDetails ? (
+                                <>
+                                    {/* Contact Information */}
+                                    <div>
+                                        <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-2">
+                                            Contact Information
+                                        </p>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <Label className="text-xs">First Name *</Label>
+                                                <Input
+                                                    value={editForm.first_name}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, first_name: e.target.value }))}
+                                                    placeholder="First name"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <Label className="text-xs">Last Name</Label>
+                                                <Input
+                                                    value={editForm.last_name}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, last_name: e.target.value }))}
+                                                    placeholder="Last name"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2 mt-2">
+                                            <div>
+                                                <Label className="text-xs">Email</Label>
+                                                <Input
+                                                    type="email"
+                                                    value={editForm.email}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, email: e.target.value }))}
+                                                    placeholder="Email"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <Label className="text-xs">Phone</Label>
+                                                <Input
+                                                    value={editForm.phone}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, phone: e.target.value }))}
+                                                    placeholder="Phone"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="mt-2">
+                                            <Label className="text-xs">Alternate Phone</Label>
+                                            <Input
+                                                value={editForm.alternate_phone}
+                                                onChange={(e) => setEditForm(prev => ({ ...prev, alternate_phone: e.target.value }))}
+                                                placeholder="Alternate phone"
+                                                className="h-8 text-sm"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Address */}
+                                    <div>
+                                        <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-2">
+                                            Address
+                                        </p>
+                                        <div>
+                                            <Label className="text-xs">Street Address</Label>
+                                            <Input
+                                                value={editForm.address}
+                                                onChange={(e) => setEditForm(prev => ({ ...prev, address: e.target.value }))}
+                                                placeholder="Street address"
+                                                className="h-8 text-sm"
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2 mt-2">
+                                            <div>
+                                                <Label className="text-xs">City</Label>
+                                                <Input
+                                                    value={editForm.city}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, city: e.target.value }))}
+                                                    placeholder="City"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <Label className="text-xs">State/Province</Label>
+                                                <Input
+                                                    value={editForm.state}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, state: e.target.value }))}
+                                                    placeholder="State"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2 mt-2">
+                                            <div>
+                                                <Label className="text-xs">Postal Code</Label>
+                                                <Input
+                                                    value={editForm.postal_code}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, postal_code: e.target.value }))}
+                                                    placeholder="Postal code"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <Label className="text-xs">Country</Label>
+                                                <Input
+                                                    value={editForm.country}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, country: e.target.value }))}
+                                                    placeholder="Country"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Work Information */}
+                                    <div>
+                                        <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-2">
+                                            Work Information
+                                        </p>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <Label className="text-xs">Company</Label>
+                                                <Input
+                                                    value={editForm.company}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, company: e.target.value }))}
+                                                    placeholder="Company name"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <Label className="text-xs">Job Title</Label>
+                                                <Input
+                                                    value={editForm.job_title}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, job_title: e.target.value }))}
+                                                    placeholder="Job title"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Preferences */}
+                                    <div>
+                                        <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-2">
+                                            Contact Preferences
+                                        </p>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <Label className="text-xs">Preferred Method</Label>
+                                                <Select 
+                                                    value={editForm.preferred_contact_method}
+                                                    onValueChange={(value) => setEditForm(prev => ({ ...prev, preferred_contact_method: value }))}
+                                                >
+                                                    <SelectTrigger className="h-8 text-sm">
+                                                        <SelectValue placeholder="Select..." />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="phone">Phone</SelectItem>
+                                                        <SelectItem value="email">Email</SelectItem>
+                                                        <SelectItem value="text">Text/SMS</SelectItem>
+                                                        <SelectItem value="whatsapp">WhatsApp</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div>
+                                                <Label className="text-xs">Preferred Time</Label>
+                                                <Select 
+                                                    value={editForm.preferred_contact_time}
+                                                    onValueChange={(value) => setEditForm(prev => ({ ...prev, preferred_contact_time: value }))}
+                                                >
+                                                    <SelectTrigger className="h-8 text-sm">
+                                                        <SelectValue placeholder="Select..." />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="morning">Morning (9-12)</SelectItem>
+                                                        <SelectItem value="afternoon">Afternoon (12-5)</SelectItem>
+                                                        <SelectItem value="evening">Evening (5-8)</SelectItem>
+                                                        <SelectItem value="anytime">Anytime</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Interest */}
+                                    <div>
+                                        <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-2">
+                                            Interest
+                                        </p>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <Label className="text-xs">Interested In</Label>
+                                                <Input
+                                                    value={editForm.interested_in}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, interested_in: e.target.value }))}
+                                                    placeholder="e.g., SUV, Sedan"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <Label className="text-xs">Budget Range</Label>
+                                                <Input
+                                                    value={editForm.budget_range}
+                                                    onChange={(e) => setEditForm(prev => ({ ...prev, budget_range: e.target.value }))}
+                                                    placeholder="e.g., $30k-$40k"
+                                                    className="h-8 text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Notes */}
+                                    <div>
+                                        <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-2">
+                                            Notes
+                                        </p>
+                                        <Textarea
+                                            value={editForm.notes}
+                                            onChange={(e) => setEditForm(prev => ({ ...prev, notes: e.target.value }))}
+                                            placeholder="Additional notes about this lead..."
+                                            rows={3}
+                                            className="text-sm"
+                                        />
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    {/* Display Mode - Address */}
+                                    {(lead.address || lead.city || lead.state || lead.country) && (
+                                        <div>
+                                            <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
+                                                <MapPin className="inline h-3 w-3 mr-1" />
+                                                Address
+                                            </p>
+                                            <p className="text-sm">
+                                                {[lead.address, lead.city, lead.state, lead.postal_code, lead.country]
+                                                    .filter(Boolean)
+                                                    .join(", ")}
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {/* Display Mode - Work */}
+                                    {(lead.company || lead.job_title) && (
+                                        <div>
+                                            <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
+                                                <Briefcase className="inline h-3 w-3 mr-1" />
+                                                Work
+                                            </p>
+                                            <p className="text-sm">
+                                                {lead.job_title && <span>{lead.job_title}</span>}
+                                                {lead.job_title && lead.company && <span> at </span>}
+                                                {lead.company && <span className="font-medium">{lead.company}</span>}
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {/* Display Mode - Contact Preferences */}
+                                    {(lead.preferred_contact_method || lead.preferred_contact_time) && (
+                                        <div>
+                                            <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
+                                                Contact Preferences
+                                            </p>
+                                            <div className="flex gap-2 flex-wrap">
+                                                {lead.preferred_contact_method && (
+                                                    <Badge variant="secondary" size="sm">
+                                                        {lead.preferred_contact_method}
+                                                    </Badge>
+                                                )}
+                                                {lead.preferred_contact_time && (
+                                                    <Badge variant="outline" size="sm">
+                                                        {lead.preferred_contact_time}
+                                                    </Badge>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* If no details yet, show placeholder */}
+                                    {!lead.address && !lead.city && !lead.company && !lead.preferred_contact_method && (
+                                        <div className="text-center py-4 text-muted-foreground">
+                                            <User className="h-8 w-8 mx-auto opacity-20 mb-2" />
+                                            <p className="text-sm">No additional details yet</p>
+                                            {!isMentionOnly && (
+                                                <Button 
+                                                    size="sm" 
+                                                    variant="outline"
+                                                    className="mt-2"
+                                                    onClick={handleEditStart}
+                                                >
+                                                    <Pencil className="h-3.5 w-3.5 mr-1" />
+                                                    Add Details
+                                                </Button>
+                                            )}
+                                        </div>
+                                    )}
+                                </>
                             )}
                         </CardContent>
                     </Card>
@@ -918,9 +1354,10 @@ export default function LeadDetailsPage() {
                                 {(() => {
                                     const allNotes = activities.filter(a => a.type === "note_added")
                                     // Separate parent notes and replies (threaded)
+                                    // Sort parent notes newest first (most recent at top)
                                     const parentNotes = allNotes
                                         .filter(n => !n.parent_id)
-                                        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                                        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
                                     const repliesMap = allNotes.reduce((acc, note) => {
                                         if (note.parent_id) {
                                             if (!acc[note.parent_id]) acc[note.parent_id] = []

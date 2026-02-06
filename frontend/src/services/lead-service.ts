@@ -39,6 +39,18 @@ export interface Lead {
     converted_at?: string;
     created_at: string;
     updated_at: string;
+    // Address fields
+    address?: string;
+    city?: string;
+    state?: string;
+    postal_code?: string;
+    country?: string;
+    // Additional details
+    date_of_birth?: string;
+    company?: string;
+    job_title?: string;
+    preferred_contact_method?: string;
+    preferred_contact_time?: string;
     // Extended info (available in detail view)
     assigned_to_user?: UserBrief;
     created_by_user?: UserBrief;
@@ -100,6 +112,12 @@ export const LeadService = {
     // Create new lead
     async createLead(data: Partial<Lead>): Promise<Lead> {
         const response = await apiClient.post(`${LEADS_PREFIX}/`, data);
+        return response.data;
+    },
+
+    // Update lead details
+    async updateLead(id: string, data: Partial<Lead>): Promise<Lead> {
+        const response = await apiClient.patch(`${LEADS_PREFIX}/${id}`, data);
         return response.data;
     },
 

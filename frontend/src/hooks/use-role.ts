@@ -112,6 +112,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     ],
     salesperson: [
         "view_own_leads",
+        "create_lead",  // Salesperson can create leads (auto-assigned to them)
         "update_lead",
         "view_own_activities",
         "view_own_schedule",

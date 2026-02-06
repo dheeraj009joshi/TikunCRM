@@ -115,3 +115,22 @@ export function useActivityEvents(
         [leadId, onNewActivity]
     );
 }
+
+/**
+ * Hook for dashboard stats refresh events
+ * Triggered when lead status changes, new leads added, etc.
+ */
+export function useStatsRefresh(
+    onRefresh: (data: { dealership_id?: string; timestamp?: string }) => void
+) {
+    useWebSocketEvent("stats:refresh", onRefresh, [onRefresh]);
+}
+
+/**
+ * Hook for lead created events (for real-time lead list updates)
+ */
+export function useLeadCreatedEvents(
+    onCreated: (data: any) => void
+) {
+    useWebSocketEvent("lead:created", onCreated, [onCreated]);
+}

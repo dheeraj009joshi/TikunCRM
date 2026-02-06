@@ -34,6 +34,7 @@ import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/se
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { DonutChart } from "@tremor/react"
+import { useStatsRefresh } from "@/hooks/use-websocket"
 
 export function SalespersonDashboard() {
     const [stats, setStats] = React.useState<SalespersonStats | null>(null)
@@ -42,6 +43,20 @@ export function SalespersonDashboard() {
     const [upcomingAppointments, setUpcomingAppointments] = React.useState<Appointment[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const { timezone } = useBrowserTimezone()
+
+    const fetchStats = React.useCallback(async () => {
+        try {
+            const statsData = await DashboardService.getSalespersonStats()
+            setStats(statsData)
+        } catch (error) {
+            console.error("Failed to fetch dashboard stats:", error)
+        }
+    }, [])
+
+    // Listen for real-time stats refresh via WebSocket
+    useStatsRefresh(React.useCallback(() => {
+        fetchStats()
+    }, [fetchStats]))
 
     React.useEffect(() => {
         const fetchData = async () => {
@@ -176,9 +191,11 @@ export function SalespersonDashboard() {
                 </div>
             )}
 
-            {/* Appointments Widgets - Today and Upcoming */}
+            {/* Appointments Widgets - Today and Upcoming - Only show if there are any */}
+            {(todayAppointments.length > 0 || upcomingAppointments.length > 0) && (
             <div className="grid gap-4 md:grid-cols-2">
-                {/* Today's Appointments */}
+                {/* Today's Appointments - Only show if > 0 */}
+                {todayAppointments.length > 0 && (
                 <Card className="border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950">
                     <CardHeader className="flex flex-row items-center justify-between pb-2">
                         <div className="flex items-center gap-2">
@@ -198,10 +215,7 @@ export function SalespersonDashboard() {
                         </Link>
                     </CardHeader>
                     <CardContent>
-                        {todayAppointments.length === 0 ? (
-                            <p className="text-sm text-muted-foreground text-center py-4">No appointments today</p>
-                        ) : (
-                            <div className="space-y-2">
+                        <div className="space-y-2">
                                 {todayAppointments.slice(0, 3).map((apt) => (
                                     <Link key={apt.id} href={`/leads/${apt.lead_id}`}>
                                         <div 
@@ -233,11 +247,12 @@ export function SalespersonDashboard() {
                                     </Link>
                                 ))}
                             </div>
-                        )}
                     </CardContent>
                 </Card>
+                )}
 
-                {/* Upcoming Appointments (next 3 days) */}
+                {/* Upcoming Appointments (next 3 days) - Only show if > 0 */}
+                {upcomingAppointments.length > 0 && (
                 <Card className="border-purple-200 bg-purple-50 dark:border-purple-900 dark:bg-purple-950">
                     <CardHeader className="flex flex-row items-center justify-between pb-2">
                         <div className="flex items-center gap-2">
@@ -257,10 +272,7 @@ export function SalespersonDashboard() {
                         </Link>
                     </CardHeader>
                     <CardContent>
-                        {upcomingAppointments.length === 0 ? (
-                            <p className="text-sm text-muted-foreground text-center py-4">No upcoming appointments</p>
-                        ) : (
-                            <div className="space-y-2">
+                        <div className="space-y-2">
                                 {upcomingAppointments.map((apt) => (
                                     <Link key={apt.id} href={`/leads/${apt.lead_id}`}>
                                         <div 
@@ -291,10 +303,11 @@ export function SalespersonDashboard() {
                                     </Link>
                                 ))}
                             </div>
-                        )}
                     </CardContent>
                 </Card>
+                )}
             </div>
+            )}
 
             {/* Stats Grid */}
             <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-5">

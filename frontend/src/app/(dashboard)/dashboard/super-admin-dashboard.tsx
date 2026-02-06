@@ -38,6 +38,7 @@ import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/se
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { DonutChart, BarChart } from "@tremor/react"
+import { useStatsRefresh } from "@/hooks/use-websocket"
 
 export function SuperAdminDashboard() {
     const [stats, setStats] = React.useState<SuperAdminStats | null>(null)
@@ -46,6 +47,26 @@ export function SuperAdminDashboard() {
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const { timezone } = useBrowserTimezone()
+
+    const fetchStats = React.useCallback(async () => {
+        try {
+            const [statsData, dealershipData, sourceData] = await Promise.all([
+                DashboardService.getSuperAdminStats(),
+                DashboardService.getDealershipPerformance(10),
+                DashboardService.getLeadsBySource(),
+            ])
+            setStats(statsData)
+            setDealerships(dealershipData)
+            setLeadsBySource(sourceData)
+        } catch (error) {
+            console.error("Failed to fetch dashboard stats:", error)
+        }
+    }, [])
+
+    // Listen for real-time stats refresh via WebSocket
+    useStatsRefresh(React.useCallback(() => {
+        fetchStats()
+    }, [fetchStats]))
 
     React.useEffect(() => {
         const fetchData = async () => {
