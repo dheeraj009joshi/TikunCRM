@@ -102,7 +102,23 @@ async def list_activities(
     result = await db.execute(query)
     activities = result.scalars().all()
     
-    # Fetch user info for each activity
+    # Batch-fetch all users referenced by activities (avoids N+1 queries)
+    user_ids = list({a.user_id for a in activities if a.user_id is not None})
+    users_by_id: dict = {}
+    if user_ids:
+        users_result = await db.execute(select(User).where(User.id.in_(user_ids)))
+        for user in users_result.scalars().all():
+            users_by_id[user.id] = {
+                "id": user.id,
+                "email": user.email,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "role": user.role,
+                "is_active": user.is_active,
+                "dealership_id": user.dealership_id
+            }
+    
+    # Build response with user lookup
     items: List[dict] = []
     for activity in activities:
         activity_data = {
@@ -115,24 +131,8 @@ async def list_activities(
             "parent_id": activity.parent_id,
             "meta_data": activity.meta_data,
             "created_at": activity.created_at,
-            "user": None
+            "user": users_by_id.get(activity.user_id) if activity.user_id else None
         }
-        
-        # Fetch user info if user_id exists
-        if activity.user_id:
-            user_result = await db.execute(select(User).where(User.id == activity.user_id))
-            user = user_result.scalar_one_or_none()
-            if user:
-                activity_data["user"] = {
-                    "id": user.id,
-                    "email": user.email,
-                    "first_name": user.first_name,
-                    "last_name": user.last_name,
-                    "role": user.role,
-                    "is_active": user.is_active,
-                    "dealership_id": user.dealership_id
-                }
-        
         items.append(activity_data)
     
     return {
