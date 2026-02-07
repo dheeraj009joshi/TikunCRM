@@ -343,7 +343,8 @@ export default function ShowroomPage() {
                                                     className="flex items-center gap-3 hover:underline"
                                                 >
                                                     <UserAvatar 
-                                                        name={`${visit.lead?.first_name || ""} ${visit.lead?.last_name || ""}`}
+                                                        firstName={visit.lead?.first_name ?? ""}
+                                                        lastName={visit.lead?.last_name ?? ""}
                                                         size="sm"
                                                     />
                                                     <div>
@@ -436,7 +437,8 @@ export default function ShowroomPage() {
                                                         className="flex items-center gap-3 hover:underline"
                                                     >
                                                         <UserAvatar 
-                                                            name={`${visit.lead?.first_name || ""} ${visit.lead?.last_name || ""}`}
+                                                            firstName={visit.lead?.first_name ?? ""}
+                                                            lastName={visit.lead?.last_name ?? ""}
                                                             size="sm"
                                                         />
                                                         <span className="font-medium">
@@ -556,7 +558,8 @@ export default function ShowroomPage() {
                                                 className="w-full flex items-center gap-3 p-3 hover:bg-muted text-left border-b last:border-b-0"
                                             >
                                                 <UserAvatar 
-                                                    name={`${lead.first_name} ${lead.last_name || ""}`}
+                                                    firstName={lead.first_name}
+                                                    lastName={lead.last_name ?? ""}
                                                     size="sm"
                                                 />
                                                 <div className="flex-1 min-w-0">
@@ -590,7 +593,8 @@ export default function ShowroomPage() {
                             <>
                                 <div className="bg-muted/50 rounded-lg p-4 flex items-center gap-4">
                                     <UserAvatar 
-                                        name={`${selectedLead.first_name} ${selectedLead.last_name || ""}`}
+                                        firstName={selectedLead.first_name}
+                                        lastName={selectedLead.last_name ?? ""}
                                         size="md"
                                     />
                                     <div className="flex-1">
@@ -676,7 +680,8 @@ export default function ShowroomPage() {
                         <div className="space-y-4">
                             <div className="bg-muted/50 rounded-lg p-4 flex items-center gap-4">
                                 <UserAvatar 
-                                    name={`${checkOutVisit.lead?.first_name || ""} ${checkOutVisit.lead?.last_name || ""}`}
+                                    firstName={checkOutVisit.lead?.first_name ?? ""}
+                                    lastName={checkOutVisit.lead?.last_name ?? ""}
                                     size="md"
                                 />
                                 <div className="flex-1">

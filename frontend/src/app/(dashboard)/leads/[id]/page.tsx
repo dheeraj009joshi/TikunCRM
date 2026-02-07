@@ -1857,7 +1857,8 @@ export default function LeadDetailsPage() {
                         {lead && (
                             <div className="bg-muted/50 rounded-lg p-4 flex items-center gap-4">
                                 <UserAvatar 
-                                    name={getLeadFullName(lead)}
+                                    firstName={lead.first_name}
+                                    lastName={lead.last_name ?? undefined}
                                     size="md"
                                 />
                                 <div className="flex-1">
