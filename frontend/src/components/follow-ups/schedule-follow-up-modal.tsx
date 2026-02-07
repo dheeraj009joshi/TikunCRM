@@ -105,7 +105,7 @@ export function ScheduleFollowUpModal({
         LeadService.getLead(effectiveLeadId)
             .then(async (lead) => {
                 if (lead.assigned_to && lead.assigned_to_user) {
-                    setLeadAssignedToUser(lead.assigned_to_user)
+                    setLeadAssignedToUser(lead.assigned_to_user as UserBrief)
                     setAssignedTo(lead.assigned_to)
                 } else {
                     setLeadAssignedToUser(null)
