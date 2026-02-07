@@ -16,7 +16,9 @@ import {
     UserPlus,
     Eye,
     Building2,
-    Trash2
+    Trash2,
+    Download,
+    FileSpreadsheet
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -56,6 +58,16 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { LeadService, Lead, LeadListResponse } from "@/services/lead-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
@@ -90,6 +102,8 @@ const LEAD_SOURCES = [
 export default function LeadsPage() {
     const searchParams = useSearchParams()
     const filterParam = searchParams.get('filter')
+    const statusParam = searchParams.get('status')
+    const sourceParam = searchParams.get('source')
     const { timezone } = useBrowserTimezone()
     
     const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, canAssignToSalesperson, hasPermission } = useRole()
@@ -99,19 +113,26 @@ export default function LeadsPage() {
     const [total, setTotal] = React.useState(0)
     const [page, setPage] = React.useState(1)
     const [search, setSearch] = React.useState("")
-    const [status, setStatus] = React.useState("all")
-    const [source, setSource] = React.useState("all")
+    const [status, setStatus] = React.useState(statusParam || "all")
+    const [source, setSource] = React.useState(sourceParam || "all")
     const [viewMode, setViewMode] = React.useState<"mine" | "unassigned" | "all">(
         filterParam === "unassigned" ? "unassigned" : filterParam === "all" ? "all" : "mine"
     )
     const [isLoading, setIsLoading] = React.useState(true)
 
-    // Sync view mode with URL when user navigates via sidebar (e.g. "Unassigned Pool" link)
+    // Sync view mode, status, and source with URL when user navigates via links
     React.useEffect(() => {
         const filter = searchParams.get("filter")
+        const urlStatus = searchParams.get("status")
+        const urlSource = searchParams.get("source")
+        
         if (filter === "unassigned") setViewMode("unassigned")
         else if (filter === "all") setViewMode("all")
         else if (filter === "mine") setViewMode("mine")
+        
+        // Sync status filter from URL (e.g., /leads?status=converted from dashboard)
+        if (urlStatus) setStatus(urlStatus)
+        if (urlSource) setSource(urlSource)
     }, [searchParams])
     
     // Assignment modal state
@@ -127,6 +148,15 @@ export default function LeadsPage() {
     const [deleteModalOpen, setDeleteModalOpen] = React.useState(false)
     const [leadToDelete, setLeadToDelete] = React.useState<Lead | null>(null)
     const [isDeleting, setIsDeleting] = React.useState(false)
+    
+    // Export state
+    const [exportModalOpen, setExportModalOpen] = React.useState(false)
+    const [exportOptions, setExportOptions] = React.useState({
+        include_activities: false,
+        include_appointments: false,
+        include_notes: false
+    })
+    const [isExporting, setIsExporting] = React.useState(false)
 
     const fetchLeads = React.useCallback(async () => {
         setIsLoading(true)
@@ -212,6 +242,22 @@ export default function LeadsPage() {
         }
     }
 
+    const handleExport = async () => {
+        setIsExporting(true)
+        try {
+            await LeadService.exportToCSV({
+                ...exportOptions,
+                status: status !== "all" ? status : undefined,
+                source: source !== "all" ? source : undefined,
+            })
+            setExportModalOpen(false)
+        } catch (error) {
+            console.error("Failed to export leads:", error)
+        } finally {
+            setIsExporting(false)
+        }
+    }
+
     return (
         <div className="space-y-6">
             {/* Header */}
@@ -279,6 +325,14 @@ export default function LeadsPage() {
                                 Showing <span className="font-medium text-foreground">{leads.length}</span> of{" "}
                                 <span className="font-medium text-foreground">{total}</span> leads
                             </p>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setExportModalOpen(true)}
+                            >
+                                <Download className="h-4 w-4 mr-2" />
+                                Export
+                            </Button>
                         </div>
                     </div>
                 </CardContent>
@@ -556,6 +610,87 @@ export default function LeadsPage() {
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
+            
+            {/* Export Modal */}
+            <Dialog open={exportModalOpen} onOpenChange={setExportModalOpen}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <FileSpreadsheet className="h-5 w-5" />
+                            Export Leads to CSV
+                        </DialogTitle>
+                        <DialogDescription>
+                            Export your leads data. Current filters will be applied.
+                        </DialogDescription>
+                    </DialogHeader>
+                    
+                    <div className="space-y-4 py-4">
+                        <div className="flex items-center space-x-2">
+                            <Checkbox
+                                id="include_activities"
+                                checked={exportOptions.include_activities}
+                                onCheckedChange={(checked) => 
+                                    setExportOptions(prev => ({ ...prev, include_activities: checked === true }))
+                                }
+                            />
+                            <Label htmlFor="include_activities" className="text-sm font-normal">
+                                Include activity history (count & last activity date)
+                            </Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                            <Checkbox
+                                id="include_appointments"
+                                checked={exportOptions.include_appointments}
+                                onCheckedChange={(checked) => 
+                                    setExportOptions(prev => ({ ...prev, include_appointments: checked === true }))
+                                }
+                            />
+                            <Label htmlFor="include_appointments" className="text-sm font-normal">
+                                Include appointments (count & next appointment)
+                            </Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                            <Checkbox
+                                id="include_notes"
+                                checked={exportOptions.include_notes}
+                                onCheckedChange={(checked) => 
+                                    setExportOptions(prev => ({ ...prev, include_notes: checked === true }))
+                                }
+                            />
+                            <Label htmlFor="include_notes" className="text-sm font-normal">
+                                Include lead notes
+                            </Label>
+                        </div>
+                        
+                        {(status !== "all" || source !== "all") && (
+                            <div className="text-sm text-muted-foreground bg-muted p-3 rounded-md">
+                                <strong>Filters applied:</strong>
+                                {status !== "all" && <span className="ml-2">Status: {status}</span>}
+                                {source !== "all" && <span className="ml-2">Source: {source}</span>}
+                            </div>
+                        )}
+                    </div>
+                    
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setExportModalOpen(false)}>
+                            Cancel
+                        </Button>
+                        <Button onClick={handleExport} disabled={isExporting}>
+                            {isExporting ? (
+                                <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Exporting...
+                                </>
+                            ) : (
+                                <>
+                                    <Download className="mr-2 h-4 w-4" />
+                                    Export CSV
+                                </>
+                            )}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

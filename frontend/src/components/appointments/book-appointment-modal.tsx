@@ -2,13 +2,14 @@
 
 import * as React from "react"
 import { format } from "date-fns"
-import { X, Loader2, CalendarClock, MapPin, Calendar as CalendarIcon, Clock } from "lucide-react"
+import { X, Loader2, CalendarClock, MapPin, Calendar as CalendarIcon, Clock, Users } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Badge, getRoleVariant } from "@/components/ui/badge"
 import {
     Select,
     SelectContent,
@@ -17,9 +18,12 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { AppointmentService } from "@/services/appointment-service"
+import { LeadService } from "@/services/lead-service"
+import { TeamService, UserBrief } from "@/services/team-service"
 import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
+import { useRole } from "@/hooks/use-role"
 import { cn } from "@/lib/utils"
 
 interface BookAppointmentModalProps {
@@ -51,6 +55,9 @@ export function BookAppointmentModal({
     leadName,
     onSuccess 
 }: BookAppointmentModalProps) {
+    const { isDealershipAdmin, isDealershipOwner, isSuperAdmin } = useRole()
+    const isAdmin = isDealershipAdmin || isDealershipOwner || isSuperAdmin
+    
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const [calendarOpen, setCalendarOpen] = React.useState(false)
@@ -61,6 +68,13 @@ export function BookAppointmentModal({
     const [duration, setDuration] = React.useState("30")
     const [location, setLocation] = React.useState("")
     const [notes, setNotes] = React.useState("")
+    
+    // Salesperson assignment (for admins): primary = who handles this appointment; secondary is on the lead
+    const [teamMembers, setTeamMembers] = React.useState<UserBrief[]>([])
+    const [assignedTo, setAssignedTo] = React.useState<string>("auto")
+    const [loadingTeam, setLoadingTeam] = React.useState(false)
+    const [leadPrimaryName, setLeadPrimaryName] = React.useState<string | null>(null)
+    const [leadSecondaryName, setLeadSecondaryName] = React.useState<string | null>(null)
 
     // Reset form when modal opens
     React.useEffect(() => {
@@ -81,8 +95,34 @@ export function BookAppointmentModal({
             setNotes("")
             setError(null)
             setCalendarOpen(false)
+            setAssignedTo("auto")
+            setLeadPrimaryName(null)
+            setLeadSecondaryName(null)
+            
+            // If admin, fetch lead to get dealership, team, and primary/secondary for display
+            if (isAdmin && leadId) {
+                setLoadingTeam(true)
+                LeadService.getLead(leadId)
+                    .then(async (lead) => {
+                        if (lead.assigned_to_user) {
+                            setLeadPrimaryName(`${lead.assigned_to_user.first_name} ${lead.assigned_to_user.last_name}`.trim())
+                        }
+                        if (lead.secondary_salesperson) {
+                            setLeadSecondaryName(`${lead.secondary_salesperson.first_name} ${lead.secondary_salesperson.last_name}`.trim())
+                        }
+                        if (lead.dealership_id) {
+                            const members = await TeamService.getSalespersons(lead.dealership_id)
+                            setTeamMembers(members)
+                            if (lead.assigned_to) {
+                                setAssignedTo(lead.assigned_to)
+                            }
+                        }
+                    })
+                    .catch(console.error)
+                    .finally(() => setLoadingTeam(false))
+            }
         }
-    }, [isOpen, leadName])
+    }, [isOpen, leadName, leadId, isAdmin])
 
     const handleSubmit = async (e?: React.FormEvent, confirmSkate?: boolean) => {
         if (e) e.preventDefault()
@@ -109,6 +149,7 @@ export function BookAppointmentModal({
                 scheduled_at: scheduledAt.toISOString(),
                 duration_minutes: parseInt(duration),
                 location: location || undefined,
+                assigned_to: assignedTo !== "auto" ? assignedTo : undefined,
                 confirmSkate,
             })
 
@@ -172,6 +213,66 @@ export function BookAppointmentModal({
                         <div className="bg-muted/50 rounded-lg p-3 text-sm">
                             <span className="text-muted-foreground">Scheduling for:</span>{" "}
                             <span className="font-medium">{leadName}</span>
+                        </div>
+                    )}
+
+                    {/* Primary / Secondary assignment (Admin only) */}
+                    {isAdmin && (
+                        <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+                            <Label className="flex items-center gap-2 text-sm font-medium">
+                                <Users className="h-4 w-4" />
+                                Assignment (primary & secondary)
+                            </Label>
+                            {(leadPrimaryName || leadSecondaryName) && (
+                                <div className="text-xs text-muted-foreground space-y-1">
+                                    {leadPrimaryName && <div><span className="font-medium">Lead primary:</span> {leadPrimaryName}</div>}
+                                    {leadSecondaryName && <div><span className="font-medium">Lead secondary:</span> {leadSecondaryName}</div>}
+                                    <p className="text-muted-foreground">Primary and secondary cannot be changed from here. Use &quot;Assign to Team Member&quot; on the lead details to change them.</p>
+                                </div>
+                            )}
+                            {loadingTeam ? (
+                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    Loading team…
+                                </div>
+                            ) : teamMembers.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">
+                                    Assign this lead to a dealership (and optionally to a team member) to choose who handles this appointment.
+                                </p>
+                            ) : (leadPrimaryName || leadSecondaryName) ? (
+                                <p className="text-xs text-muted-foreground">
+                                    This appointment will be handled by the lead&apos;s primary. To change who handles the lead, use &quot;Assign to Team Member&quot; on the lead details.
+                                </p>
+                            ) : (
+                                <>
+                                    <Label className="text-xs">Primary (who handles this appointment)</Label>
+                                    <Select value={assignedTo} onValueChange={setAssignedTo}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Auto (lead's salesperson or you)" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="auto">
+                                                <span className="text-muted-foreground">Auto (lead's primary)</span>
+                                            </SelectItem>
+                                            {teamMembers.map((person) => (
+                                                <SelectItem key={person.id} value={person.id}>
+                                                    <div className="flex items-center gap-2">
+                                                        <span>{person.first_name} {person.last_name}</span>
+                                                        <Badge variant={getRoleVariant(person.role)} size="sm">
+                                                            {person.role === 'dealership_owner' ? 'Owner' : 
+                                                             person.role === 'dealership_admin' ? 'Admin' : 
+                                                             person.role === 'salesperson' ? 'Sales' : person.role}
+                                                        </Badge>
+                                                    </div>
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    <p className="text-xs text-muted-foreground">
+                                        Secondary salesperson is set on the lead via &quot;Assign to Team Member&quot;.
+                                    </p>
+                                </>
+                            )}
                         </div>
                     )}
 

@@ -42,6 +42,7 @@ class LeadStatus(str, Enum):
     FOLLOW_UP = "follow_up"
     INTERESTED = "interested"
     NOT_INTERESTED = "not_interested"
+    IN_SHOWROOM = "in_showroom"  # Customer currently in showroom
     CONVERTED = "converted"
     LOST = "lost"
 
@@ -85,6 +86,12 @@ class Lead(Base):
         index=True
     )
     assigned_to: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
+    secondary_salesperson_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
@@ -165,6 +172,11 @@ class Lead(Base):
         "User",
         back_populates="assigned_leads",
         foreign_keys=[assigned_to],
+        lazy="noload"
+    )
+    secondary_salesperson: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[secondary_salesperson_id],
         lazy="noload"
     )
     created_by_user: Mapped[Optional["User"]] = relationship(

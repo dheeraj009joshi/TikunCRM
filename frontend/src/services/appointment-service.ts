@@ -4,7 +4,7 @@
 import apiClient from "@/lib/api-client"
 
 export type AppointmentType = "phone_call" | "email" | "in_person" | "video_call" | "other"
-export type AppointmentStatus = "scheduled" | "confirmed" | "in_progress" | "completed" | "cancelled" | "no_show" | "rescheduled"
+export type AppointmentStatus = "scheduled" | "confirmed" | "arrived" | "in_showroom" | "in_progress" | "completed" | "cancelled" | "no_show" | "rescheduled" | "sold"
 
 export interface UserBrief {
     id: string
@@ -208,8 +208,11 @@ export function getAppointmentStatusLabel(status: AppointmentStatus): string {
     const labels: Record<AppointmentStatus, string> = {
         scheduled: "Scheduled",
         confirmed: "Confirmed",
+        arrived: "Arrived",
+        in_showroom: "In Showroom",
         in_progress: "In Progress",
         completed: "Completed",
+        sold: "Sold",
         cancelled: "Cancelled",
         no_show: "No Show",
         rescheduled: "Rescheduled"
@@ -221,8 +224,11 @@ export function getAppointmentStatusColor(status: AppointmentStatus): string {
     const colors: Record<AppointmentStatus, string> = {
         scheduled: "bg-blue-100 text-blue-800",
         confirmed: "bg-green-100 text-green-800",
+        arrived: "bg-cyan-100 text-cyan-800",
+        in_showroom: "bg-orange-100 text-orange-800",
         in_progress: "bg-yellow-100 text-yellow-800",
         completed: "bg-emerald-100 text-emerald-800",
+        sold: "bg-emerald-200 text-emerald-900",
         cancelled: "bg-gray-100 text-gray-800",
         no_show: "bg-red-100 text-red-800",
         rescheduled: "bg-purple-100 text-purple-800"

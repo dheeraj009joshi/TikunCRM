@@ -24,7 +24,8 @@ import {
     Bell,
     MessageSquare,
     Phone,
-    MessagesSquare
+    MessagesSquare,
+    Store
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -86,6 +87,11 @@ const allSidebarItems: SidebarItem[] = [
         name: "Appointments", 
         icon: CalendarClock, 
         href: "/appointments" 
+    },
+    { 
+        name: "Dealership", 
+        icon: Store, 
+        href: "/showroom" 
     },
     { 
         name: "Follow-ups", 
@@ -285,9 +291,9 @@ export function Sidebar() {
     
     useBadgesRefresh(handleBadgesRefresh)
     
-    // When stats refresh (lead/appointment/follow-up changes), update appointment and follow-up badges via WebSocket
+    // When stats refresh (lead/appointment/follow-up/showroom changes), update all sidebar counts via WebSocket
     const handleStatsRefresh = React.useCallback((_data: { dealership_id?: string; timestamp?: string }) => {
-        refetchBadgeCounts({ appointments: true, followUps: true })
+        refetchBadgeCounts({ unassigned: true, appointments: true, followUps: true })
     }, [refetchBadgeCounts])
     useStatsRefresh(handleStatsRefresh)
     
@@ -332,10 +338,10 @@ export function Sidebar() {
     }, [])
 
     return (
-        <aside className="fixed left-0 top-0 z-40 h-screen w-64 border-r bg-background transition-transform">
-            <div className="flex h-full flex-col px-3 py-4">
+        <aside className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r bg-background transition-transform">
+            <div className="flex min-h-0 flex-1 flex-col px-3 py-4">
                 {/* Logo - click navigates to dashboard */}
-                <Link href="/dashboard" className="mb-10 flex items-center px-2 hover:opacity-90 transition-opacity">
+                <Link href="/dashboard" className="mb-10 shrink-0 flex items-center px-2 hover:opacity-90 transition-opacity">
                     <Image
                         src="/Gemini_Generated_Image_iauae6iauae6iaua.png"
                         alt="TikunCRM"
@@ -349,7 +355,7 @@ export function Sidebar() {
                 {/* Search */}
                 <button
                     onClick={() => setShowSearch(true)}
-                    className="relative mb-6 w-full flex items-center gap-2 rounded-md border border-input bg-muted/50 py-2 px-3 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+                    className="relative mb-6 w-full shrink-0 flex items-center gap-2 rounded-md border border-input bg-muted/50 py-2 px-3 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
                 >
                     <Search className="h-4 w-4" />
                     <span className="flex-1 text-left">Quick search...</span>
@@ -358,8 +364,8 @@ export function Sidebar() {
                     </kbd>
                 </button>
 
-                {/* Navigation */}
-                <nav className="flex-1 space-y-1">
+                {/* Navigation - scrollable when many items */}
+                <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overflow-x-hidden py-1">
                     {sidebarItems.map((item) => {
                         const isActive = pathname === item.href || 
                             (item.href !== "/dashboard" && pathname.startsWith(item.href))
@@ -392,8 +398,8 @@ export function Sidebar() {
                     })}
                 </nav>
 
-                {/* User / Bottom Section */}
-                <div className="mt-auto border-t pt-4">
+                {/* User / Bottom Section - always visible at bottom */}
+                <div className="mt-auto shrink-0 border-t pt-4">
                     <div className="flex items-center px-2 py-2">
                         <UserAvatar user={user || undefined} size="md" />
                         <div className="ml-3 flex-1 overflow-hidden">

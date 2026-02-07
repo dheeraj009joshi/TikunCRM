@@ -136,6 +136,16 @@ export function useLeadCreatedEvents(
 }
 
 /**
+ * Hook for showroom check-in/check-out events
+ * Triggers when a customer checks in or out of the showroom
+ */
+export function useShowroomUpdates(
+    onUpdate: (data: { action: string; dealership_id: string; visit_id?: string; lead_id?: string }) => void
+) {
+    useWebSocketEvent("showroom:update", onUpdate, [onUpdate]);
+}
+
+/**
  * Generic hook that provides lastMessage for any incoming WebSocket message
  * Useful for components that need to react to multiple message types
  */
@@ -154,6 +164,9 @@ export function useWebSocket() {
             "lead:updated",
             "lead:created",
             "activity:new",
+            "showroom:update",
+            "stats:refresh",
+            "badges:refresh",
         ];
 
         const unsubscribes = messageTypes.map((type) =>

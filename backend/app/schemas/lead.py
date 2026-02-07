@@ -124,8 +124,20 @@ class LeadStatusUpdate(BaseModel):
 
 
 class LeadAssignment(BaseModel):
-    """Schema for lead assignment"""
+    """Schema for lead assignment (primary salesperson)"""
     assigned_to: UUID
+    secondary_salesperson_id: Optional[UUID] = None  # Optional secondary salesperson
+    notes: Optional[str] = None
+
+
+class LeadSecondaryAssignment(BaseModel):
+    """Schema for assigning secondary salesperson (Admin only)"""
+    secondary_salesperson_id: Optional[UUID] = None  # None to remove secondary
+    notes: Optional[str] = None
+
+
+class LeadSwapSalespersons(BaseModel):
+    """Schema for swapping primary and secondary salespersons"""
     notes: Optional[str] = None
 
 
@@ -150,6 +162,7 @@ class LeadResponse(LeadBase):
     status: LeadStatus
     dealership_id: Optional[UUID] = None
     assigned_to: Optional[UUID] = None
+    secondary_salesperson_id: Optional[UUID] = None
     created_by: Optional[UUID] = None
     notes: Optional[str] = None
     meta_data: Dict[str, Any]
@@ -205,6 +218,7 @@ class DealershipBrief(BaseModel):
 class LeadDetail(LeadResponse):
     """Detailed lead response with related user and dealership info"""
     assigned_to_user: Optional[UserBrief] = None
+    secondary_salesperson: Optional[UserBrief] = None
     created_by_user: Optional[UserBrief] = None
     dealership: Optional[DealershipBrief] = None
     access_level: Optional[str] = None  # "full" or "mention_only" (mention_only = can only read/reply to notes)

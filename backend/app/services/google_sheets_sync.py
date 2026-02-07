@@ -260,43 +260,70 @@ async def get_existing_phones(session: AsyncSession) -> Set[str]:
     return {row[0] for row in result.fetchall()}
 
 
-async def sync_google_sheet_leads():
+def _empty_sync_result(error: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "sheet_total_rows": 0,
+        "sheet_valid_leads": 0,
+        "new_added": 0,
+        "duplicates_skipped": 0,
+        "skipped_invalid": 0,
+        "error": error,
+    }
+
+
+async def sync_google_sheet_leads() -> Dict[str, Any]:
     """
     Main sync function - fetches leads from Google Sheet and adds new ones.
-    This is called by the scheduler every minute.
-    Uses a dedicated database connection to avoid conflicts with the main app.
+    Returns stats: sheet_total_rows, sheet_valid_leads, new_added, duplicates_skipped, skipped_invalid, error.
     """
     logger.info("Starting Google Sheet lead sync...")
-    
+
     try:
         # Fetch data from sheet first (no DB needed)
         rows, headers = await fetch_sheet_data()
-        
+
         if not rows:
-            logger.info("No data fetched from Google Sheet")
-            return
-        
+            logger.info("No data fetched from Google Sheet (sheet may be private or empty)")
+            return _empty_sync_result("No data from sheet (check if sheet is shared/public or URL)")
+        sheet_total_rows = len(rows)
+
         # Parse all rows first (no DB needed)
         parsed_leads = []
-        skipped_count = 0
-        
+        skipped_invalid = 0
+
         for row in rows:
             lead_data = parse_sheet_row(row, headers)
             if lead_data:
                 parsed_leads.append(lead_data)
             else:
-                skipped_count += 1
-        
+                skipped_invalid += 1
+
+        sheet_valid_leads = len(parsed_leads)
         if not parsed_leads:
-            logger.info(f"No valid leads to process ({skipped_count} skipped)")
-            return
+            logger.info(f"No valid leads to process ({skipped_invalid} skipped)")
+            return {
+                "sheet_total_rows": sheet_total_rows,
+                "sheet_valid_leads": 0,
+                "new_added": 0,
+                "duplicates_skipped": 0,
+                "skipped_invalid": skipped_invalid,
+                "error": None,
+            }
         
         # Now do DB operations with dedicated session
         sync_session_maker = get_sync_session_maker()
         
         new_leads_count = 0
         duplicate_count = 0
-        
+        sync_result = {
+            "sheet_total_rows": sheet_total_rows,
+            "sheet_valid_leads": sheet_valid_leads,
+            "new_added": 0,
+            "duplicates_skipped": 0,
+            "skipped_invalid": skipped_invalid,
+            "error": None,
+        }
+
         async with sync_session_maker() as session:
             try:
                 # Look up Toyota South Atlanta dealership for auto-assignment
@@ -429,15 +456,21 @@ async def sync_google_sheet_leads():
                 await session.rollback()
                 raise
         
+        sync_result["new_added"] = new_leads_count
+        sync_result["duplicates_skipped"] = duplicate_count
         logger.info(
             f"Google Sheet sync complete: "
             f"{new_leads_count} new leads added, "
-            f"{duplicate_count + skipped_count} skipped (duplicates/invalid)"
+            f"{duplicate_count} duplicates, {skipped_invalid} invalid rows"
         )
-        
+        return sync_result
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Google Sheet HTTP error: {e}")
+        return _empty_sync_result(f"Sheet access error: {e.response.status_code} (sheet may be private)")
     except Exception as e:
         logger.error(f"Google Sheet sync failed: {e}")
-        # Don't re-raise - let scheduler continue
+        return _empty_sync_result(str(e))
 
 
 async def send_new_lead_notifications(session: AsyncSession, leads: List[Lead], dealership_id: str):

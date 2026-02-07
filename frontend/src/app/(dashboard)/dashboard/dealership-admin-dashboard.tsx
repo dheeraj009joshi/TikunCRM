@@ -13,7 +13,8 @@ import {
     Loader2,
     UserPlus,
     ClipboardList,
-    CalendarClock
+    CalendarClock,
+    Store
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, MetricCard } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -32,54 +33,49 @@ import { UserAvatar } from "@/components/ui/avatar"
 import { DashboardService, DealershipAdminStats } from "@/services/dashboard-service"
 import { TeamService, UserWithStats } from "@/services/team-service"
 import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
+import { ShowroomService, ShowroomStats } from "@/services/showroom-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { BarChart } from "@tremor/react"
-import { useStatsRefresh } from "@/hooks/use-websocket"
+import { useStatsRefresh, useShowroomUpdates } from "@/hooks/use-websocket"
 
 export function DealershipAdminDashboard() {
     const [stats, setStats] = React.useState<DealershipAdminStats | null>(null)
     const [team, setTeam] = React.useState<UserWithStats[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [upcomingAppointments, setUpcomingAppointments] = React.useState<Appointment[]>([])
+    const [showroomStats, setShowroomStats] = React.useState<ShowroomStats | null>(null)
     const [isLoading, setIsLoading] = React.useState(true)
     const { timezone } = useBrowserTimezone()
 
-    const fetchStats = React.useCallback(async () => {
+    const loadData = React.useCallback(async () => {
         try {
-            const statsData = await DashboardService.getDealershipAdminStats()
+            const [statsData, teamData, todayData, upcomingData, showroomData] = await Promise.all([
+                DashboardService.getDealershipAdminStats(),
+                TeamService.getTeamWithStats(),
+                AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] })),
+                AppointmentService.list({ upcoming_only: true, page_size: 3 }).catch(() => ({ items: [] })),
+                ShowroomService.getStats().catch(() => null)
+            ])
             setStats(statsData)
+            setTeam(teamData.items)
+            setTodayAppointments(todayData.items || [])
+            setUpcomingAppointments(upcomingData.items || [])
+            setShowroomStats(showroomData)
         } catch (error) {
             console.error("Failed to fetch dashboard stats:", error)
+        } finally {
+            setIsLoading(false)
         }
     }, [])
 
-    // Listen for real-time stats refresh via WebSocket
-    useStatsRefresh(React.useCallback(() => {
-        fetchStats()
-    }, [fetchStats]))
+    // Real-time: refetch all dashboard data on WebSocket events (no polling)
+    useStatsRefresh(loadData)
+    useShowroomUpdates(loadData)
 
     React.useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const [statsData, teamData, todayData, upcomingData] = await Promise.all([
-                    DashboardService.getDealershipAdminStats(),
-                    TeamService.getTeamWithStats(),
-                    AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] })),
-                    AppointmentService.list({ upcoming_only: true, page_size: 3 }).catch(() => ({ items: [] }))
-                ])
-                setStats(statsData)
-                setTeam(teamData.items)
-                setTodayAppointments(todayData.items || [])
-                setUpcomingAppointments(upcomingData.items || [])
-            } catch (error) {
-                console.error("Failed to fetch dashboard stats:", error)
-            } finally {
-                setIsLoading(false)
-            }
-        }
-        fetchData()
-    }, [])
+        loadData()
+    }, [loadData])
 
     const statCards = stats ? [
         {
@@ -158,6 +154,38 @@ export function DealershipAdminDashboard() {
                     </Link>
                 </div>
             </div>
+
+            {/* Dealership Live Status */}
+            {showroomStats && showroomStats.currently_in_showroom > 0 && (
+                <Card className="border-teal-200 bg-teal-50 dark:border-teal-900 dark:bg-teal-950">
+                    <CardContent className="flex items-center gap-4 p-4">
+                        <div className="rounded-full bg-teal-100 p-3 dark:bg-teal-900">
+                            <Store className="h-6 w-6 text-teal-600" />
+                        </div>
+                        <div className="flex-1">
+                            <p className="text-3xl font-bold text-teal-700 dark:text-teal-300">
+                                {showroomStats.currently_in_showroom}
+                            </p>
+                            <p className="text-sm text-teal-600 dark:text-teal-400">
+                                Customers in Dealership Right Now
+                            </p>
+                        </div>
+                        <div className="text-right mr-4">
+                            <p className="text-lg font-semibold text-teal-700 dark:text-teal-300">
+                                {showroomStats.checked_in_today} today
+                            </p>
+                            <p className="text-sm text-teal-600 dark:text-teal-400">
+                                {showroomStats.sold_today} sold
+                            </p>
+                        </div>
+                        <Link href="/showroom">
+                            <Button variant="outline" className="border-teal-300 text-teal-700">
+                                View Dealership
+                            </Button>
+                        </Link>
+                    </CardContent>
+                </Card>
+            )}
 
             {/* Follow-up Alerts */}
             {stats && (stats.pending_follow_ups > 0 || stats.overdue_follow_ups > 0) && (

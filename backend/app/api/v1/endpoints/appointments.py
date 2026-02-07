@@ -100,6 +100,17 @@ async def create_appointment(
 
     # Determine dealership
     dealership_id = current_user.dealership_id
+    
+    # Determine assigned_to: prefer explicit, then lead's primary salesperson, then current user
+    assigned_to_id = appointment_in.assigned_to
+    if not assigned_to_id and appointment_in.lead_id:
+        from app.models.lead import Lead
+        lead_result = await db.execute(select(Lead).where(Lead.id == appointment_in.lead_id))
+        lead = lead_result.scalar_one_or_none()
+        if lead and lead.assigned_to:
+            assigned_to_id = lead.assigned_to
+    if not assigned_to_id:
+        assigned_to_id = current_user.id
 
     # Create appointment
     appointment = Appointment(
@@ -113,7 +124,7 @@ async def create_appointment(
         lead_id=appointment_in.lead_id,
         dealership_id=dealership_id,
         scheduled_by=current_user.id,
-        assigned_to=appointment_in.assigned_to or current_user.id,
+        assigned_to=assigned_to_id,
         status=AppointmentStatus.SCHEDULED
     )
     

@@ -16,19 +16,40 @@ from sqlalchemy.pool import NullPool
 from app.core.config import settings
 
 
+def _database_url_and_connect_args():
+    """Build engine URL and connect_args. asyncpg does not accept sslmode in the URL."""
+    url = settings.database_url
+    use_ssl = "ssl=require" in url or "sslmode=require" in url
+    # Strip ssl params so they are not passed to asyncpg.connect() (causes TypeError)
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+    parsed = urlparse(url)
+    if parsed.query:
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        qs.pop("ssl", None)
+        qs.pop("sslmode", None)
+        qs.pop("channel_binding", None)
+        new_query = urlencode([(k, v[0]) for k, v in qs.items()])
+        url = urlunparse(parsed._replace(query=new_query))
+    connect_args = {
+        "command_timeout": 30,
+        "timeout": 15,
+    }
+    if use_ssl:
+        connect_args["ssl"] = True
+    return url, connect_args
+
+
+_engine_url, _connect_args = _database_url_and_connect_args()
+
 # Create async engine with NullPool for multi-worker compatibility
 # NullPool creates connections on-demand and closes them immediately after use
 # This prevents connection exhaustion when running with multiple workers
 engine = create_async_engine(
-    settings.database_url,
+    _engine_url,
     echo=False,  # Disable SQL logging for better performance
     future=True,
     poolclass=NullPool,  # Each query gets a fresh connection - works with multi-worker
-    # Connection options to prevent stuck transactions
-    connect_args={
-        "command_timeout": 30,  # Timeout individual statements after 30 seconds
-        "timeout": 15,  # Connection timeout
-    },
+    connect_args=_connect_args,
 )
 
 # Create async session factory

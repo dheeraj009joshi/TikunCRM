@@ -24,10 +24,16 @@ class SyncStatusResponse(BaseModel):
 
 
 class SyncTriggerResponse(BaseModel):
-    """Response for manual sync trigger."""
+    """Response for manual sync trigger with sheet vs system comparison."""
     success: bool
     message: str
     new_leads_added: int = 0
+    leads_in_sheet: int = 0
+    leads_in_system: int = 0
+    sheet_total_rows: int = 0
+    duplicates_skipped: int = 0
+    skipped_invalid: int = 0
+    error: Optional[str] = None
 
 
 @router.get("/status", response_model=SyncStatusResponse)
@@ -70,29 +76,48 @@ async def get_sync_status(
 
 @router.post("/sync", response_model=SyncTriggerResponse)
 async def trigger_sync(
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Manually trigger a Google Sheets sync.
-    This runs the sync immediately instead of waiting for the scheduler.
+    Returns leads_in_sheet vs leads_in_system so you can compare counts.
     """
-    # Only super admins can trigger sync
     if current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=403,
             detail="Only Super Admins can trigger sync"
         )
-    
+
     try:
         from app.services.google_sheets_sync import sync_google_sheet_leads
-        await sync_google_sheet_leads()
-        
-        return SyncTriggerResponse(
-            success=True,
-            message="Google Sheets sync completed successfully. Check the leads page for new entries."
-        )
+        result = await sync_google_sheet_leads()
     except Exception as e:
-        return SyncTriggerResponse(
-            success=False,
-            message=f"Sync failed: {str(e)}"
-        )
+        result = {
+            "sheet_total_rows": 0,
+            "sheet_valid_leads": 0,
+            "new_added": 0,
+            "duplicates_skipped": 0,
+            "skipped_invalid": 0,
+            "error": str(e),
+        }
+
+    r = await db.execute(
+        select(func.count(Lead.id)).where(Lead.source == LeadSource.GOOGLE_SHEETS)
+    )
+    leads_in_system = r.scalar() or 0
+
+    err = result.get("error")
+    success = err is None
+    return SyncTriggerResponse(
+        success=success,
+        message="Sync completed. Compare leads_in_sheet vs leads_in_system below."
+            if success else f"Sync failed: {err}",
+        new_leads_added=result.get("new_added", 0),
+        leads_in_sheet=result.get("sheet_valid_leads", 0),
+        leads_in_system=leads_in_system,
+        sheet_total_rows=result.get("sheet_total_rows", 0),
+        duplicates_skipped=result.get("duplicates_skipped", 0),
+        skipped_invalid=result.get("skipped_invalid", 0),
+        error=err,
+    )

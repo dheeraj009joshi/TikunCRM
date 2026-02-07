@@ -32,11 +32,14 @@ class AppointmentStatus(str, Enum):
     """Status of an appointment"""
     SCHEDULED = "scheduled"
     CONFIRMED = "confirmed"
+    ARRIVED = "arrived"         # Customer has arrived
+    IN_SHOWROOM = "in_showroom" # Customer is in showroom
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     NO_SHOW = "no_show"
     RESCHEDULED = "rescheduled"
+    SOLD = "sold"               # Converted/sold
 
 
 class Appointment(Base):

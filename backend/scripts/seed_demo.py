@@ -19,6 +19,7 @@ import random
 from datetime import datetime, timedelta
 from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
@@ -103,6 +104,9 @@ BUDGET_RANGES = [
     "$110,000 - $130,000",
 ]
 
+# Single password for all test users (super admin, admins, salespersons)
+TEST_PASSWORD = "12345678"
+
 SALESPERSON_NAMES = [
     ("Sarah", "Jenkins"),
     ("Michael", "Chen"),
@@ -151,117 +155,155 @@ async def seed_database():
     async with async_session() as session:
         print("Starting database seeding...")
         
-        # 1. Create Super Admin
-        print("\n[1/5] Creating Super Admin...")
-        super_admin = User(
-            id=uuid4(),
-            email="admin@leedscrm.com",
-            password_hash=get_password_hash("admin123"),
-            first_name="System",
-            last_name="Administrator",
-            phone="+1 800 555 0000",
-            role=UserRole.SUPER_ADMIN,
-            dealership_id=None,
-            is_active=True,
-            is_verified=True,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
-        session.add(super_admin)
-        print(f"   Created: {super_admin.email} (password: admin123)")
-        
-        # 2. Create Dealerships
-        print("\n[2/5] Creating Dealerships...")
-        dealership_objects = []
-        for d_data in DEALERSHIPS:
-            dealership = Dealership(
+        # 1. Get or create Super Admin
+        print("\n[1/5] Super Admin...")
+        r = await session.execute(select(User).where(User.email == "admin@leedscrm.com"))
+        super_admin = r.scalar_one_or_none()
+        if super_admin:
+            super_admin.password_hash = get_password_hash(TEST_PASSWORD)
+            super_admin.is_active = True
+            print(f"   Updated: {super_admin.email} (password: {TEST_PASSWORD})")
+        else:
+            super_admin = User(
                 id=uuid4(),
-                name=d_data["name"],
-                address=d_data["address"],
-                city=d_data["city"],
-                state=d_data["state"],
-                country=d_data["country"],
-                postal_code=d_data["postal_code"],
-                phone=d_data["phone"],
-                email=d_data["email"],
-                config={},
-                working_hours={
-                    "monday": {"start": "09:00", "end": "18:00", "is_open": True},
-                    "tuesday": {"start": "09:00", "end": "18:00", "is_open": True},
-                    "wednesday": {"start": "09:00", "end": "18:00", "is_open": True},
-                    "thursday": {"start": "09:00", "end": "18:00", "is_open": True},
-                    "friday": {"start": "09:00", "end": "18:00", "is_open": True},
-                    "saturday": {"start": "10:00", "end": "16:00", "is_open": True},
-                    "sunday": {"start": "00:00", "end": "00:00", "is_open": False},
-                },
-                lead_assignment_rules={
-                    "auto_assign": True,
-                    "round_robin": True,
-                    "max_leads_per_salesperson": 50
-                },
-                is_active=True,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
-            )
-            session.add(dealership)
-            dealership_objects.append(dealership)
-            print(f"   Created: {dealership.name}")
-        
-        # 3. Create Dealership Admins
-        print("\n[3/5] Creating Dealership Admins...")
-        dealership_admins = []
-        admin_names = [("John", "Mitchell"), ("Lisa", "Parker"), ("Robert", "Williams")]
-        
-        for i, dealership in enumerate(dealership_objects):
-            first, last = admin_names[i]
-            admin = User(
-                id=uuid4(),
-                email=f"{first.lower()}.{last.lower()}@premiummotors.com",
-                password_hash=get_password_hash("dealer123"),
-                first_name=first,
-                last_name=last,
-                phone=random_phone(),
-                role=UserRole.DEALERSHIP_ADMIN,
-                dealership_id=dealership.id,
+                email="admin@leedscrm.com",
+                password_hash=get_password_hash(TEST_PASSWORD),
+                first_name="System",
+                last_name="Administrator",
+                phone="+1 800 555 0000",
+                role=UserRole.SUPER_ADMIN,
+                dealership_id=None,
                 is_active=True,
                 is_verified=True,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )
-            session.add(admin)
-            dealership_admins.append(admin)
-            print(f"   Created: {admin.email} for {dealership.name} (password: dealer123)")
-        
-        # 4. Create Salespersons
-        print("\n[4/5] Creating Salespersons (5 per dealership)...")
-        salespersons_by_dealership = {}
-        name_index = 0
-        
-        for dealership in dealership_objects:
-            salespersons_by_dealership[dealership.id] = []
-            
-            for _ in range(5):
-                first, last = SALESPERSON_NAMES[name_index % len(SALESPERSON_NAMES)]
-                name_index += 1
-                
-                salesperson = User(
+            session.add(super_admin)
+            print(f"   Created: {super_admin.email} (password: {TEST_PASSWORD})")
+
+        await session.flush()
+
+        # 2. Get or create Dealerships
+        print("\n[2/5] Dealerships...")
+        dealership_objects = []
+        for d_data in DEALERSHIPS:
+            r = await session.execute(select(Dealership).where(Dealership.name == d_data["name"]))
+            dealership = r.scalar_one_or_none()
+            if dealership:
+                dealership_objects.append(dealership)
+                print(f"   Using existing: {dealership.name}")
+            else:
+                dealership = Dealership(
                     id=uuid4(),
-                    email=f"{first.lower()}.{last.lower()}{name_index}@premiummotors.com",
-                    password_hash=get_password_hash("sales123"),
+                    name=d_data["name"],
+                    address=d_data["address"],
+                    city=d_data["city"],
+                    state=d_data["state"],
+                    country=d_data["country"],
+                    postal_code=d_data["postal_code"],
+                    phone=d_data["phone"],
+                    email=d_data["email"],
+                    config={},
+                    working_hours={
+                        "monday": {"start": "09:00", "end": "18:00", "is_open": True},
+                        "tuesday": {"start": "09:00", "end": "18:00", "is_open": True},
+                        "wednesday": {"start": "09:00", "end": "18:00", "is_open": True},
+                        "thursday": {"start": "09:00", "end": "18:00", "is_open": True},
+                        "friday": {"start": "09:00", "end": "18:00", "is_open": True},
+                        "saturday": {"start": "10:00", "end": "16:00", "is_open": True},
+                        "sunday": {"start": "00:00", "end": "00:00", "is_open": False},
+                    },
+                    lead_assignment_rules={
+                        "auto_assign": True,
+                        "round_robin": True,
+                        "max_leads_per_salesperson": 50
+                    },
+                    is_active=True,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                session.add(dealership)
+                dealership_objects.append(dealership)
+                print(f"   Created: {dealership.name}")
+
+        await session.flush()
+
+        # 3. Get or create Dealership Admins
+        print("\n[3/5] Dealership Admins...")
+        dealership_admins = []
+        admin_names = [("John", "Mitchell"), ("Lisa", "Parker"), ("Robert", "Williams")]
+
+        for i, dealership in enumerate(dealership_objects):
+            first, last = admin_names[i]
+            email = f"{first.lower()}.{last.lower()}@premiummotors.com"
+            r = await session.execute(select(User).where(User.email == email))
+            admin = r.scalar_one_or_none()
+            if admin:
+                admin.password_hash = get_password_hash(TEST_PASSWORD)
+                admin.dealership_id = dealership.id
+                admin.role = UserRole.DEALERSHIP_ADMIN
+                admin.is_active = True
+                print(f"   Updated: {admin.email} for {dealership.name} (password: {TEST_PASSWORD})")
+            else:
+                admin = User(
+                    id=uuid4(),
+                    email=email,
+                    password_hash=get_password_hash(TEST_PASSWORD),
                     first_name=first,
                     last_name=last,
                     phone=random_phone(),
-                    role=UserRole.SALESPERSON,
+                    role=UserRole.DEALERSHIP_ADMIN,
                     dealership_id=dealership.id,
                     is_active=True,
                     is_verified=True,
                     created_at=datetime.utcnow(),
                     updated_at=datetime.utcnow()
                 )
-                session.add(salesperson)
-                salespersons_by_dealership[dealership.id].append(salesperson)
-            
-            print(f"   Created 5 salespersons for {dealership.name} (password: sales123)")
+                session.add(admin)
+                print(f"   Created: {admin.email} for {dealership.name} (password: {TEST_PASSWORD})")
+            dealership_admins.append(admin)
+
+        await session.flush()
+
+        # 4. Get or create Salespersons
+        print("\n[4/5] Salespersons (5 per dealership)...")
+        salespersons_by_dealership = {}
+        name_index = 0
+
+        for dealership in dealership_objects:
+            salespersons_by_dealership[dealership.id] = []
+
+            for _ in range(5):
+                first, last = SALESPERSON_NAMES[name_index % len(SALESPERSON_NAMES)]
+                name_index += 1
+                email = f"{first.lower()}.{last.lower()}{name_index}@premiummotors.com"
+                r = await session.execute(select(User).where(User.email == email))
+                salesperson = r.scalar_one_or_none()
+                if salesperson:
+                    salesperson.password_hash = get_password_hash(TEST_PASSWORD)
+                    salesperson.dealership_id = dealership.id
+                    salesperson.role = UserRole.SALESPERSON
+                    salesperson.is_active = True
+                    salespersons_by_dealership[dealership.id].append(salesperson)
+                else:
+                    salesperson = User(
+                        id=uuid4(),
+                        email=email,
+                        password_hash=get_password_hash(TEST_PASSWORD),
+                        first_name=first,
+                        last_name=last,
+                        phone=random_phone(),
+                        role=UserRole.SALESPERSON,
+                        dealership_id=dealership.id,
+                        is_active=True,
+                        is_verified=True,
+                        created_at=datetime.utcnow(),
+                        updated_at=datetime.utcnow()
+                    )
+                    session.add(salesperson)
+                    salespersons_by_dealership[dealership.id].append(salesperson)
+
+            print(f"   OK 5 salespersons for {dealership.name} (password: {TEST_PASSWORD})")
         
         # 5. Create Leads
         print("\n[5/5] Creating Leads...")
@@ -401,10 +443,10 @@ async def seed_database():
         print(f"  - {len(dealership_admins)} Dealership Admins")
         print(f"  - {sum(len(s) for s in salespersons_by_dealership.values())} Salespersons")
         print(f"  - {leads_created} Leads")
-        print(f"\nLogin Credentials:")
-        print(f"  Super Admin:       admin@leedscrm.com / admin123")
-        print(f"  Dealership Admin:  john.mitchell@premiummotors.com / dealer123")
-        print(f"  Salesperson:       sarah.jenkins1@premiummotors.com / sales123")
+        print(f"\nLogin Credentials (all password: {TEST_PASSWORD}):")
+        print(f"  Super Admin:       admin@leedscrm.com")
+        print(f"  Dealership Admin:  john.mitchell@premiummotors.com")
+        print(f"  Salesperson:       sarah.jenkins1@premiummotors.com")
         print()
 
 

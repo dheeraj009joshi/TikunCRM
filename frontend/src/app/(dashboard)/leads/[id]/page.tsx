@@ -27,7 +27,9 @@ import {
     Pencil,
     Save,
     X,
-    Copy
+    Copy,
+    Store,
+    LogOut
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -56,6 +58,7 @@ import {
 } from "@/components/ui/select"
 import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { ActivityService, Activity, ACTIVITY_TYPE_INFO, ActivityType } from "@/services/activity-service"
+import { ShowroomService, ShowroomVisit, ShowroomOutcome, getOutcomeLabel } from "@/services/showroom-service"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
 import { AssignToDealershipModal, AssignToSalespersonModal } from "@/components/leads/assignment-modal"
@@ -148,6 +151,14 @@ export default function LeadDetailsPage() {
     const [showLostReasonModal, setShowLostReasonModal] = React.useState(false)
     const [lostReason, setLostReason] = React.useState("")
     
+    // Showroom check-in/out
+    const [currentVisit, setCurrentVisit] = React.useState<ShowroomVisit | null>(null)
+    const [isCheckingIn, setIsCheckingIn] = React.useState(false)
+    const [showCheckOutModal, setShowCheckOutModal] = React.useState(false)
+    const [checkOutOutcome, setCheckOutOutcome] = React.useState<ShowroomOutcome>("follow_up")
+    const [checkOutNotes, setCheckOutNotes] = React.useState("")
+    const [isCheckingOut, setIsCheckingOut] = React.useState(false)
+    
     // Reply to note
     const [replyingTo, setReplyingTo] = React.useState<string | null>(null)
     const [replyContent, setReplyContent] = React.useState("")
@@ -208,10 +219,57 @@ export default function LeadDetailsPage() {
         }
     }, [leadId])
 
+    // Check if lead is currently in showroom
+    const fetchShowroomStatus = React.useCallback(async () => {
+        try {
+            const { visits } = await ShowroomService.getCurrent()
+            const activeVisit = visits.find(v => v.lead_id === leadId)
+            setCurrentVisit(activeVisit || null)
+        } catch (error) {
+            console.error("Failed to fetch showroom status:", error)
+        }
+    }, [leadId])
+
+    const handleCheckIn = async () => {
+        setIsCheckingIn(true)
+        try {
+            const visit = await ShowroomService.checkIn({ lead_id: leadId })
+            setCurrentVisit(visit)
+            fetchActivities() // Refresh to show check-in activity
+        } catch (error: any) {
+            const detail = error.response?.data?.detail
+            const message = typeof detail === "string" ? detail : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? JSON.stringify(d)).join(" ") : "Failed to check in"
+            alert(message)
+        } finally {
+            setIsCheckingIn(false)
+        }
+    }
+
+    const handleCheckOut = async () => {
+        if (!currentVisit) return
+        setIsCheckingOut(true)
+        try {
+            await ShowroomService.checkOut(currentVisit.id, {
+                outcome: checkOutOutcome,
+                notes: checkOutNotes || undefined
+            })
+            setCurrentVisit(null)
+            setShowCheckOutModal(false)
+            setCheckOutNotes("")
+            fetchActivities() // Refresh to show check-out activity
+            fetchLead() // Refresh lead status
+        } catch (error: any) {
+            alert(error.response?.data?.detail || "Failed to check out")
+        } finally {
+            setIsCheckingOut(false)
+        }
+    }
+
     React.useEffect(() => {
         fetchLead()
         fetchActivities()
-    }, [fetchLead, fetchActivities])
+        fetchShowroomStatus()
+    }, [fetchLead, fetchActivities, fetchShowroomStatus])
     
     // When opened from mention notification (?note=activity_id): expand thread if reply, then scroll to note
     const scrolledToNoteRef = React.useRef<string | null>(null)
@@ -404,8 +462,14 @@ export default function LeadDetailsPage() {
             }
         } catch (err) {
             pendingNoteSkateRef.current = null
-            // Safely log error without causing serialization issues
-            console.error("Failed to add note:", err instanceof Error ? err.message : String(err))
+            const message = err instanceof Error ? err.message : String(err)
+            console.error("Failed to add note:", message)
+            const isNetworkError = message === "Network Error" || (err as any)?.code === "ERR_NETWORK"
+            const detail = (err as any)?.response?.data?.detail
+            const userMessage = isNetworkError
+                ? "Could not reach the server. Make sure the backend is running (e.g. uvicorn on http://localhost:8000)."
+                : typeof detail === "string" ? detail : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? String(d)).join(" ") : message
+            alert(typeof userMessage === "string" ? userMessage : "Failed to add note")
         } finally {
             setIsAddingNote(false)
         }
@@ -571,6 +635,31 @@ export default function LeadDetailsPage() {
                 </div>
             )}
 
+            {/* In Dealership Banner */}
+            {currentVisit && (
+                <div className="shrink-0 rounded-lg border border-teal-300 bg-teal-50 dark:border-teal-800 dark:bg-teal-950/30 px-4 py-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="rounded-full bg-teal-100 dark:bg-teal-900 p-2">
+                            <Store className="h-5 w-5 text-teal-600" />
+                        </div>
+                        <div>
+                            <p className="font-semibold text-teal-800 dark:text-teal-200">Customer is in Dealership</p>
+                            <p className="text-sm text-teal-600 dark:text-teal-400">
+                                Checked in at {new Date(currentVisit.checked_in_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                        </div>
+                    </div>
+                    <Button 
+                        variant="outline" 
+                        className="border-teal-300 text-teal-700 hover:bg-teal-100"
+                        onClick={() => setShowCheckOutModal(true)}
+                    >
+                        <LogOut className="h-4 w-4 mr-2" />
+                        Check Out
+                    </Button>
+                </div>
+            )}
+
             <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0 overflow-hidden">
                 {/* Left Column: Profile & Info */}
                 <div className="lg:col-span-1 space-y-6 overflow-y-auto">
@@ -675,6 +764,31 @@ export default function LeadDetailsPage() {
                                         <CalendarClock className="h-4 w-4 mr-2" />
                                         Book Appointment
                                     </Button>
+                                    {currentVisit ? (
+                                        <Button 
+                                            variant="outline"
+                                            className="w-full bg-teal-50 border-teal-300 text-teal-700 hover:bg-teal-100"
+                                            onClick={() => setShowCheckOutModal(true)}
+                                        >
+                                            <LogOut className="h-4 w-4 mr-2" />
+                                            Check Out of Dealership
+                                        </Button>
+                                    ) : (
+                                        <Button 
+                                            variant="outline" 
+                                            className="w-full"
+                                            onClick={handleCheckIn}
+                                            disabled={isCheckingIn || !lead.dealership_id}
+                                            title={!lead.dealership_id ? "Assign this lead to a dealership first (Edit lead or assign from Unassigned Pool)." : undefined}
+                                        >
+                                            {isCheckingIn ? (
+                                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                            ) : (
+                                                <Store className="h-4 w-4 mr-2 text-teal-500" />
+                                            )}
+                                            Check In to Dealership
+                                        </Button>
+                                    )}
                                 </div>
                                 )}
                             </div>
@@ -767,56 +881,81 @@ export default function LeadDetailsPage() {
                             
                             {/* Assigned Salesperson Section */}
                             <div>
-                                <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
-                                    Assigned To
-                                </p>
+                                <div className="flex items-center justify-between mb-1">
+                                    <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest">
+                                        Assigned To
+                                    </p>
+                                    {!isMentionOnly && (canAssignToSalesperson || isDealershipLevel || isSuperAdmin) && lead.dealership_id && (
+                                        <Button 
+                                            size="sm" 
+                                            variant="ghost"
+                                            className="h-6 px-2 text-xs"
+                                            onClick={() => setShowSalespersonModal(true)}
+                                        >
+                                            {lead.assigned_to_user ? (
+                                                <span><RefreshCw className="h-3 w-3 mr-1 inline" />Reassign</span>
+                                            ) : (
+                                                <span><UserPlus className="h-3 w-3 mr-1 inline" />Assign</span>
+                                            )}
+                                        </Button>
+                                    )}
+                                </div>
                                 {lead.assigned_to_user ? (
-                                    <div className="flex items-center justify-between">
+                                    <div className="space-y-2">
+                                        {/* Primary Salesperson */}
                                         <div className="flex items-center gap-2">
                                             <UserAvatar 
                                                 firstName={lead.assigned_to_user.first_name}
                                                 lastName={lead.assigned_to_user.last_name}
                                                 size="sm"
                                             />
-                                            <div>
+                                            <div className="flex-1">
                                                 <p className="font-medium text-sm">
                                                     {lead.assigned_to_user.first_name} {lead.assigned_to_user.last_name}
                                                 </p>
-                                                <Badge variant={getRoleVariant(lead.assigned_to_user.role)} size="sm">
-                                                    {lead.assigned_to_user.role === 'dealership_owner' ? 'Owner' : 
-                                                     lead.assigned_to_user.role === 'dealership_admin' ? 'Admin' : 
-                                                     lead.assigned_to_user.role === 'salesperson' ? 'Sales' : 
-                                                     lead.assigned_to_user.role.replace('_', ' ')}
-                                                </Badge>
+                                                <div className="flex items-center gap-1">
+                                                    {lead.secondary_salesperson && (
+                                                        <Badge variant="default" size="sm" className="text-[10px]">Primary</Badge>
+                                                    )}
+                                                    <Badge variant={getRoleVariant(lead.assigned_to_user.role)} size="sm">
+                                                        {lead.assigned_to_user.role === 'dealership_owner' ? 'Owner' : 
+                                                         lead.assigned_to_user.role === 'dealership_admin' ? 'Admin' : 
+                                                         lead.assigned_to_user.role === 'salesperson' ? 'Sales' : 
+                                                         lead.assigned_to_user.role.replace('_', ' ')}
+                                                    </Badge>
+                                                </div>
                                             </div>
                                         </div>
-                                        {!isMentionOnly && (canAssignToSalesperson || isDealershipLevel || isSuperAdmin) && lead.dealership_id && (
-                                            <Button 
-                                                size="sm" 
-                                                variant="outline"
-                                                onClick={() => setShowSalespersonModal(true)}
-                                            >
-                                                <RefreshCw className="h-3 w-3 mr-1" />
-                                                Reassign
-                                            </Button>
+                                        {/* Secondary Salesperson (if assigned) */}
+                                        {lead.secondary_salesperson && (
+                                            <div className="flex items-center gap-2 pl-1 border-l-2 border-orange-300 ml-1">
+                                                <UserAvatar 
+                                                    firstName={lead.secondary_salesperson.first_name}
+                                                    lastName={lead.secondary_salesperson.last_name}
+                                                    size="sm"
+                                                    className="bg-gradient-to-br from-orange-400 to-amber-500"
+                                                />
+                                                <div className="flex-1">
+                                                    <p className="font-medium text-sm">
+                                                        {lead.secondary_salesperson.first_name} {lead.secondary_salesperson.last_name}
+                                                    </p>
+                                                    <div className="flex items-center gap-1">
+                                                        <Badge variant="outline" size="sm" className="text-[10px] border-orange-300 text-orange-600">Secondary</Badge>
+                                                        <Badge variant={getRoleVariant(lead.secondary_salesperson.role)} size="sm">
+                                                            {lead.secondary_salesperson.role === 'dealership_owner' ? 'Owner' : 
+                                                             lead.secondary_salesperson.role === 'dealership_admin' ? 'Admin' : 
+                                                             lead.secondary_salesperson.role === 'salesperson' ? 'Sales' : 
+                                                             lead.secondary_salesperson.role.replace('_', ' ')}
+                                                        </Badge>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         )}
                                     </div>
                                 ) : (
-                                    <div className="flex items-center justify-between">
-                                        <Badge variant="outline" className="text-amber-600 border-amber-300">
-                                            Unassigned
-                                        </Badge>
-                                        {!isMentionOnly && (canAssignToSalesperson || isDealershipLevel || isSuperAdmin) && lead.dealership_id && (
-                                            <Button 
-                                                size="sm" 
-                                                variant="outline"
-                                                onClick={() => setShowSalespersonModal(true)}
-                                            >
-                                                <UserPlus className="h-3 w-3 mr-1" />
-                                                Assign
-                                            </Button>
-                                        )}
-                                    </div>
+                                    <Badge variant="outline" className="text-amber-600 border-amber-300">
+                                        Unassigned
+                                    </Badge>
                                 )}
                             </div>
                             
@@ -1236,6 +1375,32 @@ export default function LeadDetailsPage() {
                                 <CalendarClock className="h-4 w-4 mr-2 text-purple-500" />
                                 Book Appointment
                             </Button>
+                            {/* Dealership Check-in/Check-out */}
+                            {currentVisit ? (
+                                <Button 
+                                    className="w-full justify-start bg-teal-50 border-teal-300 text-teal-700 hover:bg-teal-100" 
+                                    variant="outline"
+                                    onClick={() => setShowCheckOutModal(true)}
+                                >
+                                    <LogOut className="h-4 w-4 mr-2" />
+                                    Check Out of Dealership
+                                </Button>
+                            ) : (
+                                <Button 
+                                    className="w-full justify-start" 
+                                    variant="outline"
+                                    onClick={handleCheckIn}
+                                    disabled={isCheckingIn || !lead.dealership_id}
+                                    title={!lead.dealership_id ? "Assign this lead to a dealership first (Edit lead or assign from Unassigned Pool)." : undefined}
+                                >
+                                    {isCheckingIn ? (
+                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    ) : (
+                                        <Store className="h-4 w-4 mr-2 text-teal-500" />
+                                    )}
+                                    Check In to Dealership
+                                </Button>
+                            )}
                             {/* Mark as Converted - only visible to admin/owner, not salesperson */}
                             {!isSalesperson && lead.status !== "converted" && (
                                 <Button 
@@ -1674,6 +1839,108 @@ export default function LeadDetailsPage() {
                     }}
                 />
             )}
+            
+            {/* Dealership Check-out Modal */}
+            <Dialog open={showCheckOutModal} onOpenChange={setShowCheckOutModal}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <LogOut className="h-5 w-5" />
+                            Check Out Customer
+                        </DialogTitle>
+                        <DialogDescription>
+                            Record the outcome of this dealership visit.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-4">
+                        {lead && (
+                            <div className="bg-muted/50 rounded-lg p-4 flex items-center gap-4">
+                                <UserAvatar 
+                                    name={getLeadFullName(lead)}
+                                    size="md"
+                                />
+                                <div className="flex-1">
+                                    <div className="font-medium">{getLeadFullName(lead)}</div>
+                                    <div className="text-sm text-muted-foreground">
+                                        {lead.phone || lead.email}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="space-y-2">
+                            <Label>Visit Outcome</Label>
+                            <Select value={checkOutOutcome} onValueChange={(v) => setCheckOutOutcome(v as ShowroomOutcome)}>
+                                <SelectTrigger>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="sold">
+                                        <div className="flex items-center gap-2">
+                                            <CheckCircle className="h-4 w-4 text-emerald-600" />
+                                            Sold - Converted to customer
+                                        </div>
+                                    </SelectItem>
+                                    <SelectItem value="follow_up">
+                                        <div className="flex items-center gap-2">
+                                            <Calendar className="h-4 w-4 text-blue-600" />
+                                            Follow Up - Needs more time
+                                        </div>
+                                    </SelectItem>
+                                    <SelectItem value="reschedule">
+                                        <div className="flex items-center gap-2">
+                                            <CalendarClock className="h-4 w-4 text-purple-600" />
+                                            Reschedule - Coming back later
+                                        </div>
+                                    </SelectItem>
+                                    <SelectItem value="not_interested">
+                                        <div className="flex items-center gap-2">
+                                            <XCircle className="h-4 w-4 text-gray-600" />
+                                            Not Interested
+                                        </div>
+                                    </SelectItem>
+                                    <SelectItem value="browsing">
+                                        <div className="flex items-center gap-2">
+                                            <User className="h-4 w-4 text-yellow-600" />
+                                            Just Browsing
+                                        </div>
+                                    </SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Notes (optional)</Label>
+                            <Textarea
+                                placeholder="Any notes about this visit..."
+                                value={checkOutNotes}
+                                onChange={(e) => setCheckOutNotes(e.target.value)}
+                                rows={3}
+                            />
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setShowCheckOutModal(false)}>
+                            Cancel
+                        </Button>
+                        <Button 
+                            onClick={handleCheckOut}
+                            disabled={isCheckingOut}
+                        >
+                            {isCheckingOut ? (
+                                <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Checking Out...
+                                </>
+                            ) : (
+                                "Check Out"
+                            )}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
             
             {/* Call / Text Coming Soon Dialog */}
             {lead?.phone && (

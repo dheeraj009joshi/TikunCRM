@@ -685,12 +685,7 @@ async def notify_lead_assigned_to_dealership_background(
 async def emit_lead_updated(lead_id: str, dealership_id: Optional[str], update_type: str, data: dict):
     """
     Emit a lead update event to all users who might be viewing this lead.
-    
-    Args:
-        lead_id: The ID of the lead that was updated
-        dealership_id: The dealership ID (for broadcasting to dealership users)
-        update_type: Type of update (assigned, status_changed, note_added, etc.)
-        data: Additional data about the update
+    Also triggers badges:refresh and stats:refresh so sidebar and dashboard update in real time.
     """
     try:
         message = {
@@ -701,13 +696,12 @@ async def emit_lead_updated(lead_id: str, dealership_id: Optional[str], update_t
                 **data
             }
         }
-        
         if dealership_id:
-            # Broadcast to all users in the dealership
             await ws_manager.broadcast_to_dealership(dealership_id, message)
         else:
-            # Broadcast to all connected users (for unassigned pool leads)
             await ws_manager.broadcast_all(message)
+        await emit_badges_refresh(unassigned=True)
+        await emit_stats_refresh(dealership_id)
     except Exception as e:
         logger.warning(f"Failed to emit lead:updated WebSocket event: {e}")
 
@@ -782,7 +776,7 @@ async def emit_lead_created(lead_id: str, dealership_id: Optional[str], lead_dat
 async def emit_stats_refresh(dealership_id: Optional[str] = None):
     """
     Emit a stats refresh event when dashboard stats should be updated.
-    Called after lead creation, status changes, appointments, etc.
+    Broadcast to ALL connected clients so admins (who may have no dealership_id in JWT) also receive and can refetch.
     """
     try:
         message = {
@@ -792,10 +786,27 @@ async def emit_stats_refresh(dealership_id: Optional[str] = None):
                 "timestamp": datetime.utcnow().isoformat()
             }
         }
-        
-        if dealership_id:
-            await ws_manager.broadcast_to_dealership(dealership_id, message)
-        else:
-            await ws_manager.broadcast_all(message)
+        await ws_manager.broadcast_all(message)
     except Exception as e:
         logger.warning(f"Failed to emit stats:refresh WebSocket event: {e}")
+
+
+async def emit_showroom_update(dealership_id: str, action: str, data: dict):
+    """
+    Emit a showroom update event for real-time dashboard updates.
+    Broadcast to ALL connected clients so admins (who may have no dealership_id in JWT) see correct "customers in dealership" count.
+    """
+    try:
+        message = {
+            "type": "showroom:update",
+            "data": {
+                "action": action,
+                "dealership_id": dealership_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                **data
+            }
+        }
+        await ws_manager.broadcast_all(message)
+        await emit_stats_refresh(dealership_id)
+    except Exception as e:
+        logger.warning(f"Failed to emit showroom:update WebSocket event: {e}")

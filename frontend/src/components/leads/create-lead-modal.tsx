@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, User, Mail, Phone, FileText, Target } from "lucide-react"
+import { Loader2, User, Mail, Phone, Target } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -20,12 +20,16 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
-import { LeadService } from "@/services/lead-service"
+import { LeadService, Lead } from "@/services/lead-service"
+import { DealershipService } from "@/services/dealership-service"
+import { useAuthStore } from "@/stores/auth-store"
+import { getCountryAndDial, formatPhoneForDisplay, toE164, DIAL_CODE_OPTIONS } from "@/lib/phone-utils"
 
 interface CreateLeadModalProps {
     isOpen: boolean
     onClose: () => void
-    onSuccess?: () => void
+    /** Called after lead is created; receives the new lead when available */
+    onSuccess?: (lead?: Lead) => void
 }
 
 const LEAD_SOURCES = [
@@ -38,9 +42,12 @@ const LEAD_SOURCES = [
 ]
 
 export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalProps) {
+    const user = useAuthStore((s) => s.user)
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState("")
-    
+    const [dialCode, setDialCode] = React.useState("+1")
+    const [countryCode, setCountryCode] = React.useState("US")
+
     const [formData, setFormData] = React.useState({
         first_name: "",
         last_name: "",
@@ -52,6 +59,25 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
         budget_range: "",
         notes: "",
     })
+
+    // When modal opens, load dealership country and set default country/dial code
+    React.useEffect(() => {
+        if (!isOpen || !user?.dealership_id) {
+            setDialCode("+1")
+            setCountryCode("US")
+            return
+        }
+        DealershipService.getDealership(user.dealership_id)
+            .then((d) => {
+                const { countryCode: code, dialCode: dial } = getCountryAndDial(d.country ?? undefined)
+                setCountryCode(code)
+                setDialCode(dial)
+            })
+            .catch(() => {
+                setDialCode("+1")
+                setCountryCode("US")
+            })
+    }, [isOpen, user?.dealership_id])
 
     const resetForm = () => {
         setFormData({
@@ -68,15 +94,21 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
         setError("")
     }
 
+    const handlePhoneChange = (field: "phone" | "alternate_phone", value: string) => {
+        const digits = value.replace(/\D/g, "")
+        const formatted = digits ? formatPhoneForDisplay(digits, dialCode) : ""
+        setFormData((prev) => ({ ...prev, [field]: formatted }))
+    }
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
-        
+
         if (!formData.first_name.trim()) {
             setError("First name is required")
             return
         }
-        
-        if (!formData.email && !formData.phone) {
+
+        if (!formData.email?.trim() && !formData.phone?.trim()) {
             setError("Please provide either email or phone number")
             return
         }
@@ -84,13 +116,18 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
         setIsLoading(true)
         setError("")
 
+        const payload = {
+            ...formData,
+            status: "new",
+            email: formData.email?.trim() || undefined,
+            phone: formData.phone?.trim() ? toE164(formData.phone, dialCode) : undefined,
+            alternate_phone: formData.alternate_phone?.trim() ? toE164(formData.alternate_phone, dialCode) : undefined,
+        }
+
         try {
-            await LeadService.createLead({
-                ...formData,
-                status: "new",
-            })
+            const created = await LeadService.createLead(payload)
             resetForm()
-            onSuccess?.()
+            onSuccess?.(created)
             onClose()
         } catch (err: any) {
             console.error("Failed to create lead:", err)
@@ -138,15 +175,16 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                         </div>
                     </div>
 
-                    {/* Contact Info */}
+                    {/* Contact Info - Email optional, Phone with country code */}
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
-                            <Label htmlFor="email">Email</Label>
+                            <Label htmlFor="email">Email (optional)</Label>
                             <div className="relative">
                                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                 <Input
                                     id="email"
-                                    type="email"
+                                    type="text"
+                                    inputMode="email"
                                     placeholder="john@example.com"
                                     className="pl-9"
                                     value={formData.email}
@@ -155,17 +193,43 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                             </div>
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="phone">Phone *</Label>
-                            <div className="relative">
-                                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                    id="phone"
-                                    placeholder="+1 234 567 8900"
-                                    className="pl-9"
-                                    value={formData.phone}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
-                                />
+                            <Label htmlFor="phone">Phone (optional)</Label>
+                            <div className="flex gap-1">
+                                <Select
+                                    value={dialCode}
+                                    onValueChange={(value) => {
+                                        const option = DIAL_CODE_OPTIONS.find((o) => o.dial === value)
+                                        if (option) {
+                                            setDialCode(option.dial)
+                                            setCountryCode(option.code)
+                                        }
+                                    }}
+                                >
+                                    <SelectTrigger className="w-[110px] shrink-0">
+                                        <SelectValue placeholder="+1" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {DIAL_CODE_OPTIONS.map((opt) => (
+                                            <SelectItem key={opt.dial} value={opt.dial}>
+                                                {opt.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                                <div className="relative flex-1">
+                                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                    <Input
+                                        id="phone"
+                                        type="tel"
+                                        inputMode="tel"
+                                        placeholder={countryCode === "US" ? "234 567 8900" : "phone number"}
+                                        className="pl-9"
+                                        value={formData.phone}
+                                        onChange={(e) => handlePhoneChange("phone", e.target.value)}
+                                    />
+                                </div>
                             </div>
+                            <p className="text-xs text-muted-foreground">Country: {countryCode} (default from dealership; you can change above)</p>
                         </div>
                     </div>
 

@@ -20,6 +20,7 @@ import {
     MoreHorizontal,
     MoreVertical,
     User,
+    Users,
     X,
     Loader2,
     Download,
@@ -519,10 +520,13 @@ export default function AppointmentsPage() {
     // Filters
     const [filter, setFilter] = React.useState<"all" | "today" | "upcoming" | "overdue" | "completed">("all")
     const [statusFilter, setStatusFilter] = React.useState<AppointmentStatus | "">("")
+    const [dateMode, setDateMode] = React.useState<"range" | "specific">("range")
     const [dateFrom, setDateFrom] = React.useState<Date | undefined>(undefined)
     const [dateTo, setDateTo] = React.useState<Date | undefined>(undefined)
+    const [specificDate, setSpecificDate] = React.useState<Date | undefined>(undefined)
     const [dateFromOpen, setDateFromOpen] = React.useState(false)
     const [dateToOpen, setDateToOpen] = React.useState(false)
+    const [specificDateOpen, setSpecificDateOpen] = React.useState(false)
     
     // Modals
     const [showCreateModal, setShowCreateModal] = React.useState(false)
@@ -541,8 +545,12 @@ export default function AppointmentsPage() {
                     today_only: filter === "today",
                     upcoming_only: filter === "upcoming",
                     overdue_only: filter === "overdue",
-                    date_from: dateFrom?.toISOString(),
-                    date_to: dateTo?.toISOString()
+                    date_from: dateMode === "specific" && specificDate 
+                        ? new Date(specificDate.setHours(0, 0, 0, 0)).toISOString()
+                        : dateFrom?.toISOString(),
+                    date_to: dateMode === "specific" && specificDate 
+                        ? new Date(specificDate.setHours(23, 59, 59, 999)).toISOString()
+                        : dateTo?.toISOString()
                 }),
                 AppointmentService.getStats()
             ])
@@ -561,7 +569,7 @@ export default function AppointmentsPage() {
         } finally {
             setLoading(false)
         }
-    }, [page, filter, statusFilter, dateFrom, dateTo])
+    }, [page, filter, statusFilter, dateFrom, dateTo, dateMode, specificDate])
     
     React.useEffect(() => {
         loadData()
@@ -823,74 +831,140 @@ export default function AppointmentsPage() {
                         <SelectItem value="all_statuses">All Statuses</SelectItem>
                         <SelectItem value="scheduled">Scheduled</SelectItem>
                         <SelectItem value="confirmed">Confirmed</SelectItem>
+                        <SelectItem value="arrived">Arrived</SelectItem>
+                        <SelectItem value="in_showroom">In Showroom</SelectItem>
+                        <SelectItem value="in_progress">In Progress</SelectItem>
                         <SelectItem value="completed">Completed</SelectItem>
+                        <SelectItem value="sold">Sold</SelectItem>
                         <SelectItem value="cancelled">Cancelled</SelectItem>
                         <SelectItem value="no_show">No Show</SelectItem>
+                        <SelectItem value="rescheduled">Rescheduled</SelectItem>
                     </SelectContent>
                 </Select>
                 
-                {/* Date Range Filter */}
-                <div className="flex items-center gap-2">
-                    <span className="text-sm text-muted-foreground">From:</span>
-                    <Popover open={dateFromOpen} onOpenChange={setDateFromOpen}>
-                        <PopoverTrigger asChild>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className={cn(
-                                    "w-[140px] justify-start text-left font-normal",
-                                    !dateFrom && "text-muted-foreground"
-                                )}
-                            >
-                                <Calendar className="mr-2 h-4 w-4" />
-                                {dateFrom ? format(dateFrom, "MMM d, yyyy") : "Start date"}
-                            </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                            <CalendarPicker
-                                mode="single"
-                                selected={dateFrom}
-                                onSelect={(d) => { setDateFrom(d); setDateFromOpen(false); setPage(1) }}
-                                initialFocus
-                            />
-                        </PopoverContent>
-                    </Popover>
-                </div>
-                <div className="flex items-center gap-2">
-                    <span className="text-sm text-muted-foreground">To:</span>
-                    <Popover open={dateToOpen} onOpenChange={setDateToOpen}>
-                        <PopoverTrigger asChild>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className={cn(
-                                    "w-[140px] justify-start text-left font-normal",
-                                    !dateTo && "text-muted-foreground"
-                                )}
-                            >
-                                <Calendar className="mr-2 h-4 w-4" />
-                                {dateTo ? format(dateTo, "MMM d, yyyy") : "End date"}
-                            </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                            <CalendarPicker
-                                mode="single"
-                                selected={dateTo}
-                                onSelect={(d) => { setDateTo(d); setDateToOpen(false); setPage(1) }}
-                                disabled={(date) => dateFrom ? date < dateFrom : false}
-                                initialFocus
-                            />
-                        </PopoverContent>
-                    </Popover>
+                {/* Date Filter Mode Toggle */}
+                <div className="flex items-center gap-1 border rounded-md p-0.5">
+                    <Button
+                        variant={dateMode === "range" ? "default" : "ghost"}
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => { 
+                            setDateMode("range"); 
+                            setSpecificDate(undefined); 
+                            setPage(1);
+                        }}
+                    >
+                        Range
+                    </Button>
+                    <Button
+                        variant={dateMode === "specific" ? "default" : "ghost"}
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => { 
+                            setDateMode("specific"); 
+                            setDateFrom(undefined);
+                            setDateTo(undefined);
+                            setPage(1);
+                        }}
+                    >
+                        Specific Day
+                    </Button>
                 </div>
                 
+                {/* Date Range Filter (when dateMode is "range") */}
+                {dateMode === "range" && (
+                    <>
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm text-muted-foreground">From:</span>
+                            <Popover open={dateFromOpen} onOpenChange={setDateFromOpen}>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className={cn(
+                                            "w-[140px] justify-start text-left font-normal",
+                                            !dateFrom && "text-muted-foreground"
+                                        )}
+                                    >
+                                        <Calendar className="mr-2 h-4 w-4" />
+                                        {dateFrom ? format(dateFrom, "MMM d, yyyy") : "Start date"}
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-auto p-0" align="start">
+                                    <CalendarPicker
+                                        mode="single"
+                                        selected={dateFrom}
+                                        onSelect={(d) => { setDateFrom(d); setDateFromOpen(false); setPage(1) }}
+                                        initialFocus
+                                    />
+                                </PopoverContent>
+                            </Popover>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm text-muted-foreground">To:</span>
+                            <Popover open={dateToOpen} onOpenChange={setDateToOpen}>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className={cn(
+                                            "w-[140px] justify-start text-left font-normal",
+                                            !dateTo && "text-muted-foreground"
+                                        )}
+                                    >
+                                        <Calendar className="mr-2 h-4 w-4" />
+                                        {dateTo ? format(dateTo, "MMM d, yyyy") : "End date"}
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-auto p-0" align="start">
+                                    <CalendarPicker
+                                        mode="single"
+                                        selected={dateTo}
+                                        onSelect={(d) => { setDateTo(d); setDateToOpen(false); setPage(1) }}
+                                        disabled={(date) => dateFrom ? date < dateFrom : false}
+                                        initialFocus
+                                    />
+                                </PopoverContent>
+                            </Popover>
+                        </div>
+                    </>
+                )}
+                
+                {/* Specific Date Filter (when dateMode is "specific") */}
+                {dateMode === "specific" && (
+                    <Popover open={specificDateOpen} onOpenChange={setSpecificDateOpen}>
+                        <PopoverTrigger asChild>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className={cn(
+                                    "w-[180px] justify-start text-left font-normal",
+                                    !specificDate && "text-muted-foreground"
+                                )}
+                            >
+                                <Calendar className="mr-2 h-4 w-4" />
+                                {specificDate ? format(specificDate, "EEEE, MMM d, yyyy") : "Select date"}
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                            <CalendarPicker
+                                mode="single"
+                                selected={specificDate}
+                                onSelect={(d) => { setSpecificDate(d); setSpecificDateOpen(false); setPage(1) }}
+                                initialFocus
+                            />
+                        </PopoverContent>
+                    </Popover>
+                )}
+                
                 {/* Clear Filters */}
-                {(dateFrom || dateTo || filter !== "all" || statusFilter) && (
+                {(dateFrom || dateTo || specificDate || filter !== "all" || statusFilter) && (
                     <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => {
                             setDateFrom(undefined)
+                            setSpecificDate(undefined)
                             setDateTo(undefined)
                             setFilter("all")
                             setStatusFilter("")
@@ -931,18 +1005,22 @@ export default function AppointmentsPage() {
                             >
                                 {/* Status Icon */}
                                 <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full ${
-                                    appointment.status === "completed" 
+                                    appointment.status === "completed" || appointment.status === "sold"
                                         ? "bg-green-100 dark:bg-green-900/30"
                                         : appointment.status === "cancelled"
                                         ? "bg-gray-100 dark:bg-gray-900/30"
+                                        : appointment.status === "arrived" || appointment.status === "in_showroom"
+                                        ? "bg-orange-100 dark:bg-orange-900/30"
                                         : isOverdue(appointment)
                                         ? "bg-red-100 dark:bg-red-900/30"
                                         : "bg-blue-100 dark:bg-blue-900/30"
                                 }`}>
-                                    {appointment.status === "completed" ? (
+                                    {appointment.status === "completed" || appointment.status === "sold" ? (
                                         <CheckCircle className="h-5 w-5 text-green-600" />
                                     ) : appointment.status === "cancelled" ? (
                                         <XCircle className="h-5 w-5 text-gray-600" />
+                                    ) : appointment.status === "arrived" || appointment.status === "in_showroom" ? (
+                                        <Users className="h-5 w-5 text-orange-600" />
                                     ) : isOverdue(appointment) ? (
                                         <AlertCircle className="h-5 w-5 text-red-600" />
                                     ) : (
@@ -967,14 +1045,18 @@ export default function AppointmentsPage() {
                                                     <span className="font-medium">{appointment.title || "Appointment"}</span>
                                                 )}
                                                 <Badge variant={
-                                                    appointment.status === "completed" ? "default" :
+                                                    appointment.status === "completed" || appointment.status === "sold" ? "default" :
                                                     appointment.status === "cancelled" ? "secondary" :
                                                     appointment.status === "confirmed" ? "default" :
+                                                    appointment.status === "arrived" || appointment.status === "in_showroom" ? "default" :
                                                     "outline"
                                                 } className={
                                                     appointment.status === "completed" ? "bg-green-100 text-green-800 dark:bg-green-900/30" :
+                                                    appointment.status === "sold" ? "bg-emerald-200 text-emerald-900 dark:bg-emerald-900/30" :
                                                     appointment.status === "cancelled" ? "bg-gray-100 text-gray-800" :
                                                     appointment.status === "confirmed" ? "bg-blue-100 text-blue-800" :
+                                                    appointment.status === "arrived" ? "bg-cyan-100 text-cyan-800" :
+                                                    appointment.status === "in_showroom" ? "bg-orange-100 text-orange-800" :
                                                     ""
                                                 }>
                                                     {getAppointmentStatusLabel(appointment.status)}

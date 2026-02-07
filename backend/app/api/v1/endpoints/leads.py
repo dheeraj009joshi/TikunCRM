@@ -25,7 +25,8 @@ from app.models.dealership import Dealership
 from app.schemas.lead import (
     LeadResponse, LeadCreate, LeadUpdate, LeadDetail, 
     LeadStatusUpdate, LeadAssignment, LeadListResponse,
-    LeadDealershipAssignment, BulkLeadDealershipAssignment
+    LeadDealershipAssignment, BulkLeadDealershipAssignment,
+    LeadSecondaryAssignment, LeadSwapSalespersons
 )
 from app.schemas.activity import NoteCreate
 from app.services.activity import ActivityService
@@ -160,7 +161,7 @@ async def auto_assign_lead_on_activity(
 
 
 async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
-    """Add assigned_to_user and dealership info to leads."""
+    """Add assigned_to_user, secondary_salesperson, and dealership info to leads."""
     if not leads:
         return []
     
@@ -170,6 +171,8 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
     for lead in leads:
         if lead.assigned_to:
             user_ids.add(lead.assigned_to)
+        if hasattr(lead, 'secondary_salesperson_id') and lead.secondary_salesperson_id:
+            user_ids.add(lead.secondary_salesperson_id)
         if lead.dealership_id:
             dealership_ids.add(lead.dealership_id)
     
@@ -212,6 +215,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "status": lead.status.value if hasattr(lead.status, 'value') else str(lead.status),
             "dealership_id": str(lead.dealership_id) if lead.dealership_id else None,
             "assigned_to": str(lead.assigned_to) if lead.assigned_to else None,
+            "secondary_salesperson_id": str(lead.secondary_salesperson_id) if hasattr(lead, 'secondary_salesperson_id') and lead.secondary_salesperson_id else None,
             "created_by": str(lead.created_by) if lead.created_by else None,
             "notes": lead.notes,
             "meta_data": lead.meta_data or {},
@@ -223,6 +227,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "created_at": lead.created_at.isoformat() if lead.created_at else None,
             "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
             "assigned_to_user": users_map.get(lead.assigned_to) if lead.assigned_to else None,
+            "secondary_salesperson": users_map.get(lead.secondary_salesperson_id) if hasattr(lead, 'secondary_salesperson_id') and lead.secondary_salesperson_id else None,
             "dealership": dealerships_map.get(lead.dealership_id) if lead.dealership_id else None
         }
         enriched_items.append(lead_dict)
@@ -513,16 +518,19 @@ async def create_lead(
             source=source_display,
         )
     
-    # Emit WebSocket events for real-time updates
+    # Emit WebSocket events for real-time updates (lead:created + stats + badges)
     try:
-        from app.services.notification_service import emit_badges_refresh, emit_stats_refresh
+        from app.services.notification_service import emit_lead_created, emit_badges_refresh
+        await emit_lead_created(
+            str(lead.id),
+            str(dealership_id) if dealership_id else None,
+            {"dealership_id": str(dealership_id) if dealership_id else None},
+        )
         if lead.dealership_id is None:
             await emit_badges_refresh(unassigned=True)
-        # Trigger dashboard stats refresh for all dashboards
-        await emit_stats_refresh(str(dealership_id) if dealership_id else None)
     except Exception:
         pass
-    
+
     return lead
 
 
@@ -648,6 +656,7 @@ async def get_lead(
         "status": lead.status,
         "dealership_id": lead.dealership_id,
         "assigned_to": lead.assigned_to,
+        "secondary_salesperson_id": lead.secondary_salesperson_id,
         "created_by": lead.created_by,
         "notes": lead.notes,
         "meta_data": lead.meta_data,
@@ -672,6 +681,7 @@ async def get_lead(
         "created_at": lead.created_at,
         "updated_at": lead.updated_at,
         "assigned_to_user": None,
+        "secondary_salesperson": None,
         "created_by_user": None,
         "dealership": None,
         "access_level": access_level
@@ -690,6 +700,21 @@ async def get_lead(
                 "role": assigned_user.role,
                 "is_active": assigned_user.is_active,
                 "dealership_id": assigned_user.dealership_id
+            }
+    
+    # Fetch secondary salesperson info
+    if lead.secondary_salesperson_id:
+        sec_result = await db.execute(select(User).where(User.id == lead.secondary_salesperson_id))
+        secondary_user = sec_result.scalar_one_or_none()
+        if secondary_user:
+            response_data["secondary_salesperson"] = {
+                "id": secondary_user.id,
+                "email": secondary_user.email,
+                "first_name": secondary_user.first_name,
+                "last_name": secondary_user.last_name,
+                "role": secondary_user.role,
+                "is_active": secondary_user.is_active,
+                "dealership_id": secondary_user.dealership_id
             }
     
     # Fetch created by user info
@@ -884,6 +909,16 @@ async def assign_lead(
 
     lead.assigned_to = assign_in.assigned_to
     
+    # Handle optional secondary salesperson assignment (for admins)
+    secondary_user = None
+    if assign_in.secondary_salesperson_id:
+        if current_user.role in [UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+            sec_result = await db.execute(select(User).where(User.id == assign_in.secondary_salesperson_id))
+            secondary_user = sec_result.scalar_one_or_none()
+            if secondary_user:
+                if assign_in.secondary_salesperson_id != assign_in.assigned_to:
+                    lead.secondary_salesperson_id = assign_in.secondary_salesperson_id
+    
     # Log assignment with names
     assigned_to_name = f"{assign_to_user.first_name} {assign_to_user.last_name}"
     performer_name = f"{current_user.first_name} {current_user.last_name}"
@@ -967,6 +1002,160 @@ async def assign_lead(
     except Exception as e:
         logger.error(f"Failed to emit WebSocket events: {e}")
     
+    return lead
+
+
+@router.patch("/{lead_id}/assign-secondary", response_model=LeadResponse)
+async def assign_secondary_salesperson(
+    lead_id: UUID,
+    assign_in: LeadSecondaryAssignment,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.ASSIGN_LEAD_TO_SALESPERSON))
+) -> Any:
+    """
+    Assign or remove secondary salesperson (Admin only).
+    Set secondary_salesperson_id to null to remove.
+    """
+    # Only admins can assign secondary
+    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+        raise HTTPException(status_code=403, detail="Only admins can assign secondary salesperson")
+    
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    
+    # Verify secondary user exists if provided
+    secondary_user = None
+    if assign_in.secondary_salesperson_id:
+        user_result = await db.execute(select(User).where(User.id == assign_in.secondary_salesperson_id))
+        secondary_user = user_result.scalar_one_or_none()
+        
+        if not secondary_user:
+            raise HTTPException(status_code=404, detail="Secondary salesperson not found")
+        
+        # Verify same dealership (unless super admin)
+        if current_user.role != UserRole.SUPER_ADMIN:
+            if secondary_user.dealership_id != current_user.dealership_id:
+                raise HTTPException(status_code=400, detail="Cannot assign user from different dealership")
+        
+        # Cannot be same as primary
+        if lead.assigned_to and lead.assigned_to == assign_in.secondary_salesperson_id:
+            raise HTTPException(status_code=400, detail="Secondary cannot be same as primary salesperson")
+    
+    old_secondary_id = lead.secondary_salesperson_id
+    lead.secondary_salesperson_id = assign_in.secondary_salesperson_id
+    
+    # Log activity
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
+    if secondary_user:
+        secondary_name = f"{secondary_user.first_name} {secondary_user.last_name}"
+        description = f"Secondary salesperson set to {secondary_name} by {performer_name}"
+    else:
+        description = f"Secondary salesperson removed by {performer_name}"
+    
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.LEAD_ASSIGNED,
+        description=description,
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=lead.dealership_id,
+        meta_data={
+            "secondary_salesperson_id": str(assign_in.secondary_salesperson_id) if assign_in.secondary_salesperson_id else None,
+            "old_secondary_salesperson_id": str(old_secondary_id) if old_secondary_id else None,
+            "action": "assign_secondary",
+            "notes": assign_in.notes
+        }
+    )
+    
+    await db.commit()
+    await db.refresh(lead)
+    try:
+        from app.services.notification_service import emit_lead_updated, emit_badges_refresh, emit_stats_refresh
+        await emit_lead_updated(
+            str(lead.id),
+            str(lead.dealership_id) if lead.dealership_id else None,
+            "assigned",
+            {"action": "assign_secondary"},
+        )
+    except Exception:
+        pass
+    return lead
+
+
+@router.post("/{lead_id}/swap-salespersons", response_model=LeadResponse)
+async def swap_salespersons(
+    lead_id: UUID,
+    swap_in: LeadSwapSalespersons,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.ASSIGN_LEAD_TO_SALESPERSON))
+) -> Any:
+    """
+    Swap primary and secondary salespersons.
+    Only works if both are assigned.
+    """
+    # Only admins can swap
+    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+        raise HTTPException(status_code=403, detail="Only admins can swap salespersons")
+    
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    
+    if not lead.assigned_to or not lead.secondary_salesperson_id:
+        raise HTTPException(status_code=400, detail="Both primary and secondary must be assigned to swap")
+    
+    # Swap
+    old_primary = lead.assigned_to
+    old_secondary = lead.secondary_salesperson_id
+    lead.assigned_to = old_secondary
+    lead.secondary_salesperson_id = old_primary
+    
+    # Get names for logging
+    primary_result = await db.execute(select(User).where(User.id == old_primary))
+    primary_user = primary_result.scalar_one_or_none()
+    secondary_result = await db.execute(select(User).where(User.id == old_secondary))
+    secondary_user = secondary_result.scalar_one_or_none()
+    
+    primary_name = f"{primary_user.first_name} {primary_user.last_name}" if primary_user else "Unknown"
+    secondary_name = f"{secondary_user.first_name} {secondary_user.last_name}" if secondary_user else "Unknown"
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
+    
+    description = f"Salespersons swapped: {secondary_name} is now primary, {primary_name} is now secondary (by {performer_name})"
+    
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.LEAD_ASSIGNED,
+        description=description,
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=lead.dealership_id,
+        meta_data={
+            "action": "swap_salespersons",
+            "old_primary": str(old_primary),
+            "old_secondary": str(old_secondary),
+            "new_primary": str(old_secondary),
+            "new_secondary": str(old_primary),
+            "notes": swap_in.notes
+        }
+    )
+    
+    await db.commit()
+    await db.refresh(lead)
+    try:
+        from app.services.notification_service import emit_lead_updated, emit_badges_refresh, emit_stats_refresh
+        await emit_lead_updated(
+            str(lead.id),
+            str(lead.dealership_id) if lead.dealership_id else None,
+            "assigned",
+            {"action": "swap_salespersons"},
+        )
+    except Exception:
+        pass
     return lead
 
 
@@ -1117,7 +1306,14 @@ async def bulk_assign_leads_to_dealership(
         )
     
     await db.commit()
-    
+
+    try:
+        from app.services.notification_service import emit_badges_refresh, emit_stats_refresh
+        await emit_badges_refresh(unassigned=True)
+        await emit_stats_refresh(str(assignment_in.dealership_id))
+    except Exception:
+        pass
+
     return {
         "message": f"Successfully assigned {assigned_count} leads to {dealership.name}",
         "assigned_count": assigned_count,
@@ -1584,11 +1780,165 @@ async def delete_lead(
         }
     )
     
+    dealership_id_str = str(lead.dealership_id) if lead.dealership_id else None
     # Delete the lead
     await db.delete(lead)
     await db.commit()
-    
+
+    # Emit real-time updates so sidebar and dashboard refresh
+    try:
+        from app.services.notification_service import emit_badges_refresh, emit_stats_refresh
+        await emit_badges_refresh(unassigned=True)
+        await emit_stats_refresh(dealership_id_str)
+    except Exception:
+        pass
+
     return {
         "message": f"Lead '{lead_name}' deleted successfully",
         "lead_id": str(lead_id)
     }
+
+
+@router.get("/export/csv")
+async def export_leads_csv(
+    include_activities: bool = Query(False, description="Include activity history"),
+    include_appointments: bool = Query(False, description="Include appointments"),
+    include_notes: bool = Query(False, description="Include notes in export"),
+    status: Optional[LeadStatus] = Query(None, description="Filter by status"),
+    source: Optional[LeadSource] = Query(None, description="Filter by source"),
+    date_from: Optional[datetime] = Query(None, description="Filter by created date from"),
+    date_to: Optional[datetime] = Query(None, description="Filter by created date to"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Export leads to CSV with optional detailed data.
+    - Basic export: lead info only
+    - Detailed export: includes activities, appointments, notes
+    """
+    import csv
+    from io import StringIO
+    from fastapi.responses import StreamingResponse
+    from app.models.activity import Activity
+    from app.models.appointment import Appointment
+    
+    # Build query based on user role
+    query = select(Lead)
+    
+    if current_user.role == UserRole.SALESPERSON:
+        # Salesperson sees only their leads
+        query = query.where(
+            (Lead.assigned_to == current_user.id) | 
+            (Lead.secondary_salesperson_id == current_user.id)
+        )
+    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+        # Dealership staff sees only their dealership leads
+        if current_user.dealership_id:
+            query = query.where(Lead.dealership_id == current_user.dealership_id)
+    # Super admin sees all
+    
+    # Apply filters
+    if status:
+        query = query.where(Lead.status == status)
+    if source:
+        query = query.where(Lead.source == source)
+    if date_from:
+        query = query.where(Lead.created_at >= date_from)
+    if date_to:
+        query = query.where(Lead.created_at <= date_to)
+    
+    query = query.order_by(Lead.created_at.desc())
+    
+    result = await db.execute(query)
+    leads = result.scalars().all()
+    
+    # Prepare CSV output
+    output = StringIO()
+    
+    # Build header based on options
+    headers = [
+        "ID", "First Name", "Last Name", "Email", "Phone",
+        "Status", "Source", "Created At", "Last Contacted",
+        "Dealership ID", "Assigned To ID", "Secondary Salesperson ID",
+        "Converted At", "Notes"
+    ]
+    
+    if include_activities:
+        headers.extend(["Activity Count", "Last Activity"])
+    if include_appointments:
+        headers.extend(["Appointment Count", "Next Appointment"])
+    
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    
+    # Fetch additional data if needed
+    lead_ids = [lead.id for lead in leads]
+    
+    activity_counts = {}
+    last_activities = {}
+    if include_activities and lead_ids:
+        activity_query = select(
+            Activity.lead_id,
+            func.count(Activity.id).label("count"),
+            func.max(Activity.created_at).label("last")
+        ).where(Activity.lead_id.in_(lead_ids)).group_by(Activity.lead_id)
+        activity_result = await db.execute(activity_query)
+        for row in activity_result.all():
+            activity_counts[row.lead_id] = row.count
+            last_activities[row.lead_id] = row.last
+    
+    appointment_counts = {}
+    next_appointments = {}
+    if include_appointments and lead_ids:
+        from sqlalchemy import case
+        appt_query = select(
+            Appointment.lead_id,
+            func.count(Appointment.id).label("count"),
+            func.min(case((Appointment.scheduled_at > utc_now(), Appointment.scheduled_at))).label("next")
+        ).where(Appointment.lead_id.in_(lead_ids)).group_by(Appointment.lead_id)
+        appt_result = await db.execute(appt_query)
+        for row in appt_result.all():
+            appointment_counts[row.lead_id] = row.count
+            next_appointments[row.lead_id] = row.next
+    
+    # Write data rows
+    for lead in leads:
+        row = [
+            str(lead.id),
+            lead.first_name or "",
+            lead.last_name or "",
+            lead.email or "",
+            lead.phone or "",
+            lead.status.value if lead.status else "",
+            lead.source.value if lead.source else "",
+            lead.created_at.isoformat() if lead.created_at else "",
+            lead.last_contacted_at.isoformat() if lead.last_contacted_at else "",
+            str(lead.dealership_id) if lead.dealership_id else "",
+            str(lead.assigned_to) if lead.assigned_to else "",
+            str(lead.secondary_salesperson_id) if lead.secondary_salesperson_id else "",
+            lead.converted_at.isoformat() if lead.converted_at else "",
+            lead.notes or "" if include_notes else ""
+        ]
+        
+        if include_activities:
+            row.append(str(activity_counts.get(lead.id, 0)))
+            last_act = last_activities.get(lead.id)
+            row.append(last_act.isoformat() if last_act else "")
+        
+        if include_appointments:
+            row.append(str(appointment_counts.get(lead.id, 0)))
+            next_appt = next_appointments.get(lead.id)
+            row.append(next_appt.isoformat() if next_appt else "")
+        
+        writer.writerow(row)
+    
+    output.seek(0)
+    
+    # Generate filename with timestamp
+    filename = f"leads_export_{utc_now().strftime('%Y%m%d_%H%M%S')}.csv"
+    
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )

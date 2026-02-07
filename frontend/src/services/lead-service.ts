@@ -29,6 +29,7 @@ export interface Lead {
     status: string;
     dealership_id?: string;
     assigned_to?: string;
+    secondary_salesperson_id?: string;
     created_by?: string;
     notes?: string;
     meta_data: Record<string, unknown>;
@@ -53,6 +54,7 @@ export interface Lead {
     preferred_contact_time?: string;
     // Extended info (available in detail view)
     assigned_to_user?: UserBrief;
+    secondary_salesperson?: UserBrief;
     created_by_user?: UserBrief;
     dealership?: DealershipBrief;
     /** "full" = full access; "mention_only" = can only read lead and reply to notes */
@@ -194,9 +196,67 @@ export const LeadService = {
         return this.assignToSalesperson(id, userId, notes);
     },
 
+    // Assign secondary salesperson (Admin only)
+    async assignSecondarySalesperson(id: string, secondaryUserId: string | null, notes?: string): Promise<Lead> {
+        const response = await apiClient.patch(`${LEADS_PREFIX}/${id}/assign-secondary`, {
+            secondary_salesperson_id: secondaryUserId,
+            notes
+        });
+        return response.data;
+    },
+
+    // Swap primary and secondary salespersons (Admin only)
+    async swapSalespersons(id: string, notes?: string): Promise<Lead> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/swap-salespersons`, { notes });
+        return response.data;
+    },
+
     // Delete lead - Super Admin only
     async deleteLead(id: string): Promise<{ message: string; lead_id: string }> {
         const response = await apiClient.delete(`${LEADS_PREFIX}/${id}`);
         return response.data;
+    },
+
+    // Export leads to CSV
+    async exportToCSV(options?: {
+        include_activities?: boolean;
+        include_appointments?: boolean;
+        include_notes?: boolean;
+        status?: string;
+        source?: string;
+        date_from?: string;
+        date_to?: string;
+    }): Promise<void> {
+        const params = new URLSearchParams();
+        if (options?.include_activities) params.append('include_activities', 'true');
+        if (options?.include_appointments) params.append('include_appointments', 'true');
+        if (options?.include_notes) params.append('include_notes', 'true');
+        if (options?.status && options.status !== 'all') params.append('status', options.status);
+        if (options?.source && options.source !== 'all') params.append('source', options.source);
+        if (options?.date_from) params.append('date_from', options.date_from);
+        if (options?.date_to) params.append('date_to', options.date_to);
+        
+        const response = await apiClient.get(`${LEADS_PREFIX}/export/csv?${params.toString()}`, {
+            responseType: 'blob'
+        });
+        
+        // Create download link
+        const url = window.URL.createObjectURL(new Blob([response.data]));
+        const link = document.createElement('a');
+        link.href = url;
+        
+        // Extract filename from content-disposition header if available
+        const contentDisposition = response.headers['content-disposition'];
+        let filename = 'leads_export.csv';
+        if (contentDisposition) {
+            const match = contentDisposition.match(/filename=(.+)/);
+            if (match) filename = match[1];
+        }
+        
+        link.setAttribute('download', filename);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
     }
 };

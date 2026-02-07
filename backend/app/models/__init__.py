@@ -17,6 +17,7 @@ from app.models.appointment import Appointment, AppointmentType, AppointmentStat
 from app.models.fcm_token import FCMToken
 from app.models.call_log import CallLog, CallDirection, CallStatus
 from app.models.sms_log import SMSLog, MessageDirection, SMSStatus
+from app.models.showroom_visit import ShowroomVisit, ShowroomOutcome
 
 __all__ = [
     "Dealership",
@@ -49,4 +50,6 @@ __all__ = [
     "SMSLog",
     "MessageDirection",
     "SMSStatus",
+    "ShowroomVisit",
+    "ShowroomOutcome",
 ]
