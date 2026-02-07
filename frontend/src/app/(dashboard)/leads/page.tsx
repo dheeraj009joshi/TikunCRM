@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { useSearchParams } from "next/navigation"
+import { useSearchParams, useRouter } from "next/navigation"
 import {
     Inbox,
     Search,
@@ -18,7 +18,8 @@ import {
     Building2,
     Trash2,
     Download,
-    FileSpreadsheet
+    FileSpreadsheet,
+    CheckCircle2
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -99,7 +100,10 @@ const LEAD_SOURCES = [
     { value: "walk_in", label: "Walk-in" },
 ]
 
+type ViewMode = "mine" | "unassigned" | "all" | "converted"
+
 export default function LeadsPage() {
+    const router = useRouter()
     const searchParams = useSearchParams()
     const filterParam = searchParams.get('filter')
     const statusParam = searchParams.get('status')
@@ -115,8 +119,8 @@ export default function LeadsPage() {
     const [search, setSearch] = React.useState("")
     const [status, setStatus] = React.useState(statusParam || "all")
     const [source, setSource] = React.useState(sourceParam || "all")
-    const [viewMode, setViewMode] = React.useState<"mine" | "unassigned" | "all">(
-        filterParam === "unassigned" ? "unassigned" : filterParam === "all" ? "all" : "mine"
+    const [viewMode, setViewMode] = React.useState<ViewMode>(
+        filterParam === "unassigned" ? "unassigned" : filterParam === "converted" ? "converted" : filterParam === "all" ? "all" : "mine"
     )
     const [isLoading, setIsLoading] = React.useState(true)
 
@@ -128,9 +132,16 @@ export default function LeadsPage() {
         
         if (filter === "unassigned") setViewMode("unassigned")
         else if (filter === "all") setViewMode("all")
-        else if (filter === "mine") setViewMode("mine")
+        else if (filter === "converted") {
+            setViewMode("converted")
+            setStatus("converted")
+        } else if (filter === "mine") setViewMode("mine")
+        // When dashboard links with ?status=converted, switch to Converted & Sold tab
+        else if (urlStatus === "converted") {
+            setViewMode("converted")
+            setStatus("converted")
+        }
         
-        // Sync status filter from URL (e.g., /leads?status=converted from dashboard)
         if (urlStatus) setStatus(urlStatus)
         if (urlSource) setSource(urlSource)
     }, [searchParams])
@@ -163,7 +174,6 @@ export default function LeadsPage() {
         try {
             const params: Record<string, unknown> = { page, page_size: 20 }
             if (search) params.search = search
-            if (status && status !== "all") params.status = status
             if (source && source !== "all") params.source = source
             
             // Filter by view mode
@@ -171,8 +181,12 @@ export default function LeadsPage() {
                 params.pool = "unassigned"  // Unassigned pool (no dealership)
             } else if (viewMode === "mine") {
                 params.pool = "mine"  // Only leads assigned to current user
+            } else if (viewMode === "converted") {
+                // Converted & Sold tab: all leads in scope with status converted (no pool filter)
+                params.status = "converted"
             }
-            // "all" mode shows all leads in the dealership (default behavior)
+            // "all" mode: no pool, show all leads in the dealership
+            if (viewMode !== "converted" && status && status !== "all") params.status = status
 
             const data = await LeadService.listLeads(params)
             setLeads(data.items)
@@ -274,11 +288,31 @@ export default function LeadsPage() {
             </div>
 
             {/* Lead filter tabs */}
-            <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as "mine" | "unassigned" | "all")}>
+            <Tabs
+                value={viewMode}
+                onValueChange={(v) => {
+                    const mode = v as ViewMode
+                    setViewMode(mode)
+                    if (mode === "converted") {
+                        setStatus("converted")
+                        router.push("/leads?filter=converted")
+                    } else if (mode === "unassigned") {
+                        router.push("/leads?filter=unassigned")
+                    } else if (mode === "all") {
+                        router.push("/leads?filter=all")
+                    } else {
+                        router.push("/leads?filter=mine")
+                    }
+                }}
+            >
                 <TabsList>
                     <TabsTrigger value="mine">Your Leads</TabsTrigger>
                     <TabsTrigger value="unassigned">Unassigned</TabsTrigger>
                     <TabsTrigger value="all">All Leads</TabsTrigger>
+                    <TabsTrigger value="converted">
+                        <CheckCircle2 className="h-4 w-4 mr-1.5" />
+                        Converted & Sold
+                    </TabsTrigger>
                 </TabsList>
             </Tabs>
 
@@ -362,16 +396,20 @@ export default function LeadsPage() {
                                         ? "No leads assigned to you" 
                                         : viewMode === "unassigned" 
                                             ? "No unassigned leads" 
-                                            : "No leads found"
+                                            : viewMode === "converted"
+                                                ? "No converted or sold leads"
+                                                : "No leads found"
                                 }
                                 description={
-                                    search || status !== "all" || source !== "all"
+                                    search || (viewMode !== "converted" && status !== "all") || source !== "all"
                                         ? "Try adjusting your filters"
                                         : viewMode === "mine"
                                             ? "Leads assigned to you will appear here"
                                             : viewMode === "unassigned"
                                                 ? "No leads in the unassigned pool"
-                                                : "Create your first lead to get started"
+                                                : viewMode === "converted"
+                                                    ? "Leads marked as converted will appear here"
+                                                    : "Create your first lead to get started"
                                 }
                                 action={
                                     viewMode !== "unassigned" && canCreateLead && (

@@ -100,7 +100,7 @@ export function SalespersonDashboard() {
             value: stats.converted_leads.toLocaleString(),
             icon: CheckCircle,
             color: "emerald" as const,
-            href: "/leads?status=converted"
+            href: "/leads?filter=converted"
         },
         {
             name: "Lost",
@@ -114,7 +114,7 @@ export function SalespersonDashboard() {
             value: stats.conversion_rate,
             icon: ArrowUpRight,
             color: "emerald" as const,
-            href: "/leads?status=converted"
+            href: "/leads?filter=converted"
         },
     ] : []
 

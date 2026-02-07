@@ -155,10 +155,17 @@ async def schedule_follow_up(
         if lead.dealership_id != current_user.dealership_id:
             raise HTTPException(status_code=403, detail="You can only schedule follow-ups for leads in your dealership")
     # Super Admin has access to all leads
-        
+
+    # Assignment: explicit from request, else lead's primary salesperson, else current user
+    assigned_to_id = follow_up_in.assigned_to
+    if not assigned_to_id and lead.assigned_to:
+        assigned_to_id = lead.assigned_to
+    if not assigned_to_id:
+        assigned_to_id = current_user.id
+
     follow_up = FollowUp(
         lead_id=lead_id,
-        assigned_to=current_user.id,
+        assigned_to=assigned_to_id,
         scheduled_at=follow_up_in.scheduled_at,
         notes=follow_up_in.notes,
         status=FollowUpStatus.PENDING

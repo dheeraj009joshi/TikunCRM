@@ -39,6 +39,7 @@ export interface FollowUpCreate {
     lead_id: string;
     scheduled_at: string;
     notes?: string;
+    assigned_to?: string;  // User ID; if omitted, backend uses lead's primary or current user
     confirmSkate?: boolean;
 }
 

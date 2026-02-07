@@ -105,14 +105,14 @@ export function DealershipAdminDashboard() {
             value: stats.converted_leads.toLocaleString(),
             icon: CheckCircle,
             color: "emerald" as const,
-            href: "/leads?status=converted"
+            href: "/leads?filter=converted"
         },
         {
             name: "Conversion Rate",
             value: stats.conversion_rate,
             icon: ArrowUpRight,
             color: "emerald" as const,
-            href: "/leads?status=converted"
+            href: "/leads?filter=converted"
         },
         {
             name: "Team Size",

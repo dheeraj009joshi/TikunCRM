@@ -38,9 +38,11 @@ import {
     getAppointmentStatusColor
 } from "@/services/appointment-service"
 import { LeadService, Lead } from "@/services/lead-service"
+import { TeamService, UserBrief } from "@/services/team-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { useAuthStore } from "@/stores/auth-store"
+import { useRole } from "@/hooks/use-role"
 import { UserAvatar } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -61,7 +63,7 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Badge } from "@/components/ui/badge"
+import { Badge, getRoleVariant } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 
 // Stats Card Component
@@ -146,11 +148,18 @@ function CreateAppointmentModal({
     onSuccess: () => void
     preselectedLead?: Lead
 }) {
+    const user = useAuthStore((s) => s.user)
+    const { isDealershipAdmin, isDealershipOwner, isSuperAdmin } = useRole()
+    const isAdmin = isDealershipAdmin || isDealershipOwner || isSuperAdmin
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const [leads, setLeads] = React.useState<Lead[]>([])
     const [loadingLeads, setLoadingLeads] = React.useState(false)
     const [calendarOpen, setCalendarOpen] = React.useState(false)
+    const [teamMembers, setTeamMembers] = React.useState<UserBrief[]>([])
+    const [assignedTo, setAssignedTo] = React.useState<string>("auto")
+    const [loadingTeam, setLoadingTeam] = React.useState(false)
+    const [leadAssignedToUser, setLeadAssignedToUser] = React.useState<UserBrief | null>(null)
     
     const [title, setTitle] = React.useState("")
     const [selectedDate, setSelectedDate] = React.useState<Date | undefined>(undefined)
@@ -187,8 +196,52 @@ function CreateAppointmentModal({
             setLeadId(preselectedLead?.id || "")
             setError(null)
             setCalendarOpen(false)
+            setAssignedTo("auto")
+            setLeadAssignedToUser(null)
         }
     }, [isOpen, preselectedLead])
+
+    // When lead is selected, load team and default assignment
+    React.useEffect(() => {
+        if (!isOpen) return
+        const effectiveLeadId = leadId || preselectedLead?.id
+        if (!effectiveLeadId) {
+            setTeamMembers([])
+            setAssignedTo("auto")
+            setLeadAssignedToUser(null)
+            return
+        }
+        setLoadingTeam(true)
+        setLeadAssignedToUser(null)
+        LeadService.getLead(effectiveLeadId)
+            .then(async (lead) => {
+                if (lead.assigned_to && lead.assigned_to_user) {
+                    setLeadAssignedToUser(lead.assigned_to_user)
+                    setAssignedTo(lead.assigned_to)
+                } else {
+                    setLeadAssignedToUser(null)
+                }
+                const dealershipId = lead.dealership_id || user?.dealership_id
+                if (dealershipId) {
+                    const members = await TeamService.getSalespersons(dealershipId)
+                    setTeamMembers(members)
+                    if (!lead.assigned_to) {
+                        setAssignedTo(user?.id || "auto")
+                    }
+                } else {
+                    setTeamMembers([])
+                    if (!lead.assigned_to) {
+                        setAssignedTo(user?.id || "auto")
+                    }
+                }
+            })
+            .catch(() => {
+                setTeamMembers([])
+                setAssignedTo(user?.id || "auto")
+                setLeadAssignedToUser(null)
+            })
+            .finally(() => setLoadingTeam(false))
+    }, [isOpen, leadId, preselectedLead?.id, user?.dealership_id, user?.id])
     
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault()
@@ -218,7 +271,8 @@ function CreateAppointmentModal({
                 scheduled_at: scheduledAt.toISOString(),
                 duration_minutes: parseInt(duration),
                 location: location || undefined,
-                lead_id: leadId
+                lead_id: leadId,
+                assigned_to: isAdmin ? (assignedTo !== "auto" ? assignedTo : undefined) : undefined,
             })
             
             onSuccess()
@@ -291,6 +345,69 @@ function CreateAppointmentModal({
                             </Select>
                         )}
                     </div>
+
+                    {/* Assign to (admin can select; non-admin is always self) */}
+                    {(leadId || preselectedLead) && (
+                        <div className="space-y-2">
+                            <Label className="flex items-center gap-2">
+                                <Users className="h-4 w-4" />
+                                Assign to
+                            </Label>
+                            {!isAdmin ? (
+                                <div className="rounded-lg border bg-muted/30 p-3">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-medium">{user?.first_name} {user?.last_name}</span>
+                                        <Badge variant="outline" size="sm">You</Badge>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        This appointment will be assigned to you.
+                                    </p>
+                                </div>
+                            ) : loadingTeam ? (
+                                <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    Loading team…
+                                </div>
+                            ) : leadAssignedToUser ? (
+                                <div className="rounded-lg border bg-muted/30 p-3 space-y-1">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-medium">{leadAssignedToUser.first_name} {leadAssignedToUser.last_name}</span>
+                                        <Badge variant={getRoleVariant(leadAssignedToUser.role)} size="sm">
+                                            {leadAssignedToUser.role === "dealership_owner" ? "Owner" :
+                                             leadAssignedToUser.role === "dealership_admin" ? "Admin" :
+                                             leadAssignedToUser.role === "salesperson" ? "Sales" : leadAssignedToUser.role}
+                                        </Badge>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">
+                                        Lead is already assigned. To change assignment, use &quot;Assign to Team Member&quot; on the lead details page.
+                                    </p>
+                                </div>
+                            ) : (
+                                <Select value={assignedTo} onValueChange={setAssignedTo}>
+                                    <SelectTrigger>
+                                        <SelectValue placeholder="Auto (lead's primary or you)" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="auto">
+                                            <span className="text-muted-foreground">Auto (lead's primary or me)</span>
+                                        </SelectItem>
+                                        {teamMembers.map((person) => (
+                                            <SelectItem key={person.id} value={person.id}>
+                                                <div className="flex items-center gap-2">
+                                                    <span>{person.first_name} {person.last_name}</span>
+                                                    <Badge variant={getRoleVariant(person.role)} size="sm">
+                                                        {person.role === "dealership_owner" ? "Owner" :
+                                                         person.role === "dealership_admin" ? "Admin" :
+                                                         person.role === "salesperson" ? "Sales" : person.role}
+                                                    </Badge>
+                                                </div>
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            )}
+                        </div>
+                    )}
                     
                     {/* Date Picker with Calendar */}
                     <div className="space-y-2">

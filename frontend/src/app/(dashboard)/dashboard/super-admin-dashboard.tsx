@@ -124,7 +124,7 @@ export function SuperAdminDashboard() {
             trend: stats.conversion_change.startsWith("+") ? "up" : "down",
             icon: TrendingUp,
             color: "emerald" as const,
-            href: "/leads?status=converted"
+            href: "/leads?filter=converted"
         },
         {
             name: "Sales Force",

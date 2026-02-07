@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Calendar, Clock, Loader2, User } from "lucide-react"
+import { Calendar, Clock, Loader2, User, Users } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -23,10 +23,28 @@ import {
 } from "@/components/ui/select"
 import { LeadService, Lead } from "@/services/lead-service"
 import { FollowUpService, FollowUpCreate } from "@/services/follow-up-service"
+
+// Same time slots as book-appointment-modal: 6 AM–11 PM in 15-minute intervals
+const TIME_SLOTS: { value: string; label: string }[] = []
+for (let hour = 6; hour <= 23; hour++) {
+    for (let minute = 0; minute < 60; minute += 15) {
+        const h = hour.toString().padStart(2, "0")
+        const m = minute.toString().padStart(2, "0")
+        const value = `${h}:${m}`
+        const period = hour >= 12 ? "PM" : "AM"
+        const displayHour = hour % 12 || 12
+        const label = `${displayHour}:${m} ${period}`
+        TIME_SLOTS.push({ value, label })
+    }
+}
+import { TeamService, UserBrief } from "@/services/team-service"
+import { useAuthStore } from "@/stores/auth-store"
+import { useRole } from "@/hooks/use-role"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
+import { Badge, getRoleVariant } from "@/components/ui/badge"
 
 interface ScheduleFollowUpModalProps {
     isOpen: boolean
@@ -42,12 +60,19 @@ export function ScheduleFollowUpModal({
     preselectedLeadId
 }: ScheduleFollowUpModalProps) {
     const { timezone } = useBrowserTimezone()
+    const user = useAuthStore((s) => s.user)
+    const { isDealershipAdmin, isDealershipOwner, isSuperAdmin } = useRole()
+    const isAdmin = isDealershipAdmin || isDealershipOwner || isSuperAdmin
     
     const [isLoading, setIsLoading] = React.useState(false)
     const [isLoadingLeads, setIsLoadingLeads] = React.useState(false)
     const [error, setError] = React.useState("")
     const [leads, setLeads] = React.useState<Lead[]>([])
     const [preselectedLead, setPreselectedLead] = React.useState<Lead | null>(null)
+    const [teamMembers, setTeamMembers] = React.useState<UserBrief[]>([])
+    const [assignedTo, setAssignedTo] = React.useState<string>("auto")
+    const [loadingTeam, setLoadingTeam] = React.useState(false)
+    const [leadAssignedToUser, setLeadAssignedToUser] = React.useState<UserBrief | null>(null)
     
     const [formData, setFormData] = React.useState({
         lead_id: preselectedLeadId || "",
@@ -65,6 +90,46 @@ export function ScheduleFollowUpModal({
             fetchPreselectedLead()
         }
     }, [isOpen, preselectedLeadId])
+
+    // When lead is selected, load team and default assignment (lead's primary or current user)
+    const effectiveLeadId = formData.lead_id || preselectedLeadId
+    React.useEffect(() => {
+        if (!isOpen || !effectiveLeadId) {
+            setTeamMembers([])
+            setAssignedTo("auto")
+            setLeadAssignedToUser(null)
+            return
+        }
+        setLoadingTeam(true)
+        setLeadAssignedToUser(null)
+        LeadService.getLead(effectiveLeadId)
+            .then(async (lead) => {
+                if (lead.assigned_to && lead.assigned_to_user) {
+                    setLeadAssignedToUser(lead.assigned_to_user)
+                    setAssignedTo(lead.assigned_to)
+                } else {
+                    setLeadAssignedToUser(null)
+                }
+                const dealershipId = lead.dealership_id || user?.dealership_id
+                if (dealershipId) {
+                    const members = await TeamService.getSalespersons(dealershipId)
+                    setTeamMembers(members)
+                    if (!lead.assigned_to) {
+                        if (user?.id) setAssignedTo(user.id)
+                        else setAssignedTo("auto")
+                    }
+                } else {
+                    setTeamMembers([])
+                    if (!lead.assigned_to) setAssignedTo(user?.id || "auto")
+                }
+            })
+            .catch(() => {
+                setTeamMembers([])
+                setAssignedTo(user?.id || "auto")
+                setLeadAssignedToUser(null)
+            })
+            .finally(() => setLoadingTeam(false))
+    }, [isOpen, effectiveLeadId, user?.dealership_id, user?.id])
     
     const fetchPreselectedLead = async () => {
         if (!preselectedLeadId) return
@@ -102,6 +167,8 @@ export function ScheduleFollowUpModal({
         })
         setError("")
         setPreselectedLead(null)
+        setAssignedTo("auto")
+        setLeadAssignedToUser(null)
     }
     
     const handleSubmit = async (e?: React.FormEvent, confirmSkate?: boolean) => {
@@ -150,6 +217,7 @@ export function ScheduleFollowUpModal({
                 lead_id: formData.lead_id,
                 scheduled_at: scheduledDateTime.toISOString(),
                 notes: formData.notes || undefined,
+                assigned_to: isAdmin ? (assignedTo !== "auto" ? assignedTo : undefined) : undefined,
                 confirmSkate,
             }
             
@@ -187,11 +255,15 @@ export function ScheduleFollowUpModal({
     // Get minimum date (today) for date input
     const minDate = new Date().toISOString().split('T')[0]
     
-    // Get default time (1 hour from now)
+    // Default time: 1 hour from now, rounded to nearest 15-min slot (same as appointment modal)
     const getDefaultTime = () => {
         const now = new Date()
         now.setHours(now.getHours() + 1)
-        return now.toTimeString().slice(0, 5) // HH:MM format
+        now.setMinutes(0)
+        const h = now.getHours().toString().padStart(2, "0")
+        const m = now.getMinutes().toString().padStart(2, "0")
+        const value = `${h}:${m}`
+        return TIME_SLOTS.some((s) => s.value === value) ? value : TIME_SLOTS[0]?.value ?? "09:00"
     }
     
     React.useEffect(() => {
@@ -260,6 +332,69 @@ export function ScheduleFollowUpModal({
                             </Select>
                         )}
                     </div>
+
+                    {/* Assign to (admin can select; non-admin is always self) */}
+                    {effectiveLeadId && (
+                        <div className="space-y-2">
+                            <Label className="flex items-center gap-2">
+                                <Users className="h-4 w-4" />
+                                Assign to
+                            </Label>
+                            {!isAdmin ? (
+                                <div className="rounded-lg border bg-muted/30 p-3">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-medium">{user?.first_name} {user?.last_name}</span>
+                                        <Badge variant="outline" size="sm">You</Badge>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        This follow-up will be assigned to you.
+                                    </p>
+                                </div>
+                            ) : loadingTeam ? (
+                                <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    Loading team…
+                                </div>
+                            ) : leadAssignedToUser ? (
+                                <div className="rounded-lg border bg-muted/30 p-3 space-y-1">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-medium">{leadAssignedToUser.first_name} {leadAssignedToUser.last_name}</span>
+                                        <Badge variant={getRoleVariant(leadAssignedToUser.role)} size="sm">
+                                            {leadAssignedToUser.role === "dealership_owner" ? "Owner" :
+                                             leadAssignedToUser.role === "dealership_admin" ? "Admin" :
+                                             leadAssignedToUser.role === "salesperson" ? "Sales" : leadAssignedToUser.role}
+                                        </Badge>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">
+                                        Lead is already assigned. To change assignment, use &quot;Assign to Team Member&quot; on the lead details page.
+                                    </p>
+                                </div>
+                            ) : (
+                                <Select value={assignedTo} onValueChange={setAssignedTo}>
+                                    <SelectTrigger>
+                                        <SelectValue placeholder="Auto (lead's primary or you)" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="auto">
+                                            <span className="text-muted-foreground">Auto (lead's primary or me)</span>
+                                        </SelectItem>
+                                        {teamMembers.map((person) => (
+                                            <SelectItem key={person.id} value={person.id}>
+                                                <div className="flex items-center gap-2">
+                                                    <span>{person.first_name} {person.last_name}</span>
+                                                    <Badge variant={getRoleVariant(person.role)} size="sm">
+                                                        {person.role === "dealership_owner" ? "Owner" :
+                                                         person.role === "dealership_admin" ? "Admin" :
+                                                         person.role === "salesperson" ? "Sales" : person.role}
+                                                    </Badge>
+                                                </div>
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            )}
+                        </div>
+                    )}
                     
                     {/* Date and Time */}
                     <div className="grid grid-cols-2 gap-4">
@@ -275,14 +410,26 @@ export function ScheduleFollowUpModal({
                             />
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="scheduled_time">Time *</Label>
-                            <Input
-                                id="scheduled_time"
-                                type="time"
+                            <Label htmlFor="scheduled_time" className="flex items-center gap-2">
+                                <Clock className="h-4 w-4" />
+                                Time *
+                            </Label>
+                            <Select
                                 value={formData.scheduled_time}
-                                onChange={(e) => setFormData(prev => ({ ...prev, scheduled_time: e.target.value }))}
+                                onValueChange={(value) => setFormData(prev => ({ ...prev, scheduled_time: value }))}
                                 required
-                            />
+                            >
+                                <SelectTrigger id="scheduled_time">
+                                    <SelectValue placeholder="Select time" />
+                                </SelectTrigger>
+                                <SelectContent className="max-h-[300px]">
+                                    {TIME_SLOTS.map((t) => (
+                                        <SelectItem key={t.value} value={t.value}>
+                                            {t.label}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
                     </div>
                     
