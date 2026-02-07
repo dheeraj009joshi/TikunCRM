@@ -48,7 +48,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             // If we have a token but no user in store, try to fetch user
             if (storedToken && !user) {
                 try {
-                    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://leedsapi.tikuntech.com/api/v1";
+                    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
                     const response = await fetch(`${apiUrl}/auth/me`, {
                         headers: {
                             "Authorization": `Bearer ${storedToken}`
@@ -63,7 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                         const refreshToken = localStorage.getItem('refresh_token')
                         if (refreshToken) {
                             try {
-                                const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://leedsapi.tikuntech.com/api/v1";
+                                const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
                                 const refreshResponse = await fetch(`${apiUrl}/auth/refresh`, {
                                     method: "POST",
                                     headers: { "Content-Type": "application/json" },

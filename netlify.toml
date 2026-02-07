@@ -1,5 +1,5 @@
-# Netlify configuration for LeedsCRM frontend
-# The app lives in the frontend/ subdirectory. Backend API is at https://leedsapi.tikuntech.com/api/v1
+# Netlify configuration for TikunCRM frontend
+# The app lives in the frontend/ subdirectory. Backend API is at https://api.tikuncrm.com/api/v1
 #
 # Deploy from local CLI (run from repo root only):
 #   cd /path/to/LeedsCrm
@@ -19,4 +19,4 @@
 [build.environment]
   NODE_VERSION = "20"
   # Set NEXT_PUBLIC_API_URL in Netlify UI: Site settings → Environment variables
-  # Recommended: NEXT_PUBLIC_API_URL = https://leedsapi.tikuntech.com/api/v1
+  # Recommended: NEXT_PUBLIC_API_URL = https://api.tikuncrm.com/api/v1

@@ -134,3 +134,38 @@ export function useLeadCreatedEvents(
 ) {
     useWebSocketEvent("lead:created", onCreated, [onCreated]);
 }
+
+/**
+ * Generic hook that provides lastMessage for any incoming WebSocket message
+ * Useful for components that need to react to multiple message types
+ */
+export function useWebSocket() {
+    const [lastMessage, setLastMessage] = useState<{ type: string; payload: any } | null>(null);
+
+    useEffect(() => {
+        // Subscribe to common message types
+        const messageTypes = [
+            "sms:received",
+            "sms:sent",
+            "sms:status",
+            "call:incoming",
+            "call:status",
+            "notification:new",
+            "lead:updated",
+            "lead:created",
+            "activity:new",
+        ];
+
+        const unsubscribes = messageTypes.map((type) =>
+            wsService.on(type, (payload: any) => {
+                setLastMessage({ type, payload });
+            })
+        );
+
+        return () => {
+            unsubscribes.forEach((unsub) => unsub());
+        };
+    }, []);
+
+    return { lastMessage };
+}

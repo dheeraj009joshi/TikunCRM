@@ -28,7 +28,7 @@ export default function LoginPage() {
             formBody.append('username', formData.email)
             formBody.append('password', formData.password)
 
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://leedsapi.tikuntech.com/api/v1";
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
             const response = await fetch(`${apiUrl}/auth/login`, {
                 method: "POST",
                 headers: { "Content-Type": "application/x-www-form-urlencoded" },

@@ -58,7 +58,7 @@ export default function ChangePasswordPage() {
         setIsLoading(true)
 
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://leedsapi.tikuntech.com/api/v1"
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1"
             const response = await fetch(`${apiUrl}/auth/change-password`, {
                 method: "POST",
                 headers: {

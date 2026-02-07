@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from app.models.follow_up import FollowUp
     from app.models.email_log import EmailLog
     from app.models.appointment import Appointment
+    from app.models.call_log import CallLog
+    from app.models.sms_log import SMSLog
 
 
 class LeadSource(str, Enum):
@@ -189,6 +191,16 @@ class Lead(Base):
     )
     appointments: Mapped[List["Appointment"]] = relationship(
         "Appointment",
+        back_populates="lead",
+        lazy="noload"
+    )
+    call_logs: Mapped[List["CallLog"]] = relationship(
+        "CallLog",
+        back_populates="lead",
+        lazy="noload"
+    )
+    sms_logs: Mapped[List["SMSLog"]] = relationship(
+        "SMSLog",
         back_populates="lead",
         lazy="noload"
     )

@@ -8,7 +8,7 @@
  * Falls back to localhost for development
  */
 export function getApiUrl(): string {
-    return process.env.NEXT_PUBLIC_API_URL || "https://leedsapi.tikuntech.com/api/v1";
+    return process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
 }
 
 /**

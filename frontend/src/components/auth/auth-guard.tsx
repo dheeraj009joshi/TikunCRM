@@ -50,7 +50,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
             // Token exists but no user - need to fetch user data
             try {
-                const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://leedsapi.tikuntech.com/api/v1";
+                const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
                 const response = await fetch(`${apiUrl}/auth/me`, {
                     headers: {
                         "Authorization": `Bearer ${storedToken}`
@@ -76,7 +76,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                     const refreshToken = localStorage.getItem('refresh_token')
                     if (refreshToken) {
                         try {
-                            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://leedsapi.tikuntech.com/api/v1";
+                            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
                             const refreshResponse = await fetch(`${apiUrl}/auth/refresh`, {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },

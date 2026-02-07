@@ -24,7 +24,7 @@ from app.schemas.follow_up import FollowUpResponse, FollowUpCreate, FollowUpUpda
 from app.schemas.lead import LeadBrief
 from app.schemas.user import UserBrief
 from app.services.activity import ActivityService
-from app.services.notification_service import NotificationService, send_skate_alert_background
+from app.services.notification_service import NotificationService, send_skate_alert_background, emit_stats_refresh
 from app.utils.skate_helper import check_skate_condition
 
 router = APIRouter()
@@ -183,6 +183,11 @@ async def schedule_follow_up(
     
     await db.commit()
     
+    try:
+        await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None)
+    except Exception:
+        pass
+    
     # Re-fetch with relationships loaded
     result = await db.execute(
         select(FollowUp)
@@ -270,6 +275,11 @@ async def complete_follow_up(
     )
     
     await db.commit()
+    
+    try:
+        await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None)
+    except Exception:
+        pass
     
     # Enrich response
     follow_up_dict = {

@@ -170,7 +170,7 @@ class WebSocketService {
      * Get the WebSocket URL
      */
     private getWebSocketUrl(token: string): string {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://leedsapi.tikuntech.com/api/v1";
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
         // Convert http(s) to ws(s)
         const wsUrl = apiUrl.replace(/^http/, "ws");
         return `${wsUrl}/ws?token=${token}`;

@@ -26,7 +26,8 @@ import {
     Briefcase,
     Pencil,
     Save,
-    X
+    X,
+    Copy
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -125,6 +126,7 @@ export default function LeadDetailsPage() {
     
     // Call/Email logging
     const [showCallModal, setShowCallModal] = React.useState(false)
+    const [showCallTextComingSoon, setShowCallTextComingSoon] = React.useState(false)
     const [isLoggingCall, setIsLoggingCall] = React.useState(false)
     const [showEmailComposer, setShowEmailComposer] = React.useState(false)
     
@@ -625,21 +627,26 @@ export default function LeadDetailsPage() {
                                 <div className="flex flex-col gap-2 mt-6 w-full">
                                     <div className="flex gap-2">
                                         {lead.phone && (
-                                            <Button 
-                                                className="flex-1"
-                                                onClick={() => {
-                                                    window.open(`tel:${lead.phone}`, '_self')
-                                                    setTimeout(() => {
-                                                        const outcome = window.prompt("Call outcome (e.g., Answered, No Answer, Voicemail):")
-                                                        if (outcome) {
-                                                            handleLogCall(outcome)
-                                                        }
-                                                    }, 500)
-                                                }}
-                                            >
-                                                <Phone className="h-4 w-4 mr-2" />
-                                                Call
-                                            </Button>
+                                            <div className="flex gap-2 flex-1">
+                                                <Button
+                                                    variant="outline"
+                                                    className="flex-1"
+                                                    onClick={() => setShowCallTextComingSoon(true)}
+                                                    title="Call this lead"
+                                                >
+                                                    <Phone className="h-4 w-4 mr-2" />
+                                                    Call
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    className="flex-1"
+                                                    onClick={() => setShowCallTextComingSoon(true)}
+                                                    title="Text this lead"
+                                                >
+                                                    <MessageSquare className="h-4 w-4 mr-2" />
+                                                    Text
+                                                </Button>
+                                            </div>
                                         )}
                                         {lead.email && (
                                             <Button 
@@ -885,7 +892,7 @@ export default function LeadDetailsPage() {
                         </CardHeader>
                         <CardContent className="space-y-4">
                             {isEditingDetails ? (
-                                <>
+                                <div className="space-y-4">
                                     {/* Contact Information */}
                                     <div>
                                         <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-2">
@@ -1109,9 +1116,9 @@ export default function LeadDetailsPage() {
                                             className="text-sm"
                                         />
                                     </div>
-                                </>
+                                </div>
                             ) : (
-                                <>
+                                <div className="space-y-4">
                                     {/* Display Mode - Address */}
                                     {(lead.address || lead.city || lead.state || lead.country) && (
                                         <div>
@@ -1181,7 +1188,7 @@ export default function LeadDetailsPage() {
                                             )}
                                         </div>
                                     )}
-                                </>
+                                </div>
                             )}
                         </CardContent>
                     </Card>
@@ -1193,6 +1200,26 @@ export default function LeadDetailsPage() {
                             <CardTitle className="text-base">Quick Actions</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-2">
+                            {lead.phone && (
+                                <div className="grid grid-cols-2 gap-2">
+                                    <Button 
+                                        className="justify-start" 
+                                        variant="outline"
+                                        onClick={() => setShowCallTextComingSoon(true)}
+                                    >
+                                        <Phone className="h-4 w-4 mr-2 text-green-500" />
+                                        Call
+                                    </Button>
+                                    <Button 
+                                        className="justify-start" 
+                                        variant="outline"
+                                        onClick={() => setShowCallTextComingSoon(true)}
+                                    >
+                                        <MessageSquare className="h-4 w-4 mr-2 text-purple-500" />
+                                        Text
+                                    </Button>
+                                </div>
+                            )}
                             <Button 
                                 className="w-full justify-start" 
                                 variant="outline"
@@ -1648,6 +1675,58 @@ export default function LeadDetailsPage() {
                 />
             )}
             
+            {/* Call / Text Coming Soon Dialog */}
+            {lead?.phone && (
+                <Dialog open={showCallTextComingSoon} onOpenChange={setShowCallTextComingSoon}>
+                    <DialogContent className="sm:max-w-md">
+                        <DialogHeader>
+                            <DialogTitle className="flex items-center gap-2">
+                                <Phone className="h-5 w-5 text-primary" />
+                                Call &amp; Text Coming Soon
+                            </DialogTitle>
+                            <DialogDescription>
+                                In-app calling and SMS are being set up. You can still contact this lead using your own phone.
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-4 py-2">
+                            <p className="text-sm text-muted-foreground">
+                                Use the number below to call or text manually:
+                            </p>
+                            <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted/30 px-4 py-3">
+                                <span className="font-mono font-medium">{lead.phone}</span>
+                                <div className="flex gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(lead.phone || "")
+                                        }}
+                                        title="Copy number"
+                                    >
+                                        <Copy className="h-4 w-4 mr-1" />
+                                        Copy
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        asChild
+                                        title="Call with your phone"
+                                    >
+                                        <a href={`tel:${lead.phone}`}>
+                                            <Phone className="h-4 w-4 mr-1" />
+                                            Call
+                                        </a>
+                                    </Button>
+                                </div>
+                            </div>
+                        </div>
+                        <DialogFooter>
+                            <Button onClick={() => setShowCallTextComingSoon(false)}>Got it</Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
+            )}
+            
             {/* Delete Confirmation Dialog */}
             {lead && (
                 <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
@@ -1667,10 +1746,10 @@ export default function LeadDetailsPage() {
                                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                             >
                                 {isDeleting ? (
-                                    <>
+                                    <span className="inline-flex items-center">
                                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                         Deleting...
-                                    </>
+                                    </span>
                                 ) : (
                                     "Delete Lead"
                                 )}
@@ -1723,10 +1802,10 @@ export default function LeadDetailsPage() {
                             disabled={!lostReason.trim() || isUpdatingStatus}
                         >
                             {isUpdatingStatus ? (
-                                <>
+                                <span className="inline-flex items-center">
                                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                     Updating...
-                                </>
+                                </span>
                             ) : (
                                 "Mark as Lost"
                             )}

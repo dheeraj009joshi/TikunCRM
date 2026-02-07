@@ -21,12 +21,15 @@ import {
     InboxIcon,
     ClipboardList,
     Mail,
-    Bell
+    Bell,
+    MessageSquare,
+    Phone,
+    MessagesSquare
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
 import { useRole, getRoleDisplayName } from "@/hooks/use-role"
-import { useNotificationEvents, useLeadUpdateEvents, useBadgesRefresh } from "@/hooks/use-websocket"
+import { useNotificationEvents, useLeadUpdateEvents, useBadgesRefresh, useStatsRefresh } from "@/hooks/use-websocket"
 import { UserAvatar } from "@/components/ui/avatar"
 import { Badge, getRoleVariant } from "@/components/ui/badge"
 import { AppointmentService } from "@/services/appointment-service"
@@ -93,6 +96,16 @@ const allSidebarItems: SidebarItem[] = [
         name: "Communications", 
         icon: Mail, 
         href: "/communications" 
+    },
+    { 
+        name: "SMS Inbox", 
+        icon: MessageSquare, 
+        href: "/sms" 
+    },
+    { 
+        name: "Unified Inbox", 
+        icon: MessagesSquare, 
+        href: "/inbox" 
     },
     { 
         name: "Notifications", 
@@ -203,13 +216,9 @@ export function Sidebar() {
             }
         }
         
-        // Only fetch if user is logged in
+        // Only fetch once on mount when user is logged in. Updates via WebSocket (badges:refresh, stats:refresh, etc.)
         if (user && role) {
             fetchBadgeCounts()
-            
-            // Poll every 60 seconds (as fallback if WebSocket is not connected)
-            const interval = setInterval(fetchBadgeCounts, 60000)
-            return () => clearInterval(interval)
         }
     }, [user, role, pathname])
     
@@ -275,6 +284,12 @@ export function Sidebar() {
     }, [refetchBadgeCounts])
     
     useBadgesRefresh(handleBadgesRefresh)
+    
+    // When stats refresh (lead/appointment/follow-up changes), update appointment and follow-up badges via WebSocket
+    const handleStatsRefresh = React.useCallback((_data: { dealership_id?: string; timestamp?: string }) => {
+        refetchBadgeCounts({ appointments: true, followUps: true })
+    }, [refetchBadgeCounts])
+    useStatsRefresh(handleStatsRefresh)
     
     // Build sidebar items with dynamic badges
     const sidebarItems = React.useMemo(() => {

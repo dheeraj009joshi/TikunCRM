@@ -7,6 +7,7 @@ import { EmailConfigReminderModal } from "@/components/email-config-reminder-mod
 import { SkateAlertDialog } from "@/components/skate-alert-dialog"
 import { SkateConfirmDialog } from "@/components/skate-confirm-dialog"
 import { WebSocketProvider } from "@/components/providers/websocket-provider"
+import { Softphone } from "@/components/softphone"
 import { useAuthStore } from "@/stores/auth-store"
 
 export default function DashboardLayout({
@@ -71,6 +72,8 @@ export default function DashboardLayout({
                 />
                 <SkateAlertDialog />
                 <SkateConfirmDialog />
+                {/* Floating softphone for voice calls */}
+                <Softphone />
             </div>
         </WebSocketProvider>
     )

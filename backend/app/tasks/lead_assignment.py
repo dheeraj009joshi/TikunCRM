@@ -293,7 +293,9 @@ async def unassign_stale_leads():
                         link=f"/leads/{lead.id}",
                         related_id=lead.id,
                         related_type="lead",
-                        send_push=True
+                        send_push=True,
+                        send_email=True,
+                        send_sms=True,
                     )
                     
                     # Emit WebSocket events

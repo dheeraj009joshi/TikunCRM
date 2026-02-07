@@ -52,8 +52,8 @@ class Settings(BaseSettings):
     meta_app_secret: str = ""
     meta_redirect_uri: str = "http://localhost:8000/api/v1/auth/oauth/meta/callback"
     
-    # Frontend URL
-    frontend_url: str = "http://localhost:3000"
+    # Frontend URL (for email links, password reset, etc.)
+    frontend_url: str = "https://tikuncrm.com"
     
     # Email Provider Settings
     # Options: "smtp", "sendgrid", "mailgun", "aws_ses"
@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     # SendGrid (Recommended for production)
     sendgrid_api_key: str = ""
     sendgrid_from_email: str = ""  # Verified sender email
-    sendgrid_from_name: str = "Leeds CRM"
+    sendgrid_from_name: str = "TikunCRM"
     sendgrid_inbound_domain: str = ""  # e.g., inbound.yourcrm.com
     sendgrid_webhook_key: str = ""  # For webhook signature verification
     
@@ -98,15 +98,43 @@ class Settings(BaseSettings):
     twilio_phone_number: str = ""  # The Twilio phone number to send from (e.g., +1234567890)
     sms_notifications_enabled: bool = False
     
+    # Twilio Voice Settings (WebRTC Softphone)
+    twilio_twiml_app_sid: str = ""  # TwiML Application SID for voice
+    twilio_api_key_sid: str = ""     # API Key SID for Access Tokens
+    twilio_api_key_secret: str = ""  # API Key Secret
+    voice_enabled: bool = False
+    
+    # Azure Blob Storage (for call recordings)
+    azure_storage_connection_string: str = ""
+    azure_storage_container: str = "call-recordings"
+    
     @property
     def is_twilio_configured(self) -> bool:
-        """Check if Twilio is properly configured"""
+        """Check if Twilio SMS is properly configured"""
         return bool(
             self.twilio_account_sid and 
             self.twilio_auth_token and 
             self.twilio_phone_number and
             self.sms_notifications_enabled
         )
+    
+    @property
+    def is_twilio_voice_configured(self) -> bool:
+        """Check if Twilio Voice is properly configured for WebRTC"""
+        return bool(
+            self.twilio_account_sid and 
+            self.twilio_auth_token and 
+            self.twilio_phone_number and
+            self.twilio_twiml_app_sid and
+            self.twilio_api_key_sid and
+            self.twilio_api_key_secret and
+            self.voice_enabled
+        )
+    
+    @property
+    def is_azure_storage_configured(self) -> bool:
+        """Check if Azure Blob Storage is configured"""
+        return bool(self.azure_storage_connection_string)
     
     # Firebase Cloud Messaging (FCM) HTTP V1 - for push notifications
     # Path to the service account JSON file from Firebase Console (Project Settings > Service accounts)

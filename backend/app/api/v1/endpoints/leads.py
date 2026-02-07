@@ -1293,7 +1293,10 @@ async def add_lead_note(
                         "lead_name": lead_name,
                         "mentioned_by": performer_name,
                         "note_preview": note_in.content[:100] + "..." if len(note_in.content) > 100 else note_in.content
-                    }
+                    },
+                    send_push=True,
+                    send_email=True,
+                    send_sms=True,
                 )
         # Emit badge refresh for mentioned users
         from app.services.notification_service import emit_badges_refresh

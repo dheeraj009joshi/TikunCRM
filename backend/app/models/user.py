@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from app.models.schedule import Schedule
     from app.models.follow_up import FollowUp
     from app.models.oauth_token import OAuthToken
+    from app.models.call_log import CallLog
 
 
 class User(Base):
@@ -199,6 +200,11 @@ class User(Base):
     )
     oauth_tokens: Mapped[List["OAuthToken"]] = relationship(
         "OAuthToken",
+        back_populates="user",
+        lazy="noload"
+    )
+    call_logs: Mapped[List["CallLog"]] = relationship(
+        "CallLog",
         back_populates="user",
         lazy="noload"
     )

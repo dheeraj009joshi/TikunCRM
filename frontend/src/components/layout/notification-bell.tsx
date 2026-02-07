@@ -92,7 +92,7 @@ export function NotificationBell() {
         }
     }, [])
     
-    // Fetch unread count on mount and periodically
+    // Fetch unread count once on mount. Updates via WebSocket (notification:new) only.
     React.useEffect(() => {
         const fetchUnreadCount = async () => {
             try {
@@ -102,12 +102,7 @@ export function NotificationBell() {
                 console.error("Failed to fetch notification stats:", error)
             }
         }
-        
         fetchUnreadCount()
-        
-        // Poll every 30 seconds (as fallback if WebSocket is not connected)
-        const interval = setInterval(fetchUnreadCount, 30000)
-        return () => clearInterval(interval)
     }, [])
     
     // Listen for real-time notification events via WebSocket

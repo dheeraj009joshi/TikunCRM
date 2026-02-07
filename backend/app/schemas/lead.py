@@ -1,25 +1,49 @@
 """
 Pydantic Schemas for Lead
 """
+import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, BeforeValidator
 
 from app.models.lead import LeadSource, LeadStatus
 from app.schemas.user import UserBrief
+
+
+def empty_to_none(v: Any) -> Any:
+    """Convert empty string to None"""
+    if v == '' or v is None:
+        return None
+    return v
+
+
+def validate_optional_email(v: Any) -> Optional[str]:
+    """Validate email only if not empty, otherwise return None"""
+    if v == '' or v is None:
+        return None
+    if isinstance(v, str):
+        # Basic email regex validation
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, v):
+            raise ValueError('Invalid email format')
+    return v
+
+
+# Custom type for optional email that accepts empty strings
+OptionalEmail = Annotated[Optional[str], BeforeValidator(validate_optional_email)]
 
 
 class LeadBase(BaseModel):
     """Base lead schema"""
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: Optional[str] = Field(None, max_length=100)
-    email: Optional[EmailStr] = None
+    email: OptionalEmail = None
     phone: Optional[str] = Field(None, max_length=20)
     alternate_phone: Optional[str] = Field(None, max_length=20)
     
-    @field_validator('email', 'last_name', 'phone', 'alternate_phone', mode='before')
+    @field_validator('last_name', 'phone', 'alternate_phone', mode='before')
     @classmethod
     def empty_string_to_none(cls, v):
         """Convert empty string to None for optional fields"""
@@ -63,7 +87,7 @@ class LeadUpdate(BaseModel):
     """Schema for updating a lead"""
     first_name: Optional[str] = Field(None, min_length=1, max_length=100)
     last_name: Optional[str] = Field(None, max_length=100)
-    email: Optional[EmailStr] = None
+    email: OptionalEmail = None
     phone: Optional[str] = Field(None, max_length=20)
     alternate_phone: Optional[str] = Field(None, max_length=20)
     notes: Optional[str] = None
@@ -83,7 +107,7 @@ class LeadUpdate(BaseModel):
     preferred_contact_method: Optional[str] = None
     preferred_contact_time: Optional[str] = None
     
-    @field_validator('email', 'first_name', 'last_name', 'phone', 'alternate_phone', 'notes', 'interested_in', 'budget_range', 'address', 'city', 'state', 'postal_code', 'country', 'company', 'job_title', 'preferred_contact_method', 'preferred_contact_time', mode='before')
+    @field_validator('first_name', 'last_name', 'phone', 'alternate_phone', 'notes', 'interested_in', 'budget_range', 'address', 'city', 'state', 'postal_code', 'country', 'company', 'job_title', 'preferred_contact_method', 'preferred_contact_time', mode='before')
     @classmethod
     def empty_string_to_none(cls, v):
         """Convert empty string to None for optional fields"""

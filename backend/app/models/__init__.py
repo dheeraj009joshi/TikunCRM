@@ -15,6 +15,8 @@ from app.models.notification import Notification, NotificationType
 from app.models.password_reset import PasswordResetToken
 from app.models.appointment import Appointment, AppointmentType, AppointmentStatus
 from app.models.fcm_token import FCMToken
+from app.models.call_log import CallLog, CallDirection, CallStatus
+from app.models.sms_log import SMSLog, MessageDirection, SMSStatus
 
 __all__ = [
     "Dealership",
@@ -41,4 +43,10 @@ __all__ = [
     "AppointmentType",
     "AppointmentStatus",
     "FCMToken",
+    "CallLog",
+    "CallDirection",
+    "CallStatus",
+    "SMSLog",
+    "MessageDirection",
+    "SMSStatus",
 ]

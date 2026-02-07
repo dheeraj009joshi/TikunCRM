@@ -1,7 +1,7 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
 
 // Get API URL from environment variable, default to production backend
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://leedsapi.tikuntech.com/api/v1";
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
 
 const apiClient = axios.create({
     baseURL: API_BASE_URL,

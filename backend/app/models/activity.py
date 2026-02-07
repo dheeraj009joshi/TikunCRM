@@ -37,6 +37,7 @@ class ActivityType(str, Enum):
     EMAIL_SENT = "email_sent"
     EMAIL_RECEIVED = "email_received"
     SMS_SENT = "sms_sent"
+    SMS_RECEIVED = "sms_received"
     WHATSAPP_SENT = "whatsapp_sent"
     
     # Follow-ups

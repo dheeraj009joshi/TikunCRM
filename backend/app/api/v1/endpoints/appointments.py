@@ -21,7 +21,7 @@ from app.models.appointment import Appointment, AppointmentStatus, AppointmentTy
 from app.models.activity import ActivityType
 from app.models.notification import NotificationType
 from app.services.activity import ActivityService
-from app.services.notification_service import NotificationService, send_skate_alert_background
+from app.services.notification_service import NotificationService, send_skate_alert_background, emit_stats_refresh
 from app.utils.skate_helper import check_skate_condition
 from app.schemas.appointment import (
     AppointmentCreate,
@@ -144,8 +144,8 @@ async def create_appointment(
     
     # Create notification for assigned user if different from creator
     if appointment.assigned_to and appointment.assigned_to != current_user.id:
-        await NotificationService.create_notification(
-            db,
+        notification_service = NotificationService(db)
+        await notification_service.create_notification(
             user_id=appointment.assigned_to,
             notification_type=NotificationType.SYSTEM,
             title="New Appointment Assigned",
@@ -154,10 +154,18 @@ async def create_appointment(
             meta_data={
                 "appointment_id": str(appointment.id),
                 "scheduled_at": appointment.scheduled_at.isoformat()
-            }
+            },
+            send_push=True,
+            send_email=True,
+            send_sms=True,
         )
     
     await db.commit()
+    
+    try:
+        await emit_stats_refresh(str(dealership_id) if dealership_id else None)
+    except Exception as e:
+        logger.warning(f"Failed to emit stats:refresh for new appointment: {e}")
     
     # Send SMS confirmation to lead
     if appointment.lead_id:
@@ -524,6 +532,11 @@ async def update_appointment(
     
     await db.commit()
     
+    try:
+        await emit_stats_refresh(str(appointment.dealership_id) if appointment.dealership_id else None)
+    except Exception as e:
+        logger.warning(f"Failed to emit stats:refresh for updated appointment: {e}")
+    
     # Re-fetch with relationships
     result = await db.execute(
         select(Appointment)
@@ -592,6 +605,11 @@ async def complete_appointment(
         )
     
     await db.commit()
+    
+    try:
+        await emit_stats_refresh(str(appointment.dealership_id) if appointment.dealership_id else None)
+    except Exception as e:
+        logger.warning(f"Failed to emit stats:refresh for completed appointment: {e}")
     
     # Re-fetch with relationships
     result = await db.execute(

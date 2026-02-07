@@ -63,7 +63,7 @@ Hello {to_name},
 {f'View details: {settings.frontend_url}{link}' if link else ''}
 
 ---
-This is an automated notification from LeedsCRM.
+This is an automated notification from TikunCRM.
             """.strip()
             
             # HTML version
@@ -93,7 +93,7 @@ This is an automated notification from LeedsCRM.
             </div>
             {f'<a href="{settings.frontend_url}{link}" class="button">View Details</a>' if link else ''}
             <div class="footer">
-                <p>This is an automated notification from LeedsCRM.</p>
+                <p>This is an automated notification from TikunCRM.</p>
             </div>
         </div>
     </div>
@@ -151,11 +151,11 @@ You have received a new email reply from {lead_name}.
 
 {f'Preview: {email_preview[:300]}...' if email_preview and len(email_preview) > 300 else f'Preview: {email_preview}' if email_preview else ''}
 
-View the full conversation in LeedsCRM:
+View the full conversation in TikunCRM:
 {crm_link}
 
 ---
-This is an automated notification from LeedsCRM.
+This is an automated notification from TikunCRM.
             """.strip()
             
             # HTML version
@@ -191,7 +191,7 @@ This is an automated notification from LeedsCRM.
             <a href="{crm_link}" class="button">View Conversation</a>
             
             <div class="footer">
-                <p>This is an automated notification from LeedsCRM.</p>
+                <p>This is an automated notification from TikunCRM.</p>
             </div>
         </div>
     </div>
@@ -249,7 +249,7 @@ This is an automated notification from LeedsCRM.
             
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
-            msg['From'] = formataddr((config.from_name or "LeedsCRM", config.smtp_username))
+            msg['From'] = formataddr((config.from_name or "TikunCRM", config.smtp_username))
             msg['To'] = to_email
             
             msg.attach(MIMEText(body_text, 'plain'))

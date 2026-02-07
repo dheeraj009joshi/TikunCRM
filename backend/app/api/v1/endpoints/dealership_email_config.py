@@ -287,14 +287,14 @@ async def test_email_config(
     try:
         # Create test email
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "LeedsCRM - Email Configuration Test"
-        msg["From"] = f"{config.from_name or 'LeedsCRM'} <{config.smtp_username}>"
+        msg["Subject"] = "TikunCRM - Email Configuration Test"
+        msg["From"] = f"{config.from_name or 'TikunCRM'} <{config.smtp_username}>"
         msg["To"] = test_data.test_email
         
         text_content = f"""
 Hello,
 
-This is a test email from LeedsCRM to verify your email configuration.
+This is a test email from TikunCRM to verify your email configuration.
 
 If you received this email, your SMTP settings are working correctly!
 
@@ -306,15 +306,15 @@ Configuration details:
 - TLS: {'Yes' if config.smtp_use_tls else 'No'}
 
 Best regards,
-LeedsCRM
+TikunCRM
         """
         
         html_content = f"""
 <html>
 <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-    <h2 style="color: #2563eb;">LeedsCRM - Email Configuration Test</h2>
+    <h2 style="color: #2563eb;">TikunCRM - Email Configuration Test</h2>
     <p>Hello,</p>
-    <p>This is a test email from LeedsCRM to verify your email configuration.</p>
+    <p>This is a test email from TikunCRM to verify your email configuration.</p>
     <p style="color: #16a34a; font-weight: bold;">
         If you received this email, your SMTP settings are working correctly!
     </p>
@@ -326,7 +326,7 @@ LeedsCRM
         <li><strong>SSL:</strong> {'Yes' if config.smtp_use_ssl else 'No'}</li>
         <li><strong>TLS:</strong> {'Yes' if config.smtp_use_tls else 'No'}</li>
     </ul>
-    <p>Best regards,<br>LeedsCRM</p>
+    <p>Best regards,<br>TikunCRM</p>
 </body>
 </html>
         """

@@ -214,13 +214,13 @@ async def send_password_reset_email(user: User, reset_url: str):
             logger.warning(f"SMTP not configured, cannot send password reset email to {user.email}")
             return
         
-        subject = "Reset Your LeedsCRM Password"
+        subject = "Reset Your TikunCRM Password"
         body_html = f"""
         <html>
         <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2>Password Reset Request</h2>
             <p>Hi {user.first_name},</p>
-            <p>You requested to reset your password for LeedsCRM. Click the button below to reset it:</p>
+            <p>You requested to reset your password for TikunCRM. Click the button below to reset it:</p>
             <p style="text-align: center; margin: 30px 0;">
                 <a href="{reset_url}" 
                    style="background-color: #2563eb; color: white; padding: 12px 24px; 
@@ -240,7 +240,7 @@ async def send_password_reset_email(user: User, reset_url: str):
         body_text = f"""
         Hi {user.first_name},
         
-        You requested to reset your password for LeedsCRM.
+        You requested to reset your password for TikunCRM.
         
         Click here to reset: {reset_url}
         
@@ -254,7 +254,7 @@ async def send_password_reset_email(user: User, reset_url: str):
             body_text=body_text,
             body_html=body_html,
             from_email=settings.smtp_user or settings.email_from_address,
-            from_name=settings.email_from_name or "LeedsCRM"
+            from_name=settings.email_from_name or "TikunCRM"
         )
         
         if result.get("success"):

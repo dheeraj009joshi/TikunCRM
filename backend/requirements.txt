@@ -56,3 +56,9 @@ phonenumbers==8.13.0
 # Firebase Cloud Messaging (FCM) - for push notifications
 google-auth==2.27.0  # Already included above
 httpx==0.26.0  # Already included above
+
+# Azure Blob Storage (for call recordings)
+azure-storage-blob==12.19.0
+
+# WebSockets
+websockets==12.0

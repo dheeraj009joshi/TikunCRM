@@ -322,7 +322,8 @@ async def detect_missed_appointments():
                                     related_id=appointment.id,
                                     related_type="appointment",
                                     send_push=True,
-                                    send_email=True
+                                    send_email=True,
+                                    send_sms=True,
                                 )
                             except Exception as e:
                                 logger.error(f"Failed to notify admin {admin.id}: {e}")

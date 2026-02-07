@@ -215,6 +215,9 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=lead_id,
             related_type="lead",
+            send_push=True,
+            send_email=True,
+            send_sms=True,
         )
     
     async def notify_follow_up_due(
@@ -243,6 +246,9 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=follow_up_id,
             related_type="follow_up",
+            send_push=True,
+            send_email=True,
+            send_sms=True,
         )
     
     async def notify_follow_up_overdue(
@@ -263,6 +269,9 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=follow_up_id,
             related_type="follow_up",
+            send_push=True,
+            send_email=True,
+            send_sms=True,
         )
     
     async def create_system_notification(
@@ -281,6 +290,9 @@ class NotificationService:
             title=title,
             message=message,
             link=link,
+            send_push=True,
+            send_email=True,
+            send_sms=True,
         )
     
     async def notify_appointment_reminder(
@@ -348,7 +360,7 @@ class NotificationService:
             related_type="appointment",
             send_push=True,
             send_email=True,
-            send_sms=False,  # Don't spam SMS for missed appointments
+            send_sms=True,
         )
     
     async def notify_new_lead_to_dealership(
@@ -448,8 +460,8 @@ class NotificationService:
                     related_type="lead",
                     meta_data={"lead_id": str(lead_id), "lead_name": lead_name, "performer_name": performer_name, "source": source},
                     send_push=True,
-                    send_email=True,  # Send email notification for new leads
-                    send_sms=False,
+                    send_email=True,
+                    send_sms=True,
                 )
                 notifications.append(notification)
             except Exception as e:
@@ -556,7 +568,8 @@ class NotificationService:
                 "action": action,
             },
             send_push=True,
-            send_email=True,  # Send email notification for SKATE alerts to lead owner
+            send_email=True,
+            send_sms=True,
         )
 
         # Notify all dealership members (so everyone sees the alert)
@@ -591,7 +604,8 @@ class NotificationService:
                     "action": action,
                 },
                 send_push=True,
-                send_email=True,  # Send email for all SKATE alerts
+                send_email=True,
+                send_sms=True,
             )
 
 

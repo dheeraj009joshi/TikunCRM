@@ -3,8 +3,9 @@ API v1 Router - combines all route modules
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports
+from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, voice, sms
 from app.api.v1.endpoints.webhooks import sendgrid as sendgrid_webhook
+from app.api.v1.endpoints.webhooks import twilio as twilio_webhook
 
 api_router = APIRouter()
 
@@ -28,9 +29,12 @@ api_router.include_router(google_sheets.router, prefix="/google-sheets", tags=["
 api_router.include_router(appointments.router, prefix="/appointments", tags=["Appointments"])
 api_router.include_router(push.router, prefix="/push", tags=["Push Notifications"])
 api_router.include_router(reports.router, prefix="/reports", tags=["Reports & Admin"])
+api_router.include_router(voice.router, prefix="/voice", tags=["Voice Calling"])
+api_router.include_router(sms.router, prefix="/sms", tags=["SMS Messaging"])
 
 # Webhook endpoints (no auth required - secured by signatures)
 api_router.include_router(sendgrid_webhook.router, prefix="/webhooks/sendgrid", tags=["Webhooks"])
+api_router.include_router(twilio_webhook.router, prefix="/webhooks/twilio", tags=["Webhooks"])
 
 # WebSocket endpoint for real-time updates
 api_router.include_router(websocket.router, tags=["WebSocket"])
