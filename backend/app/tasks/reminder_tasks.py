@@ -233,14 +233,15 @@ async def detect_missed_appointments():
         
         async with session_maker() as session:
             # Get appointments that:
-            # 1. scheduled_at is in the past
+            # 1. scheduled_at is at least 24 hours in the past (no change in status for 24h)
             # 2. Status is SCHEDULED or CONFIRMED (not completed/cancelled)
             now = utc_now()
+            cutoff = now - timedelta(hours=24)
             
             result = await session.execute(
                 select(Appointment)
                 .where(
-                    Appointment.scheduled_at < now,
+                    Appointment.scheduled_at < cutoff,
                     Appointment.status.in_([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED])
                 )
             )

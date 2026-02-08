@@ -21,6 +21,7 @@ class ShowroomCheckOut(BaseModel):
     """Schema for checking out a customer"""
     outcome: ShowroomOutcome
     notes: Optional[str] = None
+    reschedule_scheduled_at: Optional[datetime] = None  # When outcome is RESCHEDULE and visit has appointment_id
 
 
 class LeadBrief(BaseModel):

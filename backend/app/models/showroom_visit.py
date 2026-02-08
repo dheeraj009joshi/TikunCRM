@@ -27,6 +27,7 @@ class ShowroomOutcome(str, Enum):
     FOLLOW_UP = "follow_up"
     RESCHEDULE = "reschedule"
     BROWSING = "browsing"  # Just looking, may return
+    COULDNT_QUALIFY = "couldnt_qualify"
 
 
 class ShowroomVisit(Base):

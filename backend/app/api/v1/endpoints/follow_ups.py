@@ -34,11 +34,13 @@ router = APIRouter()
 async def list_follow_ups(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
+    lead_id: Optional[UUID] = Query(None, description="Filter by lead"),
     status: Optional[FollowUpStatus] = None,
     overdue: bool = False
 ) -> Any:
     """
     List follow-ups for the current user or dealership.
+    Optionally filter by lead_id (e.g. for lead detail page).
     """
     query = select(FollowUp).options(
         selectinload(FollowUp.lead),
@@ -52,6 +54,9 @@ async def list_follow_ups(
         # Get users in dealership first or join with User model
         from app.models.user import User as UserModel
         query = query.join(UserModel).where(UserModel.dealership_id == current_user.dealership_id)
+        
+    if lead_id is not None:
+        query = query.where(FollowUp.lead_id == lead_id)
         
     if status:
         query = query.where(FollowUp.status == status)

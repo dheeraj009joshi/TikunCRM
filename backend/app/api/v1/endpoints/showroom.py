@@ -2,7 +2,7 @@
 Showroom Endpoints - Check-in/Check-out for customer tracking
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -15,6 +15,7 @@ from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
 from app.models.lead import Lead, LeadStatus
+from app.models.appointment import Appointment, AppointmentStatus
 from app.models.showroom_visit import ShowroomVisit, ShowroomOutcome
 from app.models.activity import ActivityType
 from app.services.activity import ActivityService
@@ -158,6 +159,15 @@ async def check_in(
         }
     )
     
+    # If check-in is linked to an appointment, set appointment status to ARRIVED
+    if check_in_data.appointment_id:
+        appt_result = await db.execute(
+            select(Appointment).where(Appointment.id == check_in_data.appointment_id)
+        )
+        appointment = appt_result.scalar_one_or_none()
+        if appointment and appointment.lead_id == check_in_data.lead_id and appointment.dealership_id == dealership_id:
+            appointment.status = AppointmentStatus.ARRIVED
+    
     await db.commit()
     await db.refresh(visit)
 
@@ -219,8 +229,8 @@ async def check_out(
     lead_result = await db.execute(select(Lead).where(Lead.id == visit.lead_id))
     lead = lead_result.scalar_one_or_none()
 
-    # Map showroom outcome to lead status
-    new_status = LeadStatus.CONTACTED  # Default for BROWSING / general
+    # Map showroom outcome to lead status (outcome = lead status where applicable)
+    new_status = LeadStatus.CONTACTED  # fallback
     if check_out_data.outcome == ShowroomOutcome.SOLD:
         new_status = LeadStatus.CONVERTED
     elif check_out_data.outcome == ShowroomOutcome.FOLLOW_UP:
@@ -228,9 +238,29 @@ async def check_out(
     elif check_out_data.outcome == ShowroomOutcome.NOT_INTERESTED:
         new_status = LeadStatus.NOT_INTERESTED
     elif check_out_data.outcome == ShowroomOutcome.RESCHEDULE:
-        new_status = LeadStatus.FOLLOW_UP
+        new_status = LeadStatus.RESCHEDULE
     elif check_out_data.outcome == ShowroomOutcome.BROWSING:
-        new_status = LeadStatus.CONTACTED
+        new_status = LeadStatus.BROWSING
+    elif check_out_data.outcome == ShowroomOutcome.COULDNT_QUALIFY:
+        new_status = LeadStatus.COULDNT_QUALIFY
+
+    # When outcome is RESCHEDULE and visit has linked appointment, update appointment with new time
+    if (
+        check_out_data.outcome == ShowroomOutcome.RESCHEDULE
+        and visit.appointment_id
+        and check_out_data.reschedule_scheduled_at
+    ):
+        apt_result = await db.execute(
+            select(Appointment).where(Appointment.id == visit.appointment_id)
+        )
+        appointment = apt_result.scalar_one_or_none()
+        if appointment:
+            # Ensure datetime is timezone-aware (UTC)
+            new_at = check_out_data.reschedule_scheduled_at
+            if new_at.tzinfo is None:
+                new_at = new_at.replace(tzinfo=timezone.utc)
+            appointment.scheduled_at = new_at
+            appointment.status = AppointmentStatus.SCHEDULED
 
     if lead:
         old_status = lead.status
@@ -293,28 +323,24 @@ async def get_current_visitors(
 ) -> Any:
     """
     Get customers currently in the showroom.
+    Admins/owners see all visits in their dealership; salespersons see only their assigned leads.
     """
-    # Build query for current user's dealership
-    query = select(ShowroomVisit).where(
-        ShowroomVisit.checked_out_at.is_(None)
-    ).order_by(ShowroomVisit.checked_in_at.desc())
-    
-    # Filter by dealership if not super admin
     from app.core.permissions import UserRole
+
+    query = select(ShowroomVisit).where(ShowroomVisit.checked_out_at.is_(None))
     if current_user.role != UserRole.SUPER_ADMIN and current_user.dealership_id:
         query = query.where(ShowroomVisit.dealership_id == current_user.dealership_id)
-    
+    if current_user.role == UserRole.SALESPERSON:
+        query = query.join(Lead, ShowroomVisit.lead_id == Lead.id).where(
+            Lead.assigned_to == current_user.id
+        )
+    query = query.order_by(ShowroomVisit.checked_in_at.desc())
+
     result = await db.execute(query)
-    visits = result.scalars().all()
-    
-    enriched_visits = []
-    for visit in visits:
-        enriched_visits.append(await enrich_visit(db, visit))
-    
-    return {
-        "count": len(enriched_visits),
-        "visits": enriched_visits
-    }
+    visits = result.unique().scalars().all() if current_user.role == UserRole.SALESPERSON else result.scalars().all()
+
+    enriched_visits = [await enrich_visit(db, v) for v in visits]
+    return {"count": len(enriched_visits), "visits": enriched_visits}
 
 
 @router.get("/history", response_model=ShowroomHistoryResponse)
@@ -329,18 +355,23 @@ async def get_visit_history(
 ) -> Any:
     """
     Get showroom visit history with pagination.
+    Admins/owners see all visits in their dealership; salespersons see only their assigned leads.
     """
     from app.core.permissions import UserRole
-    
-    # Build base query
+
     query = select(ShowroomVisit)
     count_query = select(func.count(ShowroomVisit.id))
-    
-    # Filter by dealership if not super admin
     if current_user.role != UserRole.SUPER_ADMIN and current_user.dealership_id:
         query = query.where(ShowroomVisit.dealership_id == current_user.dealership_id)
         count_query = count_query.where(ShowroomVisit.dealership_id == current_user.dealership_id)
-    
+    if current_user.role == UserRole.SALESPERSON:
+        query = query.join(Lead, ShowroomVisit.lead_id == Lead.id).where(
+            Lead.assigned_to == current_user.id
+        )
+        count_query = count_query.join(Lead, ShowroomVisit.lead_id == Lead.id).where(
+            Lead.assigned_to == current_user.id
+        )
+
     # Apply filters
     if date_from:
         query = query.where(ShowroomVisit.checked_in_at >= date_from)
@@ -361,18 +392,10 @@ async def get_visit_history(
     query = query.offset((page - 1) * page_size).limit(page_size)
     
     result = await db.execute(query)
-    visits = result.scalars().all()
-    
-    enriched_visits = []
-    for visit in visits:
-        enriched_visits.append(await enrich_visit(db, visit))
-    
-    return {
-        "items": enriched_visits,
-        "total": total,
-        "page": page,
-        "page_size": page_size
-    }
+    visits = result.unique().scalars().all() if current_user.role == UserRole.SALESPERSON else result.scalars().all()
+
+    enriched_visits = [await enrich_visit(db, v) for v in visits]
+    return {"items": enriched_visits, "total": total, "page": page, "page_size": page_size}
 
 
 @router.get("/stats", response_model=ShowroomStats)
@@ -382,61 +405,79 @@ async def get_showroom_stats(
 ) -> Any:
     """
     Get showroom statistics for dashboard.
+    Admins/owners see dealership-wide stats; salespersons see only their assigned leads.
     """
     from app.core.permissions import UserRole
-    
-    # Base filter for dealership
-    dealership_filter = []
+
+    base_filters = [ShowroomVisit.checked_out_at.is_(None)]
     if current_user.role != UserRole.SUPER_ADMIN and current_user.dealership_id:
-        dealership_filter.append(ShowroomVisit.dealership_id == current_user.dealership_id)
-    
+        base_filters.append(ShowroomVisit.dealership_id == current_user.dealership_id)
+    if current_user.role == UserRole.SALESPERSON:
+        base_filters.append(Lead.assigned_to == current_user.id)
+
     # Currently in showroom
-    current_query = select(func.count(ShowroomVisit.id)).where(
-        ShowroomVisit.checked_out_at.is_(None),
-        *dealership_filter
-    )
+    current_query = select(func.count(ShowroomVisit.id)).select_from(ShowroomVisit)
+    if current_user.role == UserRole.SALESPERSON:
+        current_query = current_query.join(Lead, ShowroomVisit.lead_id == Lead.id)
+    current_query = current_query.where(and_(*base_filters))
     current_result = await db.execute(current_query)
     currently_in_showroom = current_result.scalar() or 0
-    
-    # Checked in today
+
     now = utc_now()
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_query = select(func.count(ShowroomVisit.id)).where(
-        ShowroomVisit.checked_in_at >= start_of_day,
-        *dealership_filter
-    )
+    today_filters = [ShowroomVisit.checked_in_at >= start_of_day]
+    if current_user.role != UserRole.SUPER_ADMIN and current_user.dealership_id:
+        today_filters.append(ShowroomVisit.dealership_id == current_user.dealership_id)
+    if current_user.role == UserRole.SALESPERSON:
+        today_filters.append(Lead.assigned_to == current_user.id)
+
+    today_query = select(func.count(ShowroomVisit.id)).select_from(ShowroomVisit)
+    if current_user.role == UserRole.SALESPERSON:
+        today_query = today_query.join(Lead, ShowroomVisit.lead_id == Lead.id)
+    today_query = today_query.where(and_(*today_filters))
     today_result = await db.execute(today_query)
     checked_in_today = today_result.scalar() or 0
-    
-    # Sold today
-    sold_query = select(func.count(ShowroomVisit.id)).where(
+
+    sold_filters = [
         ShowroomVisit.checked_in_at >= start_of_day,
         ShowroomVisit.outcome == ShowroomOutcome.SOLD,
-        *dealership_filter
-    )
+    ]
+    if current_user.role != UserRole.SUPER_ADMIN and current_user.dealership_id:
+        sold_filters.append(ShowroomVisit.dealership_id == current_user.dealership_id)
+    if current_user.role == UserRole.SALESPERSON:
+        sold_filters.append(Lead.assigned_to == current_user.id)
+    sold_query = select(func.count(ShowroomVisit.id)).select_from(ShowroomVisit)
+    if current_user.role == UserRole.SALESPERSON:
+        sold_query = sold_query.join(Lead, ShowroomVisit.lead_id == Lead.id)
+    sold_query = sold_query.where(and_(*sold_filters))
     sold_result = await db.execute(sold_query)
     sold_today = sold_result.scalar() or 0
-    
-    # Average visit duration (last 30 days, completed visits only)
+
     thirty_days_ago = now - timedelta(days=30)
-    # Note: PostgreSQL specific for interval calculation
     avg_duration = None
     try:
         from sqlalchemy import extract
-        duration_query = select(
-            func.avg(
-                extract('epoch', ShowroomVisit.checked_out_at - ShowroomVisit.checked_in_at) / 60
-            )
-        ).where(
+        duration_filters = [
             ShowroomVisit.checked_out_at.isnot(None),
             ShowroomVisit.checked_in_at >= thirty_days_ago,
-            *dealership_filter
-        )
+        ]
+        if current_user.role != UserRole.SUPER_ADMIN and current_user.dealership_id:
+            duration_filters.append(ShowroomVisit.dealership_id == current_user.dealership_id)
+        if current_user.role == UserRole.SALESPERSON:
+            duration_filters.append(Lead.assigned_to == current_user.id)
+        duration_query = select(
+            func.avg(
+                extract("epoch", ShowroomVisit.checked_out_at - ShowroomVisit.checked_in_at) / 60
+            )
+        ).select_from(ShowroomVisit)
+        if current_user.role == UserRole.SALESPERSON:
+            duration_query = duration_query.join(Lead, ShowroomVisit.lead_id == Lead.id)
+        duration_query = duration_query.where(and_(*duration_filters))
         duration_result = await db.execute(duration_query)
         avg_duration = duration_result.scalar()
     except Exception as e:
         logger.warning(f"Failed to calculate avg duration: {e}")
-    
+
     return {
         "currently_in_showroom": currently_in_showroom,
         "checked_in_today": checked_in_today,

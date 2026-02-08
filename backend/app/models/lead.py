@@ -36,7 +36,7 @@ class LeadSource(str, Enum):
 
 
 class LeadStatus(str, Enum):
-    """Lead lifecycle statuses"""
+    """Lead lifecycle statuses (includes showroom outcome statuses)"""
     NEW = "new"
     CONTACTED = "contacted"
     FOLLOW_UP = "follow_up"
@@ -45,6 +45,10 @@ class LeadStatus(str, Enum):
     IN_SHOWROOM = "in_showroom"  # Customer currently in showroom
     CONVERTED = "converted"
     LOST = "lost"
+    # Showroom outcome → lead status (outcome is part of lead status)
+    COULDNT_QUALIFY = "couldnt_qualify"
+    BROWSING = "browsing"
+    RESCHEDULE = "reschedule"
 
 
 class Lead(Base):
