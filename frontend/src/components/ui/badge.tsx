@@ -21,6 +21,10 @@ const badgeVariants = cva(
                 not_interested: "bg-gray-500/10 text-gray-600 dark:text-gray-400",
                 converted: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-bold",
                 lost: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+                in_showroom: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+                couldnt_qualify: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+                browsing: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
+                reschedule: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
                 // Role variants
                 super_admin: "bg-purple-500/15 text-purple-700 dark:text-purple-300",
                 dealership_owner: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
@@ -78,8 +82,12 @@ function getStatusVariant(status: string): VariantProps<typeof badgeVariants>["v
         follow_up: "follow_up",
         interested: "interested",
         not_interested: "not_interested",
+        in_showroom: "in_showroom",
         converted: "converted",
         lost: "lost",
+        couldnt_qualify: "couldnt_qualify",
+        browsing: "browsing",
+        reschedule: "reschedule",
     }
     return statusMap[status] || "default"
 }

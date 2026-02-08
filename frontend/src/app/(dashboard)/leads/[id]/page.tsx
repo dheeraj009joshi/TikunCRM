@@ -29,7 +29,8 @@ import {
     X,
     Copy,
     Store,
-    LogOut
+    LogOut,
+    MoreVertical
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -49,6 +50,7 @@ import { Button } from "@/components/ui/button"
 import { Badge, getStatusVariant, getSourceVariant, getRoleVariant } from "@/components/ui/badge"
 import { UserAvatar } from "@/components/ui/avatar"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import {
     Select,
     SelectContent,
@@ -56,6 +58,12 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { ActivityService, Activity, ACTIVITY_TYPE_INFO, ActivityType } from "@/services/activity-service"
 import { ShowroomService, ShowroomVisit, ShowroomOutcome, getOutcomeLabel } from "@/services/showroom-service"
@@ -65,8 +73,16 @@ import { AssignToDealershipModal, AssignToSalespersonModal } from "@/components/
 import { EmailComposerModal } from "@/components/emails/email-composer-modal"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
 import { BookAppointmentModal } from "@/components/appointments/book-appointment-modal"
+import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal } from "@/services/appointment-service"
+import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
 import { useLeadUpdateEvents, useActivityEvents } from "@/hooks/use-websocket"
 import { LocalTime } from "@/components/ui/local-time"
+import { format } from "date-fns"
+import { formatDateInTimezone, parseAsUTC } from "@/utils/timezone"
+import { Calendar as CalendarPicker } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
+import { cn } from "@/lib/utils"
 import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
@@ -81,14 +97,31 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 
+// Time slots for reschedule (same as book appointment: 6 AM–11 PM, 15-min intervals)
+const RESCHEDULE_TIME_SLOTS: { value: string; label: string }[] = []
+for (let hour = 6; hour <= 23; hour++) {
+    for (let minute = 0; minute < 60; minute += 15) {
+        const h = hour.toString().padStart(2, "0")
+        const m = minute.toString().padStart(2, "0")
+        RESCHEDULE_TIME_SLOTS.push({
+            value: `${h}:${m}`,
+            label: `${hour % 12 || 12}:${m} ${hour >= 12 ? "PM" : "AM"}`,
+        })
+    }
+}
+
 const LEAD_STATUSES = [
     { value: "new", label: "New", color: "blue" },
     { value: "contacted", label: "Contacted", color: "amber" },
     { value: "follow_up", label: "Follow Up", color: "purple" },
     { value: "interested", label: "Interested", color: "emerald" },
     { value: "not_interested", label: "Not Interested", color: "gray" },
+    { value: "in_showroom", label: "In Showroom", color: "orange" },
     { value: "converted", label: "Converted", color: "emerald" },
     { value: "lost", label: "Lost", color: "rose" },
+    { value: "couldnt_qualify", label: "Couldn't Qualify", color: "amber" },
+    { value: "browsing", label: "Browsing", color: "yellow" },
+    { value: "reschedule", label: "Reschedule", color: "purple" },
 ]
 
 // Activity type icon mapping
@@ -111,6 +144,149 @@ const getActivityIcon = (type: ActivityType) => {
     }
 }
 
+function LeadAppointmentCompleteForm({
+    appointment,
+    onSuccess,
+    onClose,
+}: {
+    appointment: Appointment
+    onSuccess: () => void
+    onClose: () => void
+}) {
+    const [loading, setLoading] = React.useState(false)
+    const [status, setStatus] = React.useState<AppointmentStatus>("completed")
+    const [outcomeNotes, setOutcomeNotes] = React.useState("")
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault()
+        setLoading(true)
+        try {
+            await AppointmentService.complete(appointment.id, { status, outcome_notes: outcomeNotes || undefined })
+            onSuccess()
+        } catch (err: any) {
+            alert(err.response?.data?.detail || "Failed to complete")
+        } finally {
+            setLoading(false)
+        }
+    }
+    return (
+        <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={status} onValueChange={(v) => setStatus(v as AppointmentStatus)}>
+                    <SelectTrigger>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="completed">Completed</SelectItem>
+                        <SelectItem value="no_show">No Show</SelectItem>
+                        <SelectItem value="rescheduled">Rescheduled</SelectItem>
+                    </SelectContent>
+                </Select>
+            </div>
+            <div className="space-y-2">
+                <Label>Outcome Notes (optional)</Label>
+                <Textarea
+                    value={outcomeNotes}
+                    onChange={(e) => setOutcomeNotes(e.target.value)}
+                    placeholder="What was discussed or accomplished?"
+                    rows={3}
+                />
+            </div>
+            <DialogFooter>
+                <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+                <Button type="submit" disabled={loading}>{loading ? "Saving..." : "Save"}</Button>
+            </DialogFooter>
+        </form>
+    )
+}
+
+function LeadAppointmentRescheduleForm({
+    appointment,
+    timeSlots,
+    onSuccess,
+    onClose,
+}: {
+    appointment: Appointment
+    timeSlots: { value: string; label: string }[]
+    onSuccess: () => void
+    onClose: () => void
+}) {
+    const [loading, setLoading] = React.useState(false)
+    const [selectedDate, setSelectedDate] = React.useState<Date | undefined>(() => {
+        const d = new Date(appointment.scheduled_at)
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        return d < today ? today : d
+    })
+    const [selectedTime, setSelectedTime] = React.useState(() => {
+        const d = new Date(appointment.scheduled_at)
+        const h = d.getHours()
+        const m = d.getMinutes()
+        const roundedM = Math.round(m / 15) * 15
+        const minute = roundedM === 60 ? 0 : roundedM
+        const hour = roundedM === 60 ? h + 1 : h
+        const value = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`
+        const slot = timeSlots.find((s) => s.value === value)
+        return slot ? slot.value : timeSlots[0]?.value ?? "09:00"
+    })
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault()
+        if (!selectedDate || !selectedTime) return
+        const [hours, minutes] = selectedTime.split(":").map(Number)
+        const scheduledAt = new Date(selectedDate)
+        scheduledAt.setHours(hours, minutes, 0, 0)
+        setLoading(true)
+        try {
+            await AppointmentService.update(appointment.id, {
+                scheduled_at: scheduledAt.toISOString(),
+                status: "scheduled",
+            })
+            onSuccess()
+        } catch (err: any) {
+            alert(err.response?.data?.detail || "Failed to reschedule")
+        } finally {
+            setLoading(false)
+        }
+    }
+    const minDate = new Date()
+    minDate.setHours(0, 0, 0, 0)
+    return (
+        <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+                <Label>Date</Label>
+                <Popover>
+                    <PopoverTrigger asChild>
+                        <Button type="button" variant="outline" className={cn("w-full justify-start text-left font-normal", !selectedDate && "text-muted-foreground")}>
+                            <Calendar className="mr-2 h-4 w-4" />
+                            {selectedDate ? format(selectedDate, "MMM d, yyyy") : "Pick date"}
+                        </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                        <CalendarPicker mode="single" selected={selectedDate} onSelect={setSelectedDate} disabled={(date) => date < minDate} />
+                    </PopoverContent>
+                </Popover>
+            </div>
+            <div className="space-y-2">
+                <Label>Time</Label>
+                <Select value={selectedTime} onValueChange={setSelectedTime}>
+                    <SelectTrigger>
+                        <SelectValue placeholder="Select time" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-[220px]">
+                        {timeSlots.map((t) => (
+                            <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </div>
+            <DialogFooter>
+                <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+                <Button type="submit" disabled={loading || !selectedDate || !selectedTime}>{loading ? "Saving..." : "Save"}</Button>
+            </DialogFooter>
+        </form>
+    )
+}
+
 export default function LeadDetailsPage() {
     const params = useParams()
     const searchParams = useSearchParams()
@@ -118,6 +294,7 @@ export default function LeadDetailsPage() {
     const noteIdFromUrl = searchParams.get("note")
     const { canAssignToSalesperson, canAssignToDealership, role, isDealershipLevel, isSuperAdmin, isSalesperson } = useRole()
     const user = useAuthStore(state => state.user)
+    const { timezone } = useBrowserTimezone()
     
     const [lead, setLead] = React.useState<Lead | null>(null)
     const [activities, setActivities] = React.useState<Activity[]>([])
@@ -154,10 +331,20 @@ export default function LeadDetailsPage() {
     // Showroom check-in/out
     const [currentVisit, setCurrentVisit] = React.useState<ShowroomVisit | null>(null)
     const [isCheckingIn, setIsCheckingIn] = React.useState(false)
+    const [showCheckInAppointmentModal, setShowCheckInAppointmentModal] = React.useState(false)
+    const [leadAppointmentsForCheckIn, setLeadAppointmentsForCheckIn] = React.useState<Appointment[]>([])
+    const [leadAppointments, setLeadAppointments] = React.useState<Appointment[]>([])
+    const [leadFollowUps, setLeadFollowUps] = React.useState<FollowUp[]>([])
+    const [loadingAppointmentsFollowUps, setLoadingAppointmentsFollowUps] = React.useState(false)
     const [showCheckOutModal, setShowCheckOutModal] = React.useState(false)
     const [checkOutOutcome, setCheckOutOutcome] = React.useState<ShowroomOutcome>("follow_up")
     const [checkOutNotes, setCheckOutNotes] = React.useState("")
+    const [checkOutRescheduleDate, setCheckOutRescheduleDate] = React.useState<Date | undefined>(undefined)
+    const [checkOutRescheduleTime, setCheckOutRescheduleTime] = React.useState("")
     const [isCheckingOut, setIsCheckingOut] = React.useState(false)
+    // Appointment actions (lead detail Appointments tab)
+    const [appointmentCompleteModal, setAppointmentCompleteModal] = React.useState<Appointment | null>(null)
+    const [appointmentRescheduleModal, setAppointmentRescheduleModal] = React.useState<Appointment | null>(null)
     
     // Reply to note
     const [replyingTo, setReplyingTo] = React.useState<string | null>(null)
@@ -168,7 +355,7 @@ export default function LeadDetailsPage() {
     // Which note threads have replies expanded (click to load replies)
     const [expandedReplies, setExpandedReplies] = React.useState<Set<string>>(new Set())
     // Active tab: default to Notes when opening from mention link (?note=activity_id)
-    const [activeActivityTab, setActiveActivityTab] = React.useState<"timeline" | "notes">(
+    const [activeActivityTab, setActiveActivityTab] = React.useState<"timeline" | "notes" | "appointments" | "followups">(
         noteIdFromUrl ? "notes" : "timeline"
     )
     
@@ -230,11 +417,96 @@ export default function LeadDetailsPage() {
         }
     }, [leadId])
 
-    const handleCheckIn = async () => {
+    const fetchLeadAppointmentsAndFollowUps = React.useCallback(async () => {
+        if (!leadId) return
+        setLoadingAppointmentsFollowUps(true)
+        try {
+            const [appointmentsRes, followUpsList] = await Promise.all([
+                AppointmentService.list({ lead_id: leadId, page_size: 100 }),
+                FollowUpService.listFollowUps({ lead_id: leadId }).catch(() => []),
+            ])
+            setLeadAppointments(appointmentsRes.items)
+            setLeadFollowUps(followUpsList)
+        } catch (error) {
+            console.error("Failed to fetch appointments/follow-ups:", error)
+        } finally {
+            setLoadingAppointmentsFollowUps(false)
+        }
+    }, [leadId])
+
+    // Badge: only today's count; color = red if any of today's are overdue, else green. Hide when 0.
+    const ACTIVE_APPOINTMENT_STATUSES = ["scheduled", "confirmed", "arrived", "in_showroom", "in_progress", "rescheduled"] as const
+    const {
+        appointmentBadgeCount,
+        appointmentBadgeColor,
+        followUpBadgeCount,
+        followUpBadgeColor,
+        appointmentsToday,
+        appointmentsUpcoming,
+        followUpsToday,
+        followUpsUpcoming,
+    } = React.useMemo(() => {
+        const now = new Date()
+        const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+        const isSameDay = (d: Date) =>
+            d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+        const toDate = (s: string) => parseAsUTC(s)
+        const relevantAppointments = leadAppointments.filter(
+            (a) => ACTIVE_APPOINTMENT_STATUSES.includes(a.status as typeof ACTIVE_APPOINTMENT_STATUSES[number])
+        )
+        const todayApt: Appointment[] = []
+        const upcomingApt: Appointment[] = []
+        let aptTodayOverdue = false
+        relevantAppointments.forEach((a) => {
+            const d = toDate(a.scheduled_at)
+            if (isNaN(d.getTime())) return
+            if (isSameDay(d)) {
+                todayApt.push(a)
+                if (d.getTime() < now.getTime()) aptTodayOverdue = true
+            } else if (d.getTime() > endOfToday.getTime()) upcomingApt.push(a)
+        })
+        todayApt.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
+        upcomingApt.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
+        const appointmentBadgeCount = todayApt.length
+        const appointmentBadgeColor = aptTodayOverdue ? "red" : "green"
+        const relevantFollowUps = leadFollowUps.filter((f) => f.status === "pending")
+        const todayFu: FollowUp[] = []
+        const upcomingFu: FollowUp[] = []
+        let fuTodayOverdue = false
+        relevantFollowUps.forEach((f) => {
+            const d = toDate(f.scheduled_at)
+            if (isNaN(d.getTime())) return
+            if (isSameDay(d)) {
+                todayFu.push(f)
+                if (d.getTime() < now.getTime()) fuTodayOverdue = true
+            } else if (d.getTime() > endOfToday.getTime()) upcomingFu.push(f)
+        })
+        todayFu.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
+        upcomingFu.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
+        const followUpBadgeCount = todayFu.length
+        const followUpBadgeColor = fuTodayOverdue ? "red" : "green"
+        return {
+            appointmentBadgeCount,
+            appointmentBadgeColor,
+            followUpBadgeCount,
+            followUpBadgeColor,
+            appointmentsToday: todayApt,
+            appointmentsUpcoming: upcomingApt,
+            followUpsToday: todayFu,
+            followUpsUpcoming: upcomingFu,
+        }
+    }, [leadAppointments, leadFollowUps])
+
+    const doCheckIn = async (appointmentId: string | null) => {
         setIsCheckingIn(true)
         try {
-            const visit = await ShowroomService.checkIn({ lead_id: leadId })
+            const visit = await ShowroomService.checkIn({
+                lead_id: leadId,
+                ...(appointmentId ? { appointment_id: appointmentId } : {}),
+            })
             setCurrentVisit(visit)
+            setShowCheckInAppointmentModal(false)
+            setLeadAppointmentsForCheckIn([])
             fetchActivities() // Refresh to show check-in activity
         } catch (error: any) {
             const detail = error.response?.data?.detail
@@ -245,19 +517,67 @@ export default function LeadDetailsPage() {
         }
     }
 
+    const handleCheckIn = async () => {
+        setIsCheckingIn(true)
+        try {
+            const now = new Date()
+            const startOfToday = new Date(now)
+            startOfToday.setHours(0, 0, 0, 0)
+            const res = await AppointmentService.list({
+                lead_id: leadId,
+                date_from: startOfToday.toISOString(),
+                page_size: 50,
+            })
+            const linkable = res.items.filter(
+                (a) =>
+                    ["scheduled", "confirmed"].includes(a.status) &&
+                    new Date(a.scheduled_at) >= now
+            )
+            if (linkable.length === 0) {
+                await doCheckIn(null)
+            } else if (linkable.length === 1) {
+                await doCheckIn(linkable[0].id)
+            } else {
+                setLeadAppointmentsForCheckIn(linkable)
+                setShowCheckInAppointmentModal(true)
+            }
+        } catch (error: any) {
+            const detail = error.response?.data?.detail
+            const message = typeof detail === "string" ? detail : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? JSON.stringify(d)).join(" ") : "Failed to load appointments"
+            alert(message)
+        } finally {
+            setIsCheckingIn(false)
+        }
+    }
+
     const handleCheckOut = async () => {
         if (!currentVisit) return
+        const needsReschedule = checkOutOutcome === "reschedule" && currentVisit.appointment_id
+        if (needsReschedule && (!checkOutRescheduleDate || !checkOutRescheduleTime)) {
+            alert("Please select a date and time for the rescheduled appointment.")
+            return
+        }
+        let reschedule_scheduled_at: string | undefined
+        if (needsReschedule && checkOutRescheduleDate && checkOutRescheduleTime) {
+            const [h, m] = checkOutRescheduleTime.split(":").map(Number)
+            const d = new Date(checkOutRescheduleDate.getFullYear(), checkOutRescheduleDate.getMonth(), checkOutRescheduleDate.getDate(), h, m, 0, 0)
+            reschedule_scheduled_at = d.toISOString()
+        }
         setIsCheckingOut(true)
         try {
             await ShowroomService.checkOut(currentVisit.id, {
                 outcome: checkOutOutcome,
-                notes: checkOutNotes || undefined
+                notes: checkOutNotes || undefined,
+                reschedule_scheduled_at,
             })
             setCurrentVisit(null)
             setShowCheckOutModal(false)
             setCheckOutNotes("")
-            fetchActivities() // Refresh to show check-out activity
-            fetchLead() // Refresh lead status
+            setCheckOutRescheduleDate(undefined)
+            setCheckOutRescheduleTime("")
+            fetchActivities()
+            fetchLead()
+            fetchLeadAppointmentsAndFollowUps()
         } catch (error: any) {
             alert(error.response?.data?.detail || "Failed to check out")
         } finally {
@@ -265,11 +585,50 @@ export default function LeadDetailsPage() {
         }
     }
 
+    const refreshAppointments = React.useCallback(() => {
+        fetchLeadAppointmentsAndFollowUps()
+        fetchActivities()
+    }, [fetchLeadAppointmentsAndFollowUps, fetchActivities])
+
+    async function handleAppointmentConfirm(apt: Appointment) {
+        try {
+            await AppointmentService.update(apt.id, { status: "confirmed" })
+            refreshAppointments()
+        } catch (e: any) {
+            alert(e.response?.data?.detail || "Failed to confirm")
+        }
+    }
+    async function handleAppointmentStatusUpdate(apt: Appointment, status: AppointmentStatus) {
+        try {
+            await AppointmentService.update(apt.id, { status })
+            refreshAppointments()
+        } catch (e: any) {
+            alert(e.response?.data?.detail || "Failed to update status")
+        }
+    }
+    async function handleAppointmentCancel(apt: Appointment) {
+        try {
+            await AppointmentService.update(apt.id, { status: "cancelled" })
+            refreshAppointments()
+        } catch (e: any) {
+            alert(e.response?.data?.detail || "Failed to cancel")
+        }
+    }
+    async function handleAppointmentNoShow(apt: Appointment) {
+        try {
+            await AppointmentService.complete(apt.id, { status: "no_show" })
+            refreshAppointments()
+        } catch (e: any) {
+            alert(e.response?.data?.detail || "Failed to mark no show")
+        }
+    }
+
     React.useEffect(() => {
         fetchLead()
         fetchActivities()
         fetchShowroomStatus()
-    }, [fetchLead, fetchActivities, fetchShowroomStatus])
+        fetchLeadAppointmentsAndFollowUps()
+    }, [fetchLead, fetchActivities, fetchShowroomStatus, fetchLeadAppointmentsAndFollowUps])
     
     // When opened from mention notification (?note=activity_id): expand thread if reply, then scroll to note
     const scrolledToNoteRef = React.useRef<string | null>(null)
@@ -1444,7 +1803,7 @@ export default function LeadDetailsPage() {
                 {/* Right Column: Activity & Interaction */}
                 <div className="lg:col-span-2 flex flex-col min-h-0 overflow-hidden">
                     <Card className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                        <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as "timeline" | "notes")} className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                        <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as "timeline" | "notes" | "appointments" | "followups")} className="flex-1 flex flex-col min-h-0 overflow-hidden">
                             <div className="border-b px-6">
                                 <TabsList className="bg-transparent h-auto p-0">
                                     <TabsTrigger 
@@ -1458,6 +1817,42 @@ export default function LeadDetailsPage() {
                                         className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4"
                                     >
                                         Notes
+                                    </TabsTrigger>
+                                    <TabsTrigger 
+                                        value="appointments"
+                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 flex items-center gap-1.5"
+                                    >
+                                        Appointments
+                                        {appointmentBadgeCount > 0 && (
+                                            <span
+                                                className={cn(
+                                                    "h-5 min-w-[20px] rounded-full text-white text-xs font-medium flex items-center justify-center px-1.5",
+                                                    appointmentBadgeColor === "red" && "bg-red-500",
+                                                    appointmentBadgeColor === "green" && "bg-green-500",
+                                                    appointmentBadgeColor === "grey" && "bg-gray-500"
+                                                )}
+                                            >
+                                                {appointmentBadgeCount}
+                                            </span>
+                                        )}
+                                    </TabsTrigger>
+                                    <TabsTrigger 
+                                        value="followups"
+                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 flex items-center gap-1.5"
+                                    >
+                                        Follow-ups
+                                        {followUpBadgeCount > 0 && (
+                                            <span
+                                                className={cn(
+                                                    "h-5 min-w-[20px] rounded-full text-white text-xs font-medium flex items-center justify-center px-1.5",
+                                                    followUpBadgeColor === "red" && "bg-red-500",
+                                                    followUpBadgeColor === "green" && "bg-green-500",
+                                                    followUpBadgeColor === "grey" && "bg-gray-500"
+                                                )}
+                                            >
+                                                {followUpBadgeCount}
+                                            </span>
+                                        )}
                                     </TabsTrigger>
                                 </TabsList>
                             </div>
@@ -1755,6 +2150,306 @@ export default function LeadDetailsPage() {
                                     )
                                 })()}
                             </TabsContent>
+
+                            <TabsContent value="appointments" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                                {loadingAppointmentsFollowUps ? (
+                                    <div className="flex items-center justify-center py-12">
+                                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                                    </div>
+                                ) : leadAppointments.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground py-4">No appointments for this lead.</p>
+                                ) : (
+                                    <div className="space-y-6">
+                                        {appointmentsToday.length > 0 && (
+                                            <div>
+                                                <h3 className="text-sm font-semibold text-foreground mb-2">Today&apos;s</h3>
+                                                <Table>
+                                                    <TableHeader>
+                                                        <TableRow>
+                                                            <TableHead>Title</TableHead>
+                                                            <TableHead>Date & time</TableHead>
+                                                            <TableHead>Status</TableHead>
+                                                            <TableHead className="text-right">Actions</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {appointmentsToday.map((apt) => (
+                                                            <TableRow key={apt.id}>
+                                                                <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell>
+                                                                    <LocalTime date={apt.scheduled_at} />
+                                                                    {apt.duration_minutes ? ` (${apt.duration_minutes}m)` : ""}
+                                                                </TableCell>
+                                                                <TableCell>
+                                                                    <Badge variant="outline" className={getAppointmentStatusColor(apt.status)} size="sm">
+                                                                        {getAppointmentStatusLabel(apt.status)}
+                                                                    </Badge>
+                                                                </TableCell>
+                                                                <TableCell className="text-right flex items-center justify-end gap-1">
+                                                                    <Link href={`/appointments?lead=${leadId}`} className="text-xs text-primary hover:underline">
+                                                                        View
+                                                                    </Link>
+                                                                    {!isAppointmentStatusTerminal(apt.status) && (
+                                                                        <DropdownMenu>
+                                                                            <DropdownMenuTrigger asChild>
+                                                                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                                                                                    <MoreVertical className="h-4 w-4" />
+                                                                                </Button>
+                                                                            </DropdownMenuTrigger>
+                                                                            <DropdownMenuContent align="end">
+                                                                                {apt.status === "scheduled" && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentConfirm(apt)}>
+                                                                                        <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
+                                                                                        Confirm
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                    <DropdownMenuItem onClick={() => setAppointmentRescheduleModal(apt)}>
+                                                                                        <CalendarClock className="mr-2 h-4 w-4" />
+                                                                                        Reschedule
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {apt.status === "arrived" && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentStatusUpdate(apt, "in_showroom")}>
+                                                                                        <Store className="mr-2 h-4 w-4" />
+                                                                                        Mark as In Showroom
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "arrived" || apt.status === "in_showroom") && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentStatusUpdate(apt, "in_progress")}>
+                                                                                        <Clock className="mr-2 h-4 w-4" />
+                                                                                        Mark as In Progress
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                    <DropdownMenuItem onClick={() => setAppointmentCompleteModal(apt)}>
+                                                                                        <CheckCircle className="mr-2 h-4 w-4 text-green-600" />
+                                                                                        Mark as Completed
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress") && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentNoShow(apt)}>
+                                                                                        <XCircle className="mr-2 h-4 w-4 text-amber-600" />
+                                                                                        No Show
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentCancel(apt)} className="text-red-600">
+                                                                                        <XCircle className="mr-2 h-4 w-4" />
+                                                                                        Cancel Appointment
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                            </DropdownMenuContent>
+                                                                        </DropdownMenu>
+                                                                    )}
+                                                                </TableCell>
+                                                            </TableRow>
+                                                        ))}
+                                                    </TableBody>
+                                                </Table>
+                                            </div>
+                                        )}
+                                        {appointmentsUpcoming.length > 0 && (
+                                            <div>
+                                                <h3 className="text-sm font-semibold text-foreground mb-2">Upcoming</h3>
+                                                <Table>
+                                                    <TableHeader>
+                                                        <TableRow>
+                                                            <TableHead>Title</TableHead>
+                                                            <TableHead>Date & time</TableHead>
+                                                            <TableHead>Status</TableHead>
+                                                            <TableHead className="text-right">Actions</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {appointmentsUpcoming.map((apt) => (
+                                                            <TableRow key={apt.id}>
+                                                                <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell>
+                                                                    <LocalTime date={apt.scheduled_at} />
+                                                                    {apt.duration_minutes ? ` (${apt.duration_minutes}m)` : ""}
+                                                                </TableCell>
+                                                                <TableCell>
+                                                                    <Badge variant="outline" className={getAppointmentStatusColor(apt.status)} size="sm">
+                                                                        {getAppointmentStatusLabel(apt.status)}
+                                                                    </Badge>
+                                                                </TableCell>
+                                                                <TableCell className="text-right flex items-center justify-end gap-1">
+                                                                    <Link href={`/appointments?lead=${leadId}`} className="text-xs text-primary hover:underline">
+                                                                        View
+                                                                    </Link>
+                                                                    {!isAppointmentStatusTerminal(apt.status) && (
+                                                                        <DropdownMenu>
+                                                                            <DropdownMenuTrigger asChild>
+                                                                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                                                                                    <MoreVertical className="h-4 w-4" />
+                                                                                </Button>
+                                                                            </DropdownMenuTrigger>
+                                                                            <DropdownMenuContent align="end">
+                                                                                {apt.status === "scheduled" && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentConfirm(apt)}>
+                                                                                        <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
+                                                                                        Confirm
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                    <DropdownMenuItem onClick={() => setAppointmentRescheduleModal(apt)}>
+                                                                                        <CalendarClock className="mr-2 h-4 w-4" />
+                                                                                        Reschedule
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {apt.status === "arrived" && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentStatusUpdate(apt, "in_showroom")}>
+                                                                                        <Store className="mr-2 h-4 w-4" />
+                                                                                        Mark as In Showroom
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "arrived" || apt.status === "in_showroom") && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentStatusUpdate(apt, "in_progress")}>
+                                                                                        <Clock className="mr-2 h-4 w-4" />
+                                                                                        Mark as In Progress
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                    <DropdownMenuItem onClick={() => setAppointmentCompleteModal(apt)}>
+                                                                                        <CheckCircle className="mr-2 h-4 w-4 text-green-600" />
+                                                                                        Mark as Completed
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress") && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentNoShow(apt)}>
+                                                                                        <XCircle className="mr-2 h-4 w-4 text-amber-600" />
+                                                                                        No Show
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentCancel(apt)} className="text-red-600">
+                                                                                        <XCircle className="mr-2 h-4 w-4" />
+                                                                                        Cancel Appointment
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                            </DropdownMenuContent>
+                                                                        </DropdownMenu>
+                                                                    )}
+                                                                </TableCell>
+                                                            </TableRow>
+                                                        ))}
+                                                    </TableBody>
+                                                </Table>
+                                            </div>
+                                        )}
+                                        {appointmentsToday.length === 0 && appointmentsUpcoming.length === 0 && (
+                                            <p className="text-sm text-muted-foreground py-4">No active appointments (past appointments are not listed here).</p>
+                                        )}
+                                    </div>
+                                )}
+                            </TabsContent>
+
+                            <TabsContent value="followups" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                                {loadingAppointmentsFollowUps ? (
+                                    <div className="flex items-center justify-center py-12">
+                                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                                    </div>
+                                ) : leadFollowUps.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground py-4">No follow-ups for this lead.</p>
+                                ) : (
+                                    <div className="space-y-6">
+                                        {followUpsToday.length > 0 && (
+                                            <div>
+                                                <h3 className="text-sm font-semibold text-foreground mb-2">Today&apos;s</h3>
+                                                <Table>
+                                                    <TableHeader>
+                                                        <TableRow>
+                                                            <TableHead>Due</TableHead>
+                                                            <TableHead>Status</TableHead>
+                                                            <TableHead>Notes</TableHead>
+                                                            <TableHead className="text-right">Actions</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {followUpsToday.map((fu) => {
+                                                            const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status]
+                                                            return (
+                                                                <TableRow key={fu.id}>
+                                                                    <TableCell><LocalTime date={fu.scheduled_at} /></TableCell>
+                                                                    <TableCell>
+                                                                        <Badge variant={statusInfo.variant} size="sm">{statusInfo.label}</Badge>
+                                                                    </TableCell>
+                                                                    <TableCell className="max-w-[200px] truncate text-muted-foreground">{fu.notes || "—"}</TableCell>
+                                                                    <TableCell className="text-right">
+                                                                        {fu.status === "pending" && (
+                                                                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={async () => {
+                                                                                try {
+                                                                                    await FollowUpService.completeFollowUp(fu.id)
+                                                                                    fetchLeadAppointmentsAndFollowUps()
+                                                                                    fetchActivities()
+                                                                                } catch (e) {
+                                                                                    console.error(e)
+                                                                                    alert("Failed to complete follow-up")
+                                                                                }
+                                                                            }}>
+                                                                                Complete
+                                                                            </Button>
+                                                                        )}
+                                                                    </TableCell>
+                                                                </TableRow>
+                                                            )
+                                                        })}
+                                                    </TableBody>
+                                                </Table>
+                                            </div>
+                                        )}
+                                        {followUpsUpcoming.length > 0 && (
+                                            <div>
+                                                <h3 className="text-sm font-semibold text-foreground mb-2">Upcoming</h3>
+                                                <Table>
+                                                    <TableHeader>
+                                                        <TableRow>
+                                                            <TableHead>Due</TableHead>
+                                                            <TableHead>Status</TableHead>
+                                                            <TableHead>Notes</TableHead>
+                                                            <TableHead className="text-right">Actions</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {followUpsUpcoming.map((fu) => {
+                                                            const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status]
+                                                            return (
+                                                                <TableRow key={fu.id}>
+                                                                    <TableCell><LocalTime date={fu.scheduled_at} /></TableCell>
+                                                                    <TableCell>
+                                                                        <Badge variant={statusInfo.variant} size="sm">{statusInfo.label}</Badge>
+                                                                    </TableCell>
+                                                                    <TableCell className="max-w-[200px] truncate text-muted-foreground">{fu.notes || "—"}</TableCell>
+                                                                    <TableCell className="text-right">
+                                                                        {fu.status === "pending" && (
+                                                                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={async () => {
+                                                                                try {
+                                                                                    await FollowUpService.completeFollowUp(fu.id)
+                                                                                    fetchLeadAppointmentsAndFollowUps()
+                                                                                    fetchActivities()
+                                                                                } catch (e) {
+                                                                                    console.error(e)
+                                                                                    alert("Failed to complete follow-up")
+                                                                                }
+                                                                            }}>
+                                                                                Complete
+                                                                            </Button>
+                                                                        )}
+                                                                    </TableCell>
+                                                                </TableRow>
+                                                            )
+                                                        })}
+                                                    </TableBody>
+                                                </Table>
+                                            </div>
+                                        )}
+                                        {followUpsToday.length === 0 && followUpsUpcoming.length === 0 && (
+                                            <p className="text-sm text-muted-foreground py-4">No pending follow-ups for today or later.</p>
+                                        )}
+                                    </div>
+                                )}
+                            </TabsContent>
                         </Tabs>
 
                         {/* Quick Note Input - Fixed at bottom */}
@@ -1822,7 +2517,8 @@ export default function LeadDetailsPage() {
                     onClose={() => setShowScheduleFollowUp(false)}
                     preselectedLeadId={lead.id}
                     onSuccess={() => {
-                        fetchActivities() // Refresh activities to show the new follow-up activity
+                        fetchActivities()
+                        fetchLeadAppointmentsAndFollowUps()
                     }}
                 />
             )}
@@ -1835,13 +2531,65 @@ export default function LeadDetailsPage() {
                     leadId={lead.id}
                     leadName={getLeadFullName(lead)}
                     onSuccess={() => {
-                        fetchActivities() // Refresh activities to show the new appointment
+                        fetchActivities()
+                        fetchLeadAppointmentsAndFollowUps()
                     }}
                 />
             )}
+
+            {/* Check-in: link to which appointment? (when lead has multiple) */}
+            <Dialog open={showCheckInAppointmentModal} onOpenChange={(open) => { if (!open) { setShowCheckInAppointmentModal(false); setLeadAppointmentsForCheckIn([]) } }}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <Store className="h-5 w-5 text-teal-600" />
+                            Link check-in to an appointment?
+                        </DialogTitle>
+                        <DialogDescription>
+                            This lead has more than one upcoming appointment. Choose which one they are here for, or check in without linking.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-2">
+                        {leadAppointmentsForCheckIn.map((apt) => (
+                            <Button
+                                key={apt.id}
+                                variant="outline"
+                                className="w-full justify-start text-left h-auto py-3 px-4"
+                                onClick={() => doCheckIn(apt.id)}
+                                disabled={isCheckingIn}
+                            >
+                                <CalendarClock className="h-4 w-4 mr-3 shrink-0 text-muted-foreground" />
+                                <div className="min-w-0">
+                                    <div className="font-medium truncate">{apt.title || "Appointment"}</div>
+                                    <div className="text-sm text-muted-foreground">
+                                        {formatDateInTimezone(apt.scheduled_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
+                                    </div>
+                                </div>
+                            </Button>
+                        ))}
+                        <Button
+                            variant="ghost"
+                            className="w-full justify-start text-muted-foreground"
+                            onClick={() => doCheckIn(null)}
+                            disabled={isCheckingIn}
+                        >
+                            Check in without linking to an appointment
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
             
             {/* Dealership Check-out Modal */}
-            <Dialog open={showCheckOutModal} onOpenChange={setShowCheckOutModal}>
+            <Dialog
+                open={showCheckOutModal}
+                onOpenChange={(open) => {
+                    setShowCheckOutModal(open)
+                    if (!open) {
+                        setCheckOutRescheduleDate(undefined)
+                        setCheckOutRescheduleTime("")
+                    }
+                }}
+            >
                 <DialogContent className="max-w-md">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
@@ -1907,9 +2655,64 @@ export default function LeadDetailsPage() {
                                             Just Browsing
                                         </div>
                                     </SelectItem>
+                                    <SelectItem value="couldnt_qualify">
+                                        <div className="flex items-center gap-2">
+                                            <AlertCircle className="h-4 w-4 text-amber-600" />
+                                            Couldn&apos;t Qualify
+                                        </div>
+                                    </SelectItem>
                                 </SelectContent>
                             </Select>
                         </div>
+
+                        {checkOutOutcome === "reschedule" && currentVisit?.appointment_id && (
+                            <div className="space-y-3 rounded-lg border p-3 bg-muted/30">
+                                <p className="text-sm font-medium">Reschedule linked appointment</p>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs">Date</Label>
+                                        <Popover>
+                                            <PopoverTrigger asChild>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className={cn("w-full justify-start text-left font-normal", !checkOutRescheduleDate && "text-muted-foreground")}
+                                                >
+                                                    <Calendar className="mr-2 h-4 w-4" />
+                                                    {checkOutRescheduleDate ? format(checkOutRescheduleDate, "MMM d, yyyy") : "Pick date"}
+                                                </Button>
+                                            </PopoverTrigger>
+                                            <PopoverContent className="w-auto p-0" align="start">
+                                                <CalendarPicker
+                                                    mode="single"
+                                                    selected={checkOutRescheduleDate}
+                                                    onSelect={setCheckOutRescheduleDate}
+                                                    disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
+                                                />
+                                            </PopoverContent>
+                                        </Popover>
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs">Time</Label>
+                                        <Select
+                                            value={checkOutRescheduleTime}
+                                            onValueChange={setCheckOutRescheduleTime}
+                                        >
+                                            <SelectTrigger className="h-9">
+                                                <SelectValue placeholder="Select time" />
+                                            </SelectTrigger>
+                                            <SelectContent className="max-h-[220px]">
+                                                {RESCHEDULE_TIME_SLOTS.map((t) => (
+                                                    <SelectItem key={t.value} value={t.value}>
+                                                        {t.label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="space-y-2">
                             <Label>Notes (optional)</Label>
@@ -1926,9 +2729,14 @@ export default function LeadDetailsPage() {
                         <Button variant="outline" onClick={() => setShowCheckOutModal(false)}>
                             Cancel
                         </Button>
-                        <Button 
+                        <Button
                             onClick={handleCheckOut}
-                            disabled={isCheckingOut}
+                            disabled={
+                                isCheckingOut ||
+                                !!(checkOutOutcome === "reschedule" &&
+                                    currentVisit?.appointment_id &&
+                                    (!checkOutRescheduleDate || !checkOutRescheduleTime))
+                            }
                         >
                             {isCheckingOut ? (
                                 <>
@@ -1942,6 +2750,47 @@ export default function LeadDetailsPage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* Complete Appointment Modal (from lead Appointments tab) */}
+            {appointmentCompleteModal && (
+                <Dialog open={!!appointmentCompleteModal} onOpenChange={(open) => !open && setAppointmentCompleteModal(null)}>
+                    <DialogContent className="max-w-md">
+                        <DialogHeader>
+                            <DialogTitle>Complete Appointment</DialogTitle>
+                            <DialogDescription>{appointmentCompleteModal.title}</DialogDescription>
+                        </DialogHeader>
+                        <LeadAppointmentCompleteForm
+                            appointment={appointmentCompleteModal}
+                            onSuccess={() => {
+                                setAppointmentCompleteModal(null)
+                                refreshAppointments()
+                            }}
+                            onClose={() => setAppointmentCompleteModal(null)}
+                        />
+                    </DialogContent>
+                </Dialog>
+            )}
+
+            {/* Reschedule Appointment Modal (from lead Appointments tab) */}
+            {appointmentRescheduleModal && (
+                <Dialog open={!!appointmentRescheduleModal} onOpenChange={(open) => !open && setAppointmentRescheduleModal(null)}>
+                    <DialogContent className="max-w-md">
+                        <DialogHeader>
+                            <DialogTitle>Reschedule Appointment</DialogTitle>
+                            <DialogDescription>{appointmentRescheduleModal.title}</DialogDescription>
+                        </DialogHeader>
+                        <LeadAppointmentRescheduleForm
+                            appointment={appointmentRescheduleModal}
+                            timeSlots={RESCHEDULE_TIME_SLOTS}
+                            onSuccess={() => {
+                                setAppointmentRescheduleModal(null)
+                                refreshAppointments()
+                            }}
+                            onClose={() => setAppointmentRescheduleModal(null)}
+                        />
+                    </DialogContent>
+                </Dialog>
+            )}
             
             {/* Call / Text Coming Soon Dialog */}
             {lead?.phone && (

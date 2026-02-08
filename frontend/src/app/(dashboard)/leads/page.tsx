@@ -86,8 +86,12 @@ const LEAD_STATUSES = [
     { value: "follow_up", label: "Follow Up" },
     { value: "interested", label: "Interested" },
     { value: "not_interested", label: "Not Interested" },
+    { value: "in_showroom", label: "In Showroom" },
     { value: "converted", label: "Converted" },
     { value: "lost", label: "Lost" },
+    { value: "couldnt_qualify", label: "Couldn't Qualify" },
+    { value: "browsing", label: "Browsing" },
+    { value: "reschedule", label: "Reschedule" },
 ]
 
 const LEAD_SOURCES = [

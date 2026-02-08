@@ -204,6 +204,17 @@ export function getAppointmentTypeLabel(type: AppointmentType): string {
     return labels[type] || type
 }
 
+/** Statuses after which the appointment is considered done; no further status updates in UI. No Show can still be updated until completed. */
+export const TERMINAL_APPOINTMENT_STATUSES: AppointmentStatus[] = [
+    "completed",
+    "cancelled",
+    "sold",
+    "rescheduled",
+]
+export function isAppointmentStatusTerminal(status: AppointmentStatus): boolean {
+    return TERMINAL_APPOINTMENT_STATUSES.includes(status)
+}
+
 export function getAppointmentStatusLabel(status: AppointmentStatus): string {
     const labels: Record<AppointmentStatus, string> = {
         scheduled: "Scheduled",

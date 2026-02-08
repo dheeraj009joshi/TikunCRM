@@ -22,6 +22,7 @@ import {
     User,
     Users,
     X,
+    Store,
     Loader2,
     Download,
     Printer,
@@ -35,7 +36,8 @@ import {
     AppointmentType,
     getAppointmentTypeLabel,
     getAppointmentStatusLabel,
-    getAppointmentStatusColor
+    getAppointmentStatusColor,
+    isAppointmentStatusTerminal
 } from "@/services/appointment-service"
 import { LeadService, Lead } from "@/services/lead-service"
 import { TeamService, UserBrief } from "@/services/team-service"
@@ -624,6 +626,137 @@ function CompleteAppointmentModal({
     )
 }
 
+// Reschedule Appointment Modal – same appointment, new date/time
+function RescheduleAppointmentModal({
+    isOpen,
+    onClose,
+    appointment,
+    onSuccess
+}: {
+    isOpen: boolean
+    onClose: () => void
+    appointment: Appointment | null
+    onSuccess: () => void
+}) {
+    const [isLoading, setIsLoading] = React.useState(false)
+    const [selectedDate, setSelectedDate] = React.useState<Date | undefined>(undefined)
+    const [selectedTime, setSelectedTime] = React.useState("")
+    const [calendarOpen, setCalendarOpen] = React.useState(false)
+
+    React.useEffect(() => {
+        if (isOpen && appointment) {
+            const d = new Date(appointment.scheduled_at)
+            const today = new Date()
+            today.setHours(0, 0, 0, 0)
+            setSelectedDate(d < today ? today : d)
+            const h = d.getHours()
+            const m = d.getMinutes()
+            const roundedM = Math.round(m / 15) * 15
+            const minute = roundedM === 60 ? 0 : roundedM
+            const hour = roundedM === 60 ? h + 1 : h
+            const value = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`
+            const slot = TIME_SLOTS.find(s => s.value === value)
+            setSelectedTime(slot ? slot.value : TIME_SLOTS[0]?.value ?? "09:00")
+            setCalendarOpen(false)
+        }
+    }, [isOpen, appointment])
+
+    async function handleSubmit(e: React.FormEvent) {
+        e.preventDefault()
+        if (!appointment || !selectedDate || !selectedTime) return
+        const [hours, minutes] = selectedTime.split(":").map(Number)
+        const scheduledAt = new Date(selectedDate)
+        scheduledAt.setHours(hours, minutes, 0, 0)
+        setIsLoading(true)
+        try {
+            await AppointmentService.update(appointment.id, {
+                scheduled_at: scheduledAt.toISOString(),
+                status: "scheduled"
+            })
+            onSuccess()
+            onClose()
+        } catch (err) {
+            console.error("Failed to reschedule appointment:", err)
+        } finally {
+            setIsLoading(false)
+        }
+    }
+
+    if (!isOpen || !appointment) return null
+
+    const minDate = new Date()
+    minDate.setHours(0, 0, 0, 0)
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="fixed inset-0 bg-black/50" onClick={onClose} />
+            <div className="relative z-50 w-full max-w-md bg-background rounded-lg shadow-lg p-6">
+                <h2 className="text-xl font-semibold mb-1">Reschedule appointment</h2>
+                <p className="text-muted-foreground mb-4">{appointment.title}</p>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div className="space-y-2">
+                        <Label>Date</Label>
+                        <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+                            <PopoverTrigger asChild>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    className={cn(
+                                        "w-full justify-start text-left font-normal",
+                                        !selectedDate && "text-muted-foreground"
+                                    )}
+                                >
+                                    <Calendar className="mr-2 h-4 w-4" />
+                                    {selectedDate ? format(selectedDate, "EEEE, MMMM d, yyyy") : "Select date"}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0" align="start">
+                                <CalendarPicker
+                                    mode="single"
+                                    selected={selectedDate}
+                                    onSelect={(d) => {
+                                        setSelectedDate(d)
+                                        setCalendarOpen(false)
+                                    }}
+                                    disabled={(date) => date < minDate}
+                                    initialFocus
+                                />
+                            </PopoverContent>
+                        </Popover>
+                    </div>
+                    <div className="space-y-2">
+                        <Label className="flex items-center gap-2">
+                            <Clock className="h-4 w-4" />
+                            Time
+                        </Label>
+                        <Select value={selectedTime} onValueChange={setSelectedTime}>
+                            <SelectTrigger>
+                                <SelectValue placeholder="Select time" />
+                            </SelectTrigger>
+                            <SelectContent className="max-h-[300px]">
+                                {TIME_SLOTS.map((t) => (
+                                    <SelectItem key={t.value} value={t.value}>
+                                        {t.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="flex justify-end gap-3 pt-4">
+                        <Button type="button" variant="outline" onClick={onClose} disabled={isLoading}>
+                            Cancel
+                        </Button>
+                        <Button type="submit" disabled={isLoading || !selectedDate || !selectedTime}>
+                            {isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                            Save
+                        </Button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    )
+}
+
 export default function AppointmentsPage() {
     const { user } = useAuthStore()
     const { timezone } = useBrowserTimezone()
@@ -648,6 +781,7 @@ export default function AppointmentsPage() {
     // Modals
     const [showCreateModal, setShowCreateModal] = React.useState(false)
     const [showCompleteModal, setShowCompleteModal] = React.useState(false)
+    const [showRescheduleModal, setShowRescheduleModal] = React.useState(false)
     const [selectedAppointment, setSelectedAppointment] = React.useState<Appointment | null>(null)
     
     // Load data
@@ -705,6 +839,38 @@ export default function AppointmentsPage() {
             loadData()
         } catch (err) {
             console.error("Failed to cancel appointment:", err)
+        }
+    }
+
+    async function handleConfirm(appointment: Appointment) {
+        try {
+            await AppointmentService.update(appointment.id, { status: "confirmed" })
+            loadData()
+        } catch (err) {
+            console.error("Failed to confirm appointment:", err)
+        }
+    }
+
+    function handleReschedule(appointment: Appointment) {
+        setSelectedAppointment(appointment)
+        setShowRescheduleModal(true)
+    }
+
+    async function handleStatusUpdate(appointment: Appointment, status: AppointmentStatus) {
+        try {
+            await AppointmentService.update(appointment.id, { status })
+            loadData()
+        } catch (err) {
+            console.error("Failed to update status:", err)
+        }
+    }
+
+    async function handleNoShow(appointment: Appointment) {
+        try {
+            await AppointmentService.complete(appointment.id, { status: "no_show" })
+            loadData()
+        } catch (err) {
+            console.error("Failed to mark no show:", err)
         }
     }
     
@@ -1231,8 +1397,8 @@ export default function AppointmentsPage() {
                                             )}
                                         </div>
                                         
-                                        {/* Actions Dropdown */}
-                                        {["scheduled", "confirmed"].includes(appointment.status) && (
+                                        {/* Actions Dropdown - show for all non-terminal statuses */}
+                                        {!isAppointmentStatusTerminal(appointment.status) && (
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
                                                     <Button variant="ghost" size="sm">
@@ -1240,14 +1406,48 @@ export default function AppointmentsPage() {
                                                     </Button>
                                                 </DropdownMenuTrigger>
                                                 <DropdownMenuContent align="end">
-                                                    <DropdownMenuItem onClick={() => handleComplete(appointment)}>
-                                                        <CheckCircle className="mr-2 h-4 w-4 text-green-600" />
-                                                        Mark as Completed
-                                                    </DropdownMenuItem>
-                                                    <DropdownMenuItem onClick={() => handleCancel(appointment)} className="text-red-600">
-                                                        <XCircle className="mr-2 h-4 w-4" />
-                                                        Cancel Appointment
-                                                    </DropdownMenuItem>
+                                                    {appointment.status === "scheduled" && (
+                                                        <DropdownMenuItem onClick={() => handleConfirm(appointment)}>
+                                                            <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
+                                                            Confirm
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                    {(appointment.status === "scheduled" || appointment.status === "confirmed" || appointment.status === "arrived" || appointment.status === "in_showroom" || appointment.status === "in_progress" || appointment.status === "no_show") && (
+                                                        <DropdownMenuItem onClick={() => handleReschedule(appointment)}>
+                                                            <CalendarClock className="mr-2 h-4 w-4" />
+                                                            Reschedule
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                    {appointment.status === "arrived" && (
+                                                        <DropdownMenuItem onClick={() => handleStatusUpdate(appointment, "in_showroom")}>
+                                                            <Store className="mr-2 h-4 w-4" />
+                                                            Mark as In Showroom
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                    {(appointment.status === "arrived" || appointment.status === "in_showroom") && (
+                                                        <DropdownMenuItem onClick={() => handleStatusUpdate(appointment, "in_progress")}>
+                                                            <Clock className="mr-2 h-4 w-4" />
+                                                            Mark as In Progress
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                    {(appointment.status === "scheduled" || appointment.status === "confirmed" || appointment.status === "arrived" || appointment.status === "in_showroom" || appointment.status === "in_progress" || appointment.status === "no_show") && (
+                                                        <DropdownMenuItem onClick={() => handleComplete(appointment)}>
+                                                            <CheckCircle className="mr-2 h-4 w-4 text-green-600" />
+                                                            Mark as Completed
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                    {(appointment.status === "scheduled" || appointment.status === "confirmed" || appointment.status === "arrived" || appointment.status === "in_showroom" || appointment.status === "in_progress") && (
+                                                        <DropdownMenuItem onClick={() => handleNoShow(appointment)}>
+                                                            <XCircle className="mr-2 h-4 w-4 text-amber-600" />
+                                                            No Show
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                    {(appointment.status === "scheduled" || appointment.status === "confirmed" || appointment.status === "arrived" || appointment.status === "in_showroom" || appointment.status === "in_progress" || appointment.status === "no_show") && (
+                                                        <DropdownMenuItem onClick={() => handleCancel(appointment)} className="text-red-600">
+                                                            <XCircle className="mr-2 h-4 w-4" />
+                                                            Cancel Appointment
+                                                        </DropdownMenuItem>
+                                                    )}
                                                 </DropdownMenuContent>
                                             </DropdownMenu>
                                         )}
@@ -1291,6 +1491,12 @@ export default function AppointmentsPage() {
             <CompleteAppointmentModal
                 isOpen={showCompleteModal}
                 onClose={() => setShowCompleteModal(false)}
+                appointment={selectedAppointment}
+                onSuccess={loadData}
+            />
+            <RescheduleAppointmentModal
+                isOpen={showRescheduleModal}
+                onClose={() => { setShowRescheduleModal(false); setSelectedAppointment(null) }}
                 appointment={selectedAppointment}
                 onSuccess={loadData}
             />

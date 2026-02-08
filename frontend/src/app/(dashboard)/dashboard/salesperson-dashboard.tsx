@@ -13,7 +13,8 @@ import {
     Phone,
     Mail,
     Calendar,
-    CalendarClock
+    CalendarClock,
+    Store
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, MetricCard } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -31,54 +32,48 @@ import {
 import { DashboardService, SalespersonStats } from "@/services/dashboard-service"
 import { LeadService, Lead } from "@/services/lead-service"
 import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
+import { ShowroomService, ShowroomStats } from "@/services/showroom-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { DonutChart } from "@tremor/react"
-import { useStatsRefresh } from "@/hooks/use-websocket"
+import { useStatsRefresh, useShowroomUpdates } from "@/hooks/use-websocket"
 
 export function SalespersonDashboard() {
     const [stats, setStats] = React.useState<SalespersonStats | null>(null)
+    const [showroomStats, setShowroomStats] = React.useState<ShowroomStats | null>(null)
     const [recentLeads, setRecentLeads] = React.useState<Lead[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [upcomingAppointments, setUpcomingAppointments] = React.useState<Appointment[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const { timezone } = useBrowserTimezone()
 
-    const fetchStats = React.useCallback(async () => {
+    const loadData = React.useCallback(async () => {
         try {
-            const statsData = await DashboardService.getSalespersonStats()
+            const [statsData, showroomData, leadsData, todayData, upcomingData] = await Promise.all([
+                DashboardService.getSalespersonStats(),
+                ShowroomService.getStats().catch(() => null),
+                LeadService.listLeads({ page: 1, page_size: 5 }),
+                AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] })),
+                AppointmentService.list({ upcoming_only: true, page_size: 3 }).catch(() => ({ items: [] }))
+            ])
             setStats(statsData)
+            setShowroomStats(showroomData)
+            setRecentLeads(leadsData.items)
+            setTodayAppointments(todayData?.items || [])
+            setUpcomingAppointments(upcomingData?.items || [])
         } catch (error) {
             console.error("Failed to fetch dashboard stats:", error)
+        } finally {
+            setIsLoading(false)
         }
     }, [])
 
-    // Listen for real-time stats refresh via WebSocket
-    useStatsRefresh(React.useCallback(() => {
-        fetchStats()
-    }, [fetchStats]))
+    useStatsRefresh(loadData)
+    useShowroomUpdates(loadData)
 
     React.useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const [statsData, leadsData, todayData, upcomingData] = await Promise.all([
-                    DashboardService.getSalespersonStats(),
-                    LeadService.listLeads({ page: 1, page_size: 5 }),
-                    AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] })),
-                    AppointmentService.list({ upcoming_only: true, page_size: 3 }).catch(() => ({ items: [] }))
-                ])
-                setStats(statsData)
-                setRecentLeads(leadsData.items)
-                setTodayAppointments(todayData.items || [])
-                setUpcomingAppointments(upcomingData.items || [])
-            } catch (error) {
-                console.error("Failed to fetch dashboard stats:", error)
-            } finally {
-                setIsLoading(false)
-            }
-        }
-        fetchData()
-    }, [])
+        loadData()
+    }, [loadData])
 
     const statCards = stats ? [
         {
@@ -140,6 +135,38 @@ export function SalespersonDashboard() {
                     </Button>
                 </Link>
             </div>
+
+            {/* My customers in dealership (only this salesperson's leads) */}
+            {showroomStats !== null && (
+                <Card className="border-teal-200 bg-teal-50 dark:border-teal-900 dark:bg-teal-950">
+                    <CardContent className="flex items-center gap-4 p-4">
+                        <div className="rounded-full bg-teal-100 p-3 dark:bg-teal-900">
+                            <Store className="h-6 w-6 text-teal-600" />
+                        </div>
+                        <div className="flex-1">
+                            <p className="text-3xl font-bold text-teal-700 dark:text-teal-300">
+                                {showroomStats.currently_in_showroom}
+                            </p>
+                            <p className="text-sm text-teal-600 dark:text-teal-400">
+                                My Customers in Dealership Right Now
+                            </p>
+                        </div>
+                        <div className="text-right mr-4">
+                            <p className="text-lg font-semibold text-teal-700 dark:text-teal-300">
+                                {showroomStats.checked_in_today} today
+                            </p>
+                            <p className="text-sm text-teal-600 dark:text-teal-400">
+                                {showroomStats.sold_today} sold
+                            </p>
+                        </div>
+                        <Link href="/showroom">
+                            <Button variant="outline" className="border-teal-300 text-teal-700">
+                                View Showroom
+                            </Button>
+                        </Link>
+                    </CardContent>
+                </Card>
+            )}
 
             {/* Follow-up Alerts */}
             {stats && (stats.todays_follow_ups > 0 || stats.overdue_follow_ups > 0) && (

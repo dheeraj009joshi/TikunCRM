@@ -8,7 +8,7 @@ import { formatDistanceToNow } from "date-fns";
  * Parse a date string as UTC.
  * Backend sends timestamps without timezone suffix, but they ARE in UTC.
  */
-function parseAsUTC(date: Date | string): Date {
+export function parseAsUTC(date: Date | string): Date {
     if (date instanceof Date) return date;
     
     let str = String(date).trim();

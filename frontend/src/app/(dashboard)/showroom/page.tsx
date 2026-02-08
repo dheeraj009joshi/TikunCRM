@@ -14,8 +14,11 @@ import {
     CheckCircle2,
     XCircle,
     Calendar,
+    CalendarClock,
     ArrowUpDown,
-    ChevronRight
+    ChevronRight,
+    Store,
+    AlertCircle
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -63,12 +66,30 @@ import {
     getOutcomeColor 
 } from "@/services/showroom-service"
 import { LeadService, Lead } from "@/services/lead-service"
+import { AppointmentService, Appointment } from "@/services/appointment-service"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
+import { formatDateInTimezone } from "@/utils/timezone"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useWebSocket } from "@/hooks/use-websocket"
 import { useRole } from "@/hooks/use-role"
 import { cn } from "@/lib/utils"
+import { Calendar as CalendarComponent } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import Link from "next/link"
 import { Plus } from "lucide-react"
+
+// Time slots for reschedule (same as book appointment: 6 AM–11 PM, 15-min intervals)
+const RESCHEDULE_TIME_SLOTS: { value: string; label: string }[] = []
+for (let hour = 6; hour <= 23; hour++) {
+    for (let minute = 0; minute < 60; minute += 15) {
+        const h = hour.toString().padStart(2, "0")
+        const m = minute.toString().padStart(2, "0")
+        RESCHEDULE_TIME_SLOTS.push({
+            value: `${h}:${m}`,
+            label: `${hour % 12 || 12}:${m} ${hour >= 12 ? "PM" : "AM"}`,
+        })
+    }
+}
 
 export default function ShowroomPage() {
     const [currentVisits, setCurrentVisits] = React.useState<ShowroomVisit[]>([])
@@ -85,12 +106,16 @@ export default function ShowroomPage() {
     const [checkInNotes, setCheckInNotes] = React.useState("")
     const [checkInLoading, setCheckInLoading] = React.useState(false)
     const [searching, setSearching] = React.useState(false)
+    const [showCheckInAppointmentModal, setShowCheckInAppointmentModal] = React.useState(false)
+    const [leadAppointmentsForCheckIn, setLeadAppointmentsForCheckIn] = React.useState<Appointment[]>([])
     
     // Check-out modal
     const [showCheckOutModal, setShowCheckOutModal] = React.useState(false)
     const [checkOutVisit, setCheckOutVisit] = React.useState<ShowroomVisit | null>(null)
     const [checkOutOutcome, setCheckOutOutcome] = React.useState<ShowroomOutcome>("follow_up")
     const [checkOutNotes, setCheckOutNotes] = React.useState("")
+    const [checkOutRescheduleDate, setCheckOutRescheduleDate] = React.useState<Date | undefined>(undefined)
+    const [checkOutRescheduleTime, setCheckOutRescheduleTime] = React.useState("")
     const [checkOutLoading, setCheckOutLoading] = React.useState(false)
     
     // History pagination
@@ -102,6 +127,7 @@ export default function ShowroomPage() {
 
     const { hasPermission } = useRole()
     const canCreateLead = hasPermission("create_lead")
+    const { timezone } = useBrowserTimezone()
 
     // WebSocket for real-time updates
     const { lastMessage } = useWebSocket()
@@ -156,16 +182,18 @@ export default function ShowroomPage() {
         return () => clearTimeout(timer)
     }, [checkInLeadSearch])
 
-    const handleCheckIn = async () => {
+    const doCheckIn = async (appointmentId: string | null) => {
         if (!selectedLead) return
-        
         setCheckInLoading(true)
         try {
             await ShowroomService.checkIn({
                 lead_id: selectedLead.id,
-                notes: checkInNotes || undefined
+                notes: checkInNotes || undefined,
+                ...(appointmentId ? { appointment_id: appointmentId } : {}),
             })
             setShowCheckInModal(false)
+            setShowCheckInAppointmentModal(false)
+            setLeadAppointmentsForCheckIn([])
             setSelectedLead(null)
             setCheckInLeadSearch("")
             setCheckInNotes("")
@@ -179,24 +207,73 @@ export default function ShowroomPage() {
         }
     }
 
+    const handleCheckIn = async () => {
+        if (!selectedLead) return
+        setCheckInLoading(true)
+        try {
+            const now = new Date()
+            const startOfToday = new Date(now)
+            startOfToday.setHours(0, 0, 0, 0)
+            const res = await AppointmentService.list({
+                lead_id: selectedLead.id,
+                date_from: startOfToday.toISOString(),
+                page_size: 50,
+            })
+            const linkable = res.items.filter(
+                (a) =>
+                    ["scheduled", "confirmed"].includes(a.status) &&
+                    new Date(a.scheduled_at) >= now
+            )
+            if (linkable.length === 0) {
+                await doCheckIn(null)
+            } else if (linkable.length === 1) {
+                await doCheckIn(linkable[0].id)
+            } else {
+                setLeadAppointmentsForCheckIn(linkable)
+                setShowCheckInAppointmentModal(true)
+            }
+        } catch (error: any) {
+            const detail = error.response?.data?.detail
+            const message = typeof detail === "string" ? detail : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? JSON.stringify(d)).join(" ") : "Failed to load appointments"
+            alert(message)
+        } finally {
+            setCheckInLoading(false)
+        }
+    }
+
     const openCheckOut = (visit: ShowroomVisit) => {
         setCheckOutVisit(visit)
         setCheckOutOutcome("follow_up")
         setCheckOutNotes("")
+        setCheckOutRescheduleDate(undefined)
+        setCheckOutRescheduleTime("")
         setShowCheckOutModal(true)
     }
 
     const handleCheckOut = async () => {
         if (!checkOutVisit) return
-        
+        const needsReschedule = checkOutOutcome === "reschedule" && checkOutVisit.appointment_id
+        if (needsReschedule && (!checkOutRescheduleDate || !checkOutRescheduleTime)) {
+            alert("Please select a date and time for the rescheduled appointment.")
+            return
+        }
+        let reschedule_scheduled_at: string | undefined
+        if (needsReschedule && checkOutRescheduleDate && checkOutRescheduleTime) {
+            const [h, m] = checkOutRescheduleTime.split(":").map(Number)
+            const d = new Date(checkOutRescheduleDate.getFullYear(), checkOutRescheduleDate.getMonth(), checkOutRescheduleDate.getDate(), h, m, 0, 0)
+            reschedule_scheduled_at = d.toISOString()
+        }
         setCheckOutLoading(true)
         try {
             await ShowroomService.checkOut(checkOutVisit.id, {
                 outcome: checkOutOutcome,
-                notes: checkOutNotes || undefined
+                notes: checkOutNotes || undefined,
+                reschedule_scheduled_at,
             })
             setShowCheckOutModal(false)
             setCheckOutVisit(null)
+            setCheckOutRescheduleDate(undefined)
+            setCheckOutRescheduleTime("")
             loadData()
         } catch (error: any) {
             alert(error.response?.data?.detail || "Failed to check out")
@@ -649,6 +726,48 @@ export default function ShowroomPage() {
                 </DialogContent>
             </Dialog>
 
+            {/* Check-in: link to which appointment? (when lead has multiple) */}
+            <Dialog open={showCheckInAppointmentModal} onOpenChange={(open) => { if (!open) { setShowCheckInAppointmentModal(false); setLeadAppointmentsForCheckIn([]) } }}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <Store className="h-5 w-5 text-teal-600" />
+                            Link check-in to an appointment?
+                        </DialogTitle>
+                        <DialogDescription>
+                            This lead has more than one upcoming appointment. Choose which one they are here for, or check in without linking.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-2">
+                        {leadAppointmentsForCheckIn.map((apt) => (
+                            <Button
+                                key={apt.id}
+                                variant="outline"
+                                className="w-full justify-start text-left h-auto py-3 px-4"
+                                onClick={() => doCheckIn(apt.id)}
+                                disabled={checkInLoading}
+                            >
+                                <CalendarClock className="h-4 w-4 mr-3 shrink-0 text-muted-foreground" />
+                                <div className="min-w-0">
+                                    <div className="font-medium truncate">{apt.title || "Appointment"}</div>
+                                    <div className="text-sm text-muted-foreground">
+                                        {formatDateInTimezone(apt.scheduled_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
+                                    </div>
+                                </div>
+                            </Button>
+                        ))}
+                        <Button
+                            variant="ghost"
+                            className="w-full justify-start text-muted-foreground"
+                            onClick={() => doCheckIn(null)}
+                            disabled={checkInLoading}
+                        >
+                            Check in without linking to an appointment
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
             {/* Create Lead (from check-in when not found) */}
             <CreateLeadModal
                 isOpen={showCreateLeadFromCheckIn}
@@ -731,9 +850,64 @@ export default function ShowroomPage() {
                                                 Just Browsing
                                             </div>
                                         </SelectItem>
+                                        <SelectItem value="couldnt_qualify">
+                                            <div className="flex items-center gap-2">
+                                                <AlertCircle className="h-4 w-4 text-amber-600" />
+                                                Couldn&apos;t Qualify
+                                            </div>
+                                        </SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
+
+                            {checkOutOutcome === "reschedule" && checkOutVisit?.appointment_id && (
+                                <div className="space-y-3 rounded-lg border p-3 bg-muted/30">
+                                    <p className="text-sm font-medium">Reschedule linked appointment</p>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="space-y-1.5">
+                                            <Label className="text-xs">Date</Label>
+                                            <Popover>
+                                                <PopoverTrigger asChild>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className={cn("w-full justify-start text-left font-normal", !checkOutRescheduleDate && "text-muted-foreground")}
+                                                    >
+                                                        <Calendar className="mr-2 h-4 w-4" />
+                                                        {checkOutRescheduleDate ? format(checkOutRescheduleDate, "MMM d, yyyy") : "Pick date"}
+                                                    </Button>
+                                                </PopoverTrigger>
+                                                <PopoverContent className="w-auto p-0" align="start">
+                                                    <CalendarComponent
+                                                        mode="single"
+                                                        selected={checkOutRescheduleDate}
+                                                        onSelect={setCheckOutRescheduleDate}
+                                                        disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
+                                                    />
+                                                </PopoverContent>
+                                            </Popover>
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <Label className="text-xs">Time</Label>
+                                            <Select
+                                                value={checkOutRescheduleTime}
+                                                onValueChange={setCheckOutRescheduleTime}
+                                            >
+                                                <SelectTrigger className="h-9">
+                                                    <SelectValue placeholder="Select time" />
+                                                </SelectTrigger>
+                                                <SelectContent className="max-h-[220px]">
+                                                    {RESCHEDULE_TIME_SLOTS.map((t) => (
+                                                        <SelectItem key={t.value} value={t.value}>
+                                                            {t.label}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="space-y-2">
                                 <Label>Notes (optional)</Label>
@@ -748,12 +922,24 @@ export default function ShowroomPage() {
                     )}
 
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setShowCheckOutModal(false)}>
+                        <Button
+                            variant="outline"
+                            onClick={() => {
+                                setShowCheckOutModal(false)
+                                setCheckOutRescheduleDate(undefined)
+                                setCheckOutRescheduleTime("")
+                            }}
+                        >
                             Cancel
                         </Button>
-                        <Button 
+                        <Button
                             onClick={handleCheckOut}
-                            disabled={checkOutLoading}
+                            disabled={
+                                checkOutLoading ||
+                                !!(checkOutOutcome === "reschedule" &&
+                                    checkOutVisit?.appointment_id &&
+                                    (!checkOutRescheduleDate || !checkOutRescheduleTime))
+                            }
                         >
                             {checkOutLoading ? "Checking Out..." : "Check Out"}
                         </Button>

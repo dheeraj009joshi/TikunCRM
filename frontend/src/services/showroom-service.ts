@@ -3,7 +3,7 @@
  */
 import apiClient from "@/lib/api-client"
 
-export type ShowroomOutcome = "sold" | "not_interested" | "follow_up" | "reschedule" | "browsing"
+export type ShowroomOutcome = "sold" | "not_interested" | "follow_up" | "reschedule" | "browsing" | "couldnt_qualify"
 
 export interface LeadBrief {
     id: string
@@ -66,6 +66,8 @@ export interface CheckInData {
 export interface CheckOutData {
     outcome: ShowroomOutcome
     notes?: string
+    /** When outcome is reschedule and visit has appointment_id, new date/time for the appointment (ISO string) */
+    reschedule_scheduled_at?: string
 }
 
 export const ShowroomService = {
@@ -126,6 +128,7 @@ export function getOutcomeLabel(outcome: ShowroomOutcome): string {
         follow_up: "Follow Up",
         reschedule: "Reschedule",
         browsing: "Just Browsing",
+        couldnt_qualify: "Couldn't Qualify",
     }
     return labels[outcome] || outcome
 }
@@ -140,6 +143,7 @@ export function getOutcomeColor(outcome: ShowroomOutcome): string {
         follow_up: "bg-blue-100 text-blue-800",
         reschedule: "bg-purple-100 text-purple-800",
         browsing: "bg-yellow-100 text-yellow-800",
+        couldnt_qualify: "bg-amber-100 text-amber-800",
     }
     return colors[outcome] || "bg-gray-100 text-gray-800"
 }

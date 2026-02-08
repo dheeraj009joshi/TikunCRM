@@ -51,6 +51,7 @@ export interface FollowUpUpdate {
 }
 
 export interface FollowUpListParams {
+    lead_id?: string;
     status?: FollowUpStatus;
     overdue?: boolean;
 }
