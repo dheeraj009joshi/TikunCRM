@@ -67,8 +67,11 @@ SelectScrollDownButton.displayName = SelectPrimitive.ScrollDownButton.displayNam
 
 const SelectContent = React.forwardRef<
     React.ComponentRef<typeof SelectPrimitive.Content>,
-    React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
->(({ className, children, position = "popper", ...props }, ref) => (
+    React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content> & {
+        /** Optional class for the viewport to e.g. show all options without scroll (!h-auto !max-h-[420px]) */
+        viewportClassName?: string
+    }
+>(({ className, children, position = "popper", viewportClassName, ...props }, ref) => (
     <SelectPrimitive.Portal>
         <SelectPrimitive.Content
             ref={ref}
@@ -86,7 +89,8 @@ const SelectContent = React.forwardRef<
                 className={cn(
                     "p-1",
                     position === "popper" &&
-                    "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]"
+                    "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]",
+                    viewportClassName
                 )}
             >
                 {children}

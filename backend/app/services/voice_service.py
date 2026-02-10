@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.timezone import utc_now
 from app.models.call_log import CallLog, CallDirection, CallStatus
 from app.models.lead import Lead
+from app.models.customer import Customer
 from app.models.user import User
 from app.models.activity import ActivityType
 from app.services.azure_storage_service import azure_storage_service
@@ -103,18 +104,27 @@ class VoiceService:
             raise
     
     async def find_lead_by_phone(self, phone: str) -> Optional[Lead]:
-        """Find a lead by phone number (normalized search)"""
-        # Normalize phone number for search
-        normalized = ''.join(c for c in phone if c.isdigit())
-        
-        # Search in both phone and alternate_phone
-        result = await self.db.execute(
-            select(Lead).where(
+        """Find a lead by phone number via Customer table (most recent lead for that customer)."""
+        normalized = "".join(c for c in phone if c.isdigit())
+        if len(normalized) < 10:
+            return None
+        suffix = normalized[-10:]
+        cust_result = await self.db.execute(
+            select(Customer).where(
                 or_(
-                    Lead.phone.ilike(f"%{normalized[-10:]}%"),
-                    Lead.alternate_phone.ilike(f"%{normalized[-10:]}%")
+                    Customer.phone.ilike(f"%{suffix}"),
+                    Customer.alternate_phone.ilike(f"%{suffix}"),
                 )
             ).limit(1)
+        )
+        customer = cust_result.scalar_one_or_none()
+        if not customer:
+            return None
+        result = await self.db.execute(
+            select(Lead)
+            .where(Lead.customer_id == customer.id)
+            .order_by(Lead.updated_at.desc())
+            .limit(1)
         )
         return result.scalar_one_or_none()
     
@@ -160,11 +170,12 @@ class VoiceService:
         to_number: str,
         user_id: Optional[UUID] = None,
         lead_id: Optional[UUID] = None,
+        customer_id: Optional[UUID] = None,
         dealership_id: Optional[UUID] = None,
         status: CallStatus = CallStatus.INITIATED,
         parent_call_sid: Optional[str] = None
     ) -> CallLog:
-        """Create a new call log entry"""
+        """Create a new call log entry (customer_id for unified history)."""
         call_log = CallLog(
             twilio_call_sid=twilio_call_sid,
             twilio_parent_call_sid=parent_call_sid,
@@ -173,6 +184,7 @@ class VoiceService:
             to_number=to_number,
             user_id=user_id,
             lead_id=lead_id,
+            customer_id=customer_id,
             dealership_id=dealership_id,
             status=status,
             started_at=utc_now()
@@ -380,7 +392,7 @@ class VoiceService:
         dial = Dial(
             caller_id=caller_id or settings.twilio_phone_number,
             record="record-from-answer-dual" if record else "do-not-record",
-            recording_status_callback=f"{settings.frontend_url.replace('localhost:3000', 'localhost:8000')}/api/v1/voice/webhook/recording",
+            recording_status_callback=f"{settings.backend_url.rstrip('/')}/api/v1/voice/webhook/recording",
             recording_status_callback_event="completed"
         )
         dial.number(to_number)
@@ -399,7 +411,7 @@ class VoiceService:
         response = VoiceResponse()
         dial = Dial(
             record="record-from-answer-dual" if record else "do-not-record",
-            recording_status_callback=f"{settings.frontend_url.replace('localhost:3000', 'localhost:8000')}/api/v1/voice/webhook/recording",
+            recording_status_callback=f"{settings.backend_url.rstrip('/')}/api/v1/voice/webhook/recording",
             recording_status_callback_event="completed"
         )
         dial.client(client_identity)

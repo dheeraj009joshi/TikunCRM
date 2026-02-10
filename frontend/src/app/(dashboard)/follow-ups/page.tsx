@@ -387,7 +387,7 @@ export default function FollowUpsPage() {
                                 const statusInfo = FOLLOW_UP_STATUS_INFO[followUp.status]
                                 const isOverdue = followUp.status === "pending" && new Date(followUp.scheduled_at) < new Date()
                                 const leadName = followUp.lead
-                                    ? `${followUp.lead.first_name} ${followUp.lead.last_name || ""}`.trim()
+                                    ? (followUp.lead.customer?.full_name || `${followUp.lead.customer?.first_name || ""} ${followUp.lead.customer?.last_name || ""}`.trim() || "Unknown")
                                     : "Unknown Lead"
                                 
                                 return (
@@ -453,16 +453,16 @@ export default function FollowUpsPage() {
                                                                     </Badge>
                                                                 </div>
                                                             )}
-                                                            {followUp.lead?.phone && (
+                                                            {followUp.lead?.customer?.phone && (
                                                                 <div className="flex items-center gap-1">
                                                                     <Phone className="h-4 w-4" />
-                                                                    <span>{followUp.lead.phone}</span>
+                                                                    <span>{followUp.lead.customer.phone}</span>
                                                                 </div>
                                                             )}
-                                                            {followUp.lead?.email && (
+                                                            {followUp.lead?.customer?.email && (
                                                                 <div className="flex items-center gap-1">
                                                                     <Mail className="h-4 w-4" />
-                                                                    <span className="truncate max-w-[200px]">{followUp.lead.email}</span>
+                                                                    <span className="truncate max-w-[200px]">{followUp.lead.customer.email}</span>
                                                                 </div>
                                                             )}
                                                         </div>

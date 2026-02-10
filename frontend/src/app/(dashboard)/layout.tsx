@@ -7,6 +7,7 @@ import { EmailConfigReminderModal } from "@/components/email-config-reminder-mod
 import { SkateAlertDialog } from "@/components/skate-alert-dialog"
 import { SkateConfirmDialog } from "@/components/skate-confirm-dialog"
 import { WebSocketProvider } from "@/components/providers/websocket-provider"
+import { SidebarProvider, useSidebarOptional } from "@/contexts/sidebar-context"
 import { Softphone } from "@/components/softphone"
 import { useAuthStore } from "@/stores/auth-store"
 
@@ -58,23 +59,43 @@ export default function DashboardLayout({
 
     return (
         <WebSocketProvider>
-            <div className="flex min-h-screen bg-background text-foreground">
-                <Sidebar />
-                <div className="flex flex-1 flex-col pl-64">
-                    <Header />
-                    <main className="flex-1 p-6 overflow-y-auto">
-                        {children}
-                    </main>
-                </div>
-                <EmailConfigReminderModal 
-                    open={showReminder} 
-                    onOpenChange={handleReminderClose}
-                />
-                <SkateAlertDialog />
-                <SkateConfirmDialog />
-                {/* Floating softphone for voice calls */}
-                <Softphone />
-            </div>
+            <SidebarProvider>
+                <DashboardContent
+                    showReminder={showReminder}
+                    onReminderClose={handleReminderClose}
+                >
+                    {children}
+                </DashboardContent>
+            </SidebarProvider>
         </WebSocketProvider>
+    )
+}
+
+function DashboardContent({
+    children,
+    showReminder,
+    onReminderClose,
+}: {
+    children: React.ReactNode
+    showReminder: boolean
+    onReminderClose: (open: boolean) => void
+}) {
+    const sidebar = useSidebarOptional()
+    const collapsed = sidebar?.collapsed ?? false
+
+    return (
+        <div className="flex min-h-screen bg-background text-foreground">
+            <Sidebar />
+            <div className={collapsed ? "flex min-w-0 flex-1 flex-col pl-16 transition-[padding] duration-200" : "flex min-w-0 flex-1 flex-col pl-64 transition-[padding] duration-200"}>
+                <Header />
+                <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-6">
+                    {children}
+                </main>
+            </div>
+            <EmailConfigReminderModal open={showReminder} onOpenChange={onReminderClose} />
+            <SkateAlertDialog />
+            <SkateConfirmDialog />
+            <Softphone />
+        </div>
     )
 }

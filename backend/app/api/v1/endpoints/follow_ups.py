@@ -22,7 +22,9 @@ from app.models.lead import Lead
 from app.models.activity import ActivityType
 from app.schemas.follow_up import FollowUpResponse, FollowUpCreate, FollowUpUpdate
 from app.schemas.lead import LeadBrief
+from app.schemas.customer import CustomerBrief
 from app.schemas.user import UserBrief
+from app.models.customer import Customer
 from app.services.activity import ActivityService
 from app.services.notification_service import NotificationService, send_skate_alert_background, emit_stats_refresh
 from app.utils.skate_helper import check_skate_condition
@@ -51,9 +53,10 @@ async def list_follow_ups(
     if current_user.role == UserRole.SALESPERSON:
         query = query.where(FollowUp.assigned_to == current_user.id)
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        # Get users in dealership first or join with User model
-        from app.models.user import User as UserModel
-        query = query.join(UserModel).where(UserModel.dealership_id == current_user.dealership_id)
+        # Show follow-ups whose assignee is in the same dealership (explicit join on assigned_to)
+        query = query.join(User, FollowUp.assigned_to == User.id).where(
+            User.dealership_id == current_user.dealership_id
+        )
         
     if lead_id is not None:
         query = query.where(FollowUp.lead_id == lead_id)
@@ -77,15 +80,18 @@ async def list_follow_ups(
     for follow_up in follow_ups:
         follow_up_dict = {
             **follow_up.__dict__,
-            "lead": LeadBrief(
-                id=follow_up.lead.id,
-                first_name=follow_up.lead.first_name,
-                last_name=follow_up.lead.last_name,
-                email=follow_up.lead.email,
-                phone=follow_up.lead.phone,
-                status=follow_up.lead.status,
-                source=follow_up.lead.source
-            ) if follow_up.lead else None,
+            "lead": {
+                "id": str(follow_up.lead.id),
+                "customer": {
+                    "id": str(follow_up.lead.customer_id),
+                    "first_name": follow_up.lead.first_name,
+                    "last_name": follow_up.lead.last_name,
+                    "phone": follow_up.lead.phone,
+                    "email": follow_up.lead.email,
+                } if follow_up.lead else None,
+                "source": follow_up.lead.source.value if follow_up.lead else None,
+                "is_active": follow_up.lead.is_active if follow_up.lead else True,
+            } if follow_up.lead else None,
             "assigned_to_user": UserBrief(
                 id=follow_up.assigned_to_user.id,
                 email=follow_up.assigned_to_user.email,
@@ -207,19 +213,16 @@ async def schedule_follow_up(
         .where(FollowUp.id == follow_up.id)
     )
     follow_up = result.scalar_one()
-    
-    # Enrich response
+
+    # Enrich response (schedule)
     follow_up_dict = {
         **follow_up.__dict__,
-        "lead": LeadBrief(
-            id=follow_up.lead.id,
-            first_name=follow_up.lead.first_name,
-            last_name=follow_up.lead.last_name,
-            email=follow_up.lead.email,
-            phone=follow_up.lead.phone,
-            status=follow_up.lead.status,
-            source=follow_up.lead.source
-        ) if follow_up.lead else None,
+        "lead": {
+            "id": str(follow_up.lead.id),
+            "customer": {"id": str(follow_up.lead.customer_id), "first_name": follow_up.lead.first_name, "last_name": follow_up.lead.last_name, "phone": follow_up.lead.phone, "email": follow_up.lead.email} if follow_up.lead else None,
+            "source": follow_up.lead.source.value if follow_up.lead else None,
+            "is_active": follow_up.lead.is_active if follow_up.lead else True,
+        } if follow_up.lead else None,
         "assigned_to_user": UserBrief(
             id=follow_up.assigned_to_user.id,
             email=follow_up.assigned_to_user.email,
@@ -293,18 +296,15 @@ async def complete_follow_up(
     except Exception:
         pass
     
-    # Enrich response
+    # Enrich response (complete)
     follow_up_dict = {
         **follow_up.__dict__,
-        "lead": LeadBrief(
-            id=follow_up.lead.id,
-            first_name=follow_up.lead.first_name,
-            last_name=follow_up.lead.last_name,
-            email=follow_up.lead.email,
-            phone=follow_up.lead.phone,
-            status=follow_up.lead.status,
-            source=follow_up.lead.source
-        ) if follow_up.lead else None,
+        "lead": {
+            "id": str(follow_up.lead.id),
+            "customer": {"id": str(follow_up.lead.customer_id), "first_name": follow_up.lead.first_name, "last_name": follow_up.lead.last_name, "phone": follow_up.lead.phone, "email": follow_up.lead.email} if follow_up.lead else None,
+            "source": follow_up.lead.source.value if follow_up.lead else None,
+            "is_active": follow_up.lead.is_active if follow_up.lead else True,
+        } if follow_up.lead else None,
         "assigned_to_user": UserBrief(
             id=follow_up.assigned_to_user.id,
             email=follow_up.assigned_to_user.email,

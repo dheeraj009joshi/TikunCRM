@@ -17,7 +17,7 @@ import {
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Badge, getStatusVariant, getSourceVariant } from "@/components/ui/badge"
+import { Badge, getSourceVariant } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
@@ -37,7 +37,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
-import { LeadService, Lead, LeadListResponse } from "@/services/lead-service"
+import { LeadService, Lead, LeadListResponse, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
 import { AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { useRole } from "@/hooks/use-role"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
@@ -287,11 +287,11 @@ export default function UnassignedLeadsPage() {
                                         <TableCell>
                                             <div className="flex items-center gap-3">
                                                 <div className="flex h-9 w-9 items-center justify-center rounded-full bg-amber-500/10 text-amber-600 font-semibold">
-                                                    {lead.first_name.charAt(0)}
+                                                    {(lead.customer?.first_name || "?").charAt(0)}
                                                 </div>
                                                 <div>
                                                     <p className="font-semibold">
-                                                        {lead.first_name} {lead.last_name}
+                                                        {getLeadFullName(lead)}
                                                     </p>
                                                     {lead.interested_in && (
                                                         <p className="text-xs text-muted-foreground">
@@ -308,16 +308,16 @@ export default function UnassignedLeadsPage() {
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex flex-col gap-1">
-                                                {lead.email && (
+                                                {getLeadEmail(lead) && (
                                                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
                                                         <Mail className="h-3 w-3" />
-                                                        {lead.email}
+                                                        {getLeadEmail(lead)}
                                                     </span>
                                                 )}
-                                                {lead.phone && (
+                                                {getLeadPhone(lead) && (
                                                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
                                                         <Phone className="h-3 w-3" />
-                                                        {lead.phone}
+                                                        {getLeadPhone(lead)}
                                                     </span>
                                                 )}
                                             </div>

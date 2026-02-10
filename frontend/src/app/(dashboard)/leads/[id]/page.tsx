@@ -10,6 +10,7 @@ import {
     Clock,
     ChevronLeft,
     MessageSquare,
+    MessageCircle,
     Send,
     User,
     Building2,
@@ -64,12 +65,14 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
+import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
+import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { ActivityService, Activity, ACTIVITY_TYPE_INFO, ActivityType } from "@/services/activity-service"
 import { ShowroomService, ShowroomVisit, ShowroomOutcome, getOutcomeLabel } from "@/services/showroom-service"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
-import { AssignToDealershipModal, AssignToSalespersonModal } from "@/components/leads/assignment-modal"
+import { AssignToDealershipModal, AssignToSalespersonModal, AssignSecondaryCustomerModal } from "@/components/leads/assignment-modal"
+import { getCustomerFullName } from "@/services/customer-service"
 import { EmailComposerModal } from "@/components/emails/email-composer-modal"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
 import { BookAppointmentModal } from "@/components/appointments/book-appointment-modal"
@@ -110,26 +113,13 @@ for (let hour = 6; hour <= 23; hour++) {
     }
 }
 
-const LEAD_STATUSES = [
-    { value: "new", label: "New", color: "blue" },
-    { value: "contacted", label: "Contacted", color: "amber" },
-    { value: "follow_up", label: "Follow Up", color: "purple" },
-    { value: "interested", label: "Interested", color: "emerald" },
-    { value: "not_interested", label: "Not Interested", color: "gray" },
-    { value: "in_showroom", label: "In Showroom", color: "orange" },
-    { value: "converted", label: "Converted", color: "emerald" },
-    { value: "lost", label: "Lost", color: "rose" },
-    { value: "couldnt_qualify", label: "Couldn't Qualify", color: "amber" },
-    { value: "browsing", label: "Browsing", color: "yellow" },
-    { value: "reschedule", label: "Reschedule", color: "purple" },
-]
-
 // Activity type icon mapping
 const getActivityIcon = (type: ActivityType) => {
     switch (type) {
         case "lead_created": return <PlusCircle className="h-4 w-4 text-emerald-500" />
         case "lead_assigned": return <UserPlus className="h-4 w-4 text-blue-500" />
         case "lead_reassigned": return <RefreshCw className="h-4 w-4 text-amber-500" />
+        case "lead_updated": return <Pencil className="h-4 w-4 text-slate-500" />
         case "status_changed": return <RefreshCw className="h-4 w-4 text-purple-500" />
         case "note_added": return <MessageSquare className="h-4 w-4 text-gray-500" />
         case "call_logged": return <PhoneCall className="h-4 w-4 text-emerald-500" />
@@ -319,6 +309,7 @@ export default function LeadDetailsPage() {
     // Assignment modals
     const [showDealershipModal, setShowDealershipModal] = React.useState(false)
     const [showSalespersonModal, setShowSalespersonModal] = React.useState(false)
+    const [showSecondaryCustomerModal, setShowSecondaryCustomerModal] = React.useState(false)
     
     // Delete confirmation
     const [showDeleteDialog, setShowDeleteDialog] = React.useState(false)
@@ -358,6 +349,9 @@ export default function LeadDetailsPage() {
     const [activeActivityTab, setActiveActivityTab] = React.useState<"timeline" | "notes" | "appointments" | "followups">(
         noteIdFromUrl ? "notes" : "timeline"
     )
+
+    // Pipeline stages (for status dropdown with correct colors)
+    const [stages, setStages] = React.useState<LeadStage[]>([])
     
     // Lead details editing
     const [isEditingDetails, setIsEditingDetails] = React.useState(false)
@@ -629,6 +623,10 @@ export default function LeadDetailsPage() {
         fetchShowroomStatus()
         fetchLeadAppointmentsAndFollowUps()
     }, [fetchLead, fetchActivities, fetchShowroomStatus, fetchLeadAppointmentsAndFollowUps])
+
+    React.useEffect(() => {
+        LeadStageService.list().then(setStages).catch(console.error)
+    }, [])
     
     // When opened from mention notification (?note=activity_id): expand thread if reply, then scroll to note
     const scrolledToNoteRef = React.useRef<string | null>(null)
@@ -744,7 +742,7 @@ export default function LeadDetailsPage() {
                     () => handleStatusChange(newStatus, notes, true) // Retry with confirmation
                 )
             } else {
-                setLead({ ...lead, status: newStatus })
+                setLead(result as Lead)
                 fetchActivities() // Refresh to show the status change with reason
             }
         } catch (error) {
@@ -866,21 +864,21 @@ export default function LeadDetailsPage() {
     const handleEditStart = () => {
         if (!lead) return
         setEditForm({
-            first_name: lead.first_name || "",
-            last_name: lead.last_name || "",
-            email: lead.email || "",
-            phone: lead.phone || "",
-            alternate_phone: lead.alternate_phone || "",
-            address: lead.address || "",
-            city: lead.city || "",
-            state: lead.state || "",
-            postal_code: lead.postal_code || "",
-            country: lead.country || "",
-            company: lead.company || "",
-            job_title: lead.job_title || "",
-            date_of_birth: lead.date_of_birth ? lead.date_of_birth.split("T")[0] : "",
-            preferred_contact_method: lead.preferred_contact_method || "",
-            preferred_contact_time: lead.preferred_contact_time || "",
+            first_name: lead.customer?.first_name || "",
+            last_name: lead.customer?.last_name || "",
+            email: lead.customer?.email || "",
+            phone: lead.customer?.phone || "",
+            alternate_phone: (lead as any).customer?.alternate_phone || "",
+            address: (lead as any).customer?.address || "",
+            city: (lead as any).customer?.city || "",
+            state: (lead as any).customer?.state || "",
+            postal_code: (lead as any).customer?.postal_code || "",
+            country: (lead as any).customer?.country || "",
+            company: (lead as any).customer?.company || "",
+            job_title: (lead as any).customer?.job_title || "",
+            date_of_birth: (lead as any).customer?.date_of_birth ? String((lead as any).customer.date_of_birth).split("T")[0] : "",
+            preferred_contact_method: (lead as any).customer?.preferred_contact_method || "",
+            preferred_contact_time: (lead as any).customer?.preferred_contact_time || "",
             interested_in: lead.interested_in || "",
             budget_range: lead.budget_range || "",
             notes: lead.notes || "",
@@ -898,20 +896,21 @@ export default function LeadDetailsPage() {
         try {
             const updateData: Partial<typeof editForm> = {}
             // Only include fields that changed
-            if (editForm.first_name !== (lead.first_name || "")) updateData.first_name = editForm.first_name
-            if (editForm.last_name !== (lead.last_name || "")) updateData.last_name = editForm.last_name || undefined
-            if (editForm.email !== (lead.email || "")) updateData.email = editForm.email || undefined
-            if (editForm.phone !== (lead.phone || "")) updateData.phone = editForm.phone || undefined
-            if (editForm.alternate_phone !== (lead.alternate_phone || "")) updateData.alternate_phone = editForm.alternate_phone || undefined
-            if (editForm.address !== (lead.address || "")) updateData.address = editForm.address || undefined
-            if (editForm.city !== (lead.city || "")) updateData.city = editForm.city || undefined
-            if (editForm.state !== (lead.state || "")) updateData.state = editForm.state || undefined
-            if (editForm.postal_code !== (lead.postal_code || "")) updateData.postal_code = editForm.postal_code || undefined
-            if (editForm.country !== (lead.country || "")) updateData.country = editForm.country || undefined
-            if (editForm.company !== (lead.company || "")) updateData.company = editForm.company || undefined
-            if (editForm.job_title !== (lead.job_title || "")) updateData.job_title = editForm.job_title || undefined
-            if (editForm.preferred_contact_method !== (lead.preferred_contact_method || "")) updateData.preferred_contact_method = editForm.preferred_contact_method || undefined
-            if (editForm.preferred_contact_time !== (lead.preferred_contact_time || "")) updateData.preferred_contact_time = editForm.preferred_contact_time || undefined
+            if (editForm.first_name !== (lead.customer?.first_name || "")) updateData.first_name = editForm.first_name
+            if (editForm.last_name !== (lead.customer?.last_name || "")) updateData.last_name = editForm.last_name || undefined
+            if (editForm.email !== (lead.customer?.email || "")) updateData.email = editForm.email || undefined
+            if (editForm.phone !== (lead.customer?.phone || "")) updateData.phone = editForm.phone || undefined
+            const _c = lead.customer as any || {}
+            if (editForm.alternate_phone !== (_c.alternate_phone || "")) updateData.alternate_phone = editForm.alternate_phone || undefined
+            if (editForm.address !== (_c.address || "")) updateData.address = editForm.address || undefined
+            if (editForm.city !== (_c.city || "")) updateData.city = editForm.city || undefined
+            if (editForm.state !== (_c.state || "")) updateData.state = editForm.state || undefined
+            if (editForm.postal_code !== (_c.postal_code || "")) updateData.postal_code = editForm.postal_code || undefined
+            if (editForm.country !== (_c.country || "")) updateData.country = editForm.country || undefined
+            if (editForm.company !== (_c.company || "")) updateData.company = editForm.company || undefined
+            if (editForm.job_title !== (_c.job_title || "")) updateData.job_title = editForm.job_title || undefined
+            if (editForm.preferred_contact_method !== (_c.preferred_contact_method || "")) updateData.preferred_contact_method = editForm.preferred_contact_method || undefined
+            if (editForm.preferred_contact_time !== (_c.preferred_contact_time || "")) updateData.preferred_contact_time = editForm.preferred_contact_time || undefined
             if (editForm.interested_in !== (lead.interested_in || "")) updateData.interested_in = editForm.interested_in || undefined
             if (editForm.budget_range !== (lead.budget_range || "")) updateData.budget_range = editForm.budget_range || undefined
             if (editForm.notes !== (lead.notes || "")) updateData.notes = editForm.notes || undefined
@@ -956,15 +955,14 @@ export default function LeadDetailsPage() {
         )
     }
 
-    const currentStatus = LEAD_STATUSES.find(s => s.value === lead.status)
     const isMentionOnly = lead.access_level === "mention_only"
 
     return (
         <div className="h-[calc(100vh-120px)] flex flex-col max-w-7xl mx-auto overflow-hidden">
             {/* Navigation */}
             <div className="flex items-center justify-between shrink-0 mb-4">
-                <Link href="/leads" className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1">
-                    <ChevronLeft className="h-4 w-4" />
+                <Link href="/leads" className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors duration-200 rounded-md hover:bg-muted/50 px-2 py-1 -mx-2 -my-1">
+                    <ChevronLeft className="h-4 w-4 shrink-0" />
                     Back to Leads
                 </Link>
                 <div className="flex items-center gap-2">
@@ -1023,44 +1021,47 @@ export default function LeadDetailsPage() {
                 {/* Left Column: Profile & Info */}
                 <div className="lg:col-span-1 space-y-6 overflow-y-auto">
                     {/* Profile Card */}
-                    <Card>
+                    <Card className="overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
                         <CardContent className="p-6">
                             <div className="flex flex-col items-center text-center">
-                                <div className="h-20 w-20 rounded-full bg-primary/10 flex items-center justify-center text-primary text-3xl font-bold mb-4">
-                                    {lead.first_name.charAt(0)}
+                                <div className="h-20 w-20 rounded-full bg-primary/10 flex items-center justify-center text-primary text-3xl font-bold mb-4 ring-2 ring-primary/5 transition-transform duration-200 hover:scale-105">
+                                    {(lead.customer?.first_name || "?").charAt(0)}
                                 </div>
-                                <h1 className="text-2xl font-bold">
-                                    {lead.first_name} {lead.last_name}
+                                <h1 className="text-2xl font-bold tracking-tight text-foreground">
+                                    {getLeadFullName(lead)}
                                 </h1>
                                 
                                 {/* Status Selector - hidden for mention-only access */}
                                 {!isMentionOnly && (
                                 <div className="mt-3 w-full max-w-xs">
                                     <Select 
-                                        value={lead.status} 
+                                        value={lead.stage?.name || ""} 
                                         onValueChange={handleStatusChange}
                                         disabled={isUpdatingStatus}
                                     >
-                                        <SelectTrigger className="w-full">
+                                        <SelectTrigger className="w-full bg-white border-input hover:bg-muted/50 transition-colors duration-200 rounded-lg">
                                             <div className="flex items-center gap-2">
                                                 {isUpdatingStatus && <Loader2 className="h-4 w-4 animate-spin" />}
-                                                <Badge variant={getStatusVariant(lead.status)}>
-                                                    {lead.status.replace('_', ' ')}
+                                                <Badge size="sm" variant={getStatusVariant(lead.stage?.name ?? "")}>
+                                                    {getStageLabel(lead.stage)}
                                                 </Badge>
                                             </div>
                                         </SelectTrigger>
-                                        <SelectContent>
-                                            {LEAD_STATUSES
-                                                .filter(status => {
+                                        <SelectContent
+                                            className="bg-white shadow-lg max-h-[420px]"
+                                            viewportClassName="!h-auto !max-h-[420px]"
+                                        >
+                                            {stages
+                                                .filter((stage) => {
                                                     // Salespersons cannot set status to "lost" or "converted" - only admin/owner can
-                                                    if (isSalesperson && (status.value === "lost" || status.value === "converted")) return false
+                                                    if (isSalesperson && (stage.name === "lost" || stage.name === "converted")) return false
                                                     return true
                                                 })
-                                                .map((status) => (
-                                                <SelectItem key={status.value} value={status.value}>
+                                                .map((stage) => (
+                                                <SelectItem key={stage.id} value={stage.name}>
                                                     <div className="flex items-center gap-2">
-                                                        <Badge variant={getStatusVariant(status.value)} size="sm">
-                                                            {status.label}
+                                                        <Badge size="sm" variant={getStatusVariant(stage.name)}>
+                                                            {getStageLabel(stage)}
                                                         </Badge>
                                                     </div>
                                                 </SelectItem>
@@ -1072,78 +1073,93 @@ export default function LeadDetailsPage() {
 
                                 {/* Quick Actions - hidden for mention-only access */}
                                 {!isMentionOnly && (
-                                <div className="flex flex-col gap-2 mt-6 w-full">
-                                    <div className="flex gap-2">
-                                        {lead.phone && (
-                                            <div className="flex gap-2 flex-1">
+                                <div className="flex flex-col gap-3 mt-6 w-full">
+                                    <div className="flex flex-wrap gap-2">
+                                        {getLeadPhone(lead) && (
+                                            <>
                                                 <Button
                                                     variant="outline"
-                                                    className="flex-1"
+                                                    size="sm"
+                                                    className="shrink-0 h-9 rounded-lg transition-all duration-200 hover:shadow-sm active:scale-[0.98]"
                                                     onClick={() => setShowCallTextComingSoon(true)}
                                                     title="Call this lead"
                                                 >
-                                                    <Phone className="h-4 w-4 mr-2" />
-                                                    Call
+                                                    <Phone className="h-4 w-4 mr-2 shrink-0" />
+                                                    <span className="whitespace-nowrap">Call</span>
                                                 </Button>
                                                 <Button
                                                     variant="outline"
-                                                    className="flex-1"
+                                                    size="sm"
+                                                    className="shrink-0 h-9 rounded-lg transition-all duration-200 hover:shadow-sm active:scale-[0.98]"
                                                     onClick={() => setShowCallTextComingSoon(true)}
                                                     title="Text this lead"
                                                 >
-                                                    <MessageSquare className="h-4 w-4 mr-2" />
-                                                    Text
+                                                    <MessageSquare className="h-4 w-4 mr-2 shrink-0" />
+                                                    <span className="whitespace-nowrap">Text</span>
                                                 </Button>
-                                            </div>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="shrink-0 h-9 rounded-lg bg-[#25D366]/10 border-[#25D366]/30 text-[#128C7E] hover:bg-[#25D366]/20 transition-all duration-200 hover:shadow-sm active:scale-[0.98]"
+                                                    title="Message on WhatsApp"
+                                                    asChild
+                                                >
+                                                    <Link href={`/whatsapp?lead=${lead.id}`} className="inline-flex items-center">
+                                                        <MessageCircle className="h-4 w-4 mr-2 shrink-0" />
+                                                        <span className="whitespace-nowrap">WhatsApp</span>
+                                                    </Link>
+                                                </Button>
+                                            </>
                                         )}
-                                        {lead.email && (
+                                        {getLeadEmail(lead) && (
                                             <Button 
                                                 variant="outline" 
-                                                className="flex-1"
+                                                size="sm"
+                                                className="shrink-0 h-9 rounded-lg transition-all duration-200 hover:shadow-sm active:scale-[0.98]"
                                                 onClick={() => setShowEmailComposer(true)}
                                             >
-                                                <Mail className="h-4 w-4 mr-2" />
-                                                Email
+                                                <Mail className="h-4 w-4 mr-2 shrink-0" />
+                                                <span className="whitespace-nowrap">Email</span>
                                             </Button>
                                         )}
                                     </div>
                                     <Button 
                                         variant="outline" 
-                                        className="w-full"
+                                        className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
                                         onClick={() => setShowScheduleFollowUp(true)}
                                     >
-                                        <Calendar className="h-4 w-4 mr-2" />
+                                        <Calendar className="h-4 w-4 mr-2 shrink-0" />
                                         Schedule Follow-up
                                     </Button>
                                     <Button 
                                         variant="outline" 
-                                        className="w-full"
+                                        className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
                                         onClick={() => setShowBookAppointment(true)}
                                     >
-                                        <CalendarClock className="h-4 w-4 mr-2" />
+                                        <CalendarClock className="h-4 w-4 mr-2 shrink-0" />
                                         Book Appointment
                                     </Button>
                                     {currentVisit ? (
                                         <Button 
                                             variant="outline"
-                                            className="w-full bg-teal-50 border-teal-300 text-teal-700 hover:bg-teal-100"
+                                            className="w-full h-10 rounded-lg bg-teal-50 border-teal-300 text-teal-700 hover:bg-teal-100 transition-all duration-200 hover:shadow-sm active:scale-[0.99]"
                                             onClick={() => setShowCheckOutModal(true)}
                                         >
-                                            <LogOut className="h-4 w-4 mr-2" />
+                                            <LogOut className="h-4 w-4 mr-2 shrink-0" />
                                             Check Out of Dealership
                                         </Button>
                                     ) : (
                                         <Button 
                                             variant="outline" 
-                                            className="w-full"
+                                            className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
                                             onClick={handleCheckIn}
                                             disabled={isCheckingIn || !lead.dealership_id}
                                             title={!lead.dealership_id ? "Assign this lead to a dealership first (Edit lead or assign from Unassigned Pool)." : undefined}
                                         >
                                             {isCheckingIn ? (
-                                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                                <Loader2 className="h-4 w-4 mr-2 animate-spin shrink-0" />
                                             ) : (
-                                                <Store className="h-4 w-4 mr-2 text-teal-500" />
+                                                <Store className="h-4 w-4 mr-2 text-teal-500 shrink-0" />
                                             )}
                                             Check In to Dealership
                                         </Button>
@@ -1153,29 +1169,29 @@ export default function LeadDetailsPage() {
                             </div>
 
                             {/* Contact Details */}
-                            <div className="mt-8 space-y-4 pt-6 border-t border-dashed">
-                                {lead.email && (
+                            <div className="mt-8 space-y-4 pt-6 border-t border-border/60">
+                                {getLeadEmail(lead) && (
                                     <div className="flex justify-between items-center text-sm">
                                         <span className="text-muted-foreground flex items-center gap-2">
                                             <Mail className="h-4 w-4" /> Email
                                         </span>
-                                        <span className="font-medium">{lead.email}</span>
+                                        <span className="font-medium">{getLeadEmail(lead)}</span>
                                     </div>
                                 )}
-                                {lead.phone && (
+                                {getLeadPhone(lead) && (
                                     <div className="flex justify-between items-center text-sm">
                                         <span className="text-muted-foreground flex items-center gap-2">
                                             <Phone className="h-4 w-4" /> Phone
                                         </span>
-                                        <span className="font-medium">{lead.phone}</span>
+                                        <span className="font-medium">{getLeadPhone(lead)}</span>
                                     </div>
                                 )}
-                                {lead.alternate_phone && (
+                                {(lead as any).customer?.alternate_phone && (
                                     <div className="flex justify-between items-center text-sm">
                                         <span className="text-muted-foreground flex items-center gap-2">
                                             <Phone className="h-4 w-4" /> Alt. Phone
                                         </span>
-                                        <span className="font-medium">{lead.alternate_phone}</span>
+                                        <span className="font-medium">{(lead as any).customer?.alternate_phone}</span>
                                     </div>
                                 )}
                                 <div className="flex justify-between items-center text-sm">
@@ -1201,7 +1217,7 @@ export default function LeadDetailsPage() {
                     </Card>
 
                     {/* Lead Context Card */}
-                    <Card>
+                    <Card className="overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
                         <CardHeader>
                             <CardTitle className="text-base flex items-center gap-2">
                                 <Building2 className="h-4 w-4 text-primary" />
@@ -1209,6 +1225,94 @@ export default function LeadDetailsPage() {
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-4">
+                            {/* Primary customer */}
+                            <div>
+                                <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
+                                    Primary customer
+                                </p>
+                                {lead.customer ? (
+                                    <Link
+                                        href={`/customers/${lead.customer_id}`}
+                                        className="font-medium text-sm text-primary hover:underline flex items-center gap-2"
+                                    >
+                                        <User className="h-4 w-4 text-primary" />
+                                        {getCustomerFullName(lead.customer)}
+                                    </Link>
+                                ) : (
+                                    <span className="text-sm text-muted-foreground">—</span>
+                                )}
+                                {lead.customer && (
+                                    <div className="text-xs text-muted-foreground mt-0.5 space-y-0.5">
+                                        {getLeadEmail(lead) && <p>{getLeadEmail(lead)}</p>}
+                                        {getLeadPhone(lead) && <p>{getLeadPhone(lead)}</p>}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Secondary customer (optional) */}
+                            <div>
+                                <div className="flex items-center justify-between mb-1">
+                                    <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest">
+                                        Secondary customer (optional)
+                                    </p>
+                                    {!isMentionOnly && (
+                                        <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="h-6 px-2 text-xs"
+                                            onClick={() => setShowSecondaryCustomerModal(true)}
+                                        >
+                                            {lead.secondary_customer ? (
+                                                <span><RefreshCw className="h-3 w-3 mr-1 inline" />Change</span>
+                                            ) : (
+                                                <span><UserPlus className="h-3 w-3 mr-1 inline" />Add secondary customer</span>
+                                            )}
+                                        </Button>
+                                    )}
+                                </div>
+                                {lead.secondary_customer ? (
+                                    <div className="flex items-center gap-2 pl-1 border-l-2 border-orange-300 ml-1">
+                                        <UserAvatar
+                                            firstName={lead.secondary_customer.first_name}
+                                            lastName={lead.secondary_customer.last_name ?? undefined}
+                                            size="sm"
+                                            className="bg-gradient-to-br from-orange-400 to-amber-500"
+                                        />
+                                        <div className="flex-1">
+                                            <p className="font-medium text-sm">
+                                                {getCustomerFullName(lead.secondary_customer)}
+                                            </p>
+                                            <div className="flex items-center gap-1">
+                                                <Badge variant="outline" size="sm" className="text-[10px] border-orange-300 text-orange-600">Secondary</Badge>
+                                            </div>
+                                            {(lead.secondary_customer.email || lead.secondary_customer.phone) && (
+                                                <p className="text-xs text-muted-foreground mt-0.5">
+                                                    {[lead.secondary_customer.email, lead.secondary_customer.phone].filter(Boolean).join(" · ")}
+                                                </p>
+                                            )}
+                                        </div>
+                                        {!isMentionOnly && (
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                className="text-destructive hover:text-destructive"
+                                                onClick={async () => {
+                                                    if (!lead) return
+                                                    try {
+                                                        await LeadService.updateLead(lead.id, { secondary_customer_id: null })
+                                                        fetchLead()
+                                                    } catch (e) { console.error(e) }
+                                                }}
+                                            >
+                                                Remove
+                                            </Button>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <p className="text-sm text-muted-foreground">None</p>
+                                )}
+                            </div>
+
                             {/* Dealership Section */}
                             <div>
                                 <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
@@ -1346,7 +1450,7 @@ export default function LeadDetailsPage() {
                     </Card>
 
                     {/* Lead Details Card - Editable */}
-                    <Card>
+                    <Card className="overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                             <CardTitle className="text-base flex items-center gap-2">
                                 <User className="h-4 w-4 text-primary" />
@@ -1617,15 +1721,16 @@ export default function LeadDetailsPage() {
                                 </div>
                             ) : (
                                 <div className="space-y-4">
+                                    {(() => { const _cu = (lead as any).customer || {}; return (<>
                                     {/* Display Mode - Address */}
-                                    {(lead.address || lead.city || lead.state || lead.country) && (
+                                    {(_cu.address || _cu.city || _cu.state || _cu.country) && (
                                         <div>
                                             <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
                                                 <MapPin className="inline h-3 w-3 mr-1" />
                                                 Address
                                             </p>
                                             <p className="text-sm">
-                                                {[lead.address, lead.city, lead.state, lead.postal_code, lead.country]
+                                                {[_cu.address, _cu.city, _cu.state, _cu.postal_code, _cu.country]
                                                     .filter(Boolean)
                                                     .join(", ")}
                                             </p>
@@ -1633,35 +1738,35 @@ export default function LeadDetailsPage() {
                                     )}
 
                                     {/* Display Mode - Work */}
-                                    {(lead.company || lead.job_title) && (
+                                    {(_cu.company || _cu.job_title) && (
                                         <div>
                                             <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
                                                 <Briefcase className="inline h-3 w-3 mr-1" />
                                                 Work
                                             </p>
                                             <p className="text-sm">
-                                                {lead.job_title && <span>{lead.job_title}</span>}
-                                                {lead.job_title && lead.company && <span> at </span>}
-                                                {lead.company && <span className="font-medium">{lead.company}</span>}
+                                                {_cu.job_title && <span>{_cu.job_title}</span>}
+                                                {_cu.job_title && _cu.company && <span> at </span>}
+                                                {_cu.company && <span className="font-medium">{_cu.company}</span>}
                                             </p>
                                         </div>
                                     )}
 
                                     {/* Display Mode - Contact Preferences */}
-                                    {(lead.preferred_contact_method || lead.preferred_contact_time) && (
+                                    {(_cu.preferred_contact_method || _cu.preferred_contact_time) && (
                                         <div>
                                             <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
                                                 Contact Preferences
                                             </p>
                                             <div className="flex gap-2 flex-wrap">
-                                                {lead.preferred_contact_method && (
+                                                {_cu.preferred_contact_method && (
                                                     <Badge variant="secondary" size="sm">
-                                                        {lead.preferred_contact_method}
+                                                        {_cu.preferred_contact_method}
                                                     </Badge>
                                                 )}
-                                                {lead.preferred_contact_time && (
+                                                {_cu.preferred_contact_time && (
                                                     <Badge variant="outline" size="sm">
-                                                        {lead.preferred_contact_time}
+                                                        {_cu.preferred_contact_time}
                                                     </Badge>
                                                 )}
                                             </div>
@@ -1669,7 +1774,7 @@ export default function LeadDetailsPage() {
                                     )}
 
                                     {/* If no details yet, show placeholder */}
-                                    {!lead.address && !lead.city && !lead.company && !lead.preferred_contact_method && (
+                                    {!_cu.address && !_cu.city && !_cu.company && !_cu.preferred_contact_method && (
                                         <div className="text-center py-4 text-muted-foreground">
                                             <User className="h-8 w-8 mx-auto opacity-20 mb-2" />
                                             <p className="text-sm">No additional details yet</p>
@@ -1686,6 +1791,7 @@ export default function LeadDetailsPage() {
                                             )}
                                         </div>
                                     )}
+                                    </>); })()}
                                 </div>
                             )}
                         </CardContent>
@@ -1698,7 +1804,7 @@ export default function LeadDetailsPage() {
                             <CardTitle className="text-base">Quick Actions</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-2">
-                            {lead.phone && (
+                            {getLeadPhone(lead) && (
                                 <div className="grid grid-cols-2 gap-2">
                                     <Button 
                                         className="justify-start" 
@@ -1716,6 +1822,15 @@ export default function LeadDetailsPage() {
                                         <MessageSquare className="h-4 w-4 mr-2 text-purple-500" />
                                         Text
                                     </Button>
+                                    <Link href={`/whatsapp?lead=${lead.id}`} className="col-span-2">
+                                        <Button 
+                                            className="w-full justify-start bg-[#25D366]/10 border-[#25D366]/30 text-[#128C7E] hover:bg-[#25D366]/20" 
+                                            variant="outline"
+                                        >
+                                            <MessageCircle className="h-4 w-4 mr-2" />
+                                            Message on WhatsApp
+                                        </Button>
+                                    </Link>
                                 </div>
                             )}
                             <Button 
@@ -1761,7 +1876,7 @@ export default function LeadDetailsPage() {
                                 </Button>
                             )}
                             {/* Mark as Converted - only visible to admin/owner, not salesperson */}
-                            {!isSalesperson && lead.status !== "converted" && (
+                            {!isSalesperson && lead.stage?.name !== "converted" && (
                                 <Button 
                                     className="w-full justify-start" 
                                     variant="outline"
@@ -1773,7 +1888,7 @@ export default function LeadDetailsPage() {
                                 </Button>
                             )}
                             {/* Mark as Lost - only visible to admin/owner, not salesperson */}
-                            {!isSalesperson && lead.status !== "lost" && lead.status !== "converted" && (
+                            {!isSalesperson && lead.stage?.name !== "lost" && lead.stage?.name !== "converted" && (
                                 <Button 
                                     className="w-full justify-start" 
                                     variant="outline"
@@ -1784,7 +1899,7 @@ export default function LeadDetailsPage() {
                                     Mark as Lost
                                 </Button>
                             )}
-                            {lead.status === "new" && (
+                            {lead.stage?.name === "new" && (
                                 <Button 
                                     className="w-full justify-start" 
                                     variant="outline"
@@ -1802,25 +1917,25 @@ export default function LeadDetailsPage() {
 
                 {/* Right Column: Activity & Interaction */}
                 <div className="lg:col-span-2 flex flex-col min-h-0 overflow-hidden">
-                    <Card className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                    <Card className="flex-1 flex flex-col min-h-0 overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
                         <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as "timeline" | "notes" | "appointments" | "followups")} className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                            <div className="border-b px-6">
-                                <TabsList className="bg-transparent h-auto p-0">
+                            <div className="border-b border-border/60 px-6">
+                                <TabsList className="bg-transparent h-auto p-0 gap-1">
                                     <TabsTrigger 
                                         value="timeline"
-                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4"
+                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
                                     >
                                         Activity Timeline
                                     </TabsTrigger>
                                     <TabsTrigger 
                                         value="notes"
-                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4"
+                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
                                     >
                                         Notes
                                     </TabsTrigger>
                                     <TabsTrigger 
                                         value="appointments"
-                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 flex items-center gap-1.5"
+                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5 transition-colors duration-200"
                                     >
                                         Appointments
                                         {appointmentBadgeCount > 0 && (
@@ -1887,11 +2002,15 @@ export default function LeadDetailsPage() {
                                                     <div className="flex items-start justify-between gap-2">
                                                         <div>
                                                             <p className="text-sm font-medium">
-                                                                {ACTIVITY_TYPE_INFO[activity.type]?.label || activity.type.replace('_', ' ')}
+                                                                {activity.type === "lead_updated"
+                                                                    ? activity.description
+                                                                    : (ACTIVITY_TYPE_INFO[activity.type]?.label || activity.type.replace('_', ' '))}
                                                             </p>
-                                                            <p className="text-xs text-muted-foreground">
-                                                                {activity.description}
-                                                            </p>
+                                                            {activity.type !== "lead_updated" && (
+                                                                <p className="text-xs text-muted-foreground">
+                                                                    {activity.description}
+                                                                </p>
+                                                            )}
                                                             {activity.user && (
                                                                 <p className="text-xs text-muted-foreground mt-1">
                                                                     by {activity.user.first_name} {activity.user.last_name}
@@ -1930,12 +2049,17 @@ export default function LeadDetailsPage() {
                                                     {activity.type === "status_changed" && activity.meta_data?.old_status != null ? (
                                                         <div className="mt-2 flex items-center gap-2 text-xs">
                                                             <Badge variant={getStatusVariant(String(activity.meta_data.old_status))} size="sm">
-                                                                {String(activity.meta_data.old_status).replace('_', ' ')}
+                                                                {String(activity.meta_data.old_status).replace(/_/g, ' ')}
                                                             </Badge>
-                                                            <span>→</span>
+                                                            <span className="text-muted-foreground">→</span>
                                                             <Badge variant={getStatusVariant(String(activity.meta_data.new_status))} size="sm">
-                                                                {String(activity.meta_data.new_status).replace('_', ' ')}
+                                                                {String(activity.meta_data.new_status).replace(/_/g, ' ')}
                                                             </Badge>
+                                                        </div>
+                                                    ) : null}
+                                                    {activity.type === "lead_updated" && Array.isArray(activity.meta_data?.updated_fields_labels) && activity.meta_data.updated_fields_labels.length > 0 ? (
+                                                        <div className="mt-1 text-xs text-muted-foreground">
+                                                            Fields: {(activity.meta_data.updated_fields_labels as string[]).join(", ")}
                                                         </div>
                                                     ) : null}
                                                 </div>
@@ -2496,14 +2620,21 @@ export default function LeadDetailsPage() {
                 lead={lead}
                 onSuccess={fetchLead}
             />
+
+            <AssignSecondaryCustomerModal
+                open={showSecondaryCustomerModal}
+                onOpenChange={setShowSecondaryCustomerModal}
+                lead={lead}
+                onSuccess={fetchLead}
+            />
             
             {/* Email Composer Modal */}
             <EmailComposerModal
                 isOpen={showEmailComposer}
                 onClose={() => setShowEmailComposer(false)}
                 leadId={lead?.id}
-                leadEmail={lead?.email}
-                leadName={lead ? `${lead.first_name} ${lead.last_name}` : undefined}
+                leadEmail={lead ? getLeadEmail(lead) : undefined}
+                leadName={lead ? getLeadFullName(lead) : undefined}
                 onSent={() => {
                     fetchActivities()
                     fetchLead()
@@ -2605,14 +2736,14 @@ export default function LeadDetailsPage() {
                         {lead && (
                             <div className="bg-muted/50 rounded-lg p-4 flex items-center gap-4">
                                 <UserAvatar 
-                                    firstName={lead.first_name}
-                                    lastName={lead.last_name ?? undefined}
+                                    firstName={lead.customer?.first_name || ""}
+                                    lastName={lead.customer?.last_name ?? undefined}
                                     size="md"
                                 />
                                 <div className="flex-1">
                                     <div className="font-medium">{getLeadFullName(lead)}</div>
                                     <div className="text-sm text-muted-foreground">
-                                        {lead.phone || lead.email}
+                                        {getLeadPhone(lead) || getLeadEmail(lead)}
                                     </div>
                                 </div>
                             </div>
@@ -2793,7 +2924,7 @@ export default function LeadDetailsPage() {
             )}
             
             {/* Call / Text Coming Soon Dialog */}
-            {lead?.phone && (
+            {lead?.customer?.phone && (
                 <Dialog open={showCallTextComingSoon} onOpenChange={setShowCallTextComingSoon}>
                     <DialogContent className="sm:max-w-md">
                         <DialogHeader>
@@ -2810,13 +2941,13 @@ export default function LeadDetailsPage() {
                                 Use the number below to call or text manually:
                             </p>
                             <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted/30 px-4 py-3">
-                                <span className="font-mono font-medium">{lead.phone}</span>
+                                <span className="font-mono font-medium">{getLeadPhone(lead)}</span>
                                 <div className="flex gap-2">
                                     <Button
                                         variant="outline"
                                         size="sm"
                                         onClick={() => {
-                                            navigator.clipboard.writeText(lead.phone || "")
+                                            navigator.clipboard.writeText(getLeadPhone(lead) || "")
                                         }}
                                         title="Copy number"
                                     >
@@ -2829,7 +2960,7 @@ export default function LeadDetailsPage() {
                                         asChild
                                         title="Call with your phone"
                                     >
-                                        <a href={`tel:${lead.phone}`}>
+                                        <a href={`tel:${getLeadPhone(lead)}`}>
                                             <Phone className="h-4 w-4 mr-1" />
                                             Call
                                         </a>
@@ -2851,7 +2982,7 @@ export default function LeadDetailsPage() {
                         <AlertDialogHeader>
                             <AlertDialogTitle>Delete Lead</AlertDialogTitle>
                             <AlertDialogDescription>
-                                Are you sure you want to delete <strong>{lead.first_name} {lead.last_name || ''}</strong>? 
+                                Are you sure you want to delete <strong>{getLeadFullName(lead)}</strong>? 
                                 This action cannot be undone. All associated activities, notes, and communications will be permanently removed.
                             </AlertDialogDescription>
                         </AlertDialogHeader>

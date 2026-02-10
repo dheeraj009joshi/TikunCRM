@@ -14,7 +14,9 @@ from app.api import deps
 from app.core.permissions import Permission, UserRole
 from app.core.timezone import utc_now
 from app.db.database import get_db
-from app.models.lead import Lead, LeadStatus, LeadSource
+from app.models.lead import Lead, LeadSource
+from app.models.lead_stage import LeadStage
+from app.services.lead_stage_service import LeadStageService
 from app.models.dealership import Dealership
 from app.models.user import User
 from app.models.activity import Activity
@@ -109,7 +111,7 @@ async def get_super_admin_stats(
     
     # Conversion rate
     converted_result = await db.execute(
-        select(func.count()).select_from(Lead).where(Lead.status == LeadStatus.CONVERTED)
+        select(func.count()).select_from(Lead).where(Lead.outcome == "converted")
     )
     total_converted = converted_result.scalar() or 0
     conversion_rate = (total_converted / total_leads * 100) if total_leads > 0 else 0
@@ -160,7 +162,7 @@ async def get_dealership_performance(
         # Converted leads
         converted_result = await db.execute(
             select(func.count()).select_from(Lead).where(
-                and_(Lead.dealership_id == dealership.id, Lead.status == LeadStatus.CONVERTED)
+                and_(Lead.dealership_id == dealership.id, Lead.outcome == "converted")
             )
         )
         converted_leads = converted_result.scalar() or 0
@@ -170,14 +172,14 @@ async def get_dealership_performance(
             select(func.count()).select_from(Lead).where(
                 and_(
                     Lead.dealership_id == dealership.id,
-                    Lead.status.in_([LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.FOLLOW_UP, LeadStatus.INTERESTED])
+                    Lead.is_active == True
                 )
             )
         )
         active_leads = active_result.scalar() or 0
-        
+
         conversion_rate = (converted_leads / total_leads * 100) if total_leads > 0 else 0
-        
+
         performance_data.append(DealershipPerformance(
             id=dealership.id,
             name=dealership.name,
@@ -248,16 +250,16 @@ async def get_dealership_admin_stats(
         select(func.count()).select_from(Lead).where(
             and_(
                 Lead.dealership_id == dealership_id,
-                Lead.status.in_([LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.FOLLOW_UP, LeadStatus.INTERESTED])
+                Lead.is_active == True
             )
         )
     )
     active_leads = active_result.scalar() or 0
-    
+
     # Converted leads
     converted_result = await db.execute(
         select(func.count()).select_from(Lead).where(
-            and_(Lead.dealership_id == dealership_id, Lead.status == LeadStatus.CONVERTED)
+            and_(Lead.dealership_id == dealership_id, Lead.outcome == "converted")
         )
     )
     converted_leads = converted_result.scalar() or 0
@@ -335,25 +337,38 @@ async def get_salesperson_stats(
     )
     total_leads = total_result.scalar() or 0
     
-    # Leads by status
+    # Leads by stage (dynamic)
     leads_by_status = {}
-    for status in LeadStatus:
+    all_stages = await LeadStageService.list_stages(db, current_user.dealership_id)
+    for stage in all_stages:
         count_result = await db.execute(
             select(func.count()).select_from(Lead).where(
-                and_(Lead.assigned_to == user_id, Lead.status == status)
+                and_(Lead.assigned_to == user_id, Lead.stage_id == stage.id)
             )
         )
-        leads_by_status[status.value] = count_result.scalar() or 0
-    
-    active_leads = sum([
-        leads_by_status.get(LeadStatus.NEW.value, 0),
-        leads_by_status.get(LeadStatus.CONTACTED.value, 0),
-        leads_by_status.get(LeadStatus.FOLLOW_UP.value, 0),
-        leads_by_status.get(LeadStatus.INTERESTED.value, 0)
-    ])
-    
-    converted_leads = leads_by_status.get(LeadStatus.CONVERTED.value, 0)
-    lost_leads = leads_by_status.get(LeadStatus.LOST.value, 0)
+        leads_by_status[stage.name] = count_result.scalar() or 0
+
+    # Active = is_active True
+    active_result_sp = await db.execute(
+        select(func.count()).select_from(Lead).where(
+            and_(Lead.assigned_to == user_id, Lead.is_active == True)
+        )
+    )
+    active_leads = active_result_sp.scalar() or 0
+
+    converted_result_sp = await db.execute(
+        select(func.count()).select_from(Lead).where(
+            and_(Lead.assigned_to == user_id, Lead.outcome == "converted")
+        )
+    )
+    converted_leads = converted_result_sp.scalar() or 0
+
+    lost_result_sp = await db.execute(
+        select(func.count()).select_from(Lead).where(
+            and_(Lead.assigned_to == user_id, Lead.outcome == "lost")
+        )
+    )
+    lost_leads = lost_result_sp.scalar() or 0
     
     conversion_rate = (converted_leads / total_leads * 100) if total_leads > 0 else 0
     

@@ -6,6 +6,7 @@ export type ActivityType =
     | "lead_created"
     | "lead_assigned"
     | "lead_reassigned"
+    | "lead_updated"
     | "status_changed"
     | "note_added"
     | "call_logged"
@@ -67,6 +68,7 @@ export const ACTIVITY_TYPE_INFO: Record<ActivityType, { label: string; icon: str
     lead_created: { label: "Lead Created", icon: "plus-circle", color: "emerald" },
     lead_assigned: { label: "Lead Assigned", icon: "user-plus", color: "blue" },
     lead_reassigned: { label: "Lead Reassigned", icon: "users", color: "amber" },
+    lead_updated: { label: "Lead Updated", icon: "edit", color: "slate" },
     status_changed: { label: "Status Changed", icon: "refresh-cw", color: "purple" },
     note_added: { label: "Note Added", icon: "message-square", color: "gray" },
     call_logged: { label: "Call Logged", icon: "phone", color: "emerald" },

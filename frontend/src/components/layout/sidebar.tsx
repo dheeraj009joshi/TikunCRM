@@ -14,23 +14,27 @@ import {
     Settings,
     LogOut,
     ChevronRight,
+    ChevronLeft,
+    ChevronDown,
     Search,
     LayoutDashboard,
     Share2,
     UserPlus,
     InboxIcon,
     ClipboardList,
-    Mail,
     Bell,
     MessageSquare,
+    MessageCircle,
     Phone,
     MessagesSquare,
-    Store
+    Store,
+    Contact
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
 import { useRole, getRoleDisplayName } from "@/hooks/use-role"
 import { useNotificationEvents, useLeadUpdateEvents, useBadgesRefresh, useStatsRefresh } from "@/hooks/use-websocket"
+import { useSidebarOptional } from "@/contexts/sidebar-context"
 import { UserAvatar } from "@/components/ui/avatar"
 import { Badge, getRoleVariant } from "@/components/ui/badge"
 import { AppointmentService } from "@/services/appointment-service"
@@ -39,12 +43,20 @@ import { LeadService } from "@/services/lead-service"
 import apiClient from "@/lib/api-client"
 import { GlobalSearchModal } from "@/components/search/global-search-modal"
 
-interface SidebarItem {
+interface SidebarLink {
     name: string
     icon: React.ComponentType<{ className?: string }>
     href: string
+}
+
+interface SidebarItem {
+    name: string
+    icon: React.ComponentType<{ className?: string }>
+    href?: string
     badge?: string | number
-    roles?: UserRole[]  // If undefined, visible to all roles
+    roles?: UserRole[]
+    /** If set, this item is a dropdown with child links */
+    children?: SidebarLink[]
 }
 
 // All sidebar items with role restrictions
@@ -58,6 +70,11 @@ const allSidebarItems: SidebarItem[] = [
         name: "Leads", 
         icon: Inbox, 
         href: "/leads" 
+    },
+    {
+        name: "Customers",
+        icon: Contact,
+        href: "/customers",
     },
     { 
         name: "Unassigned Pool", 
@@ -98,20 +115,14 @@ const allSidebarItems: SidebarItem[] = [
         icon: ClipboardList, 
         href: "/follow-ups" 
     },
-    { 
-        name: "Communications", 
-        icon: Mail, 
-        href: "/communications" 
-    },
-    { 
-        name: "SMS Inbox", 
-        icon: MessageSquare, 
-        href: "/sms" 
-    },
-    { 
-        name: "Unified Inbox", 
-        icon: MessagesSquare, 
-        href: "/inbox" 
+    {
+        name: "Conversations",
+        icon: MessagesSquare,
+        children: [
+            { name: "WhatsApp", icon: MessageCircle, href: "/whatsapp" },
+            { name: "Text", icon: MessageSquare, href: "/sms" },
+            { name: "Calls", icon: Phone, href: "/calls" },
+        ],
     },
     { 
         name: "Notifications", 
@@ -160,6 +171,8 @@ export function Sidebar() {
     const pathname = usePathname()
     const { user, logout } = useAuthStore()
     const { role, isSuperAdmin, isDealershipAdmin, isSalesperson } = useRole()
+    const sidebarContext = useSidebarOptional()
+    const collapsed = sidebarContext?.collapsed ?? false
     const [showSearch, setShowSearch] = React.useState(false)
     const [badgeCounts, setBadgeCounts] = React.useState<BadgeCounts>({
         appointments: 0,
@@ -222,11 +235,11 @@ export function Sidebar() {
             }
         }
         
-        // Only fetch once on mount when user is logged in. Updates via WebSocket (badges:refresh, stats:refresh, etc.)
+        // Fetch once on mount when user is logged in. Pool/unassigned count updates via WebSocket (lead:updated, badges:refresh, stats:refresh).
         if (user && role) {
             fetchBadgeCounts()
         }
-    }, [user, role, pathname])
+    }, [user, role])
     
     // Refetch specific badge counts (used by WebSocket handlers)
     const refetchBadgeCounts = React.useCallback((which: { unassigned?: boolean; notifications?: boolean; appointments?: boolean; followUps?: boolean }) => {
@@ -297,22 +310,29 @@ export function Sidebar() {
     }, [refetchBadgeCounts])
     useStatsRefresh(handleStatsRefresh)
     
+    // Expand Conversations when on WhatsApp, SMS, or Calls
+    const isConversationsActive = pathname === "/whatsapp" || pathname === "/sms" || pathname === "/calls"
+    const [expandedGroup, setExpandedGroup] = React.useState<string | null>(() =>
+        isConversationsActive ? "Conversations" : null
+    )
+    React.useEffect(() => {
+        if (isConversationsActive) setExpandedGroup("Conversations")
+    }, [isConversationsActive])
+
     // Build sidebar items with dynamic badges
     const sidebarItems = React.useMemo(() => {
         const items = getSidebarItemsForRole(role)
-        
-        // Add dynamic badges
         return items.map(item => {
-            if (item.href === "/appointments" && badgeCounts.appointments > 0) {
+            if (!item.children && item.href === "/appointments" && badgeCounts.appointments > 0) {
                 return { ...item, badge: badgeCounts.appointments }
             }
-            if (item.href === "/follow-ups" && badgeCounts.followUps > 0) {
+            if (!item.children && item.href === "/follow-ups" && badgeCounts.followUps > 0) {
                 return { ...item, badge: badgeCounts.followUps }
             }
-            if (item.href === "/leads?filter=unassigned" && badgeCounts.unassigned > 0) {
+            if (!item.children && item.href === "/leads?filter=unassigned" && badgeCounts.unassigned > 0) {
                 return { ...item, badge: badgeCounts.unassigned }
             }
-            if (item.href === "/notifications" && badgeCounts.notifications > 0) {
+            if (!item.children && item.href === "/notifications" && badgeCounts.notifications > 0) {
                 return { ...item, badge: badgeCounts.notifications }
             }
             return item
@@ -338,94 +358,225 @@ export function Sidebar() {
     }, [])
 
     return (
-        <aside className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r bg-background transition-transform">
-            <div className="flex min-h-0 flex-1 flex-col px-3 py-4">
+        <aside
+            className={cn(
+                "fixed left-0 top-0 z-40 flex h-screen flex-col border-r bg-background transition-[width] duration-200",
+                collapsed ? "w-16" : "w-64"
+            )}
+        >
+            <div className="flex min-h-0 flex-1 flex-col px-2 py-4">
                 {/* Logo - click navigates to dashboard */}
-                <Link href="/dashboard" className="mb-10 shrink-0 flex items-center px-2 hover:opacity-90 transition-opacity">
+                <Link
+                    href="/dashboard"
+                    className={cn(
+                        "shrink-0 flex items-center hover:opacity-90 transition-opacity",
+                        collapsed ? "mb-6 justify-center px-0" : "mb-10 px-2"
+                    )}
+                >
                     <Image
                         src="/Gemini_Generated_Image_iauae6iauae6iaua.png"
                         alt="TikunCRM"
                         width={40}
                         height={40}
-                        className="h-10 w-10 rounded-lg object-contain"
+                        className="h-10 w-10 rounded-lg object-contain shrink-0"
                     />
-                    <span className="ml-3 text-xl font-bold tracking-tight">TikunCRM</span>
+                    {!collapsed && <span className="ml-3 text-xl font-bold tracking-tight truncate">TikunCRM</span>}
                 </Link>
 
                 {/* Search */}
                 <button
                     onClick={() => setShowSearch(true)}
-                    className="relative mb-6 w-full shrink-0 flex items-center gap-2 rounded-md border border-input bg-muted/50 py-2 px-3 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+                    className={cn(
+                        "relative shrink-0 flex items-center rounded-md border border-input bg-muted/50 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors",
+                        collapsed ? "mb-6 w-10 justify-center px-0" : "mb-6 w-full gap-2 px-3"
+                    )}
+                    title="Quick search (⌘K)"
                 >
-                    <Search className="h-4 w-4" />
-                    <span className="flex-1 text-left">Quick search...</span>
-                    <kbd className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium">
-                        <span className="text-xs">⌘</span>K
-                    </kbd>
+                    <Search className="h-4 w-4 shrink-0" />
+                    {!collapsed && (
+                        <>
+                            <span className="flex-1 text-left">Quick search...</span>
+                            <kbd className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium">
+                                <span className="text-xs">⌘</span>K
+                            </kbd>
+                        </>
+                    )}
                 </button>
 
                 {/* Navigation - scrollable when many items */}
                 <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overflow-x-hidden py-1">
                     {sidebarItems.map((item) => {
-                        const isActive = pathname === item.href || 
-                            (item.href !== "/dashboard" && pathname.startsWith(item.href))
+                        if (item.children) {
+                            const isOpen = expandedGroup === item.name
+                            const isChildActive = item.children.some(
+                                c => pathname === c.href || (c.href !== "/dashboard" && pathname.startsWith(c.href))
+                            )
+                            if (collapsed) {
+                                return (
+                                    <div key={item.name} className="space-y-1">
+                                        {item.children.map((child) => {
+                                            const active = pathname === child.href || pathname.startsWith(child.href + "/")
+                                            return (
+                                                <Link
+                                                    key={child.href}
+                                                    href={child.href}
+                                                    title={child.name}
+                                                    className={cn(
+                                                        "flex items-center justify-center rounded-md py-2 text-sm font-medium transition-colors hover:bg-accent",
+                                                        active ? "bg-accent text-accent-foreground" : "text-muted-foreground"
+                                                    )}
+                                                >
+                                                    <child.icon className="h-4 w-4 shrink-0" />
+                                                </Link>
+                                            )
+                                        })}
+                                    </div>
+                                )
+                            }
+                            return (
+                                <div key={item.name} className="space-y-0.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => setExpandedGroup(isOpen ? null : item.name)}
+                                        title={item.name}
+                                        className={cn(
+                                            "group relative flex w-full items-center rounded-md py-2 text-sm font-medium transition-colors hover:bg-accent",
+                                            "justify-between px-3",
+                                            isChildActive ? "text-accent-foreground" : "text-muted-foreground"
+                                        )}
+                                    >
+                                        <div className="flex items-center min-w-0">
+                                            <item.icon
+                                                className={cn(
+                                                    "h-4 w-4 shrink-0 mr-3",
+                                                    isChildActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
+                                                )}
+                                            />
+                                            <span className="truncate">{item.name}</span>
+                                        </div>
+                                        <ChevronDown
+                                            className={cn("h-4 w-4 shrink-0 transition-transform", isOpen && "rotate-180")}
+                                        />
+                                    </button>
+                                    {isOpen && (
+                                        <div className="ml-4 space-y-0.5 border-l border-border pl-2">
+                                            {item.children.map((child) => {
+                                                const active = pathname === child.href || pathname.startsWith(child.href + "/")
+                                                return (
+                                                    <Link
+                                                        key={child.href}
+                                                        href={child.href}
+                                                        className={cn(
+                                                            "flex items-center rounded-md py-1.5 pl-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
+                                                            active ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground"
+                                                        )}
+                                                    >
+                                                        <child.icon className="h-3.5 w-3.5 shrink-0 mr-2 text-muted-foreground" />
+                                                        <span className="truncate">{child.name}</span>
+                                                    </Link>
+                                                )
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            )
+                        }
+                        const isActive = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href))
                         return (
                             <Link
-                                key={item.href}
-                                href={item.href}
+                                key={item.href!}
+                                href={item.href!}
+                                title={collapsed ? item.name : undefined}
                                 className={cn(
-                                    "group flex items-center justify-between rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-accent",
+                                    "group relative flex items-center rounded-md py-2 text-sm font-medium transition-colors hover:bg-accent",
+                                    collapsed ? "justify-center px-0" : "justify-between px-3",
                                     isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground"
                                 )}
                             >
-                                <div className="flex items-center">
-                                    <item.icon className={cn(
-                                        "mr-3 h-4 w-4", 
-                                        isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
-                                    )} />
-                                    <span>{item.name}</span>
+                                <div className={cn("flex items-center min-w-0", collapsed && "justify-center")}>
+                                    <item.icon
+                                        className={cn(
+                                            "h-4 w-4 shrink-0",
+                                            !collapsed && "mr-3",
+                                            isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
+                                        )}
+                                    />
+                                    {!collapsed && <span className="truncate">{item.name}</span>}
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    {item.badge && (
-                                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
-                                            {item.badge}
-                                        </span>
-                                    )}
-                                    {isActive && <ChevronRight className="h-4 w-4 text-primary" />}
-                                </div>
+                                {!collapsed && (
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        {item.badge && (
+                                            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
+                                                {item.badge}
+                                            </span>
+                                        )}
+                                        {isActive && <ChevronRight className="h-4 w-4 text-primary" />}
+                                    </div>
+                                )}
+                                {collapsed && item.badge && (
+                                    <span className="absolute top-1/2 right-1 -translate-y-1/2 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-bold text-primary-foreground">
+                                        {item.badge}
+                                    </span>
+                                )}
                             </Link>
                         )
                     })}
                 </nav>
 
-                {/* User / Bottom Section - always visible at bottom */}
-                <div className="mt-auto shrink-0 border-t pt-4">
-                    <div className="flex items-center px-2 py-2">
-                        <UserAvatar user={user || undefined} size="md" />
-                        <div className="ml-3 flex-1 overflow-hidden">
-                            <p className="truncate text-sm font-medium text-foreground">
-                                {user?.first_name} {user?.last_name}
-                            </p>
-                            <Badge 
-                                variant={getRoleVariant(role || "")} 
-                                size="sm"
-                                className="mt-0.5"
-                            >
-                                {role ? getRoleDisplayName(role) : "Unknown"}
-                            </Badge>
-                        </div>
-                        <button 
-                            onClick={handleLogout}
-                            className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
-                            title="Logout"
+                {/* Collapse toggle */}
+                {sidebarContext && (
+                    <div className={cn("shrink-0 border-t pt-2", collapsed ? "px-0 flex justify-center" : "px-2")}>
+                        <button
+                            type="button"
+                            onClick={sidebarContext.toggle}
+                            className={cn(
+                                "flex items-center justify-center rounded-md py-2 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors",
+                                collapsed ? "w-full" : "w-full gap-2"
+                            )}
+                            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                         >
-                            <LogOut className="h-4 w-4" />
+                            {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+                            {!collapsed && <span className="text-xs">Collapse</span>}
                         </button>
+                    </div>
+                )}
+
+                {/* User / Bottom Section */}
+                <div className="mt-2 shrink-0 border-t pt-4">
+                    <div className={cn("flex items-center py-2", collapsed ? "flex-col justify-center gap-2 px-0" : "px-2")}>
+                        <UserAvatar user={user || undefined} size={collapsed ? "sm" : "md"} />
+                        {!collapsed && (
+                            <>
+                                <div className="ml-3 flex-1 overflow-hidden min-w-0">
+                                    <p className="truncate text-sm font-medium text-foreground">
+                                        {user?.first_name} {user?.last_name}
+                                    </p>
+                                    <Badge variant={getRoleVariant(role || "")} size="sm" className="mt-0.5">
+                                        {role ? getRoleDisplayName(role) : "Unknown"}
+                                    </Badge>
+                                </div>
+                                <button
+                                    onClick={handleLogout}
+                                    className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
+                                    title="Logout"
+                                >
+                                    <LogOut className="h-4 w-4" />
+                                </button>
+                            </>
+                        )}
+                        {collapsed && (
+                            <button
+                                onClick={handleLogout}
+                                className="text-muted-foreground hover:text-foreground transition-colors"
+                                title="Logout"
+                            >
+                                <LogOut className="h-4 w-4" />
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>
-            
-            {/* Global Search Modal */}
+
             <GlobalSearchModal open={showSearch} onOpenChange={setShowSearch} />
         </aside>
     )

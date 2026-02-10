@@ -19,7 +19,9 @@ import {
     Trash2,
     Download,
     FileSpreadsheet,
-    CheckCircle2
+    CheckCircle2,
+    List,
+    LayoutGrid
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -70,7 +72,9 @@ import {
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { LeadService, Lead, LeadListResponse } from "@/services/lead-service"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { LeadService, Lead, LeadListResponse, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
+import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
 import { useRole } from "@/hooks/use-role"
@@ -78,20 +82,16 @@ import { cn } from "@/lib/utils"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { useWebSocketEvent } from "@/hooks/use-websocket"
+import { LeadsPipelineView } from "@/components/leads/leads-pipeline-view"
+import type { DragEndEvent } from "@dnd-kit/core"
+import { getSkateAttemptDetail } from "@/lib/skate-alert"
+import { useSkateAlertStore } from "@/stores/skate-alert-store"
+import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
 
-const LEAD_STATUSES = [
-    { value: "all", label: "All Statuses" },
-    { value: "new", label: "New" },
-    { value: "contacted", label: "Contacted" },
-    { value: "follow_up", label: "Follow Up" },
-    { value: "interested", label: "Interested" },
-    { value: "not_interested", label: "Not Interested" },
-    { value: "in_showroom", label: "In Showroom" },
-    { value: "converted", label: "Converted" },
-    { value: "lost", label: "Lost" },
-    { value: "couldnt_qualify", label: "Couldn't Qualify" },
-    { value: "browsing", label: "Browsing" },
-    { value: "reschedule", label: "Reschedule" },
+// Lead stages are now loaded dynamically from the API
+// LEAD_STATUSES kept as fallback for initial render
+const LEAD_STATUSES_FALLBACK = [
+    { value: "all", label: "All Stages" },
 ]
 
 const LEAD_SOURCES = [
@@ -105,49 +105,72 @@ const LEAD_SOURCES = [
 ]
 
 type ViewMode = "mine" | "unassigned" | "all" | "converted"
+type DisplayView = "list" | "pipeline"
 
 export default function LeadsPage() {
     const router = useRouter()
     const searchParams = useSearchParams()
-    const filterParam = searchParams.get('filter')
-    const statusParam = searchParams.get('status')
-    const sourceParam = searchParams.get('source')
+    const filterParam = searchParams.get("filter")
+    const statusParam = searchParams.get("status")
+    const sourceParam = searchParams.get("source")
+    const viewParam = searchParams.get("view")
     const { timezone } = useBrowserTimezone()
-    
+
     const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, canAssignToSalesperson, hasPermission } = useRole()
     const canCreateLead = hasPermission("create_lead")
-    
+
     const [leads, setLeads] = React.useState<Lead[]>([])
     const [total, setTotal] = React.useState(0)
     const [page, setPage] = React.useState(1)
     const [search, setSearch] = React.useState("")
     const [status, setStatus] = React.useState(statusParam || "all")
+    const [selectedStageIds, setSelectedStageIds] = React.useState<string[]>([])
     const [source, setSource] = React.useState(sourceParam || "all")
     const [viewMode, setViewMode] = React.useState<ViewMode>(
         filterParam === "unassigned" ? "unassigned" : filterParam === "converted" ? "converted" : filterParam === "all" ? "all" : "mine"
     )
+    const [displayView, setDisplayView] = React.useState<DisplayView>(viewParam === "pipeline" ? "pipeline" : "list")
     const [isLoading, setIsLoading] = React.useState(true)
+    const [stages, setStages] = React.useState<LeadStage[]>([])
+    const [leadsByStage, setLeadsByStage] = React.useState<Record<string, Lead[]>>({})
+    const [isLoadingPipeline, setIsLoadingPipeline] = React.useState(false)
 
-    // Sync view mode, status, and source with URL when user navigates via links
+    // Load pipeline stages dynamically
+    React.useEffect(() => {
+        LeadStageService.list().then(setStages).catch(console.error)
+    }, [])
+
+    // Build stage filter options from loaded stages
+    const LEAD_STATUSES = React.useMemo(() => {
+        const items = [{ value: "all", label: "All Stages" }]
+        for (const s of stages) {
+            items.push({ value: s.id, label: s.display_name })
+        }
+        return items
+    }, [stages])
+
+    // Sync view mode, status, source, and display view with URL when user navigates via links
     React.useEffect(() => {
         const filter = searchParams.get("filter")
         const urlStatus = searchParams.get("status")
         const urlSource = searchParams.get("source")
-        
+        const urlView = searchParams.get("view")
+
         if (filter === "unassigned") setViewMode("unassigned")
         else if (filter === "all") setViewMode("all")
         else if (filter === "converted") {
             setViewMode("converted")
             setStatus("converted")
         } else if (filter === "mine") setViewMode("mine")
-        // When dashboard links with ?status=converted, switch to Converted & Sold tab
         else if (urlStatus === "converted") {
             setViewMode("converted")
             setStatus("converted")
         }
-        
+
         if (urlStatus) setStatus(urlStatus)
         if (urlSource) setSource(urlSource)
+        if (urlView === "pipeline") setDisplayView("pipeline")
+        else if (urlView === "list") setDisplayView("list")
     }, [searchParams])
     
     // Assignment modal state
@@ -182,15 +205,17 @@ export default function LeadsPage() {
             
             // Filter by view mode
             if (viewMode === "unassigned") {
-                params.pool = "unassigned"  // Unassigned pool (no dealership)
+                params.pool = "unassigned"
             } else if (viewMode === "mine") {
-                params.pool = "mine"  // Only leads assigned to current user
+                params.pool = "mine"
             } else if (viewMode === "converted") {
-                // Converted & Sold tab: all leads in scope with status converted (no pool filter)
-                params.status = "converted"
+                // Find converted stage id
+                const convertedStage = stages.find(s => s.name === "converted")
+                if (convertedStage) params.stage_id = convertedStage.id
+                params.is_active = false
             }
-            // "all" mode: no pool, show all leads in the dealership
-            if (viewMode !== "converted" && status && status !== "all") params.status = status
+            // Stage filter (stage_id instead of old status enum)
+            if (viewMode !== "converted" && status && status !== "all") params.stage_id = status
 
             const data = await LeadService.listLeads(params)
             setLeads(data.items)
@@ -200,7 +225,75 @@ export default function LeadsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [page, search, status, source, viewMode])
+    }, [page, search, status, source, viewMode, stages])
+
+    const fetchLeadsForPipeline = React.useCallback(async () => {
+        if (stages.length === 0) return
+        setIsLoadingPipeline(true)
+        try {
+            const convertedStage = stages.find((s) => s.name === "converted")
+            const baseParams: Record<string, unknown> = { page_size: 100 }
+            if (search) baseParams.search = search
+            if (source && source !== "all") baseParams.source = source
+
+            if (viewMode === "unassigned") {
+                baseParams.pool = "unassigned"
+            } else if (viewMode === "mine") {
+                baseParams.pool = "mine"
+            } else if (viewMode === "converted" && convertedStage) {
+                baseParams.stage_id = convertedStage.id
+                baseParams.is_active = false
+            }
+
+            const byStage: Record<string, Lead[]> = {}
+            const stagesToFetch =
+                viewMode === "converted" && convertedStage
+                    ? [convertedStage.id]
+                    : selectedStageIds.length > 0
+                        ? selectedStageIds
+                        : stages.map((s) => s.id)
+            for (const sid of stagesToFetch) {
+                byStage[sid] = []
+            }
+
+            if (viewMode === "converted") {
+                const data = await LeadService.listLeads(baseParams)
+                for (const lead of data.items) {
+                    const sid = lead.stage_id
+                    if (byStage[sid]) byStage[sid].push(lead)
+                    else byStage[sid] = [lead]
+                }
+            } else if (selectedStageIds.length > 0) {
+                const results = await Promise.all(
+                    selectedStageIds.map((stageId) =>
+                        LeadService.listLeads({ ...baseParams, stage_id: stageId })
+                    )
+                )
+                for (const data of results) {
+                    for (const lead of data.items) {
+                        const sid = lead.stage_id
+                        if (byStage[sid]) byStage[sid].push(lead)
+                        else byStage[sid] = [lead]
+                    }
+                }
+            } else {
+                const data = await LeadService.listLeads(baseParams)
+                for (const s of stages) {
+                    if (!byStage[s.id]) byStage[s.id] = []
+                }
+                for (const lead of data.items) {
+                    const sid = lead.stage_id
+                    if (byStage[sid]) byStage[sid].push(lead)
+                    else byStage[sid] = [lead]
+                }
+            }
+            setLeadsByStage(byStage)
+        } catch (error) {
+            console.error("Failed to fetch pipeline leads:", error)
+        } finally {
+            setIsLoadingPipeline(false)
+        }
+    }, [viewMode, search, source, selectedStageIds, stages])
 
     React.useEffect(() => {
         const timer = setTimeout(() => {
@@ -209,21 +302,30 @@ export default function LeadsPage() {
         return () => clearTimeout(timer)
     }, [fetchLeads])
 
+    React.useEffect(() => {
+        if (displayView === "pipeline" && stages.length > 0) {
+            const t = setTimeout(() => fetchLeadsForPipeline(), 300)
+            return () => clearTimeout(t)
+        }
+    }, [displayView, fetchLeadsForPipeline, stages.length])
+
     // WebSocket: Listen for lead updates to refresh the list in real-time
-    // This covers all update types: assigned, dealership_assigned, status_changed, etc.
     useWebSocketEvent("lead:updated", () => {
         fetchLeads()
-    }, [fetchLeads])
+        if (displayView === "pipeline") fetchLeadsForPipeline()
+    }, [fetchLeads, fetchLeadsForPipeline, displayView])
 
     // WebSocket: Listen for new leads to refresh the list in real-time
     useWebSocketEvent("lead:created", () => {
         fetchLeads()
-    }, [fetchLeads])
+        if (displayView === "pipeline") fetchLeadsForPipeline()
+    }, [fetchLeads, fetchLeadsForPipeline, displayView])
 
     // WebSocket: Listen for badge refresh (triggers when assignments change)
     useWebSocketEvent("badges:refresh", () => {
         fetchLeads()
-    }, [fetchLeads])
+        if (displayView === "pipeline") fetchLeadsForPipeline()
+    }, [fetchLeads, fetchLeadsForPipeline, displayView])
 
     const handleAssignClick = (lead: Lead) => {
         setSelectedLead(lead)
@@ -237,7 +339,84 @@ export default function LeadsPage() {
 
     const handleAssignmentSuccess = () => {
         fetchLeads()
+        if (displayView === "pipeline") fetchLeadsForPipeline()
     }
+
+    const applyPipelineMove = React.useCallback(
+        (sourceStageId: string, targetStageId: string, lead: Lead) => {
+            const leadId = lead.id
+            setLeadsByStage((prev) => {
+                const updated = { ...prev }
+                updated[sourceStageId] = (prev[sourceStageId] || []).filter((l) => l.id !== leadId)
+                updated[targetStageId] = [...(prev[targetStageId] || []), { ...lead, stage_id: targetStageId }]
+                return updated
+            })
+        },
+        []
+    )
+
+    const handlePipelineDragEnd = React.useCallback(
+        async (event: DragEndEvent) => {
+            const { active, over } = event
+            if (!over) return
+
+            const leadId = active.id as string
+            const overId = over.id as string
+            const stageIds = new Set(stages.map((s) => s.id))
+            const targetStageId = stageIds.has(overId)
+                ? overId
+                : (() => {
+                      for (const leads of Object.values(leadsByStage)) {
+                          const lead = leads.find((l) => l.id === overId)
+                          if (lead?.stage_id) return lead.stage_id
+                      }
+                      return overId
+                  })()
+
+            let sourceStageId: string | null = null
+            for (const [stageId, stageLeads] of Object.entries(leadsByStage)) {
+                if (stageLeads.some((l) => l.id === leadId)) {
+                    sourceStageId = stageId
+                    break
+                }
+            }
+            if (!sourceStageId || sourceStageId === targetStageId) return
+
+            const lead = leadsByStage[sourceStageId]?.find((l) => l.id === leadId)
+            if (!lead) return
+
+            try {
+                const result = await LeadService.updateLeadStage(leadId, targetStageId)
+                if (isSkateWarningResponse(result)) {
+                    useSkateConfirmStore.getState().show(
+                        result as SkateWarningInfo,
+                        () => {
+                            LeadService.updateLeadStage(leadId, targetStageId, undefined, true)
+                                .then(() => {
+                                    applyPipelineMove(sourceStageId, targetStageId, lead)
+                                    fetchLeadsForPipeline()
+                                })
+                                .catch((err) => {
+                                    const skate = getSkateAttemptDetail(err)
+                                    if (skate) useSkateAlertStore.getState().show(skate)
+                                    else fetchLeadsForPipeline()
+                                })
+                        }
+                    )
+                } else {
+                    applyPipelineMove(sourceStageId, targetStageId, lead)
+                }
+            } catch (error) {
+                const skate = getSkateAttemptDetail(error)
+                if (skate) useSkateAlertStore.getState().show(skate)
+                else {
+                    console.error("Failed to update stage:", error)
+                    fetchLeadsForPipeline()
+                }
+            }
+        },
+        [stages, leadsByStage, fetchLeadsForPipeline, applyPipelineMove]
+    )
 
     const handleDeleteClick = (lead: Lead) => {
         setLeadToDelete(lead)
@@ -277,7 +456,7 @@ export default function LeadsPage() {
     }
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 min-w-0">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
@@ -291,34 +470,61 @@ export default function LeadsPage() {
                 )}
             </div>
 
-            {/* Lead filter tabs */}
-            <Tabs
-                value={viewMode}
-                onValueChange={(v) => {
-                    const mode = v as ViewMode
-                    setViewMode(mode)
-                    if (mode === "converted") {
-                        setStatus("converted")
-                        router.push("/leads?filter=converted")
-                    } else if (mode === "unassigned") {
-                        router.push("/leads?filter=unassigned")
-                    } else if (mode === "all") {
-                        router.push("/leads?filter=all")
-                    } else {
-                        router.push("/leads?filter=mine")
-                    }
-                }}
-            >
-                <TabsList>
-                    <TabsTrigger value="mine">Your Leads</TabsTrigger>
-                    <TabsTrigger value="unassigned">Unassigned</TabsTrigger>
-                    <TabsTrigger value="all">All Leads</TabsTrigger>
-                    <TabsTrigger value="converted">
-                        <CheckCircle2 className="h-4 w-4 mr-1.5" />
-                        Converted & Sold
-                    </TabsTrigger>
-                </TabsList>
-            </Tabs>
+            {/* Lead filter tabs + List/Pipeline toggle */}
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <Tabs
+                    value={viewMode}
+                    onValueChange={(v) => {
+                        const mode = v as ViewMode
+                        setViewMode(mode)
+                        if (mode === "converted") {
+                            setStatus("converted")
+                            router.push("/leads?filter=converted")
+                        } else if (mode === "unassigned") {
+                            router.push("/leads?filter=unassigned")
+                        } else if (mode === "all") {
+                            router.push("/leads?filter=all")
+                        } else {
+                            router.push("/leads?filter=mine")
+                        }
+                    }}
+                >
+                    <TabsList>
+                        <TabsTrigger value="mine">Your Leads</TabsTrigger>
+                        <TabsTrigger value="unassigned">Unassigned</TabsTrigger>
+                        <TabsTrigger value="all">All Leads</TabsTrigger>
+                        <TabsTrigger value="converted">
+                            <CheckCircle2 className="h-4 w-4 mr-1.5" />
+                            Converted & Sold
+                        </TabsTrigger>
+                    </TabsList>
+                </Tabs>
+                <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">View:</span>
+                    <Tabs
+                        value={displayView}
+                        onValueChange={(v) => {
+                            const next = v as DisplayView
+                            setDisplayView(next)
+                            const params = new URLSearchParams(searchParams.toString())
+                            if (next === "pipeline") params.set("view", "pipeline")
+                            else params.delete("view")
+                            router.push(`/leads?${params.toString()}`)
+                        }}
+                    >
+                        <TabsList>
+                            <TabsTrigger value="list">
+                                <List className="h-4 w-4 mr-1.5" />
+                                List
+                            </TabsTrigger>
+                            <TabsTrigger value="pipeline">
+                                <LayoutGrid className="h-4 w-4 mr-1.5" />
+                                Pipeline
+                            </TabsTrigger>
+                        </TabsList>
+                    </Tabs>
+                </div>
+            </div>
 
             {/* Toolbar */}
             <Card>
@@ -332,18 +538,71 @@ export default function LeadsPage() {
                                 leftIcon={<Search className="h-4 w-4" />}
                                 className="max-w-xs"
                             />
-                            <Select value={status} onValueChange={setStatus}>
-                                <SelectTrigger className="w-36">
-                                    <SelectValue placeholder="Status" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {LEAD_STATUSES.map((s) => (
-                                        <SelectItem key={s.value} value={s.value}>
-                                            {s.label}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                            {displayView === "list" ? (
+                                <Select value={status} onValueChange={setStatus}>
+                                    <SelectTrigger className="w-36">
+                                        <SelectValue placeholder="Status" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {LEAD_STATUSES.map((s) => (
+                                            <SelectItem key={s.value} value={s.value}>
+                                                {s.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            ) : (
+                                <Popover>
+                                    <PopoverTrigger asChild>
+                                        <Button variant="outline" className="w-40 justify-between">
+                                            {selectedStageIds.length === 0
+                                                ? "All Stages"
+                                                : selectedStageIds.length === 1
+                                                    ? stages.find((s) => s.id === selectedStageIds[0])?.display_name ?? "1 stage"
+                                                    : `${selectedStageIds.length} stages`}
+                                            <Filter className="h-4 w-4 ml-1 opacity-50" />
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-56 p-2" align="start">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-sm font-medium">Stages</span>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-7 text-xs"
+                                                onClick={() => setSelectedStageIds([])}
+                                            >
+                                                Deselect all
+                                            </Button>
+                                        </div>
+                                        <div className="max-h-64 overflow-y-auto space-y-1.5">
+                                            {stages.map((s) => (
+                                                <label
+                                                    key={s.id}
+                                                    className="flex items-center gap-2 cursor-pointer rounded px-2 py-1.5 hover:bg-muted/50"
+                                                >
+                                                    <Checkbox
+                                                        checked={selectedStageIds.includes(s.id)}
+                                                        onCheckedChange={(checked) => {
+                                                            setSelectedStageIds((prev) =>
+                                                                checked
+                                                                    ? [...prev, s.id]
+                                                                    : prev.filter((id) => id !== s.id)
+                                                            )
+                                                        }}
+                                                    />
+                                                    <span className="text-sm truncate">{s.display_name}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground mt-2">
+                                            {selectedStageIds.length === 0
+                                                ? "Showing all stages"
+                                                : `Showing ${selectedStageIds.length} stage(s)`}
+                                        </p>
+                                    </PopoverContent>
+                                </Popover>
+                            )}
                             <Select value={source} onValueChange={setSource}>
                                 <SelectTrigger className="w-36">
                                     <SelectValue placeholder="Source" />
@@ -359,10 +618,16 @@ export default function LeadsPage() {
                         </div>
                         <div className="flex items-center gap-2">
                             <div className="h-4 w-px bg-border" />
-                            <p className="text-sm text-muted-foreground px-2">
-                                Showing <span className="font-medium text-foreground">{leads.length}</span> of{" "}
-                                <span className="font-medium text-foreground">{total}</span> leads
-                            </p>
+                            {displayView === "list" ? (
+                                <p className="text-sm text-muted-foreground px-2">
+                                    Showing <span className="font-medium text-foreground">{leads.length}</span> of{" "}
+                                    <span className="font-medium text-foreground">{total}</span> leads
+                                </p>
+                            ) : (
+                                <p className="text-sm text-muted-foreground px-2">
+                                    Drag leads between stages to update their pipeline position.
+                                </p>
+                            )}
                             <Button
                                 variant="outline"
                                 size="sm"
@@ -376,7 +641,20 @@ export default function LeadsPage() {
                 </CardContent>
             </Card>
 
-            {/* Leads Table */}
+            {/* Pipeline view - horizontal scroll only in this section */}
+            {displayView === "pipeline" && (
+                <div className="w-full min-w-0 overflow-x-auto">
+                    <LeadsPipelineView
+                        stages={viewMode === "converted" ? stages.filter((s) => s.name === "converted") : selectedStageIds.length === 0 ? stages : stages.filter((s) => selectedStageIds.includes(s.id))}
+                        leadsByStage={leadsByStage}
+                        isLoading={isLoadingPipeline}
+                        onDragEnd={handlePipelineDragEnd}
+                    />
+                </div>
+            )}
+
+            {/* Leads Table (list view) */}
+            {displayView === "list" && (
             <Card className="overflow-hidden">
                 <Table>
                     <TableHeader>
@@ -434,23 +712,23 @@ export default function LeadsPage() {
                                     <TableCell>
                                         <div className="flex items-center">
                                             <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary mr-3 font-semibold">
-                                                {lead.first_name.charAt(0)}
+                                                {(lead.customer?.first_name || "?").charAt(0)}
                                             </div>
                                             <div>
                                                 <p className="font-semibold group-hover:text-primary transition-colors">
-                                                    {lead.first_name} {lead.last_name}
+                                                    {getLeadFullName(lead)}
                                                 </p>
                                                 <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-                                                    {lead.email && (
+                                                    {getLeadEmail(lead) && (
                                                         <span className="flex items-center gap-1">
                                                             <Mail className="h-3 w-3" />
-                                                            {lead.email}
+                                                            {getLeadEmail(lead)}
                                                         </span>
                                                     )}
-                                                    {lead.phone && (
+                                                    {getLeadPhone(lead) && (
                                                         <span className="flex items-center gap-1">
                                                             <Phone className="h-3 w-3" />
-                                                            {lead.phone}
+                                                            {getLeadPhone(lead)}
                                                         </span>
                                                     )}
                                                 </div>
@@ -458,8 +736,8 @@ export default function LeadsPage() {
                                         </div>
                                     </TableCell>
                                     <TableCell>
-                                        <Badge variant={getStatusVariant(lead.status)}>
-                                            {lead.status.replace('_', ' ')}
+                                        <Badge variant="outline" style={{ borderColor: getStageColor(lead.stage), color: getStageColor(lead.stage) }}>
+                                            {getStageLabel(lead.stage)}
                                         </Badge>
                                     </TableCell>
                                     <TableCell>
@@ -530,19 +808,19 @@ export default function LeadsPage() {
                                                         {lead.assigned_to ? 'Reassign to Team Member' : 'Assign to Team Member'}
                                                     </DropdownMenuItem>
                                                 )}
-                                                {lead.phone && (
+                                                {getLeadPhone(lead) && (
                                                     <DropdownMenuItem onClick={(e) => {
                                                         e.stopPropagation()
-                                                        window.location.href = `tel:${lead.phone}`
+                                                        window.location.href = `tel:${getLeadPhone(lead)}`
                                                     }}>
                                                         <Phone className="mr-2 h-4 w-4" />
                                                         Call
                                                     </DropdownMenuItem>
                                                 )}
-                                                {lead.email && (
+                                                {getLeadEmail(lead) && (
                                                     <DropdownMenuItem onClick={(e) => {
                                                         e.stopPropagation()
-                                                        window.location.href = `mailto:${lead.email}`
+                                                        window.location.href = `mailto:${getLeadEmail(lead)}`
                                                     }}>
                                                         <Mail className="mr-2 h-4 w-4" />
                                                         Email
@@ -599,6 +877,7 @@ export default function LeadsPage() {
                     </div>
                 )}
             </Card>
+            )}
 
             {/* Assignment to Salesperson Modal */}
             <AssignToSalespersonModal
@@ -629,7 +908,7 @@ export default function LeadsPage() {
                     <AlertDialogHeader>
                         <AlertDialogTitle>Delete Lead</AlertDialogTitle>
                         <AlertDialogDescription>
-                            Are you sure you want to delete <strong>{leadToDelete?.first_name} {leadToDelete?.last_name}</strong>? 
+                            Are you sure you want to delete <strong>{leadToDelete ? getLeadFullName(leadToDelete) : ""}</strong>? 
                             This action cannot be undone. All associated activities and data will be permanently removed.
                         </AlertDialogDescription>
                     </AlertDialogHeader>

@@ -207,6 +207,7 @@ async def initiate_call(
             to_number=formatted_number,
             user_id=current_user.id,
             lead_id=lead.id if lead else None,
+            customer_id=lead.customer_id if lead else None,
             dealership_id=dealership_id,
             status=CallStatus.INITIATED
         )
@@ -233,6 +234,7 @@ async def list_calls(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     lead_id: Optional[UUID] = None,
+    customer_id: Optional[UUID] = None,
     direction: Optional[str] = None,
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db)
@@ -242,11 +244,26 @@ async def list_calls(
     - Salespersons see only their calls
     - Admins see all dealership calls
     - Super admins see all calls
+    - Pass customer_id to get all calls for that customer (full history); access is checked via lead.
     """
     query = select(CallLog)
     count_query = select(func.count(CallLog.id))
-    
-    # Apply role-based filtering
+
+    # Optional: filter by customer for full customer-level call history
+    if customer_id:
+        # Verify user has access to at least one lead for this customer
+        lead_check = select(Lead.id).where(Lead.customer_id == customer_id)
+        if current_user.role == UserRole.SALESPERSON:
+            lead_check = lead_check.where(Lead.assigned_to == current_user.id)
+        elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and current_user.dealership_id:
+            lead_check = lead_check.where(Lead.dealership_id == current_user.dealership_id)
+        lead_check = lead_check.limit(1)
+        access = await db.execute(lead_check)
+        if not access.scalar_one_or_none():
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this customer")
+        query = query.where(CallLog.customer_id == customer_id)
+        count_query = count_query.where(CallLog.customer_id == customer_id)
+    # Apply role-based filtering (always)
     if current_user.role == UserRole.SALESPERSON:
         query = query.where(CallLog.user_id == current_user.id)
         count_query = count_query.where(CallLog.user_id == current_user.id)
@@ -254,8 +271,7 @@ async def list_calls(
         if current_user.dealership_id:
             query = query.where(CallLog.dealership_id == current_user.dealership_id)
             count_query = count_query.where(CallLog.dealership_id == current_user.dealership_id)
-    # Super admin sees all
-    
+
     # Apply filters
     if lead_id:
         query = query.where(CallLog.lead_id == lead_id)
@@ -496,6 +512,7 @@ async def handle_incoming_call(
         to_number=to_number,
         user_id=user.id if user else None,
         lead_id=lead.id if lead else None,
+        customer_id=lead.customer_id if lead else None,
         dealership_id=(lead.dealership_id if lead else None) or (user.dealership_id if user else None),
         status=CallStatus.RINGING
     )

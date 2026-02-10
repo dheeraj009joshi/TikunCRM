@@ -206,7 +206,7 @@ export function SuperAdminDashboard() {
                                         <p className="font-medium text-sm truncate">{apt.title}</p>
                                         {apt.lead && (
                                             <p className="text-xs text-muted-foreground truncate">
-                                                {apt.lead.first_name} {apt.lead.last_name || ""}
+                                                {apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown"}
                                             </p>
                                         )}
                                     </div>

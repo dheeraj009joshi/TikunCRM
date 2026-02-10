@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.config import settings
@@ -207,10 +208,10 @@ async def get_conversation(
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get SMS conversation with a lead"""
-    # Verify access to lead
+    """Get SMS conversation with a lead (returns full customer-level history)."""
+    # Verify access to lead and load customer for name/phone
     result = await db.execute(
-        select(Lead).where(Lead.id == lead_id)
+        select(Lead).options(selectinload(Lead.customer)).where(Lead.id == lead_id)
     )
     lead = result.scalar_one_or_none()
     

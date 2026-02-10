@@ -14,7 +14,9 @@ from app.api import deps
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
-from app.models.lead import Lead, LeadStatus
+from app.models.lead import Lead
+from app.models.customer import Customer
+from app.services.lead_stage_service import LeadStageService
 from app.models.appointment import Appointment, AppointmentStatus
 from app.models.showroom_visit import ShowroomVisit, ShowroomOutcome
 from app.models.activity import ActivityType
@@ -54,16 +56,21 @@ async def enrich_visit(db: AsyncSession, visit: ShowroomVisit) -> dict:
         "updated_at": visit.updated_at,
     }
     
-    # Fetch lead
+    # Fetch lead + customer
     lead_result = await db.execute(select(Lead).where(Lead.id == visit.lead_id))
     lead = lead_result.scalar_one_or_none()
     if lead:
+        cust = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+        customer = cust.scalar_one_or_none()
         response["lead"] = {
             "id": lead.id,
-            "first_name": lead.first_name,
-            "last_name": lead.last_name,
-            "phone": lead.phone,
-            "email": lead.email,
+            "customer": {
+                "first_name": customer.first_name if customer else "",
+                "last_name": customer.last_name if customer else None,
+                "full_name": customer.full_name if customer else "",
+                "phone": customer.phone if customer else None,
+                "email": customer.email if customer else None,
+            } if customer else None,
         }
     
     # Fetch checked_in_by user
@@ -138,12 +145,18 @@ async def check_in(
     )
     db.add(visit)
     
-    # Update lead status to IN_SHOWROOM
-    old_status = lead.status
-    lead.status = LeadStatus.IN_SHOWROOM
-    
+    # Update lead stage to IN_SHOWROOM
+    from app.models.lead_stage import LeadStage as LS
+    old_stage = await LeadStageService.get_stage(db, lead.stage_id)
+    old_stage_name = old_stage.display_name if old_stage else "?"
+    in_showroom_stage = await LeadStageService.get_stage_by_name(db, "in_showroom", dealership_id)
+    if in_showroom_stage:
+        lead.stage_id = in_showroom_stage.id
+
     # Log activity
-    lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+    cust_r = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+    cust_obj = cust_r.scalar_one_or_none()
+    lead_name = cust_obj.full_name if cust_obj else "Customer"
     await ActivityService.log_activity(
         db,
         activity_type=ActivityType.STATUS_CHANGED,
@@ -153,10 +166,10 @@ async def check_in(
         dealership_id=dealership_id,
         meta_data={
             "action": "showroom_check_in",
-            "old_status": old_status.value if old_status else None,
+            "old_status": old_stage_name,
             "new_status": "in_showroom",
             "visit_id": str(visit.id),
-        }
+        },
     )
     
     # If check-in is linked to an appointment, set appointment status to ARRIVED
@@ -225,26 +238,25 @@ async def check_out(
     if check_out_data.notes:
         visit.notes = (visit.notes or "") + f"\n\nCheckout: {check_out_data.notes}"
     
-    # Get lead and update status based on check-out outcome (sync outcome -> lead status)
+    # Get lead and update stage based on check-out outcome
     lead_result = await db.execute(select(Lead).where(Lead.id == visit.lead_id))
     lead = lead_result.scalar_one_or_none()
 
-    # Map showroom outcome to lead status (outcome = lead status where applicable)
-    new_status = LeadStatus.CONTACTED  # fallback
-    if check_out_data.outcome == ShowroomOutcome.SOLD:
-        new_status = LeadStatus.CONVERTED
-    elif check_out_data.outcome == ShowroomOutcome.FOLLOW_UP:
-        new_status = LeadStatus.FOLLOW_UP
-    elif check_out_data.outcome == ShowroomOutcome.NOT_INTERESTED:
-        new_status = LeadStatus.NOT_INTERESTED
-    elif check_out_data.outcome == ShowroomOutcome.RESCHEDULE:
-        new_status = LeadStatus.RESCHEDULE
-    elif check_out_data.outcome == ShowroomOutcome.BROWSING:
-        new_status = LeadStatus.BROWSING
-    elif check_out_data.outcome == ShowroomOutcome.COULDNT_QUALIFY:
-        new_status = LeadStatus.COULDNT_QUALIFY
+    # Map showroom outcome to stage name
+    outcome_to_stage = {
+        ShowroomOutcome.SOLD: "converted",
+        ShowroomOutcome.NOT_INTERESTED: "not_interested",
+        ShowroomOutcome.FOLLOW_UP: "follow_up",
+        ShowroomOutcome.RESCHEDULE: "reschedule",
+        ShowroomOutcome.BROWSING: "browsing",
+        ShowroomOutcome.COULDNT_QUALIFY: "couldnt_qualify",
+    }
+    target_stage_name = outcome_to_stage.get(check_out_data.outcome, "contacted")
+    target_stage = await LeadStageService.get_stage_by_name(
+        db, target_stage_name, visit.dealership_id
+    )
 
-    # When outcome is RESCHEDULE and visit has linked appointment, update appointment with new time
+    # When outcome is RESCHEDULE and visit has linked appointment, reschedule it
     if (
         check_out_data.outcome == ShowroomOutcome.RESCHEDULE
         and visit.appointment_id
@@ -255,21 +267,29 @@ async def check_out(
         )
         appointment = apt_result.scalar_one_or_none()
         if appointment:
-            # Ensure datetime is timezone-aware (UTC)
             new_at = check_out_data.reschedule_scheduled_at
             if new_at.tzinfo is None:
                 new_at = new_at.replace(tzinfo=timezone.utc)
             appointment.scheduled_at = new_at
             appointment.status = AppointmentStatus.SCHEDULED
 
-    if lead:
-        old_status = lead.status
-        lead.status = new_status
-        if new_status == LeadStatus.CONVERTED:
-            lead.converted_at = utc_now()
+    if lead and target_stage:
+        old_stage = await LeadStageService.get_stage(db, lead.stage_id)
+        old_stage_name = old_stage.display_name if old_stage else "?"
+        lead.stage_id = target_stage.id
+
+        # Terminal handling
+        if target_stage.is_terminal:
+            lead.is_active = False
+            lead.closed_at = utc_now()
+            lead.outcome = target_stage.name
+            if target_stage.name == "converted":
+                lead.converted_at = utc_now()
 
         # Log activity
-        lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+        _co = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+        _cust = _co.scalar_one_or_none()
+        lead_name = _cust.full_name if _cust else "Customer"
         outcome_label = check_out_data.outcome.value.replace("_", " ").title()
         await ActivityService.log_activity(
             db,
@@ -281,10 +301,10 @@ async def check_out(
             meta_data={
                 "action": "showroom_check_out",
                 "outcome": check_out_data.outcome.value,
-                "old_status": old_status.value if old_status else None,
-                "new_status": new_status.value,
+                "old_status": old_stage_name,
+                "new_status": target_stage.display_name,
                 "visit_id": str(visit.id),
-            }
+            },
         )
 
     await db.commit()

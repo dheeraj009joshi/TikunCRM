@@ -18,7 +18,7 @@ import {
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, MetricCard } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Badge, getStatusVariant } from "@/components/ui/badge"
+import { Badge } from "@/components/ui/badge"
 import {
     Table,
     TableBody,
@@ -30,7 +30,8 @@ import {
     TableLoading
 } from "@/components/ui/table"
 import { DashboardService, SalespersonStats } from "@/services/dashboard-service"
-import { LeadService, Lead } from "@/services/lead-service"
+import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
+import { getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
 import { ShowroomService, ShowroomStats } from "@/services/showroom-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
@@ -136,8 +137,8 @@ export function SalespersonDashboard() {
                 </Link>
             </div>
 
-            {/* My customers in dealership (only this salesperson's leads) */}
-            {showroomStats !== null && (
+            {/* My customers in dealership (only when someone is there; only this salesperson's leads) */}
+            {showroomStats && showroomStats.currently_in_showroom > 0 && (
                 <Card className="border-teal-200 bg-teal-50 dark:border-teal-900 dark:bg-teal-950">
                     <CardContent className="flex items-center gap-4 p-4">
                         <div className="rounded-full bg-teal-100 p-3 dark:bg-teal-900">
@@ -258,7 +259,7 @@ export function SalespersonDashboard() {
                                                     <p className="font-medium text-sm">{apt.title}</p>
                                                     {apt.lead && (
                                                         <p className="text-xs text-muted-foreground">
-                                                            with {apt.lead.first_name} {apt.lead.last_name || ""}
+                                                            with {apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown"}
                                                         </p>
                                                     )}
                                                 </div>
@@ -318,7 +319,7 @@ export function SalespersonDashboard() {
                                                     <p className="font-medium text-sm">{apt.title}</p>
                                                     {apt.lead && (
                                                         <p className="text-xs text-muted-foreground">
-                                                            with {apt.lead.first_name} {apt.lead.last_name || ""}
+                                                            with {apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown"}
                                                         </p>
                                                     )}
                                                 </div>
@@ -429,11 +430,11 @@ export function SalespersonDashboard() {
                                         <TableCell>
                                             <div className="flex items-center gap-2">
                                                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-bold">
-                                                    {lead.first_name.charAt(0)}
+                                                    {(lead.customer?.first_name || "?").charAt(0)}
                                                 </div>
                                                 <div>
                                                     <p className="font-medium text-sm">
-                                                        {lead.first_name} {lead.last_name}
+                                                        {getLeadFullName(lead)}
                                                     </p>
                                                     <p className="text-xs text-muted-foreground">
                                                         {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
@@ -442,47 +443,47 @@ export function SalespersonDashboard() {
                                             </div>
                                         </TableCell>
                                         <TableCell>
-                                            <Badge variant={getStatusVariant(lead.status)}>
-                                                {lead.status.replace('_', ' ')}
+                                            <Badge size="sm" style={{ backgroundColor: getStageColor(lead.stage), color: "#fff" }}>
+                                                {getStageLabel(lead.stage)}
                                             </Badge>
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex flex-col gap-1">
-                                                {lead.phone && (
+                                                {getLeadPhone(lead) && (
                                                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
                                                         <Phone className="h-3 w-3" />
-                                                        {lead.phone}
+                                                        {getLeadPhone(lead)}
                                                     </span>
                                                 )}
-                                                {lead.email && (
+                                                {getLeadEmail(lead) && (
                                                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
                                                         <Mail className="h-3 w-3" />
-                                                        {lead.email}
+                                                        {getLeadEmail(lead)}
                                                     </span>
                                                 )}
                                             </div>
                                         </TableCell>
                                         <TableCell className="text-right">
                                             <div className="flex justify-end gap-1">
-                                                {lead.phone && (
+                                                {getLeadPhone(lead) && (
                                                     <Button 
                                                         variant="ghost" 
                                                         size="icon"
                                                         onClick={(e) => {
                                                             e.stopPropagation()
-                                                            window.location.href = `tel:${lead.phone}`
+                                                            window.location.href = `tel:${getLeadPhone(lead)}`
                                                         }}
                                                     >
                                                         <Phone className="h-4 w-4" />
                                                     </Button>
                                                 )}
-                                                {lead.email && (
+                                                {getLeadEmail(lead) && (
                                                     <Button 
                                                         variant="ghost" 
                                                         size="icon"
                                                         onClick={(e) => {
                                                             e.stopPropagation()
-                                                            window.location.href = `mailto:${lead.email}`
+                                                            window.location.href = `mailto:${getLeadEmail(lead)}`
                                                         }}
                                                     >
                                                         <Mail className="h-4 w-4" />

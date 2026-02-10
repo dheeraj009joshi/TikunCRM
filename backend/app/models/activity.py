@@ -39,6 +39,7 @@ class ActivityType(str, Enum):
     SMS_SENT = "sms_sent"
     SMS_RECEIVED = "sms_received"
     WHATSAPP_SENT = "whatsapp_sent"
+    WHATSAPP_RECEIVED = "whatsapp_received"
     
     # Follow-ups
     FOLLOW_UP_SCHEDULED = "follow_up_scheduled"

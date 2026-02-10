@@ -123,10 +123,13 @@ export interface EmailLogItem {
 
 export interface LeadBrief {
     id: string;
-    first_name: string;
-    last_name: string;
-    email: string;
-    phone?: string;
+    customer?: {
+        first_name: string;
+        last_name?: string;
+        full_name?: string;
+        email?: string;
+        phone?: string;
+    };
 }
 
 export interface UserBrief {

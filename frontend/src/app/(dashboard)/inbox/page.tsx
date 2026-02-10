@@ -8,6 +8,7 @@ import {
   PhoneOutgoing,
   PhoneMissed,
   MessageSquare,
+  MessageCircle,
   Mail,
   MailOpen,
   Loader2,
@@ -24,6 +25,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { voiceService, CallLog, VoiceConfig } from "@/services/voice-service";
 import { smsService, ConversationListItem, SMSConfig } from "@/services/sms-service";
+import { whatsappService, WhatsAppConversationListItem, WhatsAppConfig } from "@/services/whatsapp-service";
 import { AudioPlayer } from "@/components/audio-player";
 import apiClient from "@/lib/api-client";
 
@@ -44,7 +46,7 @@ interface Email {
 // Unified communication item
 interface CommunicationItem {
   id: string;
-  type: "call" | "sms" | "email";
+  type: "call" | "sms" | "email" | "whatsapp";
   lead_id: string | null;
   lead_name?: string;
   direction: "inbound" | "outbound";
@@ -52,21 +54,22 @@ interface CommunicationItem {
   preview: string;
   status?: string;
   is_read?: boolean;
-  raw: CallLog | ConversationListItem | Email;
+  raw: CallLog | ConversationListItem | Email | WhatsAppConversationListItem;
 }
 
 export default function UnifiedInboxPage() {
-  const [activeTab, setActiveTab] = useState<"all" | "calls" | "sms" | "email">("all");
+  const [activeTab, setActiveTab] = useState<"all" | "calls" | "sms" | "whatsapp" | "email">("all");
   const [loading, setLoading] = useState(true);
   const [voiceConfig, setVoiceConfig] = useState<VoiceConfig | null>(null);
   const [smsConfig, setSmsConfig] = useState<SMSConfig | null>(null);
+  const [whatsappConfig, setWhatsappConfig] = useState<WhatsAppConfig | null>(null);
   const [calls, setCalls] = useState<CallLog[]>([]);
   const [smsConversations, setSmsConversations] = useState<ConversationListItem[]>([]);
+  const [whatsappConversations, setWhatsappConversations] = useState<WhatsAppConversationListItem[]>([]);
   const [emails, setEmails] = useState<Email[]>([]);
   const [selectedItem, setSelectedItem] = useState<CommunicationItem | null>(null);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
-  
-  // Load configs first
+
   useEffect(() => {
     Promise.all([
       voiceService.getConfig().catch((): VoiceConfig => ({
@@ -75,54 +78,53 @@ export default function UnifiedInboxPage() {
         recording_enabled: false,
         azure_storage_configured: false,
       })),
-      smsService.getConfig().catch(() => ({ sms_enabled: false, phone_number: null }))
-    ]).then(([voice, sms]) => {
+      smsService.getConfig().catch(() => ({ sms_enabled: false, phone_number: null })),
+      whatsappService.getConfig().catch(() => ({ whatsapp_enabled: false, phone_number: null }))
+    ]).then(([voice, sms, wa]) => {
       setVoiceConfig(voice);
       setSmsConfig(sms);
+      setWhatsappConfig(wa);
     });
   }, []);
   
-  // Load all communications (only enabled ones)
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
       const promises: Promise<any>[] = [];
-      
-      // Only fetch calls if voice is enabled
       if (voiceConfig?.voice_enabled) {
         promises.push(voiceService.listCalls({ page_size: 50 }).catch(() => ({ items: [] })));
       } else {
         promises.push(Promise.resolve({ items: [] }));
       }
-      
-      // Only fetch SMS if SMS is enabled
       if (smsConfig?.sms_enabled) {
         promises.push(smsService.listConversations({ limit: 50 }).catch(() => ({ items: [], total_unread: 0 })));
       } else {
         promises.push(Promise.resolve({ items: [], total_unread: 0 }));
       }
-      
-      // Always fetch emails
+      if (whatsappConfig?.whatsapp_enabled) {
+        promises.push(whatsappService.listConversations({ limit: 50 }).catch(() => ({ items: [], total_unread: 0 })));
+      } else {
+        promises.push(Promise.resolve({ items: [], total_unread: 0 }));
+      }
       promises.push(apiClient.get("/emails", { params: { page_size: 50 } }).catch(() => ({ data: { items: [] } })));
-      
-      const [callsRes, smsRes, emailsRes] = await Promise.all(promises);
-      
+
+      const [callsRes, smsRes, waRes, emailsRes] = await Promise.all(promises);
       setCalls(callsRes.items || []);
       setSmsConversations(smsRes.items || []);
+      setWhatsappConversations(waRes.items || []);
       setEmails(emailsRes.data?.items || []);
     } catch (err) {
       console.error("Failed to load communications:", err);
     } finally {
       setLoading(false);
     }
-  }, [voiceConfig?.voice_enabled, smsConfig?.sms_enabled]);
+  }, [voiceConfig?.voice_enabled, smsConfig?.sms_enabled, whatsappConfig?.whatsapp_enabled]);
   
   useEffect(() => {
-    // Only load when configs are available
-    if (voiceConfig !== null && smsConfig !== null) {
+    if (voiceConfig !== null && smsConfig !== null && whatsappConfig !== null) {
       loadAll();
     }
-  }, [voiceConfig, smsConfig, loadAll]);
+  }, [voiceConfig, smsConfig, whatsappConfig, loadAll]);
   
   // Build unified list
   const buildUnifiedList = (): CommunicationItem[] => {
@@ -143,11 +145,24 @@ export default function UnifiedInboxPage() {
       });
     });
     
-    // Add SMS conversations (use last message)
     smsConversations.forEach((conv) => {
       items.push({
         id: `sms-${conv.lead_id}`,
         type: "sms",
+        lead_id: conv.lead_id,
+        lead_name: conv.lead_name,
+        direction: conv.last_message.direction as "inbound" | "outbound",
+        timestamp: conv.last_message.created_at,
+        preview: conv.last_message.body,
+        is_read: conv.unread_count === 0,
+        raw: conv
+      });
+    });
+
+    whatsappConversations.forEach((conv) => {
+      items.push({
+        id: `whatsapp-${conv.lead_id}`,
+        type: "whatsapp",
         lead_id: conv.lead_id,
         lead_name: conv.lead_name,
         direction: conv.last_message.direction as "inbound" | "outbound",
@@ -175,11 +190,11 @@ export default function UnifiedInboxPage() {
     // Sort by timestamp (newest first)
     items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     
-    // Filter by tab
     if (activeTab !== "all") {
       return items.filter((item) => {
         if (activeTab === "calls") return item.type === "call";
         if (activeTab === "sms") return item.type === "sms";
+        if (activeTab === "whatsapp") return item.type === "whatsapp";
         if (activeTab === "email") return item.type === "email";
         return true;
       });
@@ -219,6 +234,9 @@ export default function UnifiedInboxPage() {
     }
     if (item.type === "sms") {
       return <MessageSquare className="h-4 w-4 text-purple-500" />;
+    }
+    if (item.type === "whatsapp") {
+      return <MessageCircle className="h-4 w-4 text-[#25D366]" />;
     }
     if (item.type === "email") {
       return item.is_read
@@ -275,6 +293,10 @@ export default function UnifiedInboxPage() {
             <MessageSquare className="h-4 w-4 mr-1" />
             SMS
           </TabsTrigger>
+          <TabsTrigger value="whatsapp">
+            <MessageCircle className="h-4 w-4 mr-1" />
+            WhatsApp
+          </TabsTrigger>
           <TabsTrigger value="email">
             <Mail className="h-4 w-4 mr-1" />
             Email
@@ -299,6 +321,12 @@ export default function UnifiedInboxPage() {
                 icon={<MessageSquare className="h-10 w-10" />}
                 title="SMS Messaging Coming Soon"
                 description="In-app texting is being configured. You can still text leads from your phone."
+              />
+            ) : activeTab === "whatsapp" && !whatsappConfig?.whatsapp_enabled ? (
+              <ComingSoonMessage
+                icon={<MessageCircle className="h-10 w-10" />}
+                title="WhatsApp Coming Soon"
+                description="WhatsApp messaging is being configured."
               />
             ) : items.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center p-4">
@@ -367,7 +395,7 @@ export default function UnifiedInboxPage() {
                     <div>
                       <h3 className="font-semibold">{selectedItem.lead_name || "Unknown"}</h3>
                       <p className="text-sm text-muted-foreground">
-                        {selectedItem.type === "call" ? "Voice Call" : selectedItem.type === "sms" ? "SMS Message" : "Email"}
+                        {selectedItem.type === "call" ? "Voice Call" : selectedItem.type === "sms" ? "SMS Message" : selectedItem.type === "whatsapp" ? "WhatsApp" : "Email"}
                       </p>
                     </div>
                   </div>
@@ -393,6 +421,10 @@ export default function UnifiedInboxPage() {
                   
                   {selectedItem.type === "sms" && (
                     <SMSDetail conversation={selectedItem.raw as ConversationListItem} />
+                  )}
+
+                  {selectedItem.type === "whatsapp" && (
+                    <WhatsAppDetail conversation={selectedItem.raw as WhatsAppConversationListItem} />
                   )}
                   
                   {selectedItem.type === "email" && (
@@ -495,6 +527,38 @@ function SMSDetail({ conversation }: { conversation: ConversationListItem }) {
         <Button className="w-full">
           <MessageSquare className="h-4 w-4 mr-2" />
           Open Conversation
+        </Button>
+      </Link>
+    </div>
+  );
+}
+
+function WhatsAppDetail({ conversation }: { conversation: WhatsAppConversationListItem }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="text-sm text-muted-foreground">Contact</p>
+        <p className="font-medium">{conversation.lead_name}</p>
+        <p className="text-sm text-muted-foreground">{conversation.lead_phone}</p>
+      </div>
+      <div>
+        <p className="text-sm text-muted-foreground mb-2">Last Message</p>
+        <div className={cn(
+          "p-3 rounded-lg max-w-[80%]",
+          conversation.last_message.direction === "outbound"
+            ? "bg-[#005c4b] text-white ml-auto"
+            : "bg-muted"
+        )}>
+          <p className="text-sm">{conversation.last_message.body}</p>
+          <p className="text-[10px] mt-1 opacity-70">
+            {format(new Date(conversation.last_message.created_at), "PPpp")}
+          </p>
+        </div>
+      </div>
+      <Link href={`/whatsapp?lead=${conversation.lead_id}`}>
+        <Button className="w-full bg-[#25D366] hover:bg-[#20bd5a]">
+          <MessageCircle className="h-4 w-4 mr-2" />
+          Open in WhatsApp
         </Button>
       </Link>
     </div>

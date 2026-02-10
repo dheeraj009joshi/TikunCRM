@@ -49,16 +49,17 @@ function formatDate(dateString: string, timezone: string) {
 }
 
 function getDisplayName(email: EmailInboxItem): string {
+    const leadName = email.lead?.customer?.full_name || `${email.lead?.customer?.first_name || ""} ${email.lead?.customer?.last_name || ""}`.trim();
     if (email.direction === 'sent') {
         // For sent emails, show who it was sent TO
-        if (email.lead) {
-            return `To: ${email.lead.first_name} ${email.lead.last_name}`
+        if (email.lead && leadName) {
+            return `To: ${leadName}`
         }
         return `To: ${email.to_email}`
     } else {
         // For received emails, show who it's FROM
-        if (email.lead) {
-            return `${email.lead.first_name} ${email.lead.last_name}`
+        if (email.lead && leadName) {
+            return leadName
         }
         return email.from_email
     }
@@ -297,8 +298,8 @@ export default function CommunicationsPage() {
                         </div>
                     ) : email.lead ? (
                         <UserAvatar
-                            firstName={email.lead.first_name}
-                            lastName={email.lead.last_name}
+                            firstName={email.lead.customer?.first_name || ""}
+                            lastName={email.lead.customer?.last_name || ""}
                             size="md"
                         />
                     ) : (() => {
@@ -676,8 +677,8 @@ export default function CommunicationsPage() {
                 isOpen={showComposer}
                 onClose={() => setShowComposer(false)}
                 leadId={selectedEmail?.lead_id}
-                leadEmail={selectedEmail?.lead?.email || selectedEmail?.to_email}
-                leadName={selectedEmail?.lead ? `${selectedEmail.lead.first_name} ${selectedEmail.lead.last_name}` : undefined}
+                leadEmail={selectedEmail?.lead?.customer?.email || selectedEmail?.to_email}
+                leadName={selectedEmail?.lead ? (selectedEmail.lead.customer?.full_name || `${selectedEmail.lead.customer?.first_name || ""} ${selectedEmail.lead.customer?.last_name || ""}`.trim() || undefined) : undefined}
                 onSent={() => {
                     fetchEmails()
                     fetchStats()

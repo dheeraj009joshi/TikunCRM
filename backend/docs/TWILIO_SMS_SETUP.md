@@ -1,6 +1,23 @@
-# Twilio SMS Setup (Including Trial)
+# Twilio SMS and Voice Setup
 
-TikunCRM can send text (SMS) notifications using **Twilio**. You can use a **free trial account** to test.
+TikunCRM integrates with **Twilio** for both **SMS (text)** and **voice (phone)**. You can use a **free trial account** to test. The same Twilio phone number can be used for both SMS and voice if it has both capabilities.
+
+## Webhook URLs reference
+
+Replace `https://<your-backend-host>` with your backend’s public URL (e.g. `https://api.yourdomain.com` or, for local testing with ngrok, `https://xxxx.ngrok.io`). Set `BACKEND_URL` in `.env` to this value so the app can generate correct URLs (e.g. for call recording callbacks).
+
+| Purpose | URL | Used for |
+|--------|-----|----------|
+| **SMS incoming** | `https://<your-backend-host>/api/v1/webhooks/twilio/sms/incoming` | Incoming SMS to your Twilio number |
+| **SMS status** | `https://<your-backend-host>/api/v1/webhooks/twilio/sms/status` | Delivery status updates (optional) |
+| **Voice incoming** | `https://<your-backend-host>/api/v1/voice/webhook/incoming` | Incoming calls to your Twilio number |
+| **Voice outgoing** | `https://<your-backend-host>/api/v1/voice/webhook/outgoing` | Outbound calls from the WebRTC softphone |
+| **Voice status** | `https://<your-backend-host>/api/v1/voice/webhook/status` | Call status updates |
+| **Voice recording** | `https://<your-backend-host>/api/v1/voice/webhook/recording` | Recording completion (used in TwiML) |
+
+---
+
+# SMS Setup (Including Trial)
 
 ## What gets SMS in the app
 

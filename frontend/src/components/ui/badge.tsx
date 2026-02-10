@@ -19,12 +19,13 @@ const badgeVariants = cva(
                 follow_up: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
                 interested: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
                 not_interested: "bg-gray-500/10 text-gray-600 dark:text-gray-400",
-                converted: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-bold",
+                converted: "bg-emerald-600 text-white dark:bg-emerald-600 font-bold",
                 lost: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
                 in_showroom: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
                 couldnt_qualify: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-                browsing: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
-                reschedule: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
+                browsing: "bg-yellow-500 text-white dark:bg-yellow-600 font-medium",
+                reschedule: "bg-purple-500 text-white dark:bg-purple-600 font-medium",
+                negotiation: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
                 // Role variants
                 super_admin: "bg-purple-500/15 text-purple-700 dark:text-purple-300",
                 dealership_owner: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
@@ -74,8 +75,21 @@ function Badge({ className, variant, size, dot, dotColor, children, ...props }: 
     )
 }
 
-// Helper to get badge variant from status string
+// Normalize stage display name or name to variant key (e.g. "In Showroom" → "in_showroom")
+export function normalizeStatusKey(status: string): string {
+    if (!status || typeof status !== "string") return ""
+    const key = status
+        .toLowerCase()
+        .replace(/\s+/g, "_")
+        .replace(/'/g, "")
+    // Map display-name forms to variant keys
+    if (key === "couldnt_qualify") return "couldnt_qualify"
+    return key
+}
+
+// Helper to get badge variant from status string (accepts display name or name, e.g. "In Showroom", "in_showroom")
 function getStatusVariant(status: string): VariantProps<typeof badgeVariants>["variant"] {
+    const key = normalizeStatusKey(status)
     const statusMap: Record<string, VariantProps<typeof badgeVariants>["variant"]> = {
         new: "new",
         contacted: "contacted",
@@ -88,8 +102,9 @@ function getStatusVariant(status: string): VariantProps<typeof badgeVariants>["v
         couldnt_qualify: "couldnt_qualify",
         browsing: "browsing",
         reschedule: "reschedule",
+        negotiation: "negotiation",
     }
-    return statusMap[status] || "default"
+    return statusMap[key] || "default"
 }
 
 function getRoleVariant(role: string): VariantProps<typeof badgeVariants>["variant"] {

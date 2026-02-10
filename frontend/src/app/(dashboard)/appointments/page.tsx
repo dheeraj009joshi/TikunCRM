@@ -39,7 +39,7 @@ import {
     getAppointmentStatusColor,
     isAppointmentStatusTerminal
 } from "@/services/appointment-service"
-import { LeadService, Lead } from "@/services/lead-service"
+import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { TeamService, UserBrief } from "@/services/team-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
@@ -171,16 +171,31 @@ function CreateAppointmentModal({
     const [notes, setNotes] = React.useState("")
     const [leadId, setLeadId] = React.useState(preselectedLead?.id || "")
     
-    // Load leads for selector
+    // Load leads for selector: salesperson sees only their leads + unassigned; admin sees all
     React.useEffect(() => {
         if (isOpen && !preselectedLead) {
             setLoadingLeads(true)
-            LeadService.listLeads({ page_size: 100 })
-                .then(res => setLeads(res.items))
-                .catch(console.error)
-                .finally(() => setLoadingLeads(false))
+            if (isAdmin) {
+                LeadService.listLeads({ page_size: 100 })
+                    .then(res => setLeads(res.items))
+                    .catch(console.error)
+                    .finally(() => setLoadingLeads(false))
+            } else {
+                Promise.all([
+                    LeadService.listLeads({ pool: "mine", page_size: 100 }),
+                    LeadService.listUnassignedToSalesperson({ page_size: 100 }),
+                ])
+                    .then(([mineRes, unassignedRes]) => {
+                        const byId = new Map<string, Lead>()
+                        mineRes.items.forEach((l) => byId.set(l.id, l))
+                        unassignedRes.items.forEach((l) => byId.set(l.id, l))
+                        setLeads(Array.from(byId.values()))
+                    })
+                    .catch(console.error)
+                    .finally(() => setLoadingLeads(false))
+            }
         }
-    }, [isOpen, preselectedLead])
+    }, [isOpen, preselectedLead, isAdmin])
     
     // Reset form when modal opens
     React.useEffect(() => {
@@ -327,7 +342,7 @@ function CreateAppointmentModal({
                         <Label>Lead *</Label>
                         {preselectedLead ? (
                             <div className="bg-muted/50 rounded-lg p-3 text-sm">
-                                <span className="font-medium">{preselectedLead.first_name} {preselectedLead.last_name}</span>
+                                <span className="font-medium">{preselectedLead.customer?.first_name || ""} {preselectedLead.customer?.last_name || ""}</span>
                             </div>
                         ) : (
                             <Select 
@@ -340,7 +355,7 @@ function CreateAppointmentModal({
                                 <SelectContent className="max-h-[200px]">
                                     {leads.map(lead => (
                                         <SelectItem key={lead.id} value={lead.id}>
-                                            {lead.first_name} {lead.last_name || ""}
+                                            {getLeadFullName(lead)}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
@@ -893,7 +908,7 @@ export default function AppointmentsPage() {
             formatDateInTimezone(apt.scheduled_at, timezone, { timeStyle: "short" }),
             getAppointmentStatusLabel(apt.status),
             getAppointmentTypeLabel(apt.appointment_type),
-            apt.lead ? `${apt.lead.first_name} ${apt.lead.last_name || ""}`.trim() : "-",
+            apt.lead ? (apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown") : "-",
             apt.assigned_to_user ? `${apt.assigned_to_user.first_name} ${apt.assigned_to_user.last_name}` : "-",
             apt.location || "-",
             apt.description || "-"
@@ -984,7 +999,7 @@ export default function AppointmentsPage() {
                             <tr>
                                 <td>${formatDateInTimezone(apt.scheduled_at, timezone, { dateStyle: "medium", timeStyle: "short" })}</td>
                                 <td>${apt.title}</td>
-                                <td>${apt.lead ? `${apt.lead.first_name} ${apt.lead.last_name || ""}`.trim() : "-"}</td>
+                                <td>${apt.lead ? (apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown") : "-"}</td>
                                 <td>${apt.assigned_to_user ? `${apt.assigned_to_user.first_name} ${apt.assigned_to_user.last_name}` : "-"}</td>
                                 <td class="status-${apt.status}">${getAppointmentStatusLabel(apt.status)}</td>
                                 <td>${apt.location || "-"}</td>
@@ -1322,7 +1337,7 @@ export default function AppointmentsPage() {
                                                         className="font-medium hover:underline text-left"
                                                         onClick={(e) => e.stopPropagation()}
                                                     >
-                                                        {appointment.lead.first_name} {appointment.lead.last_name}
+                                                        {appointment.lead.customer?.full_name || `${appointment.lead.customer?.first_name || ""} ${appointment.lead.customer?.last_name || ""}`.trim() || "Unknown"}
                                                     </Link>
                                                 ) : (
                                                     <span className="font-medium">{appointment.title || "Appointment"}</span>
@@ -1369,10 +1384,10 @@ export default function AppointmentsPage() {
                                                         </span>
                                                     </div>
                                                 )}
-                                                {appointment.lead?.phone && (
+                                                {appointment.lead?.customer?.phone && (
                                                     <div className="flex items-center gap-1">
                                                         <Phone className="h-4 w-4" />
-                                                        <span>{appointment.lead.phone}</span>
+                                                        <span>{appointment.lead.customer.phone}</span>
                                                     </div>
                                                 )}
                                             </div>

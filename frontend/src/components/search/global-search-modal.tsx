@@ -18,9 +18,10 @@ import {
     DialogContent,
     DialogTitle,
 } from "@/components/ui/dialog"
-import { Badge, getStatusVariant, getSourceVariant } from "@/components/ui/badge"
+import { Badge, getSourceVariant } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import { LeadService, Lead } from "@/services/lead-service"
+import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
+import { getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { useDebounce } from "@/hooks/use-debounce"
 
 interface GlobalSearchModalProps {
@@ -170,31 +171,31 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
                                 >
                                     {/* Avatar */}
                                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-medium">
-                                        {lead.first_name?.[0]?.toUpperCase() || "?"}
-                                        {lead.last_name?.[0]?.toUpperCase() || ""}
+                                        {lead.customer?.first_name?.[0]?.toUpperCase() || "?"}
+                                        {lead.customer?.last_name?.[0]?.toUpperCase() || ""}
                                     </div>
                                     
                                     {/* Info */}
                                     <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-2">
                                             <span className="font-medium truncate">
-                                                {lead.first_name} {lead.last_name || ""}
+                                                {getLeadFullName(lead)}
                                             </span>
-                                            <Badge variant={getStatusVariant(lead.status)} size="sm">
-                                                {lead.status.replace("_", " ")}
+                                            <Badge size="sm" style={{ backgroundColor: getStageColor(lead.stage), color: "#fff" }}>
+                                                {getStageLabel(lead.stage)}
                                             </Badge>
                                         </div>
                                         <div className="flex items-center gap-4 mt-1 text-sm text-muted-foreground">
-                                            {lead.phone && (
+                                            {getLeadPhone(lead) && (
                                                 <span className="flex items-center gap-1 truncate">
                                                     <Phone className="h-3 w-3" />
-                                                    {lead.phone}
+                                                    {getLeadPhone(lead)}
                                                 </span>
                                             )}
-                                            {lead.email && (
+                                            {getLeadEmail(lead) && (
                                                 <span className="flex items-center gap-1 truncate">
                                                     <Mail className="h-3 w-3" />
-                                                    {lead.email}
+                                                    {getLeadEmail(lead)}
                                                 </span>
                                             )}
                                         </div>

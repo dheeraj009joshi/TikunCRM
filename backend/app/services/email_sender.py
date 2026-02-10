@@ -631,7 +631,7 @@ class EmailService:
                 values["lead_phone"] = lead.phone or ""
                 values["lead_interest"] = lead.interested_in or ""
                 values["lead_budget"] = lead.budget_range or ""
-                values["lead_status"] = lead.status.value if lead.status else ""
+                values["lead_status"] = lead.stage.display_name if lead.stage else ""
                 
                 # Get dealership name
                 if lead.dealership_id:

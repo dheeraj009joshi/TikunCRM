@@ -65,7 +65,7 @@ import {
     getOutcomeLabel,
     getOutcomeColor 
 } from "@/services/showroom-service"
-import { LeadService, Lead } from "@/services/lead-service"
+import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
 import { AppointmentService, Appointment } from "@/services/appointment-service"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
 import { formatDateInTimezone } from "@/utils/timezone"
@@ -286,10 +286,10 @@ export default function ShowroomPage() {
         if (!searchQuery) return true
         const lead = visit.lead
         if (!lead) return false
-        const fullName = `${lead.first_name} ${lead.last_name || ""}`.toLowerCase()
+        const fullName = (lead.customer?.full_name || `${lead.customer?.first_name || ""} ${lead.customer?.last_name || ""}`).toLowerCase()
         return fullName.includes(searchQuery.toLowerCase()) || 
-               lead.phone?.includes(searchQuery) ||
-               lead.email?.toLowerCase().includes(searchQuery.toLowerCase())
+               lead.customer?.phone?.includes(searchQuery) ||
+               lead.customer?.email?.toLowerCase().includes(searchQuery.toLowerCase())
     })
 
     return (
@@ -420,29 +420,29 @@ export default function ShowroomPage() {
                                                     className="flex items-center gap-3 hover:underline"
                                                 >
                                                     <UserAvatar 
-                                                        firstName={visit.lead?.first_name ?? ""}
-                                                        lastName={visit.lead?.last_name ?? ""}
+                                                        firstName={visit.lead?.customer?.first_name ?? ""}
+                                                        lastName={visit.lead?.customer?.last_name ?? ""}
                                                         size="sm"
                                                     />
                                                     <div>
                                                         <div className="font-medium">
-                                                            {visit.lead?.first_name} {visit.lead?.last_name}
+                                                            {visit.lead?.customer?.first_name} {visit.lead?.customer?.last_name}
                                                         </div>
                                                     </div>
                                                 </Link>
                                             </TableCell>
                                             <TableCell>
                                                 <div className="flex flex-col gap-1">
-                                                    {visit.lead?.phone && (
+                                                    {visit.lead?.customer?.phone && (
                                                         <div className="flex items-center gap-1 text-sm">
                                                             <Phone className="h-3 w-3" />
-                                                            {visit.lead.phone}
+                                                            {visit.lead.customer.phone}
                                                         </div>
                                                     )}
-                                                    {visit.lead?.email && (
+                                                    {visit.lead?.customer?.email && (
                                                         <div className="flex items-center gap-1 text-sm text-muted-foreground">
                                                             <Mail className="h-3 w-3" />
-                                                            {visit.lead.email}
+                                                            {visit.lead.customer.email}
                                                         </div>
                                                     )}
                                                 </div>
@@ -514,12 +514,12 @@ export default function ShowroomPage() {
                                                         className="flex items-center gap-3 hover:underline"
                                                     >
                                                         <UserAvatar 
-                                                            firstName={visit.lead?.first_name ?? ""}
-                                                            lastName={visit.lead?.last_name ?? ""}
+                                                            firstName={visit.lead?.customer?.first_name ?? ""}
+                                                            lastName={visit.lead?.customer?.last_name ?? ""}
                                                             size="sm"
                                                         />
                                                         <span className="font-medium">
-                                                            {visit.lead?.first_name} {visit.lead?.last_name}
+                                                            {visit.lead?.customer?.first_name} {visit.lead?.customer?.last_name}
                                                         </span>
                                                     </Link>
                                                 </TableCell>
@@ -635,16 +635,16 @@ export default function ShowroomPage() {
                                                 className="w-full flex items-center gap-3 p-3 hover:bg-muted text-left border-b last:border-b-0"
                                             >
                                                 <UserAvatar 
-                                                    firstName={lead.first_name}
-                                                    lastName={lead.last_name ?? ""}
+                                                    firstName={lead.customer?.first_name || ""}
+                                                    lastName={lead.customer?.last_name ?? ""}
                                                     size="sm"
                                                 />
                                                 <div className="flex-1 min-w-0">
                                                     <div className="font-medium truncate">
-                                                        {lead.first_name} {lead.last_name}
+                                                        {getLeadFullName(lead)}
                                                     </div>
                                                     <div className="text-sm text-muted-foreground truncate">
-                                                        {lead.phone || lead.email}
+                                                        {getLeadPhone(lead) || getLeadEmail(lead)}
                                                     </div>
                                                 </div>
                                             </button>
@@ -670,16 +670,16 @@ export default function ShowroomPage() {
                             <>
                                 <div className="bg-muted/50 rounded-lg p-4 flex items-center gap-4">
                                     <UserAvatar 
-                                        firstName={selectedLead.first_name}
-                                        lastName={selectedLead.last_name ?? ""}
+                                        firstName={selectedLead.customer?.first_name || ""}
+                                        lastName={selectedLead.customer?.last_name ?? ""}
                                         size="md"
                                     />
                                     <div className="flex-1">
                                         <div className="font-medium">
-                                            {selectedLead.first_name} {selectedLead.last_name}
+                                            {selectedLead.customer?.first_name} {selectedLead.customer?.last_name}
                                         </div>
                                         <div className="text-sm text-muted-foreground">
-                                            {selectedLead.phone || selectedLead.email}
+                                            {selectedLead.customer?.phone || selectedLead.customer?.email}
                                         </div>
                                     </div>
                                     <Button 
@@ -799,13 +799,13 @@ export default function ShowroomPage() {
                         <div className="space-y-4">
                             <div className="bg-muted/50 rounded-lg p-4 flex items-center gap-4">
                                 <UserAvatar 
-                                    firstName={checkOutVisit.lead?.first_name ?? ""}
-                                    lastName={checkOutVisit.lead?.last_name ?? ""}
+                                    firstName={checkOutVisit.lead?.customer?.first_name ?? ""}
+                                    lastName={checkOutVisit.lead?.customer?.last_name ?? ""}
                                     size="md"
                                 />
                                 <div className="flex-1">
                                     <div className="font-medium">
-                                        {checkOutVisit.lead?.first_name} {checkOutVisit.lead?.last_name}
+                                        {checkOutVisit.lead?.customer?.first_name} {checkOutVisit.lead?.customer?.last_name}
                                     </div>
                                     <div className="text-sm text-muted-foreground">
                                         Checked in {formatDistanceToNow(new Date(checkOutVisit.checked_in_at))} ago

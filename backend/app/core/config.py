@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     
     # Frontend URL (for email links, password reset, etc.)
     frontend_url: str = "https://tikuncrm.com"
+    # Backend public URL (for Twilio webhooks, etc.). Defaults to localhost in dev.
+    backend_url: str = "http://localhost:8000"
     
     # Email Provider Settings
     # Options: "smtp", "sendgrid", "mailgun", "aws_ses"
@@ -98,6 +100,10 @@ class Settings(BaseSettings):
     twilio_phone_number: str = ""  # The Twilio phone number to send from (e.g., +1234567890)
     sms_notifications_enabled: bool = False
     
+    # Twilio WhatsApp (same account; number is often different from SMS, e.g. sandbox)
+    twilio_whatsapp_number: str = ""  # e.g. +14155238886 for sandbox
+    whatsapp_enabled: bool = False
+
     # Twilio Voice Settings (WebRTC Softphone)
     twilio_twiml_app_sid: str = ""  # TwiML Application SID for voice
     twilio_api_key_sid: str = ""     # API Key SID for Access Tokens
@@ -118,6 +124,16 @@ class Settings(BaseSettings):
             self.sms_notifications_enabled
         )
     
+    @property
+    def is_whatsapp_configured(self) -> bool:
+        """Check if Twilio WhatsApp is configured"""
+        return bool(
+            self.twilio_account_sid
+            and self.twilio_auth_token
+            and self.twilio_whatsapp_number
+            and self.whatsapp_enabled
+        )
+
     @property
     def is_twilio_voice_configured(self) -> bool:
         """Check if Twilio Voice is properly configured for WebRTC"""

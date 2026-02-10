@@ -1,7 +1,9 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
 
-// Get API URL from environment variable, default to production backend
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
+// Get API URL from environment variable, default to production backend.
+// Backend mounts routes at /api/v1 — ensure base URL ends with /api/v1 to avoid 404s.
+const rawUrl = (process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1").trim() || "https://api.tikuncrm.com/api/v1";
+export const API_BASE_URL = rawUrl.endsWith("/api/v1") ? rawUrl : rawUrl.replace(/\/?$/, "") + "/api/v1";
 
 const apiClient = axios.create({
     baseURL: API_BASE_URL,

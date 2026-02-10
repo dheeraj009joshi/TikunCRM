@@ -23,12 +23,11 @@ from app.schemas.dealership import (
     DealershipBrief,
 )
 from app.schemas.lead import (
-    LeadBase,
     LeadCreate,
     LeadUpdate,
     LeadResponse,
     LeadDetail,
-    LeadStatusUpdate,
+    LeadStageChangeRequest,
     LeadAssignment,
 )
 from app.schemas.activity import (
@@ -67,12 +66,11 @@ __all__ = [
     "DealershipResponse",
     "DealershipBrief",
     # Lead
-    "LeadBase",
     "LeadCreate",
     "LeadUpdate",
     "LeadResponse",
     "LeadDetail",
-    "LeadStatusUpdate",
+    "LeadStageChangeRequest",
     "LeadAssignment",
     # Activity
     "ActivityCreate",

@@ -19,17 +19,21 @@ from app.core.permissions import Permission, UserRole
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
-from app.models.lead import Lead, LeadStatus, LeadSource
+from app.models.lead import Lead, LeadSource
+from app.models.customer import Customer
+from app.models.lead_stage import LeadStage
 from app.models.activity import ActivityType
 from app.models.dealership import Dealership
 from app.schemas.lead import (
-    LeadResponse, LeadCreate, LeadUpdate, LeadDetail, 
-    LeadStatusUpdate, LeadAssignment, LeadListResponse,
+    LeadResponse, LeadCreate, LeadUpdate, LeadDetail,
+    LeadStageChangeRequest, LeadAssignment, LeadListResponse,
     LeadDealershipAssignment, BulkLeadDealershipAssignment,
     LeadSecondaryAssignment, LeadSwapSalespersons
 )
 from app.schemas.activity import NoteCreate
 from app.services.activity import ActivityService
+from app.services.customer_service import CustomerService
+from app.services.lead_stage_service import LeadStageService
 from app.services.notification_service import (
     NotificationService,
     send_skate_alert_background,
@@ -100,8 +104,11 @@ async def auto_assign_lead_on_activity(
     lead.last_activity_at = utc_now()
     
     performer_name = f"{user.first_name} {user.last_name}"
-    lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "Lead"
-    
+    # Get lead name from customer
+    cust_result = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+    cust = cust_result.scalar_one_or_none()
+    lead_name = cust.full_name if cust else "Lead"
+
     # Log auto-assignment activity
     await ActivityService.log_activity(
         db,
@@ -133,7 +140,6 @@ async def auto_assign_lead_on_activity(
     
     # Notify the user they were assigned
     if notification_service:
-        lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
         await notification_service.notify_lead_assigned(
             user_id=user.id,
             lead_name=lead_name,
@@ -161,13 +167,15 @@ async def auto_assign_lead_on_activity(
 
 
 async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
-    """Add assigned_to_user, secondary_salesperson, and dealership info to leads."""
+    """Add customer, stage, assigned_to_user, secondary_salesperson, and dealership info to leads."""
     if not leads:
         return []
-    
-    # Collect all user IDs and dealership IDs
+
+    # Collect IDs
     user_ids = set()
     dealership_ids = set()
+    customer_ids = set()
+    stage_ids = set()
     for lead in leads:
         if lead.assigned_to:
             user_ids.add(lead.assigned_to)
@@ -175,7 +183,44 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             user_ids.add(lead.secondary_salesperson_id)
         if lead.dealership_id:
             dealership_ids.add(lead.dealership_id)
-    
+        if lead.customer_id:
+            customer_ids.add(lead.customer_id)
+        if getattr(lead, 'secondary_customer_id', None):
+            customer_ids.add(lead.secondary_customer_id)
+        if lead.stage_id:
+            stage_ids.add(lead.stage_id)
+
+    # Fetch customers
+    customers_map = {}
+    if customer_ids:
+        cust_result = await db.execute(select(Customer).where(Customer.id.in_(customer_ids)))
+        for c in cust_result.scalars().all():
+            customers_map[c.id] = {
+                "id": str(c.id),
+                "first_name": c.first_name,
+                "last_name": c.last_name,
+                "full_name": c.full_name,
+                "phone": c.phone,
+                "email": c.email,
+            }
+
+    # Fetch stages
+    stages_map = {}
+    if stage_ids:
+        stage_result = await db.execute(select(LeadStage).where(LeadStage.id.in_(stage_ids)))
+        for s in stage_result.scalars().all():
+            stages_map[s.id] = {
+                "id": str(s.id),
+                "name": s.name,
+                "display_name": s.display_name,
+                "order": s.order,
+                "color": s.color,
+                "dealership_id": str(s.dealership_id) if s.dealership_id else None,
+                "is_terminal": s.is_terminal,
+                "is_active": s.is_active,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+
     # Fetch users
     users_map = {}
     if user_ids:
@@ -188,50 +233,52 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
                 "last_name": user.last_name,
                 "role": user.role.value if hasattr(user.role, 'value') else str(user.role),
                 "is_active": user.is_active,
-                "dealership_id": str(user.dealership_id) if user.dealership_id else None
+                "dealership_id": str(user.dealership_id) if user.dealership_id else None,
             }
-    
+
     # Fetch dealerships
     dealerships_map = {}
     if dealership_ids:
         dealership_result = await db.execute(select(Dealership).where(Dealership.id.in_(dealership_ids)))
         for dealership in dealership_result.scalars().all():
-            dealerships_map[dealership.id] = {
-                "id": str(dealership.id),
-                "name": dealership.name
-            }
-    
+            dealerships_map[dealership.id] = {"id": str(dealership.id), "name": dealership.name}
+
     # Build enriched response
     enriched_items = []
     for lead in leads:
         lead_dict = {
             "id": str(lead.id),
-            "first_name": lead.first_name,
-            "last_name": lead.last_name,
-            "email": lead.email,
-            "phone": lead.phone,
-            "alternate_phone": lead.alternate_phone,
+            "customer_id": str(lead.customer_id),
+            "customer": customers_map.get(lead.customer_id),
+            "secondary_customer_id": str(lead.secondary_customer_id) if getattr(lead, 'secondary_customer_id', None) else None,
+            "secondary_customer": customers_map.get(lead.secondary_customer_id) if getattr(lead, 'secondary_customer_id', None) else None,
+            "stage_id": str(lead.stage_id),
+            "stage": stages_map.get(lead.stage_id),
             "source": lead.source.value if hasattr(lead.source, 'value') else str(lead.source),
-            "status": lead.status.value if hasattr(lead.status, 'value') else str(lead.status),
+            "is_active": lead.is_active,
+            "outcome": lead.outcome,
+            "interest_score": lead.interest_score,
             "dealership_id": str(lead.dealership_id) if lead.dealership_id else None,
             "assigned_to": str(lead.assigned_to) if lead.assigned_to else None,
             "secondary_salesperson_id": str(lead.secondary_salesperson_id) if hasattr(lead, 'secondary_salesperson_id') and lead.secondary_salesperson_id else None,
             "created_by": str(lead.created_by) if lead.created_by else None,
             "notes": lead.notes,
             "meta_data": lead.meta_data or {},
+            "external_id": lead.external_id,
             "interested_in": lead.interested_in,
             "budget_range": lead.budget_range,
             "first_contacted_at": lead.first_contacted_at.isoformat() if lead.first_contacted_at else None,
             "last_contacted_at": lead.last_contacted_at.isoformat() if lead.last_contacted_at else None,
             "converted_at": lead.converted_at.isoformat() if lead.converted_at else None,
+            "closed_at": lead.closed_at.isoformat() if lead.closed_at else None,
             "created_at": lead.created_at.isoformat() if lead.created_at else None,
             "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
             "assigned_to_user": users_map.get(lead.assigned_to) if lead.assigned_to else None,
             "secondary_salesperson": users_map.get(lead.secondary_salesperson_id) if hasattr(lead, 'secondary_salesperson_id') and lead.secondary_salesperson_id else None,
-            "dealership": dealerships_map.get(lead.dealership_id) if lead.dealership_id else None
+            "dealership": dealerships_map.get(lead.dealership_id) if lead.dealership_id else None,
         }
         enriched_items.append(lead_dict)
-    
+
     return enriched_items
 
 
@@ -241,9 +288,10 @@ async def list_leads(
     current_user: User = Depends(deps.get_current_active_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    status: Optional[LeadStatus] = None,
+    stage_id: Optional[UUID] = None,
     source: Optional[LeadSource] = None,
     search: Optional[str] = None,
+    is_active: Optional[bool] = None,
     pool: Optional[str] = None  # "unassigned" | "mine" | None (all)
 ) -> Any:
     """
@@ -301,42 +349,44 @@ async def list_leads(
         # Super admin sees all (no filter)
     
     # Filters
-    if status:
-        query = query.where(Lead.status == status)
+    if stage_id:
+        query = query.where(Lead.stage_id == stage_id)
     if source:
         query = query.where(Lead.source == source)
+    if is_active is not None:
+        query = query.where(Lead.is_active == is_active)
     if search:
-        # Search across first_name, last_name, full name (concatenated), email, and phone
-        full_name = func.concat(Lead.first_name, ' ', func.coalesce(Lead.last_name, ''))
+        # Search via Customer (name, phone, email)
+        query = query.join(Customer, Lead.customer_id == Customer.id)
+        full_name = func.concat(Customer.first_name, ' ', func.coalesce(Customer.last_name, ''))
         search_filter = or_(
-            Lead.first_name.ilike(f"%{search}%"),
-            Lead.last_name.ilike(f"%{search}%"),
+            Customer.first_name.ilike(f"%{search}%"),
+            Customer.last_name.ilike(f"%{search}%"),
             full_name.ilike(f"%{search}%"),
-            Lead.email.ilike(f"%{search}%"),
-            Lead.phone.ilike(f"%{search}%")
+            Customer.email.ilike(f"%{search}%"),
+            Customer.phone.ilike(f"%{search}%"),
         )
         query = query.where(search_filter)
-        
+
     # Pagination
     total_query = select(func.count()).select_from(query.subquery())
     total_result = await db.execute(total_query)
     total = total_result.scalar() or 0
-    
+
     query = query.order_by(Lead.created_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
-    
+
     result = await db.execute(query)
     items = result.scalars().all()
-    
-    # Enrich with user and dealership info
+
     enriched_items = await enrich_leads_with_relations(db, items)
-    
+
     return {
         "items": enriched_items,
         "total": total,
         "page": page,
         "page_size": page_size,
-        "pages": (total + page_size - 1) // page_size
+        "pages": (total + page_size - 1) // page_size,
     }
 
 
@@ -354,19 +404,18 @@ async def list_unassigned_leads(
     These are leads in the unassigned pool waiting for dealership assignment.
     """
     query = select(Lead).where(Lead.dealership_id.is_(None))
-    
-    # Filters
+
     if source:
         query = query.where(Lead.source == source)
     if search:
-        # Search across first_name, last_name, full name (concatenated), email, and phone
-        full_name = func.concat(Lead.first_name, ' ', func.coalesce(Lead.last_name, ''))
+        query = query.join(Customer, Lead.customer_id == Customer.id)
+        full_name = func.concat(Customer.first_name, ' ', func.coalesce(Customer.last_name, ''))
         search_filter = or_(
-            Lead.first_name.ilike(f"%{search}%"),
-            Lead.last_name.ilike(f"%{search}%"),
+            Customer.first_name.ilike(f"%{search}%"),
+            Customer.last_name.ilike(f"%{search}%"),
             full_name.ilike(f"%{search}%"),
-            Lead.email.ilike(f"%{search}%"),
-            Lead.phone.ilike(f"%{search}%")
+            Customer.email.ilike(f"%{search}%"),
+            Customer.phone.ilike(f"%{search}%"),
         )
         query = query.where(search_filter)
         
@@ -381,7 +430,6 @@ async def list_unassigned_leads(
     result = await db.execute(query)
     items = result.scalars().all()
     
-    # Enrich with user and dealership info
     enriched_items = await enrich_leads_with_relations(db, items)
     
     return {
@@ -389,7 +437,7 @@ async def list_unassigned_leads(
         "total": total,
         "page": page,
         "page_size": page_size,
-        "pages": (total + page_size - 1) // page_size
+        "pages": (total + page_size - 1) // page_size,
     }
 
 
@@ -403,34 +451,26 @@ async def list_leads_unassigned_to_salesperson(
 ) -> Any:
     """
     Get leads assigned to a dealership but not yet assigned to a salesperson.
-    For Dealership Admin to assign to their team.
     """
-    # Build base query - leads with dealership but no salesperson
     query = select(Lead).where(
-        and_(
-            Lead.dealership_id.isnot(None),
-            Lead.assigned_to.is_(None)
-        )
+        and_(Lead.dealership_id.isnot(None), Lead.assigned_to.is_(None))
     )
-    
-    # Role-based filtering - all dealership users can see leads in their dealership without salesperson
+
     if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER, UserRole.SALESPERSON]:
         if current_user.dealership_id:
             query = query.where(Lead.dealership_id == current_user.dealership_id)
         else:
-            # User without dealership shouldn't see anything
-            query = query.where(Lead.id.is_(None))  # Returns empty
-    # Super Admin can see all
-    
+            query = query.where(Lead.id.is_(None))
+
     if search:
-        # Search across first_name, last_name, full name (concatenated), email, and phone
-        full_name = func.concat(Lead.first_name, ' ', func.coalesce(Lead.last_name, ''))
+        query = query.join(Customer, Lead.customer_id == Customer.id)
+        full_name = func.concat(Customer.first_name, ' ', func.coalesce(Customer.last_name, ''))
         search_filter = or_(
-            Lead.first_name.ilike(f"%{search}%"),
-            Lead.last_name.ilike(f"%{search}%"),
+            Customer.first_name.ilike(f"%{search}%"),
+            Customer.last_name.ilike(f"%{search}%"),
             full_name.ilike(f"%{search}%"),
-            Lead.email.ilike(f"%{search}%"),
-            Lead.phone.ilike(f"%{search}%")
+            Customer.email.ilike(f"%{search}%"),
+            Customer.phone.ilike(f"%{search}%"),
         )
         query = query.where(search_filter)
         
@@ -463,52 +503,114 @@ async def create_lead(
     db: AsyncSession = Depends(get_db),
     lead_in: LeadCreate,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(deps.require_permission(Permission.CREATE_LEAD))
+    current_user: User = Depends(deps.require_permission(Permission.CREATE_LEAD)),
 ) -> Any:
     """
-    Create a new lead.
+    Create a new lead (sales opportunity).
+    Step 1: Find or create Customer by phone/email.
+    Step 2: Check for active lead for this customer in this dealership.
+    Step 3: If active → bump interest_score, else create new lead.
     """
-    # Use current user's dealership if not specified (for dealer admin/owner/salesperson)
     dealership_id = lead_in.dealership_id
     assigned_to = None
-    
+
     if current_user.role == UserRole.SALESPERSON:
-        # Salesperson creates lead: auto-assign to themselves and their dealership
         dealership_id = current_user.dealership_id
         assigned_to = current_user.id
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        # Admin/Owner: use their dealership
         dealership_id = current_user.dealership_id
-        
+
+    # Step 1: find or create customer
+    customer_extra = {}
+    for f in ("alternate_phone", "address", "city", "state", "postal_code", "country",
+              "date_of_birth", "company", "job_title", "preferred_contact_method", "preferred_contact_time"):
+        val = getattr(lead_in, f, None)
+        if val is not None:
+            customer_extra[f] = val
+
+    customer, customer_created = await CustomerService.find_or_create(
+        db,
+        phone=lead_in.phone,
+        email=lead_in.email,
+        first_name=lead_in.first_name,
+        last_name=lead_in.last_name,
+        source=lead_in.source.value if lead_in.source else None,
+        **customer_extra,
+    )
+
+    # Step 2: check for existing active lead in the same dealership
+    active_query = select(Lead).where(
+        Lead.customer_id == customer.id,
+        Lead.is_active == True,
+    )
+    if dealership_id:
+        active_query = active_query.where(Lead.dealership_id == dealership_id)
+    active_result = await db.execute(active_query)
+    existing_active_lead = active_result.scalar_one_or_none()
+
+    if existing_active_lead:
+        # Bump interest score, add activity note, return existing
+        existing_active_lead.interest_score += 20
+        existing_active_lead.last_activity_at = utc_now()
+        source_label = lead_in.source.value if lead_in.source else "unknown"
+        await ActivityService.log_activity(
+            db,
+            activity_type=ActivityType.NOTE_ADDED,
+            description=f"Customer showed interest again via {source_label} (interest_score +20)",
+            user_id=current_user.id,
+            lead_id=existing_active_lead.id,
+            dealership_id=existing_active_lead.dealership_id,
+            meta_data={"repeat_interest": True, "source": source_label, "interest_score": existing_active_lead.interest_score},
+        )
+        await db.flush()
+        return existing_active_lead
+
+    # Optional secondary customer (e.g. co-buyer)
+    secondary_customer_id = None
+    if lead_in.secondary_customer_id:
+        sec_cust = await CustomerService.get_customer(db, lead_in.secondary_customer_id)
+        if not sec_cust:
+            raise HTTPException(status_code=400, detail="Secondary customer not found")
+        if sec_cust.id == customer.id:
+            raise HTTPException(status_code=400, detail="Secondary customer cannot be the same as primary")
+        secondary_customer_id = sec_cust.id
+
+    # Step 3: create new lead
+    default_stage = await LeadStageService.get_default_stage(db, dealership_id)
+
     lead = Lead(
-        **lead_in.model_dump(exclude={"dealership_id", "meta_data", "assigned_to"}),
+        customer_id=customer.id,
+        stage_id=default_stage.id,
+        source=lead_in.source,
         dealership_id=dealership_id,
         assigned_to=assigned_to,
         created_by=current_user.id,
-        meta_data=lead_in.meta_data
+        notes=lead_in.notes,
+        meta_data=lead_in.meta_data or {},
+        interested_in=lead_in.interested_in,
+        budget_range=lead_in.budget_range,
+        secondary_customer_id=secondary_customer_id,
     )
-    
     db.add(lead)
     await db.flush()
-    
+
     # Log activity
+    lead_name = customer.full_name
     if assigned_to:
         description = f"Lead created and auto-assigned to {current_user.first_name} {current_user.last_name}"
     else:
         description = f"Lead created by {current_user.email}"
-    
+
     await ActivityService.log_activity(
         db,
         activity_type=ActivityType.LEAD_CREATED,
         description=description,
         user_id=current_user.id,
         lead_id=lead.id,
-        dealership_id=dealership_id
+        dealership_id=dealership_id,
     )
-    
-    # Send notification to all dealership members when a new lead is added
+
     if dealership_id:
-        lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "New Lead"
         source_display = lead.source.value if lead.source else "unknown"
         background_tasks.add_task(
             notify_lead_assigned_to_dealership_background,
@@ -517,8 +619,7 @@ async def create_lead(
             dealership_id=dealership_id,
             source=source_display,
         )
-    
-    # Emit WebSocket events for real-time updates (lead:created + stats + badges)
+
     try:
         from app.services.notification_service import emit_lead_created, emit_badges_refresh
         await emit_lead_created(
@@ -565,25 +666,51 @@ async def update_lead(
     
     # Update lead fields
     update_data = lead_in.model_dump(exclude_unset=True)
+    if "secondary_customer_id" in update_data:
+        sid = update_data["secondary_customer_id"]
+        if sid is not None:
+            sec_cust = await CustomerService.get_customer(db, sid)
+            if not sec_cust:
+                raise HTTPException(status_code=400, detail="Secondary customer not found")
+            if sid == lead.customer_id:
+                raise HTTPException(status_code=400, detail="Secondary customer cannot be the same as primary")
+
+    # Capture old values for activity description (before applying)
+    field_labels = {
+        "notes": "Notes",
+        "interested_in": "Interested in",
+        "budget_range": "Budget range",
+        "meta_data": "Metadata",
+        "secondary_customer_id": "Secondary customer",
+    }
+    updated_fields = list(update_data.keys())
+    labels = [field_labels.get(f, f.replace("_", " ").title()) for f in updated_fields]
+    if len(labels) == 1:
+        description = f"{labels[0]} updated"
+    elif len(labels) == 2:
+        description = f"{labels[0]} and {labels[1]} updated"
+    else:
+        description = f"{', '.join(labels[:-1])}, and {labels[-1]} updated"
+
     for field, value in update_data.items():
         setattr(lead, field, value)
     
     lead.updated_at = utc_now()
     
-    # Log update activity
+    # Log update activity with what actually changed
     performer_name = f"{current_user.first_name} {current_user.last_name}"
-    updated_fields = list(update_data.keys())
     
     await ActivityService.log_activity(
         db,
         activity_type=ActivityType.LEAD_UPDATED,
-        description=f"Lead details updated by {performer_name}",
+        description=description,
         user_id=current_user.id,
         lead_id=lead.id,
         dealership_id=lead.dealership_id,
         meta_data={
             "performer_name": performer_name,
-            "updated_fields": updated_fields
+            "updated_fields": updated_fields,
+            "updated_fields_labels": labels,
         }
     )
     
@@ -644,47 +771,85 @@ async def get_lead(
         else:
             raise HTTPException(status_code=403, detail="Not authorized")
     
-    # Build response with related data
+    # Fetch customer info
+    cust_result = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+    customer = cust_result.scalar_one_or_none()
+    customer_brief = None
+    if customer:
+        customer_brief = {
+            "id": customer.id,
+            "first_name": customer.first_name,
+            "last_name": customer.last_name,
+            "full_name": customer.full_name,
+            "phone": customer.phone,
+            "email": customer.email,
+        }
+
+    # Fetch stage info
+    stage_result = await db.execute(select(LeadStage).where(LeadStage.id == lead.stage_id))
+    stage = stage_result.scalar_one_or_none()
+    stage_data = None
+    if stage:
+        stage_data = {
+            "id": stage.id,
+            "name": stage.name,
+            "display_name": stage.display_name,
+            "order": stage.order,
+            "color": stage.color,
+            "dealership_id": stage.dealership_id,
+            "is_terminal": stage.is_terminal,
+            "is_active": stage.is_active,
+            "created_at": stage.created_at,
+        }
+
+    # Secondary customer (optional)
+    secondary_customer_brief = None
+    if getattr(lead, "secondary_customer_id", None):
+        sec_result = await db.execute(select(Customer).where(Customer.id == lead.secondary_customer_id))
+        sec_cust = sec_result.scalar_one_or_none()
+        if sec_cust:
+            secondary_customer_brief = {
+                "id": sec_cust.id,
+                "first_name": sec_cust.first_name,
+                "last_name": sec_cust.last_name,
+                "full_name": sec_cust.full_name,
+                "phone": sec_cust.phone,
+                "email": sec_cust.email,
+            }
+
+    # Build response
     response_data = {
         "id": lead.id,
-        "first_name": lead.first_name,
-        "last_name": lead.last_name,
-        "email": lead.email,
-        "phone": lead.phone,
-        "alternate_phone": lead.alternate_phone,
+        "customer_id": lead.customer_id,
+        "customer": customer_brief,
+        "secondary_customer_id": lead.secondary_customer_id if getattr(lead, "secondary_customer_id", None) else None,
+        "secondary_customer": secondary_customer_brief,
+        "stage_id": lead.stage_id,
+        "stage": stage_data,
         "source": lead.source,
-        "status": lead.status,
+        "is_active": lead.is_active,
+        "outcome": lead.outcome,
+        "interest_score": lead.interest_score,
         "dealership_id": lead.dealership_id,
         "assigned_to": lead.assigned_to,
         "secondary_salesperson_id": lead.secondary_salesperson_id,
         "created_by": lead.created_by,
         "notes": lead.notes,
         "meta_data": lead.meta_data,
+        "external_id": lead.external_id,
         "interested_in": lead.interested_in,
         "budget_range": lead.budget_range,
-        # Address fields
-        "address": lead.address,
-        "city": lead.city,
-        "state": lead.state,
-        "postal_code": lead.postal_code,
-        "country": lead.country,
-        # Additional details
-        "date_of_birth": lead.date_of_birth,
-        "company": lead.company,
-        "job_title": lead.job_title,
-        "preferred_contact_method": lead.preferred_contact_method,
-        "preferred_contact_time": lead.preferred_contact_time,
-        # Timestamps
         "first_contacted_at": lead.first_contacted_at,
         "last_contacted_at": lead.last_contacted_at,
         "converted_at": lead.converted_at,
+        "closed_at": lead.closed_at,
         "created_at": lead.created_at,
         "updated_at": lead.updated_at,
         "assigned_to_user": None,
         "secondary_salesperson": None,
         "created_by_user": None,
         "dealership": None,
-        "access_level": access_level
+        "access_level": access_level,
     }
     
     # Fetch assigned user info
@@ -745,37 +910,29 @@ async def get_lead(
     return response_data
 
 
-@router.post("/{lead_id}/status", response_model=LeadResponse)
-async def update_lead_status(
+@router.post("/{lead_id}/stage", response_model=LeadResponse)
+async def update_lead_stage(
     lead_id: UUID,
-    status_in: LeadStatusUpdate,
+    stage_in: LeadStageChangeRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.get_current_active_user)
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
-    Update lead status and log the change.
-    Auto-assigns the lead if it's in the unassigned pool.
+    Change lead's pipeline stage. If new stage is terminal, close the lead.
     """
     result = await db.execute(select(Lead).where(Lead.id == lead_id))
     lead = result.scalar_one_or_none()
-    
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    
-    # Soft SKATE check: check if this is a SKATE scenario
-    skate_info = await check_skate_condition(db, current_user, lead, "status change")
+
+    # SKATE check
+    skate_info = await check_skate_condition(db, current_user, lead, "stage change")
     is_skate_action = False
-    
     if skate_info:
-        if not status_in.confirm_skate:
-            # Return skate warning for confirmation
-            return JSONResponse(
-                status_code=200,
-                content=skate_info,
-            )
+        if not stage_in.confirm_skate:
+            return JSONResponse(status_code=200, content=skate_info)
         else:
-            # User confirmed SKATE - proceed but send notifications
             is_skate_action = True
             dealership_id = lead.dealership_id or current_user.dealership_id
             if dealership_id:
@@ -788,14 +945,13 @@ async def update_lead_status(
                     assigned_to_user_id=lead.assigned_to,
                     assigned_to_name=skate_info["assigned_to_name"],
                     performer_name=performer_name,
-                    action="updated status",
+                    action="changed stage",
                     performer_user_id=current_user.id,
                 )
 
-    # Access check: unassigned pool is open to all dealership users
+    # Access check
     is_unassigned_pool = lead.dealership_id is None
     if not is_unassigned_pool:
-        # Must have access to assigned leads (admins/owners)
         has_access = (
             current_user.role == UserRole.SUPER_ADMIN
             or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
@@ -803,72 +959,102 @@ async def update_lead_status(
         )
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to update this lead")
-    
-    # Salesperson cannot set status to LOST or CONVERTED - only admin/owner/superadmin can
-    restricted_statuses = [LeadStatus.LOST, LeadStatus.CONVERTED]
-    if status_in.status in restricted_statuses and current_user.role == UserRole.SALESPERSON:
-        raise HTTPException(
-            status_code=403, 
-            detail="Only admins or owners can mark leads as lost or converted"
-        )
+
+    # Fetch new stage
+    new_stage = await LeadStageService.get_stage(db, stage_in.stage_id)
+    if not new_stage:
+        raise HTTPException(status_code=404, detail="Stage not found")
+
+    # Salesperson cannot move to terminal (converted/lost) stages
+    if new_stage.is_terminal and current_user.role == UserRole.SALESPERSON:
+        raise HTTPException(status_code=403, detail="Only admins or owners can close leads")
 
     notification_service = NotificationService(db)
+    await auto_assign_lead_on_activity(db, lead, current_user, "stage_change", notification_service)
 
-    # Auto-assignment: if lead is in unassigned pool and user has a dealership
-    auto_assigned = await auto_assign_lead_on_activity(
-        db, lead, current_user, "status_change", notification_service
-    )
+    # Fetch old stage name for logging
+    old_stage = await LeadStageService.get_stage(db, lead.stage_id)
+    old_stage_name = old_stage.display_name if old_stage else "?"
 
-    old_status = lead.status.value
-    lead.status = status_in.status
+    lead.stage_id = new_stage.id
     lead.last_activity_at = utc_now()
-    
-    # Log status change with performer name
+
+    # Terminal stage handling
+    if new_stage.is_terminal:
+        lead.is_active = False
+        lead.closed_at = utc_now()
+        if new_stage.name == "converted":
+            lead.outcome = "converted"
+            lead.converted_at = utc_now()
+            # Update customer lifetime value
+            cust = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+            customer = cust.scalar_one_or_none()
+            if customer:
+                customer.lifetime_value += 1  # Placeholder — real value from deal
+        elif new_stage.name == "lost":
+            lead.outcome = "lost"
+        else:
+            lead.outcome = new_stage.name
+
     performer_name = f"{current_user.first_name} {current_user.last_name}"
     await ActivityService.log_lead_status_change(
         db,
         user_id=current_user.id,
         lead_id=lead.id,
         dealership_id=lead.dealership_id,
-        old_status=old_status,
-        new_status=status_in.status.value,
+        old_status=old_stage_name,
+        new_status=new_stage.display_name,
         performer_name=performer_name,
-        notes=status_in.notes,
-        is_skate_action=is_skate_action
+        notes=stage_in.notes,
+        is_skate_action=is_skate_action,
     )
-    
+
     await db.flush()
-    
-    # Emit real-time WebSocket events
+
     try:
         from app.services.notification_service import emit_lead_updated, emit_stats_refresh, emit_activity_added
         await emit_lead_updated(
             str(lead.id),
             str(lead.dealership_id) if lead.dealership_id else None,
-            "status_changed",
-            {
-                "status": status_in.status.value,
-                "old_status": old_status
-            }
+            "stage_changed",
+            {"stage_id": str(new_stage.id), "stage_name": new_stage.display_name, "old_stage": old_stage_name},
         )
-        # Emit activity event for real-time timeline update
         await emit_activity_added(
             str(lead.id),
             str(lead.dealership_id) if lead.dealership_id else None,
-            {
-                "type": "status_changed",
-                "performer_name": performer_name,
-                "old_status": old_status,
-                "new_status": status_in.status.value,
-                "timestamp": utc_now().isoformat(),
-            }
+            {"type": "stage_changed", "performer_name": performer_name, "old_stage": old_stage_name, "new_stage": new_stage.display_name, "timestamp": utc_now().isoformat()},
         )
-        # Trigger dashboard stats refresh
         await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None)
     except Exception as e:
         logger.error(f"Failed to emit WebSocket events: {e}")
-    
+
     return lead
+
+
+# Legacy compat: keep /status endpoint that delegates to /stage
+@router.post("/{lead_id}/status", response_model=LeadResponse)
+async def update_lead_status_compat(
+    lead_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+    status: Optional[str] = None,
+    stage_id: Optional[UUID] = None,
+    notes: Optional[str] = None,
+    confirm_skate: bool = False,
+) -> Any:
+    """Legacy /status endpoint — translates status name to stage_id and delegates."""
+    if stage_id:
+        target_stage_id = stage_id
+    elif status:
+        stage = await LeadStageService.get_stage_by_name(db, status)
+        if not stage:
+            raise HTTPException(status_code=400, detail=f"Unknown stage name: {status}")
+        target_stage_id = stage.id
+    else:
+        raise HTTPException(status_code=400, detail="Provide stage_id or status")
+    req = LeadStageChangeRequest(stage_id=target_stage_id, notes=notes, confirm_skate=confirm_skate)
+    return await update_lead_stage(lead_id, req, background_tasks, db, current_user)
 
 
 @router.post("/{lead_id}/assign", response_model=LeadResponse)
@@ -948,7 +1134,9 @@ async def assign_lead(
     # Create notification for the assigned user (only if it's a new assignment or reassignment to a different user)
     # Don't notify if reassigning to the same user
     if old_assigned_to_id != assign_in.assigned_to:
-        lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+        _cust = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+        _c = _cust.scalar_one_or_none()
+        lead_name = _c.full_name if _c else "Lead"
         notification_service = NotificationService(db)
         await notification_service.notify_lead_assigned(
             user_id=assign_in.assigned_to,
@@ -1192,9 +1380,10 @@ async def assign_lead_to_dealership(
     
     old_dealership_id = lead.dealership_id
     lead.dealership_id = assign_in.dealership_id
-    lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "Lead"
+    _c_obj = (await db.execute(select(Customer).where(Customer.id == lead.customer_id))).scalar_one_or_none()
+    lead_name = _c_obj.full_name if _c_obj else "Lead"
     performer_name = f"{current_user.first_name} {current_user.last_name}"
-    
+
     # Log activity with names
     await ActivityService.log_activity(
         db,
@@ -1279,8 +1468,9 @@ async def bulk_assign_leads_to_dealership(
     for lead in leads:
         lead.dealership_id = assignment_in.dealership_id
         assigned_count += 1
-        lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "Lead"
-        
+        _bc = (await db.execute(select(Customer).where(Customer.id == lead.customer_id))).scalar_one_or_none()
+        lead_name = _bc.full_name if _bc else "Lead"
+
         # Log activity for each lead
         await ActivityService.log_activity(
             db,
@@ -1472,7 +1662,8 @@ async def add_lead_note(
     # Send notifications to mentioned users (link includes note id so frontend can scroll to it)
     if note_in.mentioned_user_ids:
         from app.models.notification import NotificationType
-        lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+        _mc = (await db.execute(select(Customer).where(Customer.id == lead.customer_id))).scalar_one_or_none()
+        lead_name = _mc.full_name if _mc else "Lead"
         for mentioned_user_id in note_in.mentioned_user_ids:
             if mentioned_user_id != current_user.id:  # Don't notify yourself
                 await notification_service.create_notification(
@@ -1760,9 +1951,10 @@ async def delete_lead(
         raise HTTPException(status_code=404, detail="Lead not found")
     
     # Get lead info for logging
-    lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+    _dc = (await db.execute(select(Customer).where(Customer.id == lead.customer_id))).scalar_one_or_none()
+    lead_name = _dc.full_name if _dc else "Lead"
     performer_name = f"{current_user.first_name} {current_user.last_name}"
-    
+
     # Log deletion activity before deleting
     await ActivityService.log_activity(
         db,
@@ -1773,11 +1965,11 @@ async def delete_lead(
         dealership_id=lead.dealership_id,
         meta_data={
             "lead_name": lead_name,
-            "lead_email": lead.email,
-            "lead_phone": lead.phone,
+            "lead_email": _dc.email if _dc else None,
+            "lead_phone": _dc.phone if _dc else None,
             "performer_name": performer_name,
-            "deleted_at": utc_now().isoformat()
-        }
+            "deleted_at": utc_now().isoformat(),
+        },
     )
     
     dealership_id_str = str(lead.dealership_id) if lead.dealership_id else None
@@ -1804,7 +1996,7 @@ async def export_leads_csv(
     include_activities: bool = Query(False, description="Include activity history"),
     include_appointments: bool = Query(False, description="Include appointments"),
     include_notes: bool = Query(False, description="Include notes in export"),
-    status: Optional[LeadStatus] = Query(None, description="Filter by status"),
+    status: Optional[str] = Query(None, description="Filter by stage name"),
     source: Optional[LeadSource] = Query(None, description="Filter by source"),
     date_from: Optional[datetime] = Query(None, description="Filter by created date from"),
     date_to: Optional[datetime] = Query(None, description="Filter by created date to"),
@@ -1837,9 +2029,11 @@ async def export_leads_csv(
             query = query.where(Lead.dealership_id == current_user.dealership_id)
     # Super admin sees all
     
-    # Apply filters
+    # Apply filters (status is now a stage name for backward compat)
     if status:
-        query = query.where(Lead.status == status)
+        _stage = await LeadStageService.get_stage_by_name(db, status)
+        if _stage:
+            query = query.where(Lead.stage_id == _stage.id)
     if source:
         query = query.where(Lead.source == source)
     if date_from:
@@ -1901,15 +2095,31 @@ async def export_leads_csv(
             appointment_counts[row.lead_id] = row.count
             next_appointments[row.lead_id] = row.next
     
+    # Pre-fetch customers and stages for CSV
+    cust_ids = {l.customer_id for l in leads if l.customer_id}
+    stage_ids_csv = {l.stage_id for l in leads if l.stage_id}
+    csv_custs = {}
+    if cust_ids:
+        cr = await db.execute(select(Customer).where(Customer.id.in_(cust_ids)))
+        for c in cr.scalars().all():
+            csv_custs[c.id] = c
+    csv_stages = {}
+    if stage_ids_csv:
+        sr = await db.execute(select(LeadStage).where(LeadStage.id.in_(stage_ids_csv)))
+        for s in sr.scalars().all():
+            csv_stages[s.id] = s
+
     # Write data rows
     for lead in leads:
+        _cc = csv_custs.get(lead.customer_id)
+        _ss = csv_stages.get(lead.stage_id)
         row = [
             str(lead.id),
-            lead.first_name or "",
-            lead.last_name or "",
-            lead.email or "",
-            lead.phone or "",
-            lead.status.value if lead.status else "",
+            _cc.first_name if _cc else "",
+            _cc.last_name or "" if _cc else "",
+            _cc.email or "" if _cc else "",
+            _cc.phone or "" if _cc else "",
+            _ss.display_name if _ss else "",
             lead.source.value if lead.source else "",
             lead.created_at.isoformat() if lead.created_at else "",
             lead.last_contacted_at.isoformat() if lead.last_contacted_at else "",

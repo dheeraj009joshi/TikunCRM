@@ -7,10 +7,13 @@ export type ShowroomOutcome = "sold" | "not_interested" | "follow_up" | "resched
 
 export interface LeadBrief {
     id: string
-    first_name: string
-    last_name?: string
-    phone?: string
-    email?: string
+    customer?: {
+        first_name: string
+        last_name?: string
+        full_name?: string
+        phone?: string
+        email?: string
+    }
 }
 
 export interface UserBrief {

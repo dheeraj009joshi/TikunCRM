@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.timezone import utc_now
 from app.models.sms_log import SMSLog, MessageDirection, SMSStatus
 from app.models.lead import Lead
+from app.models.customer import Customer
 from app.models.user import User
 from app.models.activity import ActivityType
 from app.services.sms_service import sms_service
@@ -30,19 +31,32 @@ class SMSConversationService:
     def __init__(self, db: AsyncSession):
         self.db = db
     
-    async def find_lead_by_phone(self, phone: str) -> Optional[Lead]:
-        """Find a lead by phone number"""
-        # Normalize phone number for search
-        normalized = ''.join(c for c in phone if c.isdigit())
-        
-        # Search in both phone and alternate_phone
+    async def find_customer_by_phone(self, phone: str) -> Optional[Customer]:
+        """Find a customer by phone number (Customer table has phone columns)."""
+        normalized = "".join(c for c in phone if c.isdigit())
+        if len(normalized) < 10:
+            return None
+        suffix = normalized[-10:]
         result = await self.db.execute(
-            select(Lead).where(
+            select(Customer).where(
                 or_(
-                    Lead.phone.ilike(f"%{normalized[-10:]}%"),
-                    Lead.alternate_phone.ilike(f"%{normalized[-10:]}%")
+                    Customer.phone.ilike(f"%{suffix}"),
+                    Customer.alternate_phone.ilike(f"%{suffix}"),
                 )
             ).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def find_lead_by_phone(self, phone: str) -> Optional[Lead]:
+        """Find a lead by phone number (via Customer). Returns most recent lead for that customer."""
+        customer = await self.find_customer_by_phone(phone)
+        if not customer:
+            return None
+        result = await self.db.execute(
+            select(Lead)
+            .where(Lead.customer_id == customer.id)
+            .order_by(Lead.updated_at.desc())
+            .limit(1)
         )
         return result.scalar_one_or_none()
     
@@ -65,15 +79,31 @@ class SMSConversationService:
         if not formatted_number:
             return False, None, "Invalid phone number"
         
-        # Try to find lead if not provided
-        if not lead_id:
+        # Resolve lead and customer
+        lead = None
+        customer_id = None
+        if lead_id:
+            lead_result = await self.db.execute(
+                select(Lead).where(Lead.id == lead_id)
+            )
+            lead = lead_result.scalar_one_or_none()
+            if lead:
+                customer_id = lead.customer_id
+                dealership_id = dealership_id or lead.dealership_id
+        if not lead:
             lead = await self.find_lead_by_phone(formatted_number)
             if lead:
                 lead_id = lead.id
+                customer_id = lead.customer_id
                 dealership_id = dealership_id or lead.dealership_id
-        
+            else:
+                customer = await self.find_customer_by_phone(formatted_number)
+                if customer:
+                    customer_id = customer.id
+
         # Create SMS log entry
         sms_log = SMSLog(
+            customer_id=customer_id,
             lead_id=lead_id,
             user_id=user_id,
             dealership_id=dealership_id,
@@ -122,15 +152,21 @@ class SMSConversationService:
     ) -> SMSLog:
         """
         Process incoming SMS webhook and store message.
+        Conversations are at customer level; we set customer_id and optionally lead_id.
         """
-        # Find lead by phone number
-        lead = await self.find_lead_by_phone(from_number)
-        
-        # Create SMS log
+        customer = await self.find_customer_by_phone(from_number)
+        lead = await self.find_lead_by_phone(from_number) if customer else None
+        customer_id = customer.id if customer else None
+        lead_id = lead.id if lead else None
+        dealership_id = (lead.dealership_id if lead else None) or (customer and None)
+        user_id = lead.assigned_to if lead else None
+
+        # Create SMS log (customer_id for thread; lead_id for context/notification)
         sms_log = SMSLog(
-            lead_id=lead.id if lead else None,
-            dealership_id=lead.dealership_id if lead else None,
-            user_id=lead.assigned_to if lead else None,
+            customer_id=customer_id,
+            lead_id=lead_id,
+            dealership_id=dealership_id,
+            user_id=user_id,
             twilio_message_sid=message_sid,
             direction=MessageDirection.INBOUND,
             from_number=from_number,
@@ -212,41 +248,50 @@ class SMSConversationService:
         return sms_log
     
     async def mark_conversation_as_read(self, lead_id: UUID) -> int:
-        """Mark all unread messages in a conversation as read"""
-        result = await self.db.execute(
-            select(SMSLog).where(
-                SMSLog.lead_id == lead_id,
-                SMSLog.is_read == False,
-                SMSLog.direction == MessageDirection.INBOUND
-            )
+        """Mark all unread messages in the customer's conversation as read (by lead context)."""
+        lead_result = await self.db.execute(select(Lead).where(Lead.id == lead_id))
+        lead = lead_result.scalar_one_or_none()
+        if not lead:
+            return 0
+        customer_id = lead.customer_id
+        # Mark unread inbound messages for this customer (or legacy: this lead)
+        query = select(SMSLog).where(
+            SMSLog.is_read == False,
+            SMSLog.direction == MessageDirection.INBOUND
         )
+        if customer_id:
+            query = query.where(SMSLog.customer_id == customer_id)
+        else:
+            query = query.where(SMSLog.lead_id == lead_id)
+        result = await self.db.execute(query)
         messages = result.scalars().all()
-        
-        count = 0
         for msg in messages:
             msg.is_read = True
             msg.read_at = utc_now()
-            count += 1
-        
         await self.db.flush()
-        return count
-    
+        return len(messages)
+
     async def get_conversation(
         self,
         lead_id: UUID,
         limit: int = 50,
         before: Optional[datetime] = None
     ) -> List[SMSLog]:
-        """Get SMS conversation with a lead"""
-        query = select(SMSLog).where(
-            SMSLog.lead_id == lead_id
-        )
-        
+        """Get SMS conversation for the lead's customer (full history at customer level)."""
+        lead_result = await self.db.execute(select(Lead).where(Lead.id == lead_id))
+        lead = lead_result.scalar_one_or_none()
+        if not lead:
+            return []
+        customer_id = lead.customer_id
+        # All messages for this customer, or legacy: this lead only
+        query = select(SMSLog)
+        if customer_id:
+            query = query.where(SMSLog.customer_id == customer_id)
+        else:
+            query = query.where(SMSLog.lead_id == lead_id)
         if before:
             query = query.where(SMSLog.created_at < before)
-        
         query = query.order_by(SMSLog.created_at.desc()).limit(limit)
-        
         result = await self.db.execute(query)
         return list(reversed(result.scalars().all()))
     
@@ -260,9 +305,10 @@ class SMSConversationService:
     ) -> List[Dict[str, Any]]:
         """
         Get list of SMS conversations with last message and unread count.
-        Returns grouped by lead.
+        Groups by lead (so assignee sees their leads); name/phone from Customer.
+        Opening a conversation shows full customer-level history.
         """
-        # Subquery to get last message per lead
+        # Subquery: last message per lead (lead is the conversation key for list)
         subq = (
             select(
                 SMSLog.lead_id,
@@ -271,14 +317,14 @@ class SMSConversationService:
             .where(SMSLog.lead_id.isnot(None))
             .group_by(SMSLog.lead_id)
         ).subquery()
-        
-        # Main query with lead info
+
+        # Main query: last message per lead, join Lead and Customer for name/phone
         query = (
             select(
                 SMSLog,
-                Lead.first_name,
-                Lead.last_name,
-                Lead.phone,
+                Customer.first_name,
+                Customer.last_name,
+                Customer.phone,
                 func.count().filter(
                     and_(
                         SMSLog.is_read == False,
@@ -291,9 +337,9 @@ class SMSConversationService:
                 SMSLog.created_at == subq.c.last_message_at
             ))
             .join(Lead, SMSLog.lead_id == Lead.id)
+            .join(Customer, Lead.customer_id == Customer.id)
         )
-        
-        # Apply filters
+
         if user_id:
             query = query.where(Lead.assigned_to == user_id)
         if dealership_id:
@@ -303,18 +349,18 @@ class SMSConversationService:
                 SMSLog.is_read == False,
                 SMSLog.direction == MessageDirection.INBOUND
             )
-        
+
         query = query.order_by(SMSLog.created_at.desc()).offset(offset).limit(limit)
-        
         result = await self.db.execute(query)
         rows = result.all()
-        
+
         conversations = []
         for row in rows:
             sms, first_name, last_name, phone, unread_count = row
             conversations.append({
                 "lead_id": str(sms.lead_id),
-                "lead_name": f"{first_name} {last_name or ''}".strip(),
+                "customer_id": str(sms.customer_id) if sms.customer_id else None,
+                "lead_name": f"{first_name or ''} {last_name or ''}".strip() or "Unknown",
                 "lead_phone": phone,
                 "last_message": {
                     "id": str(sms.id),
@@ -325,7 +371,7 @@ class SMSConversationService:
                 },
                 "unread_count": unread_count
             })
-        
+
         return conversations
     
     async def get_unread_count(
@@ -333,18 +379,27 @@ class SMSConversationService:
         user_id: Optional[UUID] = None,
         dealership_id: Optional[UUID] = None
     ) -> int:
-        """Get total unread SMS count"""
-        query = select(func.count(SMSLog.id)).where(
+        """Get total unread SMS count (customer-level: via lead or customer access)."""
+        query = select(func.count(func.distinct(SMSLog.id))).where(
             SMSLog.is_read == False,
             SMSLog.direction == MessageDirection.INBOUND
         )
-        
         if user_id:
-            # Filter by leads assigned to user
-            query = query.join(Lead).where(Lead.assigned_to == user_id)
+            query = query.join(
+                Lead,
+                or_(
+                    SMSLog.lead_id == Lead.id,
+                    and_(SMSLog.customer_id.isnot(None), Lead.customer_id == SMSLog.customer_id)
+                )
+            ).where(Lead.assigned_to == user_id)
         elif dealership_id:
-            query = query.where(SMSLog.dealership_id == dealership_id)
-        
+            query = query.join(
+                Lead,
+                or_(
+                    SMSLog.lead_id == Lead.id,
+                    and_(SMSLog.customer_id.isnot(None), Lead.customer_id == SMSLog.customer_id)
+                )
+            ).where(Lead.dealership_id == dealership_id)
         result = await self.db.execute(query)
         return result.scalar() or 0
     

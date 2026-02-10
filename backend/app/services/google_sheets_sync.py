@@ -15,7 +15,10 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import select, text
 
-from app.models.lead import Lead, LeadSource, LeadStatus
+from app.models.lead import Lead, LeadSource
+from app.models.customer import Customer
+from app.services.customer_service import CustomerService
+from app.services.lead_stage_service import LeadStageService
 from app.models.dealership import Dealership
 from app.models.activity import Activity, ActivityType
 from app.core.config import settings
@@ -178,7 +181,6 @@ def parse_sheet_row(row: Dict[str, str], headers: List[str]) -> Optional[Dict[st
             'last_name': last_name,
             'phone': phone,
             'source': LeadSource.GOOGLE_SHEETS,
-            'status': LeadStatus.NEW,
             'notes': notes,
             'meta_data': meta_data,
         }
@@ -369,13 +371,20 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
                     # Determine dealership_id for all leads (Toyota South if found)
                     target_dealership_id = toyota_south.id if toyota_south else None
                     
+                    default_stage = await LeadStageService.get_default_stage(session, target_dealership_id)
                     for lead_data in new_leads:
-                        new_lead = Lead(
+                        customer, _ = await CustomerService.find_or_create(
+                            session,
+                            phone=lead_data['phone'],
+                            email=None,
                             first_name=lead_data['first_name'],
                             last_name=lead_data['last_name'],
-                            phone=lead_data['phone'],
+                            source="google_sheets",
+                        )
+                        new_lead = Lead(
+                            customer_id=customer.id,
+                            stage_id=default_stage.id,
                             source=lead_data['source'],
-                            status=lead_data['status'],
                             notes=lead_data['notes'],
                             meta_data=lead_data['meta_data'],
                             external_id=lead_data['external_id'],
@@ -448,9 +457,8 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
                         except Exception as e:
                             logger.warning(f"Failed to emit badges refresh: {e}")
                     
-                    # Send notifications for new leads to dealership team
-                    if new_leads_count > 0 and toyota_south:
-                        await send_new_lead_notifications(session, created_leads, toyota_south.id)
+                    # New-lead notifications are already sent above per lead via notify_lead_assigned_to_dealership_background
+                    # (no second batch via send_new_lead_notifications to avoid duplicate notifications)
                 
             except Exception as e:
                 await session.rollback()

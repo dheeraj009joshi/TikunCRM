@@ -21,7 +21,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
-import { LeadService, Lead } from "@/services/lead-service"
+import { LeadService, Lead, getLeadFullName, getLeadEmail } from "@/services/lead-service"
 import { FollowUpService, FollowUpCreate } from "@/services/follow-up-service"
 
 // Same time slots as book-appointment-modal: 6 AM–11 PM in 15-minute intervals
@@ -149,8 +149,20 @@ export function ScheduleFollowUpModal({
     const fetchLeads = async () => {
         setIsLoadingLeads(true)
         try {
-            const response = await LeadService.listLeads({ page_size: 100 })
-            setLeads(response.items)
+            if (isAdmin) {
+                const response = await LeadService.listLeads({ page_size: 100 })
+                setLeads(response.items)
+            } else {
+                // Salesperson: show only their leads + unassigned leads (in dealership)
+                const [mineRes, unassignedRes] = await Promise.all([
+                    LeadService.listLeads({ pool: "mine", page_size: 100 }),
+                    LeadService.listUnassignedToSalesperson({ page_size: 100 }),
+                ])
+                const byId = new Map<string, Lead>()
+                mineRes.items.forEach((l) => byId.set(l.id, l))
+                unassignedRes.items.forEach((l) => byId.set(l.id, l))
+                setLeads(Array.from(byId.values()))
+            }
         } catch (error) {
             console.error("Failed to fetch leads:", error)
         } finally {
@@ -298,7 +310,7 @@ export function ScheduleFollowUpModal({
                                     {isLoadingLeads ? (
                                         "Loading..."
                                     ) : preselectedLead ? (
-                                        `${preselectedLead.first_name} ${preselectedLead.last_name || ""}`.trim()
+                                        `${preselectedLead.customer?.first_name || ""} ${preselectedLead.customer?.last_name || ""}`.trim()
                                     ) : (
                                         "Lead not found"
                                     )}
@@ -318,11 +330,11 @@ export function ScheduleFollowUpModal({
                                         <SelectItem key={lead.id} value={lead.id}>
                                             <div className="flex items-center gap-2">
                                                 <span>
-                                                    {lead.first_name} {lead.last_name || ""}
+                                                    {getLeadFullName(lead)}
                                                 </span>
-                                                {lead.email && (
+                                                {getLeadEmail(lead) && (
                                                     <span className="text-xs text-muted-foreground">
-                                                        ({lead.email})
+                                                        ({getLeadEmail(lead)})
                                                     </span>
                                                 )}
                                             </div>

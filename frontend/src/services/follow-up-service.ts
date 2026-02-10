@@ -17,11 +17,18 @@ export interface FollowUp {
     // Enriched fields
     lead?: {
         id: string;
-        first_name: string;
-        last_name: string | null;
-        email: string | null;
-        phone: string | null;
-        status: string;
+        customer?: {
+            first_name: string;
+            last_name?: string;
+            full_name?: string;
+            email?: string;
+            phone?: string;
+        };
+        stage?: {
+            name: string;
+            display_name: string;
+            color?: string;
+        };
         source: string;
     };
     assigned_to_user?: {
@@ -71,7 +78,8 @@ export const FollowUpService = {
      */
     async listFollowUps(params: FollowUpListParams = {}): Promise<FollowUp[]> {
         const response = await apiClient.get<FollowUp[]>("/follow-ups/", { params });
-        return response.data;
+        const data = response.data;
+        return Array.isArray(data) ? data : (data ? [data] : []);
     },
 
     /**

@@ -175,8 +175,8 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                         </div>
                     </div>
 
-                    {/* Contact Info - Email optional, Phone with country code */}
-                    <div className="grid grid-cols-2 gap-4">
+                    {/* Contact Info - Email and Phone on separate rows so phone has full width */}
+                    <div className="space-y-4">
                         <div className="space-y-2">
                             <Label htmlFor="email">Email (optional)</Label>
                             <div className="relative">
@@ -186,7 +186,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                                     type="text"
                                     inputMode="email"
                                     placeholder="john@example.com"
-                                    className="pl-9"
+                                    className="pl-9 w-full"
                                     value={formData.email}
                                     onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
                                 />
@@ -194,7 +194,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                         </div>
                         <div className="space-y-2">
                             <Label htmlFor="phone">Phone (optional)</Label>
-                            <div className="flex gap-1">
+                            <div className="flex gap-2 w-full min-w-0">
                                 <Select
                                     value={dialCode}
                                     onValueChange={(value) => {
@@ -205,7 +205,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                                         }
                                     }}
                                 >
-                                    <SelectTrigger className="w-[110px] shrink-0">
+                                    <SelectTrigger className="w-[120px] shrink-0">
                                         <SelectValue placeholder="+1" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -216,14 +216,14 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                                         ))}
                                     </SelectContent>
                                 </Select>
-                                <div className="relative flex-1">
-                                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                <div className="relative flex-1 min-w-0">
+                                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                                     <Input
                                         id="phone"
                                         type="tel"
                                         inputMode="tel"
                                         placeholder={countryCode === "US" ? "234 567 8900" : "phone number"}
-                                        className="pl-9"
+                                        className="pl-9 w-full min-w-0"
                                         value={formData.phone}
                                         onChange={(e) => handlePhoneChange("phone", e.target.value)}
                                     />

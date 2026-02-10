@@ -10,7 +10,9 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.models.lead import Lead, LeadSource, LeadStatus
+from app.models.lead import Lead, LeadSource
+from app.services.customer_service import CustomerService
+from app.services.lead_stage_service import LeadStageService
 from app.models.dealership import Dealership
 from app.services.activity import ActivityService
 from app.models.activity import ActivityType
@@ -55,18 +57,19 @@ class IntegrationService:
             )
             return existing_lead
 
-        # Create new lead
-        new_lead = Lead(
-            first_name=first_name,
-            last_name=last_name,
-            email=email,
-            phone=phone,
-            source=LeadSource.META_ADS,
-            status=LeadStatus.NEW,
-            dealership_id=dealership_id,
-            meta_data=lead_data
+        # Find or create customer, then create lead
+        customer, _ = await CustomerService.find_or_create(
+            db, phone=phone, email=email, first_name=first_name, last_name=last_name,
+            source="meta_ads",
         )
-        
+        default_stage = await LeadStageService.get_default_stage(db, dealership_id)
+        new_lead = Lead(
+            customer_id=customer.id,
+            stage_id=default_stage.id,
+            source=LeadSource.META_ADS,
+            dealership_id=dealership_id,
+            meta_data=lead_data,
+        )
         db.add(new_lead)
         await db.flush()
         
@@ -115,17 +118,20 @@ class IntegrationService:
                 updated_count += 1
                 continue # For now, skip updates to avoid overwriting salesperson notes
                 
-            new_lead = Lead(
+            customer, _ = await CustomerService.find_or_create(
+                db, phone=phone, email=email,
                 first_name=row.get("first_name", "Sheet Lead"),
                 last_name=row.get("last_name", ""),
-                email=email,
-                phone=phone,
-                source=LeadSource.GOOGLE_SHEETS,
-                status=LeadStatus.NEW,
-                dealership_id=dealership_id,
-                meta_data=row
+                source="google_sheets",
             )
-            
+            default_stage = await LeadStageService.get_default_stage(db, dealership_id)
+            new_lead = Lead(
+                customer_id=customer.id,
+                stage_id=default_stage.id,
+                source=LeadSource.GOOGLE_SHEETS,
+                dealership_id=dealership_id,
+                meta_data=row,
+            )
             db.add(new_lead)
             created_count += 1
             

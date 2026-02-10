@@ -12,7 +12,7 @@ from app.api import deps
 from app.core.permissions import Permission, UserRole
 from app.db.database import get_db
 from app.models.user import User
-from app.models.lead import Lead, LeadStatus
+from app.models.lead import Lead
 from app.models.dealership import Dealership
 from app.schemas.user import UserResponse, UserCreate, UserUpdate, UserBrief, UserWithStats, TeamListResponse
 from app.core.security import get_password_hash
@@ -149,7 +149,7 @@ async def get_team_with_stats(
             select(func.count(Lead.id)).where(
                 and_(
                     Lead.assigned_to == user.id,
-                    Lead.status.in_([LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.FOLLOW_UP, LeadStatus.INTERESTED])
+                    Lead.is_active == True
                 )
             )
         )
@@ -159,7 +159,7 @@ async def get_team_with_stats(
             select(func.count(Lead.id)).where(
                 and_(
                     Lead.assigned_to == user.id,
-                    Lead.status == LeadStatus.CONVERTED
+                    Lead.outcome == "converted"
                 )
             )
         )

@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker, selectinload
 from app.core.config import settings
 from app.core.timezone import utc_now
 from app.core.websocket_manager import ws_manager
-from app.models.lead import Lead, LeadStatus
+from app.models.lead import Lead
 from app.models.activity import Activity, ActivityType
 from app.models.user import User
 from app.models.notification import Notification, NotificationType
@@ -217,7 +217,7 @@ async def unassign_stale_leads():
                 .options(selectinload(Lead.assigned_to_user))
                 .where(
                     Lead.assigned_to.isnot(None),
-                    Lead.status.in_([LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.FOLLOW_UP, LeadStatus.INTERESTED])
+                    Lead.is_active == True
                 )
             )
             assigned_leads = result.scalars().all()

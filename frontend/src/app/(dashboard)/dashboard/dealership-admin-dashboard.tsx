@@ -277,7 +277,7 @@ export function DealershipAdminDashboard() {
                                                     <p className="font-medium text-sm">{apt.title}</p>
                                                     {apt.lead && (
                                                         <p className="text-xs text-muted-foreground">
-                                                            with {apt.lead.first_name} {apt.lead.last_name || ""}
+                                                            with {apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown"}
                                                         </p>
                                                     )}
                                                 </div>
@@ -337,7 +337,7 @@ export function DealershipAdminDashboard() {
                                                     <p className="font-medium text-sm">{apt.title}</p>
                                                     {apt.lead && (
                                                         <p className="text-xs text-muted-foreground">
-                                                            with {apt.lead.first_name} {apt.lead.last_name || ""}
+                                                            with {apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown"}
                                                         </p>
                                                     )}
                                                 </div>

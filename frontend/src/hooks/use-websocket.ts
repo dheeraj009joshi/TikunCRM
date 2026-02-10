@@ -158,6 +158,7 @@ export function useWebSocket() {
             "sms:received",
             "sms:sent",
             "sms:status",
+            "whatsapp:status",
             "call:incoming",
             "call:status",
             "notification:new",

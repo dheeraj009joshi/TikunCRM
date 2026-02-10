@@ -1,9 +1,11 @@
 """
 Models module initialization
 """
+from app.models.customer import Customer
+from app.models.lead_stage import LeadStage
 from app.models.dealership import Dealership
 from app.models.user import User
-from app.models.lead import Lead, LeadSource, LeadStatus
+from app.models.lead import Lead, LeadSource
 from app.models.activity import Activity, ActivityType
 from app.models.follow_up import FollowUp, FollowUpStatus
 from app.models.schedule import Schedule
@@ -17,14 +19,17 @@ from app.models.appointment import Appointment, AppointmentType, AppointmentStat
 from app.models.fcm_token import FCMToken
 from app.models.call_log import CallLog, CallDirection, CallStatus
 from app.models.sms_log import SMSLog, MessageDirection, SMSStatus
+from app.models.whatsapp_log import WhatsAppLog, WhatsAppDirection, WhatsAppStatus
+from app.models.whatsapp_template import WhatsAppTemplate
 from app.models.showroom_visit import ShowroomVisit, ShowroomOutcome
 
 __all__ = [
+    "Customer",
+    "LeadStage",
     "Dealership",
     "User",
     "Lead",
     "LeadSource",
-    "LeadStatus",
     "Activity",
     "ActivityType",
     "FollowUp",
@@ -50,6 +55,10 @@ __all__ = [
     "SMSLog",
     "MessageDirection",
     "SMSStatus",
+    "WhatsAppLog",
+    "WhatsAppDirection",
+    "WhatsAppStatus",
+    "WhatsAppTemplate",
     "ShowroomVisit",
     "ShowroomOutcome",
 ]

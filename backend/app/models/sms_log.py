@@ -16,6 +16,7 @@ from app.core.timezone import utc_now
 
 if TYPE_CHECKING:
     from app.models.lead import Lead
+    from app.models.customer import Customer
     from app.models.user import User
     from app.models.dealership import Dealership
 
@@ -51,7 +52,14 @@ class SMSLog(Base):
         default=uuid.uuid4
     )
     
-    # Related lead (matched by phone number)
+    # Customer (person) - one thread per customer for full history
+    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("customers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
+    # Lead (opportunity) context when known
     lead_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("leads.id", ondelete="SET NULL"),
@@ -166,6 +174,10 @@ class SMSLog(Base):
     )
     
     # Relationships
+    customer: Mapped[Optional["Customer"]] = relationship(
+        "Customer",
+        lazy="noload"
+    )
     lead: Mapped[Optional["Lead"]] = relationship(
         "Lead",
         back_populates="sms_logs",
