@@ -88,6 +88,14 @@ class LeadStageChangeRequest(BaseModel):
     confirm_skate: bool = False
 
 
+class LeadStatusUpdateCompat(BaseModel):
+    """Legacy /status endpoint body: status name or stage_id."""
+    status: Optional[str] = None
+    stage_id: Optional[UUID] = None
+    notes: Optional[str] = None
+    confirm_skate: bool = False
+
+
 class LeadAssignment(BaseModel):
     """Schema for lead assignment (primary salesperson)."""
     assigned_to: UUID

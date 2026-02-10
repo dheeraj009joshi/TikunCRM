@@ -26,7 +26,7 @@ from app.models.activity import Activity, ActivityType
 from app.models.dealership import Dealership
 from app.schemas.lead import (
     LeadResponse, LeadCreate, LeadUpdate, LeadDetail,
-    LeadStageChangeRequest, LeadAssignment, LeadListResponse,
+    LeadStageChangeRequest, LeadStatusUpdateCompat, LeadAssignment, LeadListResponse,
     LeadDealershipAssignment, BulkLeadDealershipAssignment,
     LeadSecondaryAssignment, LeadSwapSalespersons
 )
@@ -1091,25 +1091,26 @@ async def update_lead_stage(
 @router.post("/{lead_id}/status", response_model=LeadResponse)
 async def update_lead_status_compat(
     lead_id: UUID,
+    body: LeadStatusUpdateCompat,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
-    status: Optional[str] = None,
-    stage_id: Optional[UUID] = None,
-    notes: Optional[str] = None,
-    confirm_skate: bool = False,
 ) -> Any:
-    """Legacy /status endpoint — translates status name to stage_id and delegates."""
-    if stage_id:
-        target_stage_id = stage_id
-    elif status:
-        stage = await LeadStageService.get_stage_by_name(db, status)
+    """Legacy /status endpoint — accepts JSON body with status name or stage_id, delegates to stage change."""
+    if body.stage_id:
+        target_stage_id = body.stage_id
+    elif body.status:
+        # Resolve stage by name; use lead's dealership so dealership-specific stages (e.g. "converted") are found
+        lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
+        lead = lead_result.scalar_one_or_none()
+        dealership_id = lead.dealership_id if lead else current_user.dealership_id
+        stage = await LeadStageService.get_stage_by_name(db, body.status, dealership_id)
         if not stage:
-            raise HTTPException(status_code=400, detail=f"Unknown stage name: {status}")
+            raise HTTPException(status_code=400, detail=f"Unknown stage name: {body.status}")
         target_stage_id = stage.id
     else:
         raise HTTPException(status_code=400, detail="Provide stage_id or status")
-    req = LeadStageChangeRequest(stage_id=target_stage_id, notes=notes, confirm_skate=confirm_skate)
+    req = LeadStageChangeRequest(stage_id=target_stage_id, notes=body.notes, confirm_skate=body.confirm_skate)
     return await update_lead_stage(lead_id, req, background_tasks, db, current_user)
 
 
