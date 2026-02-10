@@ -22,6 +22,9 @@ from app.models.sms_log import SMSLog, MessageDirection, SMSStatus
 from app.models.whatsapp_log import WhatsAppLog, WhatsAppDirection, WhatsAppStatus
 from app.models.whatsapp_template import WhatsAppTemplate
 from app.models.showroom_visit import ShowroomVisit, ShowroomOutcome
+from app.models.stips_category import StipsCategory
+from app.models.customer_stip_document import CustomerStipDocument
+from app.models.lead_stip_document import LeadStipDocument
 
 __all__ = [
     "Customer",
@@ -61,4 +64,7 @@ __all__ = [
     "WhatsAppTemplate",
     "ShowroomVisit",
     "ShowroomOutcome",
+    "StipsCategory",
+    "CustomerStipDocument",
+    "LeadStipDocument",
 ]

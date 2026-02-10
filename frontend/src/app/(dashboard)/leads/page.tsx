@@ -73,7 +73,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { LeadService, Lead, LeadListResponse, type LeadListParams, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
+import { LeadService, Lead, LeadListResponse, type LeadListParams, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead } from "@/services/lead-service"
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
@@ -104,7 +104,7 @@ const LEAD_SOURCES = [
     { value: "walk_in", label: "Walk-in" },
 ]
 
-type ViewMode = "mine" | "unassigned" | "all" | "converted"
+type ViewMode = "mine" | "unassigned" | "all" | "converted" | "fresh"
 type DisplayView = "list" | "pipeline"
 
 export default function LeadsPage() {
@@ -116,7 +116,7 @@ export default function LeadsPage() {
     const viewParam = searchParams.get("view")
     const { timezone } = useBrowserTimezone()
 
-    const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, canAssignToSalesperson, hasPermission } = useRole()
+    const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, isSalesperson, canAssignToSalesperson, hasPermission } = useRole()
     const canCreateLead = hasPermission("create_lead")
 
     const [leads, setLeads] = React.useState<Lead[]>([])
@@ -127,7 +127,7 @@ export default function LeadsPage() {
     const [selectedStageIds, setSelectedStageIds] = React.useState<string[]>([])
     const [source, setSource] = React.useState(sourceParam || "all")
     const [viewMode, setViewMode] = React.useState<ViewMode>(
-        filterParam === "unassigned" ? "unassigned" : filterParam === "converted" ? "converted" : filterParam === "all" ? "all" : "mine"
+        filterParam === "unassigned" ? "unassigned" : filterParam === "converted" ? "converted" : filterParam === "fresh" ? "fresh" : filterParam === "all" ? "all" : "mine"
     )
     const [displayView, setDisplayView] = React.useState<DisplayView>(viewParam === "pipeline" ? "pipeline" : "list")
     const [isLoading, setIsLoading] = React.useState(true)
@@ -213,6 +213,9 @@ export default function LeadsPage() {
                 params.pool = "unassigned"
             } else if (viewMode === "mine") {
                 params.pool = "mine"
+            } else if (viewMode === "fresh") {
+                params.fresh_only = true
+                // Fresh = unassigned only; do not set pool so backend returns unassigned fresh leads in scope
             } else if (viewMode === "converted") {
                 // Find converted stage id
                 const convertedStage = stages.find(s => s.name === "converted")
@@ -220,9 +223,9 @@ export default function LeadsPage() {
                 params.is_active = false
             }
             // Stage filter (stage_id instead of old status enum)
-            if (viewMode !== "converted" && status && status !== "all") params.stage_id = status
+            if (viewMode !== "converted" && viewMode !== "fresh" && status && status !== "all") params.stage_id = status
 
-            const data = await LeadService.listLeads(params)
+            const data = await LeadService.listLeads(params as LeadListParams)
             setLeads(data.items)
             setTotal(data.total)
         } catch (error) {
@@ -246,6 +249,8 @@ export default function LeadsPage() {
                 baseParams.pool = "unassigned"
             } else if (viewMode === "mine") {
                 baseParams.pool = "mine"
+            } else if (viewMode === "fresh") {
+                baseParams.fresh_only = true
             } else if (viewMode === "converted" && convertedStage) {
                 baseParams.stage_id = convertedStage.id
                 baseParams.is_active = false
@@ -518,6 +523,8 @@ export default function LeadsPage() {
                             router.push("/leads?filter=converted")
                         } else if (mode === "unassigned") {
                             router.push("/leads?filter=unassigned")
+                        } else if (mode === "fresh") {
+                            router.push("/leads?filter=fresh")
                         } else if (mode === "all") {
                             router.push("/leads?filter=all")
                         } else {
@@ -529,6 +536,7 @@ export default function LeadsPage() {
                         <TabsTrigger value="mine">Your Leads</TabsTrigger>
                         <TabsTrigger value="unassigned">Unassigned</TabsTrigger>
                         <TabsTrigger value="all">All Leads</TabsTrigger>
+                        <TabsTrigger value="fresh">Fresh (untouched)</TabsTrigger>
                         <TabsTrigger value="converted">
                             <CheckCircle2 className="h-4 w-4 mr-1.5" />
                             Converted & Sold
@@ -717,20 +725,24 @@ export default function LeadsPage() {
                                         ? "No leads assigned to you" 
                                         : viewMode === "unassigned" 
                                             ? "No unassigned leads" 
-                                            : viewMode === "converted"
-                                                ? "No converted or sold leads"
-                                                : "No leads found"
+                                            : viewMode === "fresh"
+                                                ? "No fresh leads"
+                                                : viewMode === "converted"
+                                                    ? "No converted or sold leads"
+                                                    : "No leads found"
                                 }
                                 description={
-                                    search || (viewMode !== "converted" && status !== "all") || source !== "all"
+                                    search || (viewMode !== "converted" && viewMode !== "fresh" && status !== "all") || source !== "all"
                                         ? "Try adjusting your filters"
                                         : viewMode === "mine"
                                             ? "Leads assigned to you will appear here"
                                             : viewMode === "unassigned"
                                                 ? "No leads in the unassigned pool"
-                                                : viewMode === "converted"
-                                                    ? "Leads marked as converted will appear here"
-                                                    : "Create your first lead to get started"
+                                                : viewMode === "fresh"
+                                                    ? "Leads with no activity yet will appear here"
+                                                    : viewMode === "converted"
+                                                        ? "Leads marked as converted will appear here"
+                                                        : "Create your first lead to get started"
                                 }
                                 action={
                                     viewMode !== "unassigned" && canCreateLead && (
@@ -754,8 +766,13 @@ export default function LeadsPage() {
                                                 {(lead.customer?.first_name || "?").charAt(0)}
                                             </div>
                                             <div>
-                                                <p className="font-semibold group-hover:text-primary transition-colors">
+                                                <p className="font-semibold group-hover:text-primary transition-colors flex items-center gap-2">
                                                     {getLeadFullName(lead)}
+                                                    {isFreshLead(lead) && (
+                                                        <Badge variant="secondary" className="text-[10px] font-normal bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border-0">
+                                                            Fresh
+                                                        </Badge>
+                                                    )}
                                                 </p>
                                                 <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
                                                     {getLeadEmail(lead) && (

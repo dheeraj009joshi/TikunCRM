@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Badge, getRoleVariant } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
     Select,
@@ -26,6 +27,7 @@ import { CustomerService, CustomerBrief, getCustomerFullName } from "@/services/
 import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { useRole } from "@/hooks/use-role"
 import { useDebounce } from "@/hooks/use-debounce"
+import { getCountryAndDial, formatPhoneForDisplay, toE164, DIAL_CODE_OPTIONS } from "@/lib/phone-utils"
 import { cn } from "@/lib/utils"
 
 interface AssignToDealershipModalProps {
@@ -410,6 +412,11 @@ export function AssignSecondaryCustomerModal({
     const [selectedCustomerId, setSelectedCustomerId] = React.useState<string>("none")
     const [selectedIndex, setSelectedIndex] = React.useState(0)
     const [isSubmitting, setIsSubmitting] = React.useState(false)
+    const [showAddForm, setShowAddForm] = React.useState(false)
+    const [creatingCustomer, setCreatingCustomer] = React.useState(false)
+    const [addForm, setAddForm] = React.useState({ first_name: "", last_name: "", phone: "", email: "" })
+    const [secDialCode, setSecDialCode] = React.useState("+1")
+    const [secCountryCode, setSecCountryCode] = React.useState("US")
     const inputRef = React.useRef<HTMLInputElement>(null)
 
     const debouncedQuery = useDebounce(query, 300)
@@ -422,8 +429,24 @@ export function AssignSecondaryCustomerModal({
             setQuery("")
             setResults([])
             setSelectedIndex(0)
+            setShowAddForm(false)
+            setAddForm({ first_name: "", last_name: "", phone: "", email: "" })
+            setSecDialCode("+1")
+            setSecCountryCode("US")
         }
     }, [open, lead?.secondary_customer_id])
+
+    // Default phone country from lead's dealership (same as create-lead)
+    React.useEffect(() => {
+        if (!open || !lead?.dealership_id) return
+        DealershipService.getDealership(lead.dealership_id)
+            .then((d) => {
+                const { countryCode, dialCode } = getCountryAndDial(d.country ?? undefined)
+                setSecCountryCode(countryCode)
+                setSecDialCode(dialCode)
+            })
+            .catch(() => {})
+    }, [open, lead?.dealership_id])
 
     React.useEffect(() => {
         if (!open) return
@@ -505,6 +528,59 @@ export function AssignSecondaryCustomerModal({
         }
     }
 
+    const openAddForm = () => {
+        const q = query.trim()
+        if (!q) {
+            setAddForm({ first_name: "", last_name: "", phone: "", email: "" })
+        } else {
+            const looksLikeEmail = q.includes("@")
+            const digitsOnlyStr = q.replace(/\D/g, "")
+            const looksLikePhone = digitsOnlyStr.length >= 6
+            if (looksLikeEmail) {
+                setAddForm({ first_name: "", last_name: "", phone: "", email: q })
+            } else if (looksLikePhone) {
+                const formatted = formatPhoneForDisplay(digitsOnlyStr, secDialCode)
+                setAddForm({ first_name: "", last_name: "", phone: formatted, email: "" })
+            } else {
+                const parts = q.split(/\s+/).filter(Boolean)
+                const first_name = parts[0] ?? ""
+                const last_name = parts.slice(1).join(" ") ?? ""
+                setAddForm({ first_name, last_name, phone: "", email: "" })
+            }
+        }
+        setShowAddForm(true)
+    }
+
+    const handleSecPhoneChange = (value: string) => {
+        const digits = value.replace(/\D/g, "")
+        const formatted = digits ? formatPhoneForDisplay(digits, secDialCode) : ""
+        setAddForm((f) => ({ ...f, phone: formatted }))
+    }
+
+    const handleCreateAndAssign = async () => {
+        if (!lead) return
+        const { first_name, last_name, phone, email } = addForm
+        if (!first_name.trim()) return
+        setCreatingCustomer(true)
+        try {
+            const newCustomer = await CustomerService.create({
+                first_name: first_name.trim(),
+                last_name: last_name.trim() || undefined,
+                phone: phone.trim() ? toE164(phone, secDialCode) : undefined,
+                email: email.trim() || undefined,
+            })
+            await LeadService.updateLead(lead.id, {
+                secondary_customer_id: newCustomer.id,
+            })
+            onSuccess()
+            onOpenChange(false)
+        } catch (err) {
+            console.error("Failed to create customer or assign:", err)
+        } finally {
+            setCreatingCustomer(false)
+        }
+    }
+
     if (!lead) return null
 
     return (
@@ -557,11 +633,114 @@ export function AssignSecondaryCustomerModal({
                             </p>
                         </div>
                     )}
-                    {query && !isSearching && results.length === 0 && (
+                    {query && !isSearching && results.length === 0 && !showAddForm && (
                         <div className="p-8 text-center text-muted-foreground">
                             <XCircle className="h-12 w-12 mx-auto mb-4 opacity-20" />
                             <p className="text-sm">No customers found for &quot;{query}&quot;</p>
-                            <p className="text-xs mt-2">Try a different search term</p>
+                            <p className="text-xs mt-2">Try a different search or add a new customer.</p>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                className="mt-4"
+                                onClick={openAddForm}
+                            >
+                                <UserPlus className="h-4 w-4 mr-2" />
+                                Add new customer
+                            </Button>
+                        </div>
+                    )}
+                    {query && showAddForm && (
+                        <div className="p-4 space-y-4">
+                            <p className="text-sm font-medium text-foreground">New secondary customer</p>
+                            <div className="grid gap-3">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="sec-first-name">First name</Label>
+                                        <Input
+                                            id="sec-first-name"
+                                            value={addForm.first_name}
+                                            onChange={(e) => setAddForm((f) => ({ ...f, first_name: e.target.value }))}
+                                            placeholder="First name"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="sec-last-name">Last name</Label>
+                                        <Input
+                                            id="sec-last-name"
+                                            value={addForm.last_name}
+                                            onChange={(e) => setAddForm((f) => ({ ...f, last_name: e.target.value }))}
+                                            placeholder="Last name"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="sec-phone">Phone</Label>
+                                    <div className="flex gap-2 w-full min-w-0">
+                                        <Select
+                                            value={secDialCode}
+                                            onValueChange={(value) => {
+                                                const option = DIAL_CODE_OPTIONS.find((o) => o.dial === value)
+                                                if (option) {
+                                                    setSecDialCode(option.dial)
+                                                    setSecCountryCode(option.code)
+                                                }
+                                            }}
+                                        >
+                                            <SelectTrigger className="w-[120px] shrink-0">
+                                                <SelectValue placeholder="+1" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {DIAL_CODE_OPTIONS.map((opt) => (
+                                                    <SelectItem key={opt.dial} value={opt.dial}>
+                                                        {opt.label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        <div className="relative flex-1 min-w-0">
+                                            <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                                            <Input
+                                                id="sec-phone"
+                                                type="tel"
+                                                inputMode="tel"
+                                                placeholder={secCountryCode === "US" ? "234 567 8900" : "phone number"}
+                                                className="pl-9 w-full min-w-0"
+                                                value={addForm.phone}
+                                                onChange={(e) => handleSecPhoneChange(e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">Country: {secCountryCode}</p>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="sec-email">Email</Label>
+                                    <Input
+                                        id="sec-email"
+                                        type="email"
+                                        value={addForm.email}
+                                        onChange={(e) => setAddForm((f) => ({ ...f, email: e.target.value }))}
+                                        placeholder="Email"
+                                    />
+                                </div>
+                            </div>
+                            <div className="flex gap-2">
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() => setShowAddForm(false)}
+                                    disabled={creatingCustomer}
+                                >
+                                    Back
+                                </Button>
+                                <Button
+                                    onClick={handleCreateAndAssign}
+                                    disabled={creatingCustomer || !addForm.first_name.trim()}
+                                    loading={creatingCustomer}
+                                    loadingText="Creating..."
+                                >
+                                    Create & assign
+                                </Button>
+                            </div>
                         </div>
                     )}
                     {query && results.length > 0 && (

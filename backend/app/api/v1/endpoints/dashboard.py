@@ -58,6 +58,7 @@ class DealershipAdminStats(BaseModel):
     team_size: int
     pending_follow_ups: int
     overdue_follow_ups: int
+    fresh_leads: int  # Leads with no activity except creation (untouched)
 
 
 class SalespersonStats(BaseModel):
@@ -69,6 +70,7 @@ class SalespersonStats(BaseModel):
     todays_follow_ups: int
     overdue_follow_ups: int
     leads_by_status: Dict[str, int]
+    fresh_leads: int  # Leads with no activity except creation (untouched)
 
 
 class LeadsBySource(BaseModel):
@@ -310,6 +312,24 @@ async def get_dealership_admin_stats(
         )
     )
     overdue_follow_ups = overdue_result.scalar() or 0
+
+    # Fresh leads: only creation activity (untouched) and unassigned
+    fresh_subq = (
+        select(Activity.lead_id)
+        .where(Activity.lead_id.isnot(None))
+        .group_by(Activity.lead_id)
+        .having(func.count(Activity.id) == 1)
+    )
+    fresh_result = await db.execute(
+        select(func.count()).select_from(Lead).where(
+            and_(
+                Lead.dealership_id == dealership_id,
+                Lead.assigned_to.is_(None),
+                Lead.id.in_(fresh_subq),
+            )
+        )
+    )
+    fresh_leads = fresh_result.scalar() or 0
     
     return DealershipAdminStats(
         total_leads=total_leads,
@@ -319,7 +339,8 @@ async def get_dealership_admin_stats(
         conversion_rate=f"{conversion_rate:.1f}%",
         team_size=team_size,
         pending_follow_ups=pending_follow_ups,
-        overdue_follow_ups=overdue_follow_ups
+        overdue_follow_ups=overdue_follow_ups,
+        fresh_leads=fresh_leads
     )
 
 
@@ -396,6 +417,24 @@ async def get_salesperson_stats(
         )
     )
     overdue_follow_ups = overdue_result.scalar() or 0
+
+    # Fresh leads: only creation activity (untouched) and unassigned (in salesperson's dealership)
+    fresh_subq = (
+        select(Activity.lead_id)
+        .where(Activity.lead_id.isnot(None))
+        .group_by(Activity.lead_id)
+        .having(func.count(Activity.id) == 1)
+    )
+    fresh_result = await db.execute(
+        select(func.count()).select_from(Lead).where(
+            and_(
+                Lead.dealership_id == current_user.dealership_id,
+                Lead.assigned_to.is_(None),
+                Lead.id.in_(fresh_subq),
+            )
+        )
+    )
+    fresh_leads = fresh_result.scalar() or 0
     
     return SalespersonStats(
         total_leads=total_leads,
@@ -405,7 +444,8 @@ async def get_salesperson_stats(
         conversion_rate=f"{conversion_rate:.1f}%",
         todays_follow_ups=todays_follow_ups,
         overdue_follow_ups=overdue_follow_ups,
-        leads_by_status=leads_by_status
+        leads_by_status=leads_by_status,
+        fresh_leads=fresh_leads
     )
 
 

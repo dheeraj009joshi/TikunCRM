@@ -8,7 +8,7 @@ from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select, func, and_, or_
@@ -22,7 +22,7 @@ from app.models.user import User
 from app.models.lead import Lead, LeadSource
 from app.models.customer import Customer
 from app.models.lead_stage import LeadStage
-from app.models.activity import ActivityType
+from app.models.activity import Activity, ActivityType
 from app.models.dealership import Dealership
 from app.schemas.lead import (
     LeadResponse, LeadCreate, LeadUpdate, LeadDetail,
@@ -31,7 +31,16 @@ from app.schemas.lead import (
     LeadSecondaryAssignment, LeadSwapSalespersons
 )
 from app.schemas.activity import NoteCreate
+from app.schemas.stips import StipDocumentResponse, StipDocumentViewUrl
 from app.services.activity import ActivityService
+from app.services.stips_service import (
+    _lead_access,
+    list_documents_for_lead,
+    upload_document_for_lead,
+    delete_document_for_lead,
+    resolve_document_for_lead,
+    get_document_info_for_lead,
+)
 from app.services.customer_service import CustomerService
 from app.services.lead_stage_service import LeadStageService
 from app.services.notification_service import (
@@ -39,6 +48,8 @@ from app.services.notification_service import (
     send_skate_alert_background,
     notify_lead_assigned_to_dealership_background,
 )
+from app.core.config import settings as app_settings
+from app.services.azure_storage_service import azure_storage_service
 from app.utils.skate_helper import check_skate_condition, check_note_skate_condition
 
 
@@ -243,6 +254,18 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
         for dealership in dealership_result.scalars().all():
             dealerships_map[dealership.id] = {"id": str(dealership.id), "name": dealership.name}
 
+    # Activity count per lead (for "fresh" / untouched indicator: only creation activity = 1)
+    lead_ids = [l.id for l in leads]
+    activity_counts = {}
+    if lead_ids:
+        act_result = await db.execute(
+            select(Activity.lead_id, func.count(Activity.id).label("count"))
+            .where(Activity.lead_id.in_(lead_ids))
+            .group_by(Activity.lead_id)
+        )
+        for row in act_result.all():
+            activity_counts[row.lead_id] = row.count
+
     # Build enriched response
     enriched_items = []
     for lead in leads:
@@ -276,6 +299,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "assigned_to_user": users_map.get(lead.assigned_to) if lead.assigned_to else None,
             "secondary_salesperson": users_map.get(lead.secondary_salesperson_id) if hasattr(lead, 'secondary_salesperson_id') and lead.secondary_salesperson_id else None,
             "dealership": dealerships_map.get(lead.dealership_id) if lead.dealership_id else None,
+            "activity_count": activity_counts.get(lead.id, 0),
         }
         enriched_items.append(lead_dict)
 
@@ -292,7 +316,8 @@ async def list_leads(
     source: Optional[LeadSource] = None,
     search: Optional[str] = None,
     is_active: Optional[bool] = None,
-    pool: Optional[str] = None  # "unassigned" | "mine" | None (all)
+    pool: Optional[str] = None,  # "unassigned" | "mine" | None (all)
+    fresh_only: Optional[bool] = Query(None, description="Only leads with no activity except creation (untouched/fresh)")
 ) -> Any:
     """
     List leads with filtering and pagination.
@@ -367,6 +392,16 @@ async def list_leads(
             Customer.phone.ilike(f"%{search}%"),
         )
         query = query.where(search_filter)
+
+    # Fresh/untouched leads only: exactly one activity (creation) AND not assigned to anyone
+    if fresh_only:
+        fresh_subq = (
+            select(Activity.lead_id)
+            .where(Activity.lead_id.isnot(None))
+            .group_by(Activity.lead_id)
+            .having(func.count(Activity.id) == 1)
+        )
+        query = query.where(Lead.id.in_(fresh_subq)).where(Lead.assigned_to.is_(None))
 
     # Pagination
     total_query = select(func.count()).select_from(query.subquery())
@@ -666,16 +701,17 @@ async def update_lead(
     
     # Update lead fields
     update_data = lead_in.model_dump(exclude_unset=True)
+    new_secondary_id = update_data.get("secondary_customer_id")
+    new_secondary_customer = None  # reused for activity description
     if "secondary_customer_id" in update_data:
-        sid = update_data["secondary_customer_id"]
-        if sid is not None:
-            sec_cust = await CustomerService.get_customer(db, sid)
-            if not sec_cust:
+        if new_secondary_id is not None:
+            new_secondary_customer = await CustomerService.get_customer(db, new_secondary_id)
+            if not new_secondary_customer:
                 raise HTTPException(status_code=400, detail="Secondary customer not found")
-            if sid == lead.customer_id:
+            if new_secondary_id == lead.customer_id:
                 raise HTTPException(status_code=400, detail="Secondary customer cannot be the same as primary")
 
-    # Capture old values for activity description (before applying)
+    # Build human-readable description (added/removed for secondary customer, "updated" for others)
     field_labels = {
         "notes": "Notes",
         "interested_in": "Interested in",
@@ -685,12 +721,32 @@ async def update_lead(
     }
     updated_fields = list(update_data.keys())
     labels = [field_labels.get(f, f.replace("_", " ").title()) for f in updated_fields]
-    if len(labels) == 1:
-        description = f"{labels[0]} updated"
-    elif len(labels) == 2:
-        description = f"{labels[0]} and {labels[1]} updated"
-    else:
-        description = f"{', '.join(labels[:-1])}, and {labels[-1]} updated"
+    description_parts = []
+
+    if "secondary_customer_id" in update_data:
+        old_secondary_id = getattr(lead, "secondary_customer_id", None)
+        if old_secondary_id is None and new_secondary_id is not None:
+            name = f"{getattr(new_secondary_customer, 'first_name', '') or ''} {getattr(new_secondary_customer, 'last_name', '') or ''}".strip() if new_secondary_customer else "Unknown"
+            description_parts.append(f"Secondary customer added: {name}")
+        elif old_secondary_id is not None and new_secondary_id is None:
+            description_parts.append("Secondary customer removed")
+        elif old_secondary_id != new_secondary_id and new_secondary_id is not None:
+            name = f"{getattr(new_secondary_customer, 'first_name', '') or ''} {getattr(new_secondary_customer, 'last_name', '') or ''}".strip() if new_secondary_customer else "Unknown"
+            description_parts.append(f"Secondary customer changed to: {name}")
+        else:
+            description_parts.append("Secondary customer updated")
+
+    other_fields = [f for f in updated_fields if f != "secondary_customer_id"]
+    if other_fields:
+        other_labels = [field_labels.get(f, f.replace("_", " ").title()) for f in other_fields]
+        if len(other_labels) == 1:
+            description_parts.append(f"{other_labels[0]} updated")
+        elif len(other_labels) == 2:
+            description_parts.append(f"{other_labels[0]} and {other_labels[1]} updated")
+        else:
+            description_parts.append(f"{', '.join(other_labels[:-1])}, and {other_labels[-1]} updated")
+
+    description = ". ".join(description_parts) if description_parts else "Lead updated"
 
     for field, value in update_data.items():
         setattr(lead, field, value)
@@ -1707,6 +1763,106 @@ async def add_lead_note(
     
     await db.flush()
     return lead
+
+
+# ----- Stips documents (lead/customer-scoped) -----
+@router.get("/{lead_id}/stips/documents", response_model=List[StipDocumentResponse])
+async def list_lead_stips_documents(
+    lead_id: UUID,
+    category_id: Optional[UUID] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """List Stips documents for this lead (customer- and lead-scoped by category)."""
+    lead = await _lead_access(db, lead_id, current_user)
+    items = await list_documents_for_lead(db, lead_id, lead, category_id=category_id)
+    return items
+
+
+@router.post("/{lead_id}/stips/documents", response_model=StipDocumentResponse)
+async def upload_lead_stip_document(
+    lead_id: UUID,
+    file: UploadFile = File(...),
+    stips_category_id: UUID = Query(..., alias="stips_category_id"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Upload a Stips document for this lead (category determines customer vs lead scope)."""
+    lead = await _lead_access(db, lead_id, current_user)
+    if not app_settings.is_azure_stips_configured:
+        raise HTTPException(status_code=503, detail="Stips storage is not configured")
+    data = await file.read()
+    doc = await upload_document_for_lead(
+        db,
+        lead=lead,
+        category_id=stips_category_id,
+        file_name=file.filename or "file",
+        data=data,
+        content_type=file.content_type or "application/octet-stream",
+        uploaded_by=current_user.id,
+    )
+    performer_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or current_user.email or "Someone"
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.STIP_DOCUMENT_ADDED,
+        description=f"Document added to {doc['category_name']}: {doc['file_name']} by {performer_name}",
+        user_id=current_user.id,
+        lead_id=lead_id,
+        dealership_id=lead.dealership_id,
+        meta_data={"category_name": doc["category_name"], "file_name": doc["file_name"]},
+    )
+    await db.commit()
+    return doc
+
+
+@router.delete("/{lead_id}/stips/documents/{document_id}")
+async def delete_lead_stip_document(
+    lead_id: UUID,
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Remove a Stips document (must belong to this lead via customer or lead)."""
+    lead = await _lead_access(db, lead_id, current_user)
+    doc_info = await get_document_info_for_lead(db, document_id, lead)
+    if not doc_info:
+        raise HTTPException(status_code=404, detail="Document not found or not accessible")
+    file_name, category_name = doc_info
+    deleted = await delete_document_for_lead(db, document_id, lead)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Document not found or not accessible")
+    performer_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or current_user.email or "Someone"
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.STIP_DOCUMENT_REMOVED,
+        description=f"Document removed from {category_name}: {file_name} by {performer_name}",
+        user_id=current_user.id,
+        lead_id=lead_id,
+        dealership_id=lead.dealership_id,
+        meta_data={"category_name": category_name, "file_name": file_name},
+    )
+    await db.commit()
+    return {"message": "Document deleted"}
+
+
+@router.get("/{lead_id}/stips/documents/{document_id}/view", response_model=StipDocumentViewUrl)
+async def view_lead_stip_document(
+    lead_id: UUID,
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Get a temporary SAS URL to view the document (open in new tab)."""
+    lead = await _lead_access(db, lead_id, current_user)
+    blob_path, _ = await resolve_document_for_lead(db, document_id, lead)
+    if not blob_path:
+        raise HTTPException(status_code=404, detail="Document not found or not accessible")
+    if not app_settings.is_azure_stips_configured:
+        raise HTTPException(status_code=503, detail="Stips storage is not configured")
+    url = azure_storage_service.get_stip_document_secure_url(blob_path, expiry_hours=1)
+    if not url:
+        raise HTTPException(status_code=503, detail="Could not generate view URL")
+    return StipDocumentViewUrl(url=url)
 
 
 @router.post("/{lead_id}/log-call")

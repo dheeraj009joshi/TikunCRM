@@ -31,7 +31,10 @@ import {
     Copy,
     Store,
     LogOut,
-    MoreVertical
+    MoreVertical,
+    FileStack,
+    Upload,
+    ExternalLink
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -78,6 +81,7 @@ import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-u
 import { BookAppointmentModal } from "@/components/appointments/book-appointment-modal"
 import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal } from "@/services/appointment-service"
 import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
+import { StipsService, StipsCategory, StipDocument } from "@/services/stips-service"
 import { useLeadUpdateEvents, useActivityEvents } from "@/hooks/use-websocket"
 import { LocalTime } from "@/components/ui/local-time"
 import { format } from "date-fns"
@@ -130,6 +134,8 @@ const getActivityIcon = (type: ActivityType) => {
         case "appointment_scheduled": return <CalendarClock className="h-4 w-4 text-purple-500" />
         case "appointment_completed": return <CheckCircle className="h-4 w-4 text-emerald-500" />
         case "appointment_cancelled": return <XCircle className="h-4 w-4 text-rose-500" />
+        case "stip_document_added": return <FileStack className="h-4 w-4 text-blue-500" />
+        case "stip_document_removed": return <FileStack className="h-4 w-4 text-slate-500" />
         default: return <Clock className="h-4 w-4 text-gray-400" />
     }
 }
@@ -310,6 +316,7 @@ export default function LeadDetailsPage() {
     const [showDealershipModal, setShowDealershipModal] = React.useState(false)
     const [showSalespersonModal, setShowSalespersonModal] = React.useState(false)
     const [showSecondaryCustomerModal, setShowSecondaryCustomerModal] = React.useState(false)
+    const [showRemoveSecondaryConfirm, setShowRemoveSecondaryConfirm] = React.useState(false)
     
     // Delete confirmation
     const [showDeleteDialog, setShowDeleteDialog] = React.useState(false)
@@ -346,9 +353,20 @@ export default function LeadDetailsPage() {
     // Which note threads have replies expanded (click to load replies)
     const [expandedReplies, setExpandedReplies] = React.useState<Set<string>>(new Set())
     // Active tab: default to Notes when opening from mention link (?note=activity_id)
-    const [activeActivityTab, setActiveActivityTab] = React.useState<"timeline" | "notes" | "appointments" | "followups">(
+    const [activeActivityTab, setActiveActivityTab] = React.useState<"timeline" | "notes" | "appointments" | "followups" | "stips">(
         noteIdFromUrl ? "notes" : "timeline"
     )
+    // Stips: categories, documents, and upload state
+    const [stipsCategories, setStipsCategories] = React.useState<StipsCategory[]>([])
+    const [stipsDocuments, setStipsDocuments] = React.useState<StipDocument[]>([])
+    const [stipsConfigured, setStipsConfigured] = React.useState(false)
+    const [stipsLoading, setStipsLoading] = React.useState(false)
+    const [activeStipsCategoryId, setActiveStipsCategoryId] = React.useState<string | null>(null)
+    const [stipsUploadingCategoryId, setStipsUploadingCategoryId] = React.useState<string | null>(null)
+    const [stipsUploadProgress, setStipsUploadProgress] = React.useState<number>(0)
+    const [stipsUploadTotalFiles, setStipsUploadTotalFiles] = React.useState<number>(0)
+    const [stipsUploadCompletedCount, setStipsUploadCompletedCount] = React.useState<number>(0)
+    const [stipsViewDoc, setStipsViewDoc] = React.useState<{ url: string; fileName: string; contentType: string } | null>(null)
 
     // Pipeline stages (for status dropdown with correct colors)
     const [stages, setStages] = React.useState<LeadStage[]>([])
@@ -627,6 +645,49 @@ export default function LeadDetailsPage() {
     React.useEffect(() => {
         LeadStageService.list().then(setStages).catch(console.error)
     }, [])
+
+    const fetchStipsCategoriesAndStatus = React.useCallback(async () => {
+        if (!leadId) return
+        try {
+            const [statusRes, categoriesRes] = await Promise.all([
+                StipsService.getStatus(),
+                StipsService.listCategories(),
+            ])
+            setStipsConfigured(statusRes.configured)
+            setStipsCategories(categoriesRes)
+            setActiveStipsCategoryId((prev) =>
+                categoriesRes.length === 0 ? null : (prev && categoriesRes.some((c) => c.id === prev) ? prev : categoriesRes[0].id)
+            )
+        } catch {
+            setStipsCategories([])
+            setStipsConfigured(false)
+        }
+    }, [leadId])
+
+    const fetchStipsDocuments = React.useCallback(async () => {
+        if (!leadId) return
+        setStipsLoading(true)
+        try {
+            const list = await StipsService.listDocuments(leadId, activeStipsCategoryId ?? undefined)
+            setStipsDocuments(list)
+        } catch {
+            setStipsDocuments([])
+        } finally {
+            setStipsLoading(false)
+        }
+    }, [leadId, activeStipsCategoryId])
+
+    React.useEffect(() => {
+        if (leadId && activeActivityTab === "stips") {
+            fetchStipsCategoriesAndStatus()
+        }
+    }, [leadId, activeActivityTab, fetchStipsCategoriesAndStatus])
+
+    React.useEffect(() => {
+        if (leadId && activeActivityTab === "stips") {
+            fetchStipsDocuments()
+        }
+    }, [leadId, activeActivityTab, activeStipsCategoryId, fetchStipsDocuments])
     
     // When opened from mention notification (?note=activity_id): expand thread if reply, then scroll to note
     const scrolledToNoteRef = React.useRef<string | null>(null)
@@ -1296,13 +1357,7 @@ export default function LeadDetailsPage() {
                                                 size="sm"
                                                 variant="ghost"
                                                 className="text-destructive hover:text-destructive"
-                                                onClick={async () => {
-                                                    if (!lead) return
-                                                    try {
-                                                        await LeadService.updateLead(lead.id, { secondary_customer_id: null })
-                                                        fetchLead()
-                                                    } catch (e) { console.error(e) }
-                                                }}
+                                                onClick={() => setShowRemoveSecondaryConfirm(true)}
                                             >
                                                 Remove
                                             </Button>
@@ -1918,7 +1973,7 @@ export default function LeadDetailsPage() {
                 {/* Right Column: Activity & Interaction */}
                 <div className="lg:col-span-2 flex flex-col min-h-0 overflow-hidden">
                     <Card className="flex-1 flex flex-col min-h-0 overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
-                        <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as "timeline" | "notes" | "appointments" | "followups")} className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                        <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as "timeline" | "notes" | "appointments" | "followups" | "stips")} className="flex-1 flex flex-col min-h-0 overflow-hidden">
                             <div className="border-b border-border/60 px-6">
                                 <TabsList className="bg-transparent h-auto p-0 gap-1">
                                     <TabsTrigger 
@@ -1968,6 +2023,13 @@ export default function LeadDetailsPage() {
                                                 {followUpBadgeCount}
                                             </span>
                                         )}
+                                    </TabsTrigger>
+                                    <TabsTrigger 
+                                        value="stips"
+                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
+                                    >
+                                        <FileStack className="h-4 w-4" />
+                                        Stips
                                     </TabsTrigger>
                                 </TabsList>
                             </div>
@@ -2057,7 +2119,7 @@ export default function LeadDetailsPage() {
                                                             </Badge>
                                                         </div>
                                                     ) : null}
-                                                    {activity.type === "lead_updated" && Array.isArray(activity.meta_data?.updated_fields_labels) && activity.meta_data.updated_fields_labels.length > 0 ? (
+                                                    {activity.type === "lead_updated" && Array.isArray(activity.meta_data?.updated_fields_labels) && activity.meta_data.updated_fields_labels.length > 0 && !/^Secondary customer (added|removed|changed to):/.test(String(activity.description)) ? (
                                                         <div className="mt-1 text-xs text-muted-foreground">
                                                             Fields: {(activity.meta_data.updated_fields_labels as string[]).join(", ")}
                                                         </div>
@@ -2574,7 +2636,235 @@ export default function LeadDetailsPage() {
                                     </div>
                                 )}
                             </TabsContent>
+
+                            <TabsContent value="stips" className="flex-1 p-6 m-0 overflow-y-auto min-h-0 flex flex-col">
+                                {!stipsConfigured && (
+                                    <p className="text-sm text-muted-foreground mb-4">Stips storage is not configured. Upload is disabled. Configure Azure storage to enable document uploads.</p>
+                                )}
+                                {stipsCategories.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">No Stips categories yet. Add categories in Settings → Stips Categories.</p>
+                                ) : (
+                                    <>
+                                        <Tabs value={activeStipsCategoryId ?? ""} onValueChange={setActiveStipsCategoryId} className="flex-1 flex flex-col min-h-0">
+                                            <TabsList className="w-full justify-start flex-wrap h-auto gap-1 p-1 mb-4">
+                                                {stipsCategories.map((cat) => (
+                                                    <TabsTrigger key={cat.id} value={cat.id} className="text-xs">
+                                                        {cat.name}
+                                                    </TabsTrigger>
+                                                ))}
+                                            </TabsList>
+                                            {activeStipsCategoryId && (
+                                                <div className="flex-1 flex flex-col min-h-0 space-y-4">
+                                                    {stipsConfigured && (
+                                                        <div
+                                                            className="border-2 border-dashed rounded-lg p-6 text-center hover:bg-muted/40 transition-colors cursor-pointer"
+                                                            onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("bg-muted/60") }}
+                                                            onDragLeave={(e) => { e.currentTarget.classList.remove("bg-muted/60") }}
+                                                            onDrop={(e) => {
+                                                                e.preventDefault()
+                                                                e.currentTarget.classList.remove("bg-muted/60")
+                                                                const files = Array.from(e.dataTransfer?.files ?? [])
+                                                                if (files.length === 0 || !leadId) return
+                                                                const categoryId = activeStipsCategoryId
+                                                                setStipsUploadingCategoryId(categoryId)
+                                                                setStipsUploadProgress(0)
+                                                                setStipsUploadTotalFiles(files.length)
+                                                                setStipsUploadCompletedCount(0)
+                                                                const total = files.length
+                                                                if (total === 1) {
+                                                                    StipsService.uploadDocument(leadId, categoryId, files[0], (p) => setStipsUploadProgress(p))
+                                                                        .then(() => fetchStipsDocuments())
+                                                                        .catch((err) => alert(err?.response?.data?.detail ?? "Upload failed"))
+                                                                        .finally(() => { setStipsUploadingCategoryId(null); setStipsUploadProgress(0); setStipsUploadTotalFiles(0); setStipsUploadCompletedCount(0) })
+                                                                } else {
+                                                                    Promise.all(files.map((file) =>
+                                                                        StipsService.uploadDocument(leadId, categoryId, file).then(() => {
+                                                                            setStipsUploadCompletedCount((c) => {
+                                                                                const next = c + 1
+                                                                                setStipsUploadProgress(Math.round((next / total) * 100))
+                                                                                return next
+                                                                            })
+                                                                        })
+                                                                    ))
+                                                                        .then(() => fetchStipsDocuments())
+                                                                        .catch((err) => alert(err?.response?.data?.detail ?? "Upload failed"))
+                                                                        .finally(() => { setStipsUploadingCategoryId(null); setStipsUploadProgress(0); setStipsUploadTotalFiles(0); setStipsUploadCompletedCount(0) })
+                                                                }
+                                                            }}
+                                                            onClick={() => document.getElementById(`stips-file-${activeStipsCategoryId}`)?.click()}
+                                                        >
+                                                            <input
+                                                                id={`stips-file-${activeStipsCategoryId}`}
+                                                                type="file"
+                                                                multiple
+                                                                className="hidden"
+                                                                accept="*/*"
+                                                                onChange={(e) => {
+                                                                    const files = Array.from(e.target.files ?? [])
+                                                                    e.target.value = ""
+                                                                    if (files.length === 0 || !leadId) return
+                                                                    const categoryId = activeStipsCategoryId
+                                                                    setStipsUploadingCategoryId(categoryId)
+                                                                    setStipsUploadProgress(0)
+                                                                    setStipsUploadTotalFiles(files.length)
+                                                                    setStipsUploadCompletedCount(0)
+                                                                    const total = files.length
+                                                                    if (total === 1) {
+                                                                        StipsService.uploadDocument(leadId, categoryId, files[0], (p) => setStipsUploadProgress(p))
+                                                                            .then(() => fetchStipsDocuments())
+                                                                            .catch((err) => alert(err?.response?.data?.detail ?? "Upload failed"))
+                                                                            .finally(() => { setStipsUploadingCategoryId(null); setStipsUploadProgress(0); setStipsUploadTotalFiles(0); setStipsUploadCompletedCount(0) })
+                                                                    } else {
+                                                                        Promise.all(files.map((file) =>
+                                                                            StipsService.uploadDocument(leadId, categoryId, file).then(() => {
+                                                                                setStipsUploadCompletedCount((c) => {
+                                                                                    const next = c + 1
+                                                                                    setStipsUploadProgress(Math.round((next / total) * 100))
+                                                                                    return next
+                                                                                })
+                                                                            })
+                                                                        ))
+                                                                            .then(() => fetchStipsDocuments())
+                                                                            .catch((err) => alert(err?.response?.data?.detail ?? "Upload failed"))
+                                                                            .finally(() => { setStipsUploadingCategoryId(null); setStipsUploadProgress(0); setStipsUploadTotalFiles(0); setStipsUploadCompletedCount(0) })
+                                                                    }
+                                                                }}
+                                                            />
+                                                            {stipsUploadingCategoryId === activeStipsCategoryId ? (
+                                                                <div className="w-full max-w-xs mx-auto space-y-3">
+                                                                    <Loader2 className="h-8 w-8 mx-auto animate-spin text-muted-foreground" />
+                                                                    <p className="text-sm font-medium text-muted-foreground">
+                                                                        {stipsUploadTotalFiles > 1
+                                                                            ? `Uploading… ${stipsUploadCompletedCount} of ${stipsUploadTotalFiles} files (${stipsUploadProgress}%)`
+                                                                            : `Uploading… ${stipsUploadProgress}%`}
+                                                                    </p>
+                                                                    <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                                                                        <div
+                                                                            className="h-full bg-primary transition-all duration-300 ease-out"
+                                                                            style={{ width: `${stipsUploadProgress}%` }}
+                                                                        />
+                                                                    </div>
+                                                                </div>
+                                                            ) : (
+                                                                <>
+                                                                    <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                                                                    <p className="text-sm text-muted-foreground">Drag and drop files here or click to browse (multiple allowed)</p>
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    {stipsLoading ? (
+                                                        <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+                                                    ) : stipsDocuments.length === 0 ? (
+                                                        <p className="text-sm text-muted-foreground py-4">No documents in this category.</p>
+                                                    ) : (
+                                                        <ul className="space-y-2">
+                                                            {stipsDocuments.map((doc) => (
+                                                                <li key={doc.id} className="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
+                                                                    <div className="min-w-0 flex-1">
+                                                                        <p className="text-sm font-medium truncate">{doc.file_name}</p>
+                                                                        <p className="text-xs text-muted-foreground">
+                                                                            {doc.uploaded_by_name && `${doc.uploaded_by_name} · `}
+                                                                            {format(new Date(doc.uploaded_at), "MMM d, yyyy HH:mm")}
+                                                                        </p>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-1 shrink-0">
+                                                                        <Button
+                                                                            variant="ghost"
+                                                                            size="sm"
+                                                                            className="h-8"
+                                                                            onClick={async () => {
+                                                                                try {
+                                                                                    const { url } = await StipsService.getViewUrl(leadId!, doc.id)
+                                                                                    setStipsViewDoc({ url, fileName: doc.file_name, contentType: doc.content_type })
+                                                                                } catch (e) {
+                                                                                    console.error(e)
+                                                                                    alert("Could not open document")
+                                                                                }
+                                                                            }}
+                                                                        >
+                                                                            <ExternalLink className="h-3.5 w-3.5 mr-1" /> View
+                                                                        </Button>
+                                                                        <Button
+                                                                            variant="ghost"
+                                                                            size="sm"
+                                                                            className="h-8 text-destructive hover:text-destructive"
+                                                                            onClick={async () => {
+                                                                                if (!confirm(`Remove "${doc.file_name}"?`)) return
+                                                                                try {
+                                                                                    await StipsService.deleteDocument(leadId!, doc.id)
+                                                                                    fetchStipsDocuments()
+                                                                                } catch (e) {
+                                                                                    console.error(e)
+                                                                                    alert("Failed to remove document")
+                                                                                }
+                                                                            }}
+                                                                        >
+                                                                            <Trash2 className="h-3.5 w-3.5" />
+                                                                        </Button>
+                                                                    </div>
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </Tabs>
+                                    </>
+                                )}
+                            </TabsContent>
                         </Tabs>
+
+                        {/* Stips document viewer modal */}
+                        <Dialog open={!!stipsViewDoc} onOpenChange={(open) => !open && setStipsViewDoc(null)}>
+                            <DialogContent className="max-w-[90vw] w-full max-h-[90vh] flex flex-col p-0 gap-0">
+                                <DialogHeader className="px-6 py-3 border-b shrink-0">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <DialogTitle className="text-base font-medium truncate pr-8">
+                                            {stipsViewDoc?.fileName ?? "Document"}
+                                        </DialogTitle>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="shrink-0"
+                                            onClick={() => stipsViewDoc && window.open(stipsViewDoc.url, "_blank")}
+                                        >
+                                            <ExternalLink className="h-3.5 w-3.5 mr-1" /> Open in new tab
+                                        </Button>
+                                    </div>
+                                </DialogHeader>
+                                <div className="flex-1 min-h-[70vh] flex items-center justify-center overflow-auto bg-muted/30 p-4">
+                                    {stipsViewDoc && (
+                                        stipsViewDoc.contentType.startsWith("image/") ? (
+                                            <img
+                                                src={stipsViewDoc.url}
+                                                alt={stipsViewDoc.fileName}
+                                                className="max-w-full max-h-[78vh] w-auto h-auto object-contain rounded-sm shadow-sm"
+                                            />
+                                        ) : stipsViewDoc.contentType === "application/pdf" || stipsViewDoc.contentType.startsWith("text/") ? (
+                                            <iframe
+                                                title={stipsViewDoc.fileName}
+                                                src={stipsViewDoc.url}
+                                                className="w-full h-full min-h-[70vh] border-0 rounded-sm"
+                                                sandbox="allow-same-origin allow-scripts"
+                                            />
+                                        ) : (
+                                            <div className="text-center max-w-sm space-y-3 p-6">
+                                                <p className="text-sm text-muted-foreground">
+                                                    This file type cannot be previewed in the browser. Use &quot;Open in new tab&quot; above to download or view the document.
+                                                </p>
+                                                <Button
+                                                    variant="secondary"
+                                                    onClick={() => stipsViewDoc && window.open(stipsViewDoc.url, "_blank")}
+                                                >
+                                                    <ExternalLink className="h-4 w-4 mr-2" /> Open in new tab
+                                                </Button>
+                                            </div>
+                                        )
+                                    )}
+                                </div>
+                            </DialogContent>
+                        </Dialog>
 
                         {/* Quick Note Input - Fixed at bottom */}
                         <div className="p-4 border-t bg-muted/30 shrink-0">
@@ -3006,6 +3296,36 @@ export default function LeadDetailsPage() {
                     </AlertDialogContent>
                 </AlertDialog>
             )}
+
+            {/* Remove secondary customer confirmation */}
+            <AlertDialog open={showRemoveSecondaryConfirm} onOpenChange={setShowRemoveSecondaryConfirm}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Remove secondary customer</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            This will remove the secondary customer from this lead. Are you sure you want to remove?
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={async () => {
+                                if (!lead) return
+                                try {
+                                    await LeadService.updateLead(lead.id, { secondary_customer_id: null })
+                                    setShowRemoveSecondaryConfirm(false)
+                                    fetchLead()
+                                } catch (e) {
+                                    console.error(e)
+                                }
+                            }}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                            Confirm
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
             
             {/* Lost Reason Modal */}
             <Dialog open={showLostReasonModal} onOpenChange={setShowLostReasonModal}>

@@ -51,6 +51,10 @@ class ActivityType(str, Enum):
     APPOINTMENT_COMPLETED = "appointment_completed"
     APPOINTMENT_CANCELLED = "appointment_cancelled"
     
+    # Stips documents
+    STIP_DOCUMENT_ADDED = "stip_document_added"
+    STIP_DOCUMENT_REMOVED = "stip_document_removed"
+    
     # User actions
     USER_LOGIN = "user_login"
     USER_LOGOUT = "user_logout"

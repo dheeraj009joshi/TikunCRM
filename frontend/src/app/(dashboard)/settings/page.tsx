@@ -11,7 +11,8 @@ import {
     Palette,
     ChevronRight,
     FileText,
-    Send
+    Send,
+    FolderOpen
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -63,6 +64,13 @@ const settingsSections: SettingSection[] = [
         description: "Manage your dealership configuration",
         href: "/settings/dealership",
         icon: Building2,
+        adminOnly: true,
+    },
+    {
+        title: "Stips Categories",
+        description: "Configure document categories (Personal, Finance, etc.) for lead Stips",
+        href: "/settings/stips-categories",
+        icon: FolderOpen,
         adminOnly: true,
     },
     {

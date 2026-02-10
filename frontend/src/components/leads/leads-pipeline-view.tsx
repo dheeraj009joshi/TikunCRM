@@ -18,7 +18,7 @@ import { CSS } from "@dnd-kit/utilities"
 import { Phone, Mail, Loader2, Target, DollarSign } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { UserAvatar } from "@/components/ui/avatar"
-import { Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
+import { Lead, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead } from "@/services/lead-service"
 import { LeadStage } from "@/services/lead-stage-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
@@ -73,6 +73,11 @@ function PipelineLeadCard({ lead, isDragging }: { lead: Lead; isDragging?: boole
                     </div>
                 )}
                 <div className="flex flex-wrap items-center gap-2 mt-2">
+                    {isFreshLead(lead) && (
+                        <Badge variant="secondary" className="text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border-0">
+                            Fresh
+                        </Badge>
+                    )}
                     <Badge variant="outline" className="text-[10px]">
                         {lead.source.replace("_", " ")}
                     </Badge>

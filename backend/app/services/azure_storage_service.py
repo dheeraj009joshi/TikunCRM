@@ -24,6 +24,7 @@ class AzureStorageService:
     def __init__(self):
         self._blob_service_client = None
         self._container_client = None
+        self._stips_container_client = None
     
     @property
     def is_configured(self) -> bool:
@@ -57,6 +58,18 @@ class AzureStorageService:
                 self._container_client.create_container()
         
         return self._container_client
+
+    def _get_stips_container_client(self):
+        """Get or create Stips documents container client."""
+        if self._stips_container_client is None and settings.is_azure_stips_configured:
+            service = self._get_blob_service_client()
+            self._stips_container_client = service.get_container_client(settings.azure_storage_container_stips)
+            try:
+                self._stips_container_client.get_container_properties()
+            except Exception:
+                logger.info(f"Creating container: {settings.azure_storage_container_stips}")
+                self._stips_container_client.create_container()
+        return self._stips_container_client
     
     async def upload_recording(
         self,
@@ -271,6 +284,82 @@ class AzureStorageService:
         except Exception as e:
             logger.error(f"Failed to list recordings: {e}")
             return []
+
+
+    async def upload_stip_document(
+        self,
+        blob_path: str,
+        data: bytes,
+        content_type: str,
+    ) -> str:
+        """
+        Upload a Stips document to Azure Blob Storage (lead/customer documents container).
+        blob_path: e.g. customers/{customer_id}/{category_id}/{uuid}_{filename} or leads/{lead_id}/...
+        """
+        if not settings.is_azure_stips_configured:
+            logger.warning("Azure Stips storage not configured")
+            return ""
+        try:
+            from azure.storage.blob import ContentSettings
+            container = self._get_stips_container_client()
+            if container is None:
+                return ""
+            blob_client = container.get_blob_client(blob_path)
+            blob_client.upload_blob(
+                data,
+                overwrite=True,
+                content_settings=ContentSettings(content_type=content_type),
+            )
+            logger.info(f"Uploaded stip document: {blob_path}")
+            return blob_client.url
+        except Exception as e:
+            logger.error(f"Failed to upload stip document: {e}")
+            raise
+
+    def get_stip_document_secure_url(self, blob_path: str, expiry_hours: int = 1) -> str:
+        """Generate a SAS URL for viewing a Stips document."""
+        if not settings.is_azure_stips_configured:
+            return ""
+        try:
+            from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+            from datetime import timezone
+            connection_parts = dict(
+                part.split("=", 1)
+                for part in settings.azure_storage_connection_string.split(";")
+                if "=" in part
+            )
+            account_name = connection_parts.get("AccountName", "")
+            account_key = connection_parts.get("AccountKey", "")
+            if not account_name or not account_key:
+                return ""
+            sas_token = generate_blob_sas(
+                account_name=account_name,
+                container_name=settings.azure_storage_container_stips,
+                blob_name=blob_path,
+                account_key=account_key,
+                permission=BlobSasPermissions(read=True),
+                expiry=datetime.now(timezone.utc) + timedelta(hours=expiry_hours)
+            )
+            return f"https://{account_name}.blob.core.windows.net/{settings.azure_storage_container_stips}/{blob_path}?{sas_token}"
+        except Exception as e:
+            logger.error(f"Failed to generate Stips SAS URL: {e}")
+            return ""
+
+    async def delete_stip_document(self, blob_path: str) -> bool:
+        """Delete a Stips document from Azure."""
+        if not settings.is_azure_stips_configured:
+            return False
+        try:
+            container = self._get_stips_container_client()
+            if container is None:
+                return False
+            blob_client = container.get_blob_client(blob_path)
+            blob_client.delete_blob()
+            logger.info(f"Deleted stip document: {blob_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete stip document: {e}")
+            return False
 
 
 # Singleton instance

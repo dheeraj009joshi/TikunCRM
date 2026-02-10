@@ -54,6 +54,8 @@ export interface Lead {
     closed_at?: string;
     created_at: string;
     updated_at: string;
+    /** Number of activities (1 = only creation = fresh/untouched lead) */
+    activity_count?: number;
     // Extended info (available in detail view)
     assigned_to_user?: UserBrief;
     secondary_salesperson?: UserBrief;
@@ -81,6 +83,11 @@ export function getLeadEmail(lead: Lead): string | undefined {
     return lead.customer?.email;
 }
 
+/** True if lead has no activity except the default creation (untouched/fresh) */
+export function isFreshLead(lead: Lead): boolean {
+    return (lead.activity_count ?? 0) <= 1;
+}
+
 export interface LeadListResponse {
     items: Lead[];
     total: number;
@@ -98,6 +105,8 @@ export interface LeadListParams {
     dealership_id?: string;
     is_active?: boolean;
     pool?: string;
+    /** Only leads with no activity except creation (fresh/untouched) */
+    fresh_only?: boolean;
 }
 
 export const LeadService = {

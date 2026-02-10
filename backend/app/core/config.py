@@ -113,6 +113,8 @@ class Settings(BaseSettings):
     # Azure Blob Storage (for call recordings)
     azure_storage_connection_string: str = ""
     azure_storage_container: str = "call-recordings"
+    # Azure Blob Storage - Stips documents (lead/customer documents)
+    azure_storage_container_stips: str = "lead-stips"
     
     @property
     def is_twilio_configured(self) -> bool:
@@ -151,7 +153,12 @@ class Settings(BaseSettings):
     def is_azure_storage_configured(self) -> bool:
         """Check if Azure Blob Storage is configured"""
         return bool(self.azure_storage_connection_string)
-    
+
+    @property
+    def is_azure_stips_configured(self) -> bool:
+        """Check if Azure Blob Storage is configured for Stips documents"""
+        return bool(self.azure_storage_connection_string and self.azure_storage_container_stips)
+
     # Firebase Cloud Messaging (FCM) HTTP V1 - for push notifications
     # Path to the service account JSON file from Firebase Console (Project Settings > Service accounts)
     fcm_service_account_path: str = ""  # e.g. /path/to/firebase-service-account.json

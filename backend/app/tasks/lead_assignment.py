@@ -211,10 +211,13 @@ async def unassign_stale_leads():
         try:
             cutoff_time = utc_now() - timedelta(hours=STALE_HOURS)
             
-            # Find all assigned leads with active statuses
+            # Find all assigned leads with active statuses (load customer for notification name)
             result = await session.execute(
                 select(Lead)
-                .options(selectinload(Lead.assigned_to_user))
+                .options(
+                    selectinload(Lead.assigned_to_user),
+                    selectinload(Lead.customer),
+                )
                 .where(
                     Lead.assigned_to.isnot(None),
                     Lead.is_active == True

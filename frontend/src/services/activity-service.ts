@@ -20,6 +20,8 @@ export type ActivityType =
     | "appointment_scheduled"
     | "appointment_completed"
     | "appointment_cancelled"
+    | "stip_document_added"
+    | "stip_document_removed"
     | "user_login"
     | "user_logout"
     | "import_completed"
@@ -82,6 +84,8 @@ export const ACTIVITY_TYPE_INFO: Record<ActivityType, { label: string; icon: str
     appointment_scheduled: { label: "Appointment Scheduled", icon: "calendar-clock", color: "purple" },
     appointment_completed: { label: "Appointment Completed", icon: "check-circle", color: "emerald" },
     appointment_cancelled: { label: "Appointment Cancelled", icon: "x-circle", color: "rose" },
+    stip_document_added: { label: "Document Added", icon: "file-plus", color: "blue" },
+    stip_document_removed: { label: "Document Removed", icon: "file-minus", color: "slate" },
     user_login: { label: "User Login", icon: "log-in", color: "gray" },
     user_logout: { label: "User Logout", icon: "log-out", color: "gray" },
     import_completed: { label: "Import Completed", icon: "download", color: "blue" },

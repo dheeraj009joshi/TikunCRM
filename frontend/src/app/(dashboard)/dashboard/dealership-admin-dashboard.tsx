@@ -14,7 +14,9 @@ import {
     UserPlus,
     ClipboardList,
     CalendarClock,
-    Store
+    Store,
+    Phone,
+    Mail
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, MetricCard } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -31,6 +33,8 @@ import {
 } from "@/components/ui/table"
 import { UserAvatar } from "@/components/ui/avatar"
 import { DashboardService, DealershipAdminStats } from "@/services/dashboard-service"
+import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
+import { getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { TeamService, UserWithStats } from "@/services/team-service"
 import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
 import { ShowroomService, ShowroomStats } from "@/services/showroom-service"
@@ -44,23 +48,26 @@ export function DealershipAdminDashboard() {
     const [team, setTeam] = React.useState<UserWithStats[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [upcomingAppointments, setUpcomingAppointments] = React.useState<Appointment[]>([])
+    const [freshLeads, setFreshLeads] = React.useState<Lead[]>([])
     const [showroomStats, setShowroomStats] = React.useState<ShowroomStats | null>(null)
     const [isLoading, setIsLoading] = React.useState(true)
     const { timezone } = useBrowserTimezone()
 
     const loadData = React.useCallback(async () => {
         try {
-            const [statsData, teamData, todayData, upcomingData, showroomData] = await Promise.all([
+            const [statsData, teamData, todayData, upcomingData, freshData, showroomData] = await Promise.all([
                 DashboardService.getDealershipAdminStats(),
                 TeamService.getTeamWithStats(),
                 AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] })),
                 AppointmentService.list({ upcoming_only: true, page_size: 3 }).catch(() => ({ items: [] })),
+                LeadService.listLeads({ fresh_only: true, page_size: 5 }).catch(() => ({ items: [] })),
                 ShowroomService.getStats().catch(() => null)
             ])
             setStats(statsData)
             setTeam(teamData.items)
             setTodayAppointments(todayData.items || [])
             setUpcomingAppointments(upcomingData.items || [])
+            setFreshLeads(freshData.items || [])
             setShowroomStats(showroomData)
         } catch (error) {
             console.error("Failed to fetch dashboard stats:", error)
@@ -353,6 +360,105 @@ export function DealershipAdminDashboard() {
                 </Card>
                 )}
             </div>
+            )}
+
+            {/* Fresh leads (untouched - no activity yet) */}
+            {stats && (stats.fresh_leads ?? 0) > 0 && (
+                <Card className="border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                        <div className="flex items-center gap-2">
+                            <div className="rounded-full bg-emerald-100 p-2 dark:bg-emerald-900">
+                                <Inbox className="h-5 w-5 text-emerald-600" />
+                            </div>
+                            <div>
+                                <CardTitle className="text-base font-semibold text-emerald-700 dark:text-emerald-300">
+                                    Fresh Leads (untouched)
+                                </CardTitle>
+                                <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">
+                                    No activity yet — assign and reach out
+                                </p>
+                            </div>
+                        </div>
+                        <Link href="/leads?filter=fresh">
+                            <Button variant="outline" size="sm" className="border-emerald-300 text-emerald-700">
+                                View Fresh Leads
+                            </Button>
+                        </Link>
+                    </CardHeader>
+                    <CardContent>
+                        <Table>
+                            <TableHeader>
+                                <TableRow className="bg-emerald-100/50 dark:bg-emerald-900/30 border-0">
+                                    <TableHead className="text-emerald-800 dark:text-emerald-200">Lead</TableHead>
+                                    <TableHead className="text-emerald-800 dark:text-emerald-200">Status</TableHead>
+                                    <TableHead className="text-emerald-800 dark:text-emerald-200">Assigned</TableHead>
+                                    <TableHead className="text-emerald-800 dark:text-emerald-200">Contact</TableHead>
+                                    <TableHead className="text-right text-emerald-800 dark:text-emerald-200">Actions</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {freshLeads.map((lead) => (
+                                    <TableRow
+                                        key={lead.id}
+                                        className="cursor-pointer hover:bg-emerald-100/50 dark:hover:bg-emerald-900/30 border-emerald-200/50"
+                                        onClick={() => window.location.href = `/leads/${lead.id}`}
+                                    >
+                                        <TableCell>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 text-sm font-bold dark:bg-emerald-900 dark:text-emerald-300">
+                                                    {(lead.customer?.first_name || "?").charAt(0)}
+                                                </div>
+                                                <div>
+                                                    <p className="font-medium text-sm text-emerald-900 dark:text-emerald-100">
+                                                        {getLeadFullName(lead)}
+                                                    </p>
+                                                    <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                                                        {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Badge size="sm" style={{ backgroundColor: getStageColor(lead.stage), color: "#fff" }}>
+                                                {getStageLabel(lead.stage)}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                            <p className="text-xs">
+                                                {lead.assigned_to_user
+                                                    ? `${lead.assigned_to_user.first_name} ${lead.assigned_to_user.last_name}`
+                                                    : "—"}
+                                            </p>
+                                        </TableCell>
+                                        <TableCell>
+                                            <div className="flex flex-col gap-1">
+                                                {getLeadPhone(lead) && (
+                                                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                                        <Phone className="h-3 w-3" />
+                                                        {getLeadPhone(lead)}
+                                                    </span>
+                                                )}
+                                                {getLeadEmail(lead) && (
+                                                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                                        <Mail className="h-3 w-3" />
+                                                        {getLeadEmail(lead)}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <Link href={`/leads/${lead.id}`} onClick={(e) => e.stopPropagation()}>
+                                                <Button variant="outline" size="sm" className="border-emerald-300 text-emerald-700">
+                                                    Open
+                                                </Button>
+                                            </Link>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
             )}
 
             {/* Stats Grid */}

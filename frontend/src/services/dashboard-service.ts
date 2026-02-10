@@ -32,6 +32,7 @@ export interface DealershipAdminStats {
     team_size: number;
     pending_follow_ups: number;
     overdue_follow_ups: number;
+    fresh_leads: number;
 }
 
 export interface SalespersonStats {
@@ -43,6 +44,7 @@ export interface SalespersonStats {
     todays_follow_ups: number;
     overdue_follow_ups: number;
     leads_by_status: Record<string, number>;
+    fresh_leads: number;
 }
 
 export interface LeadsBySource {
