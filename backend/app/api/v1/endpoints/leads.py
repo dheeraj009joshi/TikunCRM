@@ -1033,6 +1033,7 @@ async def update_lead_stage(
     old_stage_name = old_stage.display_name if old_stage else "?"
 
     lead.stage_id = new_stage.id
+    lead.stage = new_stage  # So response serializes the new stage, not the cached old one
     lead.last_activity_at = utc_now()
 
     # Terminal stage handling
