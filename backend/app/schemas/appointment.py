@@ -67,14 +67,28 @@ class UserBrief(BaseModel):
         from_attributes = True
 
 
+class CustomerBrief(BaseModel):
+    """Brief customer info for appointment lead display."""
+    id: UUID
+    first_name: str
+    last_name: Optional[str] = None
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class LeadBrief(BaseModel):
-    """Brief lead info for appointments"""
+    """Brief lead info for appointments (contact details come from lead.customer)."""
     id: UUID
     first_name: str
     last_name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
-    
+    customer: Optional[CustomerBrief] = None
+
     class Config:
         from_attributes = True
 

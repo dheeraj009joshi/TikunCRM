@@ -17,6 +17,7 @@ from app.core.permissions import UserRole
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
+from app.models.lead import Lead
 from app.models.appointment import Appointment, AppointmentStatus, AppointmentType
 from app.models.activity import ActivityType
 from app.models.notification import NotificationType
@@ -204,7 +205,7 @@ async def create_appointment(
     result = await db.execute(
         select(Appointment)
         .options(
-            selectinload(Appointment.lead),
+            selectinload(Appointment.lead).selectinload(Lead.customer),
             selectinload(Appointment.dealership),
             selectinload(Appointment.scheduled_by_user),
             selectinload(Appointment.assigned_to_user)
@@ -238,9 +239,9 @@ async def list_appointments(
     - Dealership Admin/Owner: All dealership appointments
     - Salesperson: Own appointments only
     """
-    # Build base query
+    # Build base query (load lead.customer so appointment list shows lead name)
     query = select(Appointment).options(
-        selectinload(Appointment.lead),
+        selectinload(Appointment.lead).selectinload(Lead.customer),
         selectinload(Appointment.dealership),
         selectinload(Appointment.scheduled_by_user),
         selectinload(Appointment.assigned_to_user)
@@ -465,7 +466,7 @@ async def get_appointment(
     result = await db.execute(
         select(Appointment)
         .options(
-            selectinload(Appointment.lead),
+            selectinload(Appointment.lead).selectinload(Lead.customer),
             selectinload(Appointment.dealership),
             selectinload(Appointment.scheduled_by_user),
             selectinload(Appointment.assigned_to_user)
@@ -626,7 +627,7 @@ async def complete_appointment(
     result = await db.execute(
         select(Appointment)
         .options(
-            selectinload(Appointment.lead),
+            selectinload(Appointment.lead).selectinload(Lead.customer),
             selectinload(Appointment.dealership),
             selectinload(Appointment.scheduled_by_user),
             selectinload(Appointment.assigned_to_user)

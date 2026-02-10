@@ -76,7 +76,7 @@ If you want the **source** DB to end up with the same converted data and schema 
    TARGET_DATABASE_URL="postgresql+asyncpg://...@...neon.tech/neondb?ssl=require"
    python -m scripts.push_neon_to_source
    ```
-   **Warning:** This **overwrites** dealerships, users, customers, and leads on the source DB (and truncates tables that depend on leads, e.g. activities, appointments, follow-ups). **Take a full backup of the source DB before running** (e.g. `scripts/backup_db_to_file.py` or your provider’s backup).
+   **Warning:** This **overwrites** all app data on source: dealerships, users, customers, leads, and all other tables (activities, follow_ups, appointments, call/email/sms/whatsapp logs, showroom_visits, notifications, fcm_tokens, schedules, email/whatsapp config and templates, etc.). **Take a full backup of the source DB before running** (e.g. `scripts/backup_db_to_file.py` or your provider’s backup).
 
 Use re-push when you want source and Neon to match after cloning and optionally editing data in Neon.
 

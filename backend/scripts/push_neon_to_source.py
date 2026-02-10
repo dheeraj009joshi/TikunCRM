@@ -1,9 +1,10 @@
 """
 Push data from the upgraded DB (Neon) back to the source DB.
 Use after cloning source → Neon and running migrations on source so both DBs have
-the same schema. This overwrites core tables on source with Neon data so both match.
+the same schema. This overwrites core and all app tables on source with Neon data.
 
-WARNING: This overwrites dealerships, users, customers, and leads on the source DB.
+WARNING: This overwrites dealerships, users, customers, leads, and all other app
+tables (activities, follow_ups, appointments, logs, notifications, etc.) on source.
 Take a full backup of the source DB before running (e.g. scripts/backup_db_to_file.py).
 
 Usage:
@@ -51,6 +52,86 @@ def _engine_url_and_ssl(url: str):
         url = urlunparse(parsed._replace(query=new_query))
     connect_args = {"ssl": True} if use_ssl else {}
     return url, connect_args
+
+
+async def _copy_table_from_neon(neon: AsyncSession, src: AsyncSession, Model, table_name: str) -> int:
+    """Copy all rows of Model from Neon (reader) to source (writer). Uses raw SELECT to avoid ORM loads."""
+    table = Model.__table__
+    target_column_set = {c.key for c in table.columns}
+    try:
+        r = await neon.execute(text(f"SELECT * FROM {table.name}"))
+        rows = r.fetchall()
+        key_names = r.keys()
+    except Exception as e:
+        await neon.rollback()
+        err_msg = str(e).split("\n")[0] if "\n" in str(e) else str(e)
+        if "does not exist" in err_msg or "UndefinedTableError" in str(type(e).__name__):
+            print(f"  -> {table_name}: skip (table not on Neon)")
+        else:
+            print(f"  -> {table_name}: skip (Neon error: {err_msg})")
+        return 0
+    if not rows:
+        return 0
+    for row in rows:
+        d = dict(zip(key_names, row))
+        d = {k: v for k, v in d.items() if k in target_column_set}
+        src.add(Model(**d))
+    await src.flush()
+    print(f"  -> {len(rows)} {table_name}")
+    return len(rows)
+
+
+async def _clear_and_copy_remaining_tables(neon: AsyncSession, src: AsyncSession) -> None:
+    """Truncate remaining app tables on source, then copy from Neon (same set as clone_to_neon)."""
+    from app.models.activity import Activity
+    from app.models.follow_up import FollowUp
+    from app.models.appointment import Appointment
+    from app.models.call_log import CallLog
+    from app.models.email_log import EmailLog
+    from app.models.sms_log import SMSLog
+    from app.models.whatsapp_log import WhatsAppLog
+    from app.models.showroom_visit import ShowroomVisit
+    from app.models.notification import Notification
+    from app.models.fcm_token import FCMToken
+    from app.models.oauth_token import OAuthToken
+    from app.models.password_reset import PasswordResetToken
+    from app.models.schedule import Schedule
+    from app.models.dealership_email_config import DealershipEmailConfig
+    from app.models.email_template import EmailTemplate
+    from app.models.whatsapp_template import WhatsAppTemplate
+
+    # Tables to clear then copy (order: same as clone_to_neon; truncate CASCADE clears dependents)
+    tables = [
+        (Activity, "activities"),
+        (FollowUp, "follow_ups"),
+        (Appointment, "appointments"),
+        (CallLog, "call_logs"),
+        (EmailLog, "email_logs"),
+        (SMSLog, "sms_logs"),
+        (WhatsAppLog, "whatsapp_logs"),
+        (ShowroomVisit, "showroom_visits"),
+        (Notification, "notifications"),
+        (FCMToken, "fcm_tokens"),
+        (OAuthToken, "oauth_tokens"),
+        (PasswordResetToken, "password_reset_tokens"),
+        (Schedule, "schedules"),
+        (DealershipEmailConfig, "dealership_email_configs"),
+        (EmailTemplate, "email_templates"),
+        (WhatsAppTemplate, "whatsapp_templates"),
+    ]
+    print("Clearing remaining tables on source...")
+    for _model, table_name in tables:
+        try:
+            await src.execute(text(f"TRUNCATE {table_name} CASCADE"))
+        except Exception as e:
+            if "does not exist" in str(e):
+                pass  # table may not exist on source yet
+            else:
+                raise
+    await src.flush()
+    print("Copying remaining tables from Neon...")
+    for model, table_name in tables:
+        await _copy_table_from_neon(neon, src, model, table_name)
 
 
 async def main():
@@ -251,11 +332,14 @@ async def main():
         await src.flush()
         print(f"  -> {len(leads)} leads")
 
+        # 7) Clear then copy all remaining tables (activities, follow_ups, appointments, logs, etc.)
+        await _clear_and_copy_remaining_tables(neon, src)
+
         await src.commit()
 
     await source_engine.dispose()
     await neon_engine.dispose()
-    print("Done. Source DB now has the same core data as Neon.")
+    print("Done. Source DB now has the same data as Neon.")
 
 
 if __name__ == "__main__":
