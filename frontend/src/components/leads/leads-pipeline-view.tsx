@@ -128,12 +128,42 @@ function PipelineStageColumn({
     stage,
     leads,
     isTerminal,
+    paginationMeta,
+    isLoadingMore,
+    onLoadMore,
 }: {
     stage: LeadStage
     leads: Lead[]
     isTerminal: boolean
+    paginationMeta?: { page: number; hasMore: boolean; total: number }
+    isLoadingMore?: boolean
+    onLoadMore?: () => void
 }) {
     const { setNodeRef, isOver } = useDroppable({ id: stage.id })
+    const sentinelRef = React.useRef<HTMLDivElement>(null)
+    const scrollContainerRef = React.useRef<HTMLDivElement>(null)
+    const onLoadMoreRef = React.useRef(onLoadMore)
+    onLoadMoreRef.current = onLoadMore
+
+    React.useEffect(() => {
+        if (!onLoadMoreRef.current || !paginationMeta?.hasMore || isLoadingMore) return
+        const el = sentinelRef.current
+        if (!el) return
+        const root = scrollContainerRef.current ?? null
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries[0]?.isIntersecting) onLoadMoreRef.current?.()
+            },
+            { root, rootMargin: "200px", threshold: 0 }
+        )
+        observer.observe(el)
+        return () => observer.disconnect()
+    }, [paginationMeta?.hasMore, isLoadingMore])
+
+    // Show total leads in this stage for the dealership (from API), not how many are loaded
+    const countLabel = paginationMeta != null && paginationMeta.total !== undefined
+        ? String(paginationMeta.total)
+        : String(leads.length)
 
     return (
         <div
@@ -151,14 +181,24 @@ function PipelineStageColumn({
                 />
                 <h3 className="font-semibold text-sm truncate">{stage.display_name}</h3>
                 <Badge variant="secondary" className="ml-auto text-[10px]">
-                    {leads.length}
+                    {countLabel}
                 </Badge>
             </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-2 max-h-[calc(100vh-260px)]">
+            <div
+                ref={scrollContainerRef}
+                className="flex-1 overflow-y-auto p-2 space-y-2 max-h-[calc(100vh-260px)]"
+            >
                 {leads.map((lead) => (
                     <DraggablePipelineCard key={lead.id} lead={lead} />
                 ))}
-                {leads.length === 0 && (
+                {paginationMeta?.hasMore && (
+                    <div ref={sentinelRef} className="min-h-[1px] flex items-center justify-center py-2">
+                        {isLoadingMore ? (
+                            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                        ) : null}
+                    </div>
+                )}
+                {leads.length === 0 && !paginationMeta?.hasMore && (
                     <div className="text-center text-xs text-muted-foreground py-8">
                         No leads
                     </div>
@@ -168,19 +208,31 @@ function PipelineStageColumn({
     )
 }
 
+export interface StagePaginationMeta {
+    page: number
+    hasMore: boolean
+    total: number
+}
+
 export interface LeadsPipelineViewProps {
     stages: LeadStage[]
     leadsByStage: Record<string, Lead[]>
+    stagePagination?: Record<string, StagePaginationMeta>
+    loadingMoreStageId?: string | null
     isLoading: boolean
     onDragEnd: (event: DragEndEvent) => void | Promise<void>
+    onLoadMore?: (stageId: string) => void | Promise<void>
     onRefresh?: () => void
 }
 
 export function LeadsPipelineView({
     stages,
     leadsByStage,
+    stagePagination = {},
+    loadingMoreStageId = null,
     isLoading,
     onDragEnd,
+    onLoadMore,
 }: LeadsPipelineViewProps) {
     const [activeId, setActiveId] = React.useState<string | null>(null)
 
@@ -229,6 +281,9 @@ export function LeadsPipelineView({
                             stage={stage}
                             leads={leadsByStage[stage.id] || []}
                             isTerminal={stage.is_terminal}
+                            paginationMeta={stagePagination[stage.id]}
+                            isLoadingMore={loadingMoreStageId === stage.id}
+                            onLoadMore={onLoadMore ? () => onLoadMore(stage.id) : undefined}
                         />
                     ))}
                 </div>

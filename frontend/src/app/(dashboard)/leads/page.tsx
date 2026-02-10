@@ -73,7 +73,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { LeadService, Lead, LeadListResponse, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
+import { LeadService, Lead, LeadListResponse, type LeadListParams, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
@@ -134,6 +134,11 @@ export default function LeadsPage() {
     const [stages, setStages] = React.useState<LeadStage[]>([])
     const [leadsByStage, setLeadsByStage] = React.useState<Record<string, Lead[]>>({})
     const [isLoadingPipeline, setIsLoadingPipeline] = React.useState(false)
+    /** Per-stage pagination for pipeline infinite scroll: { [stageId]: { page, hasMore, total } } */
+    const [stagePagination, setStagePagination] = React.useState<Record<string, { page: number; hasMore: boolean; total: number }>>({})
+    const [loadingMoreStageId, setLoadingMoreStageId] = React.useState<string | null>(null)
+
+    const PIPELINE_PAGE_SIZE = 20
 
     // Load pipeline stages dynamically
     React.useEffect(() => {
@@ -230,9 +235,10 @@ export default function LeadsPage() {
     const fetchLeadsForPipeline = React.useCallback(async () => {
         if (stages.length === 0) return
         setIsLoadingPipeline(true)
+        setStagePagination({})
         try {
             const convertedStage = stages.find((s) => s.name === "converted")
-            const baseParams: Record<string, unknown> = { page_size: 100 }
+            const baseParams: Record<string, unknown> = { page: 1, page_size: PIPELINE_PAGE_SIZE }
             if (search) baseParams.search = search
             if (source && source !== "all") baseParams.source = source
 
@@ -245,55 +251,85 @@ export default function LeadsPage() {
                 baseParams.is_active = false
             }
 
-            const byStage: Record<string, Lead[]> = {}
             const stagesToFetch =
                 viewMode === "converted" && convertedStage
                     ? [convertedStage.id]
                     : selectedStageIds.length > 0
                         ? selectedStageIds
                         : stages.map((s) => s.id)
+
+            const byStage: Record<string, Lead[]> = {}
+            const pagination: Record<string, { page: number; hasMore: boolean; total: number }> = {}
             for (const sid of stagesToFetch) {
                 byStage[sid] = []
             }
 
-            if (viewMode === "converted") {
-                const data = await LeadService.listLeads(baseParams)
-                for (const lead of data.items) {
-                    const sid = lead.stage_id
-                    if (byStage[sid]) byStage[sid].push(lead)
-                    else byStage[sid] = [lead]
-                }
-            } else if (selectedStageIds.length > 0) {
-                const results = await Promise.all(
-                    selectedStageIds.map((stageId) =>
-                        LeadService.listLeads({ ...baseParams, stage_id: stageId })
-                    )
+            const results = await Promise.all(
+                stagesToFetch.map((stageId) =>
+                    LeadService.listLeads({ ...baseParams, stage_id: stageId } as LeadListParams)
                 )
-                for (const data of results) {
-                    for (const lead of data.items) {
-                        const sid = lead.stage_id
-                        if (byStage[sid]) byStage[sid].push(lead)
-                        else byStage[sid] = [lead]
-                    }
-                }
-            } else {
-                const data = await LeadService.listLeads(baseParams)
-                for (const s of stages) {
-                    if (!byStage[s.id]) byStage[s.id] = []
-                }
-                for (const lead of data.items) {
-                    const sid = lead.stage_id
-                    if (byStage[sid]) byStage[sid].push(lead)
-                    else byStage[sid] = [lead]
+            )
+            for (let i = 0; i < stagesToFetch.length; i++) {
+                const stageId = stagesToFetch[i]
+                const data = results[i]
+                byStage[stageId] = data.items
+                const pages = typeof data.pages === "number" ? data.pages : Math.ceil((data.total || 0) / PIPELINE_PAGE_SIZE) || 1
+                pagination[stageId] = {
+                    page: 1,
+                    hasMore: data.page < pages && data.items.length === PIPELINE_PAGE_SIZE,
+                    total: data.total ?? 0,
                 }
             }
             setLeadsByStage(byStage)
+            setStagePagination(pagination)
         } catch (error) {
             console.error("Failed to fetch pipeline leads:", error)
         } finally {
             setIsLoadingPipeline(false)
         }
     }, [viewMode, search, source, selectedStageIds, stages])
+
+    const loadMoreForStage = React.useCallback(
+        async (stageId: string) => {
+            const meta = stagePagination[stageId]
+            if (!meta?.hasMore || loadingMoreStageId !== null) return
+            setLoadingMoreStageId(stageId)
+            try {
+                const convertedStage = stages.find((s) => s.name === "converted")
+                const nextPage = meta.page + 1
+                const params: Record<string, unknown> = {
+                    page: nextPage,
+                    page_size: PIPELINE_PAGE_SIZE,
+                    stage_id: stageId,
+                }
+                if (search) params.search = search
+                if (source && source !== "all") params.source = source
+                if (viewMode === "unassigned") params.pool = "unassigned"
+                else if (viewMode === "mine") params.pool = "mine"
+                else if (viewMode === "converted" && convertedStage) params.is_active = false
+
+                const data = await LeadService.listLeads(params as LeadListParams)
+                setLeadsByStage((prev) => ({
+                    ...prev,
+                    [stageId]: [...(prev[stageId] || []), ...data.items],
+                }))
+                const pages = typeof data.pages === "number" ? data.pages : Math.ceil((data.total || 0) / PIPELINE_PAGE_SIZE) || 1
+                setStagePagination((prev) => ({
+                    ...prev,
+                    [stageId]: {
+                        page: nextPage,
+                        hasMore: data.page < pages && data.items.length === PIPELINE_PAGE_SIZE,
+                        total: data.total ?? prev[stageId]?.total ?? 0,
+                    },
+                }))
+            } catch (error) {
+                console.error("Failed to load more pipeline leads:", error)
+            } finally {
+                setLoadingMoreStageId(null)
+            }
+        },
+        [stagePagination, loadingMoreStageId, stages, search, source, viewMode]
+    )
 
     React.useEffect(() => {
         const timer = setTimeout(() => {
@@ -647,8 +683,11 @@ export default function LeadsPage() {
                     <LeadsPipelineView
                         stages={viewMode === "converted" ? stages.filter((s) => s.name === "converted") : selectedStageIds.length === 0 ? stages : stages.filter((s) => selectedStageIds.includes(s.id))}
                         leadsByStage={leadsByStage}
+                        stagePagination={stagePagination}
+                        loadingMoreStageId={loadingMoreStageId}
                         isLoading={isLoadingPipeline}
                         onDragEnd={handlePipelineDragEnd}
+                        onLoadMore={loadMoreForStage}
                     />
                 </div>
             )}
