@@ -21,6 +21,7 @@ from app.models.appointment import Appointment, AppointmentStatus
 from app.models.showroom_visit import ShowroomVisit, ShowroomOutcome
 from app.models.activity import ActivityType
 from app.services.activity import ActivityService
+from app.services.stips_service import _lead_access
 from app.schemas.showroom import (
     ShowroomCheckIn,
     ShowroomCheckOut,
@@ -333,6 +334,30 @@ async def check_out(
     except Exception as e:
         logger.warning(f"Failed to emit WebSocket events: {e}")
 
+    return await enrich_visit(db, visit)
+
+
+@router.get("/lead/{lead_id}/current", response_model=ShowroomVisitResponse)
+async def get_lead_current_visit(
+    lead_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Get the current (active) showroom visit for a lead, if any.
+    Returns 404 when the lead is not currently checked in. Use this so the lead detail page
+    can reflect check-in state even when the visit was created under a different dealership.
+    """
+    await _lead_access(db, lead_id, current_user)
+    result = await db.execute(
+        select(ShowroomVisit).where(
+            ShowroomVisit.lead_id == lead_id,
+            ShowroomVisit.checked_out_at.is_(None),
+        )
+    )
+    visit = result.scalar_one_or_none()
+    if not visit:
+        raise HTTPException(status_code=404, detail="No active showroom visit for this lead")
     return await enrich_visit(db, visit)
 
 

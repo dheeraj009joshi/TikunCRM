@@ -24,14 +24,20 @@ class ShowroomCheckOut(BaseModel):
     reschedule_scheduled_at: Optional[datetime] = None  # When outcome is RESCHEDULE and visit has appointment_id
 
 
-class LeadBrief(BaseModel):
-    """Brief lead info for showroom responses"""
-    id: UUID
-    first_name: str
+class CustomerBrief(BaseModel):
+    """Customer info nested under lead in showroom responses"""
+    first_name: str = ""
     last_name: Optional[str] = None
+    full_name: str = ""
     phone: Optional[str] = None
     email: Optional[str] = None
-    
+
+
+class LeadBrief(BaseModel):
+    """Brief lead info for showroom responses (id + customer details)"""
+    id: UUID
+    customer: Optional[CustomerBrief] = None
+
     class Config:
         from_attributes = True
 
