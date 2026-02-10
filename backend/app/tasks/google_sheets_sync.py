@@ -21,17 +21,16 @@ async def run_google_sheets_sync():
 
 def run_google_sheets_sync_task():
     """
-    Wrapper to run the async sync function.
-    APScheduler needs a regular function, so we create an event loop.
+    Wrapper to run the async sync function. Scheduler runs this in a thread pool,
+    so we must schedule the coroutine on the main event loop in a thread-safe way.
     """
     try:
-        # Try to get existing event loop
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # If loop is already running (FastAPI), create a task
-            asyncio.create_task(run_google_sheets_sync())
+            # We're in a scheduler thread; schedule coroutine on the main loop and wait so job doesn't overlap
+            future = asyncio.run_coroutine_threadsafe(run_google_sheets_sync(), loop)
+            future.result(timeout=120)  # wait up to 2 min so max_instances=1 is respected
         else:
             loop.run_until_complete(run_google_sheets_sync())
     except RuntimeError:
-        # No event loop exists, create a new one
         asyncio.run(run_google_sheets_sync())

@@ -255,9 +255,9 @@ async def get_existing_external_ids(session: AsyncSession) -> Set[str]:
 
 
 async def get_existing_phones(session: AsyncSession) -> Set[str]:
-    """Get all existing phone numbers in one query."""
+    """Get all existing phone numbers (from customers who have leads). Lead has no phone column; phone lives on Customer."""
     result = await session.execute(
-        select(Lead.phone).where(Lead.phone.isnot(None))
+        select(Customer.phone).join(Lead, Lead.customer_id == Customer.id).where(Customer.phone.isnot(None))
     )
     return {row[0] for row in result.fetchall()}
 
