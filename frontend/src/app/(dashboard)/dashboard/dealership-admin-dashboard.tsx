@@ -318,8 +318,8 @@ export function DealershipAdminDashboard() {
                                 </CardTitle>
                             </div>
                         </div>
-                        <Link href="/appointments">
-                            <Button variant="outline" size="sm" className="border-purple-300 text-purple-700">
+<Link href="/appointments?status=scheduled">
+                        <Button variant="outline" size="sm" className="border-purple-300 text-purple-700">
                                 View All
                             </Button>
                         </Link>

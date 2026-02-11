@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import {
     Bell,
     Mail,
@@ -55,6 +55,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { filterStorage } from "@/lib/filter-storage"
 
 // Icon mapping for notification types
 const typeIcons: Record<NotificationType, React.ComponentType<{ className?: string }>> = {
@@ -106,17 +107,65 @@ const typeLabels: Record<NotificationType, string> = {
 
 export default function NotificationsPage() {
     const router = useRouter()
+    const searchParams = useSearchParams()
     const { timezone } = useBrowserTimezone()
-    
+
     const [notifications, setNotifications] = React.useState<Notification[]>([])
     const [stats, setStats] = React.useState<NotificationStats | null>(null)
     const [isLoading, setIsLoading] = React.useState(true)
     const [isMarkingAll, setIsMarkingAll] = React.useState(false)
     const [isDeleting, setIsDeleting] = React.useState(false)
-    
-    // Filters
-    const [filter, setFilter] = React.useState<"all" | "unread">("all")
-    const [typeFilter, setTypeFilter] = React.useState<NotificationType | "all">("all")
+
+    // Filters - sync from URL / localStorage
+    const [filter, setFilterState] = React.useState<"all" | "unread">("all")
+    const [typeFilter, setTypeFilterState] = React.useState<NotificationType | "all">("all")
+
+    React.useEffect(() => {
+        const urlFilter = searchParams.get("filter") as "all" | "unread" | null
+        const urlType = searchParams.get("type") as NotificationType | "all" | null
+        if (urlFilter === "all" || urlFilter === "unread") setFilterState(urlFilter)
+        if (urlType) setTypeFilterState(urlType === "all" ? "all" : urlType)
+    }, [searchParams])
+
+    React.useEffect(() => {
+        if (searchParams.get("filter") != null || searchParams.get("type") != null) return
+        const saved = filterStorage.getNotifications()
+        if (!saved) return
+        const params = new URLSearchParams()
+        if (saved.filter === "unread" || saved.filter === "all") params.set("filter", saved.filter)
+        if (saved.type && saved.type !== "all") params.set("type", saved.type)
+        if (params.toString()) router.replace(`/notifications?${params.toString()}`)
+    }, [router, searchParams])
+
+    const setFilter = React.useCallback(
+        (v: "all" | "unread") => {
+            setFilterState(v)
+            setPage(1)
+            const params = new URLSearchParams(searchParams.toString())
+            params.set("filter", v)
+            if (typeFilter !== "all") params.set("type", typeFilter)
+            else params.delete("type")
+            router.replace(`/notifications?${params.toString()}`)
+            filterStorage.setNotifications({ filter: v, type: typeFilter === "all" ? undefined : typeFilter })
+        },
+        [router, searchParams, typeFilter]
+    )
+    const setTypeFilter = React.useCallback(
+        (v: NotificationType | "all") => {
+            setTypeFilterState(v)
+            setPage(1)
+            const params = new URLSearchParams(searchParams.toString())
+            if (v !== "all") params.set("type", v)
+            else params.delete("type")
+            if (searchParams.get("filter")) params.set("filter", searchParams.get("filter")!)
+            router.replace(`/notifications?${params.toString()}`)
+            filterStorage.setNotifications({
+                filter: (searchParams.get("filter") as "all" | "unread") || "all",
+                type: v === "all" ? undefined : v,
+            })
+        },
+        [router, searchParams]
+    )
     
     // Pagination
     const [page, setPage] = React.useState(1)
@@ -321,10 +370,7 @@ export default function NotificationsPage() {
             <Card>
                 <CardContent className="p-4">
                     <div className="flex items-center gap-4">
-                        <Tabs value={filter} onValueChange={(v) => {
-                            setFilter(v as "all" | "unread")
-                            setPage(1)
-                        }}>
+                        <Tabs value={filter} onValueChange={(v) => setFilter(v as "all" | "unread")}>
                             <TabsList>
                                 <TabsTrigger value="all">All</TabsTrigger>
                                 <TabsTrigger value="unread">
@@ -338,10 +384,7 @@ export default function NotificationsPage() {
                             </TabsList>
                         </Tabs>
                         
-                        <Select value={typeFilter} onValueChange={(v) => {
-                            setTypeFilter(v as NotificationType | "all")
-                            setPage(1)
-                        }}>
+                        <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as NotificationType | "all")}>
                             <SelectTrigger className="w-[200px]">
                                 <SelectValue placeholder="Filter by type" />
                             </SelectTrigger>
@@ -364,7 +407,6 @@ export default function NotificationsPage() {
                                 onClick={() => {
                                     setFilter("all")
                                     setTypeFilter("all")
-                                    setPage(1)
                                 }}
                             >
                                 <X className="h-4 w-4 mr-1" />

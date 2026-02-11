@@ -420,10 +420,10 @@ export default function LeadDetailsPage() {
 
     // Check if lead is currently in showroom
     const fetchShowroomStatus = React.useCallback(async () => {
+        if (!leadId) return
         try {
-            const { visits } = await ShowroomService.getCurrent()
-            const activeVisit = visits.find(v => v.lead_id === leadId)
-            setCurrentVisit(activeVisit || null)
+            const visit = await ShowroomService.getCurrentVisitForLead(leadId)
+            setCurrentVisit(visit)
         } catch (error) {
             console.error("Failed to fetch showroom status:", error)
         }
@@ -524,6 +524,9 @@ export default function LeadDetailsPage() {
             const detail = error.response?.data?.detail
             const message = typeof detail === "string" ? detail : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? JSON.stringify(d)).join(" ") : "Failed to check in"
             alert(message)
+            if (typeof detail === "string" && detail.toLowerCase().includes("already checked in")) {
+                fetchShowroomStatus()
+            }
         } finally {
             setIsCheckingIn(false)
         }

@@ -296,7 +296,7 @@ export function SalespersonDashboard() {
                                 </CardTitle>
                             </div>
                         </div>
-                        <Link href="/appointments">
+                        <Link href="/appointments?status=scheduled">
                             <Button variant="outline" size="sm" className="border-purple-300 text-purple-700">
                                 View All
                             </Button>

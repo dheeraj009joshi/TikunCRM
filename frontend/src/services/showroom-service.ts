@@ -99,6 +99,22 @@ export const ShowroomService = {
     },
 
     /**
+     * Get the current (active) showroom visit for a lead, if any.
+     * Use this on the lead detail page so check-in state is correct even when
+     * the visit is for a different dealership filter. Returns null when not checked in.
+     */
+    async getCurrentVisitForLead(leadId: string): Promise<ShowroomVisit | null> {
+        try {
+            const response = await apiClient.get<ShowroomVisit>(`/showroom/lead/${leadId}/current`)
+            return response.data
+        } catch (e: unknown) {
+            const status = (e as { response?: { status?: number } })?.response?.status
+            if (status === 404) return null
+            throw e
+        }
+    },
+
+    /**
      * Get showroom visit history
      */
     async getHistory(params?: {

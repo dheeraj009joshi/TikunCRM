@@ -86,6 +86,7 @@ import { LeadsPipelineView } from "@/components/leads/leads-pipeline-view"
 import type { DragEndEvent } from "@dnd-kit/core"
 import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
+import { filterStorage } from "@/lib/filter-storage"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
 
 // Lead stages are now loaded dynamically from the API
@@ -154,6 +155,20 @@ export default function LeadsPage() {
         return items
     }, [stages])
 
+    // Restore filters from localStorage when URL has no params (e.g. sidebar link to /leads)
+    React.useEffect(() => {
+        const filter = searchParams.get("filter")
+        if (filter != null) return // URL has filter, nothing to restore
+        const saved = filterStorage.getLeads()
+        if (!saved?.filter) return
+        const params = new URLSearchParams()
+        params.set("filter", saved.filter)
+        if (saved.status && saved.status !== "all") params.set("status", saved.status)
+        if (saved.source && saved.source !== "all") params.set("source", saved.source)
+        if (saved.view === "pipeline") params.set("view", "pipeline")
+        router.replace(`/leads?${params.toString()}`)
+    }, [router, searchParams])
+
     // Sync view mode, status, source, and display view with URL when user navigates via links
     React.useEffect(() => {
         const filter = searchParams.get("filter")
@@ -167,6 +182,7 @@ export default function LeadsPage() {
             setViewMode("converted")
             setStatus("converted")
         } else if (filter === "mine") setViewMode("mine")
+        else if (filter === "fresh") setViewMode("fresh")
         else if (urlStatus === "converted") {
             setViewMode("converted")
             setStatus("converted")
@@ -222,8 +238,9 @@ export default function LeadsPage() {
                 if (convertedStage) params.stage_id = convertedStage.id
                 params.is_active = false
             }
-            // Stage filter (stage_id instead of old status enum)
-            if (viewMode !== "converted" && viewMode !== "fresh" && status && status !== "all") params.stage_id = status
+            // Stage filter (stage_id must be a UUID; ignore URL values like "active" or stage names)
+            const isValidStageId = status && status !== "all" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(status)
+            if (viewMode !== "converted" && viewMode !== "fresh" && isValidStageId) params.stage_id = status
 
             const data = await LeadService.listLeads(params as LeadListParams)
             setLeads(data.items)
@@ -530,6 +547,13 @@ export default function LeadsPage() {
                         } else {
                             router.push("/leads?filter=mine")
                         }
+                        const nextStatus = mode === "converted" ? "converted" : status
+                        filterStorage.setLeads({
+                            filter: mode,
+                            status: nextStatus,
+                            source,
+                            view: displayView,
+                        })
                     }}
                 >
                     <TabsList>
@@ -554,6 +578,12 @@ export default function LeadsPage() {
                             if (next === "pipeline") params.set("view", "pipeline")
                             else params.delete("view")
                             router.push(`/leads?${params.toString()}`)
+                            filterStorage.setLeads({
+                                filter: viewMode,
+                                status,
+                                source,
+                                view: next,
+                            })
                         }}
                     >
                         <TabsList>
@@ -583,7 +613,22 @@ export default function LeadsPage() {
                                 className="max-w-xs"
                             />
                             {displayView === "list" ? (
-                                <Select value={status} onValueChange={setStatus}>
+                                <Select
+                                    value={status}
+                                    onValueChange={(v) => {
+                                        setStatus(v)
+                                        const params = new URLSearchParams(searchParams.toString())
+                                        if (v && v !== "all") params.set("status", v)
+                                        else params.delete("status")
+                                        router.replace(`/leads?${params.toString()}`)
+                                        filterStorage.setLeads({
+                                            filter: viewMode,
+                                            status: v,
+                                            source,
+                                            view: displayView,
+                                        })
+                                    }}
+                                >
                                     <SelectTrigger className="w-36">
                                         <SelectValue placeholder="Status" />
                                     </SelectTrigger>
@@ -647,7 +692,22 @@ export default function LeadsPage() {
                                     </PopoverContent>
                                 </Popover>
                             )}
-                            <Select value={source} onValueChange={setSource}>
+                            <Select
+                                    value={source}
+                                    onValueChange={(v) => {
+                                        setSource(v)
+                                        const params = new URLSearchParams(searchParams.toString())
+                                        if (v && v !== "all") params.set("source", v)
+                                        else params.delete("source")
+                                        router.replace(`/leads?${params.toString()}`)
+                                        filterStorage.setLeads({
+                                            filter: viewMode,
+                                            status,
+                                            source: v,
+                                            view: displayView,
+                                        })
+                                    }}
+                                >
                                 <SelectTrigger className="w-36">
                                     <SelectValue placeholder="Source" />
                                 </SelectTrigger>

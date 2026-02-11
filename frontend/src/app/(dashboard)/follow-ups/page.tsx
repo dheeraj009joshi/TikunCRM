@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import {
     Clock,
     CheckCircle,
@@ -71,17 +71,67 @@ import { formatDateInTimezone, formatRelativeTimeInTimezone } from "@/utils/time
 import { UserAvatar } from "@/components/ui/avatar"
 import { getRoleDisplayName } from "@/hooks/use-role"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
+import { filterStorage } from "@/lib/filter-storage"
+
+const FOLLOWUP_VALID_FILTERS = ["all", "pending", "overdue", "completed"] as const
+type FollowUpFilterType = (typeof FOLLOWUP_VALID_FILTERS)[number]
 
 export default function FollowUpsPage() {
     const router = useRouter()
+    const searchParams = useSearchParams()
     const { timezone } = useBrowserTimezone()
-    
+
     const [followUps, setFollowUps] = React.useState<FollowUp[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
-    
-    // Filters
-    const [filter, setFilter] = React.useState<"all" | "pending" | "overdue" | "completed">("all")
-    const [statusFilter, setStatusFilter] = React.useState<FollowUpStatus | "all">("all")
+
+    // Filters - sync from URL / localStorage
+    const [filter, setFilterState] = React.useState<FollowUpFilterType>("all")
+    const [statusFilter, setStatusFilterState] = React.useState<FollowUpStatus | "all">("all")
+
+    React.useEffect(() => {
+        const urlFilter = searchParams.get("filter") as FollowUpFilterType | null
+        const urlStatus = searchParams.get("status") as FollowUpStatus | "all" | null
+        if (urlFilter && FOLLOWUP_VALID_FILTERS.includes(urlFilter)) setFilterState(urlFilter)
+        if (urlStatus) setStatusFilterState(urlStatus === "all" ? "all" : urlStatus)
+    }, [searchParams])
+
+    React.useEffect(() => {
+        if (searchParams.get("filter") != null || searchParams.get("status") != null) return
+        const saved = filterStorage.getFollowUps()
+        if (!saved) return
+        const params = new URLSearchParams()
+        if (saved.filter && FOLLOWUP_VALID_FILTERS.includes(saved.filter as FollowUpFilterType)) params.set("filter", saved.filter)
+        if (saved.status && saved.status !== "all") params.set("status", saved.status)
+        if (params.toString()) router.replace(`/follow-ups?${params.toString()}`)
+    }, [router, searchParams])
+
+    const setFilter = React.useCallback(
+        (v: FollowUpFilterType) => {
+            setFilterState(v)
+            const params = new URLSearchParams(searchParams.toString())
+            params.set("filter", v)
+            if (statusFilter !== "all") params.set("status", statusFilter)
+            else params.delete("status")
+            router.replace(`/follow-ups?${params.toString()}`)
+            filterStorage.setFollowUps({ filter: v, status: statusFilter === "all" ? undefined : statusFilter })
+        },
+        [router, searchParams, statusFilter]
+    )
+    const setStatusFilter = React.useCallback(
+        (v: FollowUpStatus | "all") => {
+            setStatusFilterState(v)
+            const params = new URLSearchParams(searchParams.toString())
+            if (v !== "all") params.set("status", v)
+            else params.delete("status")
+            if (searchParams.get("filter")) params.set("filter", searchParams.get("filter")!)
+            router.replace(`/follow-ups?${params.toString()}`)
+            filterStorage.setFollowUps({
+                filter: (searchParams.get("filter") as FollowUpFilterType) || "all",
+                status: v === "all" ? undefined : v,
+            })
+        },
+        [router, searchParams]
+    )
     
     // Complete dialog
     const [completeDialogOpen, setCompleteDialogOpen] = React.useState(false)
@@ -283,9 +333,7 @@ export default function FollowUpsPage() {
             <Card>
                 <CardContent className="p-4">
                     <div className="flex items-center gap-4">
-                        <Tabs value={filter} onValueChange={(v) => {
-                            setFilter(v as typeof filter)
-                        }}>
+                        <Tabs value={filter} onValueChange={(v) => setFilter(v as FollowUpFilterType)}>
                             <TabsList>
                                 <TabsTrigger value="all">All</TabsTrigger>
                                 <TabsTrigger value="pending">
@@ -308,9 +356,7 @@ export default function FollowUpsPage() {
                             </TabsList>
                         </Tabs>
                         
-                        <Select value={statusFilter} onValueChange={(v) => {
-                            setStatusFilter(v as FollowUpStatus | "all")
-                        }}>
+                        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as FollowUpStatus | "all")}>
                             <SelectTrigger className="w-[200px]">
                                 <SelectValue placeholder="Filter by status" />
                             </SelectTrigger>

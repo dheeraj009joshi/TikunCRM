@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { useSearchParams, useRouter } from "next/navigation"
 import { format } from "date-fns"
 import { 
     CalendarClock, 
@@ -67,6 +68,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Badge, getRoleVariant } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
+import { filterStorage } from "@/lib/filter-storage"
 
 // Stats Card Component
 function StatsCard({ 
@@ -772,19 +774,75 @@ function RescheduleAppointmentModal({
     )
 }
 
+const VALID_FILTERS = ["all", "today", "upcoming", "overdue", "completed"] as const
+type FilterType = (typeof VALID_FILTERS)[number]
+
 export default function AppointmentsPage() {
     const { user } = useAuthStore()
     const { timezone } = useBrowserTimezone()
-    
+    const searchParams = useSearchParams()
+    const router = useRouter()
+
     const [appointments, setAppointments] = React.useState<Appointment[]>([])
     const [stats, setStats] = React.useState<AppointmentStats | null>(null)
     const [loading, setLoading] = React.useState(true)
     const [page, setPage] = React.useState(1)
     const [totalPages, setTotalPages] = React.useState(1)
-    
-    // Filters
-    const [filter, setFilter] = React.useState<"all" | "today" | "upcoming" | "overdue" | "completed">("all")
-    const [statusFilter, setStatusFilter] = React.useState<AppointmentStatus | "">("")
+
+    // Filters - initial from URL or localStorage
+    const [filter, setFilterState] = React.useState<FilterType>("all")
+    const [statusFilter, setStatusFilterState] = React.useState<AppointmentStatus | "">("")
+
+    // Restore from URL or localStorage
+    React.useEffect(() => {
+        const urlFilter = searchParams.get("filter") as FilterType | null
+        const urlStatus = searchParams.get("status") as AppointmentStatus | null
+        if (urlFilter && VALID_FILTERS.includes(urlFilter)) {
+            setFilterState(urlFilter)
+        }
+        if (urlStatus) setStatusFilterState(urlStatus)
+    }, [searchParams])
+
+    // When no URL params, restore from localStorage
+    React.useEffect(() => {
+        if (searchParams.get("filter") != null || searchParams.get("status") != null) return
+        const saved = filterStorage.getAppointments()
+        if (!saved) return
+        const params = new URLSearchParams()
+        if (saved.filter && VALID_FILTERS.includes(saved.filter as FilterType)) params.set("filter", saved.filter)
+        if (saved.status) params.set("status", saved.status)
+        if (params.toString()) router.replace(`/appointments?${params.toString()}`)
+    }, [router, searchParams])
+
+    const setFilter = React.useCallback(
+        (v: FilterType) => {
+            setFilterState(v)
+            setPage(1)
+            const params = new URLSearchParams(searchParams.toString())
+            params.set("filter", v)
+            if (!statusFilter) params.delete("status")
+            else params.set("status", statusFilter)
+            router.replace(`/appointments?${params.toString()}`)
+            filterStorage.setAppointments({ filter: v, status: statusFilter || undefined })
+        },
+        [router, searchParams, statusFilter]
+    )
+    const setStatusFilter = React.useCallback(
+        (v: AppointmentStatus | "") => {
+            setStatusFilterState(v)
+            setPage(1)
+            const params = new URLSearchParams(searchParams.toString())
+            if (v) params.set("status", v)
+            else params.delete("status")
+            if (searchParams.get("filter")) params.set("filter", searchParams.get("filter")!)
+            router.replace(`/appointments?${params.toString()}`)
+            filterStorage.setAppointments({
+                filter: (searchParams.get("filter") as FilterType) || "all",
+                status: v || undefined,
+            })
+        },
+        [router, searchParams]
+    )
     const [dateMode, setDateMode] = React.useState<"range" | "specific">("range")
     const [dateFrom, setDateFrom] = React.useState<Date | undefined>(undefined)
     const [dateTo, setDateTo] = React.useState<Date | undefined>(undefined)
@@ -1109,7 +1167,7 @@ export default function AppointmentsPage() {
                     <Filter className="h-4 w-4 text-muted-foreground" />
                     <span className="text-sm text-muted-foreground">Filter:</span>
                 </div>
-                <Select value={filter} onValueChange={(v) => { setFilter(v as any); setPage(1) }}>
+                <Select value={filter} onValueChange={(v) => setFilter(v as FilterType)}>
                     <SelectTrigger className="w-[140px]">
                         <SelectValue placeholder="All" />
                     </SelectTrigger>
@@ -1121,7 +1179,7 @@ export default function AppointmentsPage() {
                         <SelectItem value="completed">Completed</SelectItem>
                     </SelectContent>
                 </Select>
-                <Select value={statusFilter || "all_statuses"} onValueChange={(v) => { setStatusFilter(v === "all_statuses" ? "" : v as any); setPage(1) }}>
+                <Select value={statusFilter || "all_statuses"} onValueChange={(v) => setStatusFilter(v === "all_statuses" ? "" : (v as AppointmentStatus))}>
                     <SelectTrigger className="w-[140px]">
                         <SelectValue placeholder="All Statuses" />
                     </SelectTrigger>
