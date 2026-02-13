@@ -55,6 +55,11 @@ class ActivityType(str, Enum):
     STIP_DOCUMENT_ADDED = "stip_document_added"
     STIP_DOCUMENT_REMOVED = "stip_document_removed"
     
+    # Credit application (Toyota South Atlanta, etc.)
+    CREDIT_APP_INITIATED = "credit_app_initiated"
+    CREDIT_APP_COMPLETED = "credit_app_completed"
+    CREDIT_APP_ABANDONED = "credit_app_abandoned"
+    
     # User actions
     USER_LOGIN = "user_login"
     USER_LOGOUT = "user_logout"

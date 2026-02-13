@@ -78,6 +78,8 @@ import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/ser
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
 import { useRole } from "@/hooks/use-role"
+import { useAuthStore } from "@/stores/auth-store"
+import { TeamService } from "@/services/team-service"
 import { cn } from "@/lib/utils"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
@@ -105,7 +107,7 @@ const LEAD_SOURCES = [
     { value: "walk_in", label: "Walk-in" },
 ]
 
-type ViewMode = "mine" | "unassigned" | "all" | "converted" | "fresh"
+type ViewMode = "mine" | "unassigned" | "all" | "converted" | "fresh" | "manager_review"
 type DisplayView = "list" | "pipeline"
 
 export default function LeadsPage() {
@@ -115,6 +117,7 @@ export default function LeadsPage() {
     const statusParam = searchParams.get("status")
     const sourceParam = searchParams.get("source")
     const viewParam = searchParams.get("view")
+    const assignedToParam = searchParams.get("assigned_to")
     const { timezone } = useBrowserTimezone()
 
     const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, isSalesperson, canAssignToSalesperson, hasPermission } = useRole()
@@ -128,9 +131,11 @@ export default function LeadsPage() {
     const [selectedStageIds, setSelectedStageIds] = React.useState<string[]>([])
     const [source, setSource] = React.useState(sourceParam || "all")
     const [viewMode, setViewMode] = React.useState<ViewMode>(
-        filterParam === "unassigned" ? "unassigned" : filterParam === "converted" ? "converted" : filterParam === "fresh" ? "fresh" : filterParam === "all" ? "all" : "mine"
+        filterParam === "unassigned" ? "unassigned" : filterParam === "converted" ? "converted" : filterParam === "fresh" ? "fresh" : filterParam === "all" ? "all" : filterParam === "manager_review" ? "manager_review" : "mine"
     )
     const [displayView, setDisplayView] = React.useState<DisplayView>(viewParam === "pipeline" ? "pipeline" : "list")
+    const [assignedTo, setAssignedTo] = React.useState(assignedToParam || "all")
+    const [teamMembers, setTeamMembers] = React.useState<{ id: string; first_name: string; last_name: string }[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const [stages, setStages] = React.useState<LeadStage[]>([])
     const [leadsByStage, setLeadsByStage] = React.useState<Record<string, Lead[]>>({})
@@ -166,15 +171,24 @@ export default function LeadsPage() {
         if (saved.status && saved.status !== "all") params.set("status", saved.status)
         if (saved.source && saved.source !== "all") params.set("source", saved.source)
         if (saved.view === "pipeline") params.set("view", "pipeline")
+        if (saved.assigned_to && saved.assigned_to !== "all") params.set("assigned_to", saved.assigned_to)
         router.replace(`/leads?${params.toString()}`)
     }, [router, searchParams])
 
-    // Sync view mode, status, source, and display view with URL when user navigates via links
+    // When in manager_review view, sync status to manager_review stage id once stages are loaded
+    React.useEffect(() => {
+        if (viewMode !== "manager_review" || stages.length === 0) return
+        const mr = stages.find((s) => s.name === "manager_review")
+        if (mr) setStatus(mr.id)
+    }, [viewMode, stages])
+
+    // Sync view mode, status, source, display view, assigned_to with URL when user navigates via links
     React.useEffect(() => {
         const filter = searchParams.get("filter")
         const urlStatus = searchParams.get("status")
         const urlSource = searchParams.get("source")
         const urlView = searchParams.get("view")
+        const urlAssignedTo = searchParams.get("assigned_to")
 
         if (filter === "unassigned") setViewMode("unassigned")
         else if (filter === "all") setViewMode("all")
@@ -183,6 +197,7 @@ export default function LeadsPage() {
             setStatus("converted")
         } else if (filter === "mine") setViewMode("mine")
         else if (filter === "fresh") setViewMode("fresh")
+        else if (filter === "manager_review") setViewMode("manager_review")
         else if (urlStatus === "converted") {
             setViewMode("converted")
             setStatus("converted")
@@ -192,7 +207,18 @@ export default function LeadsPage() {
         if (urlSource) setSource(urlSource)
         if (urlView === "pipeline") setDisplayView("pipeline")
         else if (urlView === "list") setDisplayView("list")
+        if (urlAssignedTo) setAssignedTo(urlAssignedTo)
+        else setAssignedTo("all")
     }, [searchParams])
+
+    // Load team members for admin/owner salesperson filter
+    const { user } = useAuthStore()
+    React.useEffect(() => {
+        if (!isDealershipLevel && !isSuperAdmin) return
+        TeamService.getSalespersons(user?.dealership_id ?? undefined)
+            .then((list) => setTeamMembers(list))
+            .catch(() => setTeamMembers([]))
+    }, [isDealershipLevel, isSuperAdmin, user?.dealership_id])
     
     // Assignment modal state
     const [assignModalOpen, setAssignModalOpen] = React.useState(false)
@@ -237,10 +263,14 @@ export default function LeadsPage() {
                 const convertedStage = stages.find(s => s.name === "converted")
                 if (convertedStage) params.stage_id = convertedStage.id
                 params.is_active = false
+            } else if (viewMode === "manager_review") {
+                const managerReviewStage = stages.find(s => s.name === "manager_review")
+                if (managerReviewStage) params.stage_id = managerReviewStage.id
             }
             // Stage filter (stage_id must be a UUID; ignore URL values like "active" or stage names)
             const isValidStageId = status && status !== "all" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(status)
-            if (viewMode !== "converted" && viewMode !== "fresh" && isValidStageId) params.stage_id = status
+            if (viewMode !== "converted" && viewMode !== "fresh" && viewMode !== "manager_review" && isValidStageId) params.stage_id = status
+            if (assignedTo && assignedTo !== "all") params.assigned_to = assignedTo
 
             const data = await LeadService.listLeads(params as LeadListParams)
             setLeads(data.items)
@@ -250,7 +280,7 @@ export default function LeadsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [page, search, status, source, viewMode, stages])
+    }, [page, search, status, source, viewMode, stages, assignedTo])
 
     const fetchLeadsForPipeline = React.useCallback(async () => {
         if (stages.length === 0) return
@@ -261,6 +291,7 @@ export default function LeadsPage() {
             const baseParams: Record<string, unknown> = { page: 1, page_size: PIPELINE_PAGE_SIZE }
             if (search) baseParams.search = search
             if (source && source !== "all") baseParams.source = source
+            if (assignedTo && assignedTo !== "all") baseParams.assigned_to = assignedTo
 
             if (viewMode === "unassigned") {
                 baseParams.pool = "unassigned"
@@ -271,12 +302,18 @@ export default function LeadsPage() {
             } else if (viewMode === "converted" && convertedStage) {
                 baseParams.stage_id = convertedStage.id
                 baseParams.is_active = false
+            } else if (viewMode === "manager_review") {
+                const managerReviewStage = stages.find((s) => s.name === "manager_review")
+                if (managerReviewStage) baseParams.stage_id = managerReviewStage.id
             }
 
+            const managerReviewStage = stages.find((s) => s.name === "manager_review")
             const stagesToFetch =
                 viewMode === "converted" && convertedStage
                     ? [convertedStage.id]
-                    : selectedStageIds.length > 0
+                    : viewMode === "manager_review" && managerReviewStage
+                        ? [managerReviewStage.id]
+                        : selectedStageIds.length > 0
                         ? selectedStageIds
                         : stages.map((s) => s.id)
 
@@ -309,7 +346,7 @@ export default function LeadsPage() {
         } finally {
             setIsLoadingPipeline(false)
         }
-    }, [viewMode, search, source, selectedStageIds, stages])
+    }, [viewMode, search, source, selectedStageIds, stages, assignedTo])
 
     const loadMoreForStage = React.useCallback(
         async (stageId: string) => {
@@ -326,6 +363,7 @@ export default function LeadsPage() {
                 }
                 if (search) params.search = search
                 if (source && source !== "all") params.source = source
+                if (assignedTo && assignedTo !== "all") params.assigned_to = assignedTo
                 if (viewMode === "unassigned") params.pool = "unassigned"
                 else if (viewMode === "mine") params.pool = "mine"
                 else if (viewMode === "converted" && convertedStage) params.is_active = false
@@ -350,7 +388,7 @@ export default function LeadsPage() {
                 setLoadingMoreStageId(null)
             }
         },
-        [stagePagination, loadingMoreStageId, stages, search, source, viewMode]
+        [stagePagination, loadingMoreStageId, stages, search, source, viewMode, assignedTo]
     )
 
     React.useEffect(() => {
@@ -544,6 +582,8 @@ export default function LeadsPage() {
                             router.push("/leads?filter=fresh")
                         } else if (mode === "all") {
                             router.push("/leads?filter=all")
+                        } else if (mode === "manager_review") {
+                            router.push("/leads?filter=manager_review")
                         } else {
                             router.push("/leads?filter=mine")
                         }
@@ -553,6 +593,7 @@ export default function LeadsPage() {
                             status: nextStatus,
                             source,
                             view: displayView,
+                            assigned_to: assignedTo !== "all" ? assignedTo : undefined,
                         })
                     }}
                 >
@@ -565,6 +606,9 @@ export default function LeadsPage() {
                             <CheckCircle2 className="h-4 w-4 mr-1.5" />
                             Converted & Sold
                         </TabsTrigger>
+                        {(isDealershipAdmin || isDealershipOwner || isSuperAdmin) && (
+                            <TabsTrigger value="manager_review">Manager review</TabsTrigger>
+                        )}
                     </TabsList>
                 </Tabs>
                 <div className="flex items-center gap-2">
@@ -583,6 +627,7 @@ export default function LeadsPage() {
                                 status,
                                 source,
                                 view: next,
+                                assigned_to: assignedTo !== "all" ? assignedTo : undefined,
                             })
                         }}
                     >
@@ -626,6 +671,7 @@ export default function LeadsPage() {
                                             status: v,
                                             source,
                                             view: displayView,
+                                            assigned_to: assignedTo !== "all" ? assignedTo : undefined,
                                         })
                                     }}
                                 >
@@ -705,6 +751,7 @@ export default function LeadsPage() {
                                             status,
                                             source: v,
                                             view: displayView,
+                                            assigned_to: assignedTo !== "all" ? assignedTo : undefined,
                                         })
                                     }}
                                 >
@@ -719,6 +766,37 @@ export default function LeadsPage() {
                                     ))}
                                 </SelectContent>
                             </Select>
+                            {(isDealershipLevel || isSuperAdmin) && teamMembers.length > 0 && (
+                                <Select
+                                    value={assignedTo}
+                                    onValueChange={(v) => {
+                                        setAssignedTo(v)
+                                        const params = new URLSearchParams(searchParams.toString())
+                                        if (v && v !== "all") params.set("assigned_to", v)
+                                        else params.delete("assigned_to")
+                                        router.replace(`/leads?${params.toString()}`)
+                                        filterStorage.setLeads({
+                                            filter: viewMode,
+                                            status,
+                                            source,
+                                            view: displayView,
+                                            assigned_to: v !== "all" ? v : undefined,
+                                        })
+                                    }}
+                                >
+                                    <SelectTrigger className="w-44">
+                                        <SelectValue placeholder="Team member" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All team members</SelectItem>
+                                        {teamMembers.map((u) => (
+                                            <SelectItem key={u.id} value={u.id}>
+                                                {u.first_name} {u.last_name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            )}
                         </div>
                         <div className="flex items-center gap-2">
                             <div className="h-4 w-px bg-border" />
@@ -749,7 +827,7 @@ export default function LeadsPage() {
             {displayView === "pipeline" && (
                 <div className="w-full min-w-0 overflow-x-auto">
                     <LeadsPipelineView
-                        stages={viewMode === "converted" ? stages.filter((s) => s.name === "converted") : selectedStageIds.length === 0 ? stages : stages.filter((s) => selectedStageIds.includes(s.id))}
+                        stages={viewMode === "converted" ? stages.filter((s) => s.name === "converted") : viewMode === "manager_review" ? stages.filter((s) => s.name === "manager_review") : selectedStageIds.length === 0 ? stages : stages.filter((s) => selectedStageIds.includes(s.id))}
                         leadsByStage={leadsByStage}
                         stagePagination={stagePagination}
                         loadingMoreStageId={loadingMoreStageId}
@@ -789,10 +867,12 @@ export default function LeadsPage() {
                                                 ? "No fresh leads"
                                                 : viewMode === "converted"
                                                     ? "No converted or sold leads"
-                                                    : "No leads found"
+                                                    : viewMode === "manager_review"
+                                                        ? "No leads awaiting manager review"
+                                                        : "No leads found"
                                 }
                                 description={
-                                    search || (viewMode !== "converted" && viewMode !== "fresh" && status !== "all") || source !== "all"
+                                    search || (viewMode !== "converted" && viewMode !== "fresh" && viewMode !== "manager_review" && status !== "all") || source !== "all"
                                         ? "Try adjusting your filters"
                                         : viewMode === "mine"
                                             ? "Leads assigned to you will appear here"
@@ -802,7 +882,9 @@ export default function LeadsPage() {
                                                     ? "Leads with no activity yet will appear here"
                                                     : viewMode === "converted"
                                                         ? "Leads marked as converted will appear here"
-                                                        : "Create your first lead to get started"
+                                                        : viewMode === "manager_review"
+                                                            ? "Leads sent for manager review will appear here"
+                                                            : "Create your first lead to get started"
                                 }
                                 action={
                                     viewMode !== "unassigned" && canCreateLead && (

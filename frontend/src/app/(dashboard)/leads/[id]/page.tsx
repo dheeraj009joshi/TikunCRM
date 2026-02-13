@@ -32,9 +32,11 @@ import {
     Store,
     LogOut,
     MoreVertical,
+    Download,
     FileStack,
     Upload,
-    ExternalLink
+    ExternalLink,
+    FileText
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -89,10 +91,14 @@ import { formatDateInTimezone, parseAsUTC } from "@/utils/timezone"
 import { Calendar as CalendarPicker } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
+import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
+import JSZip from "jszip"
+import { jsPDF } from "jspdf"
+import autoTable from "jspdf-autotable"
 import {
     AlertDialog,
     AlertDialogAction,
@@ -117,6 +123,8 @@ for (let hour = 6; hour <= 23; hour++) {
     }
 }
 
+const STAGES_HIDDEN_FROM_STATUS_UI = ["follow_up", "negotiation", "reschedule", "in_showroom"]
+
 // Activity type icon mapping
 const getActivityIcon = (type: ActivityType) => {
     switch (type) {
@@ -136,8 +144,24 @@ const getActivityIcon = (type: ActivityType) => {
         case "appointment_cancelled": return <XCircle className="h-4 w-4 text-rose-500" />
         case "stip_document_added": return <FileStack className="h-4 w-4 text-blue-500" />
         case "stip_document_removed": return <FileStack className="h-4 w-4 text-slate-500" />
+        case "credit_app_initiated": return <FileText className="h-4 w-4 text-blue-500" />
+        case "credit_app_completed": return <CheckCircle className="h-4 w-4 text-emerald-500" />
+        case "credit_app_abandoned": return <XCircle className="h-4 w-4 text-amber-500" />
         default: return <Clock className="h-4 w-4 text-gray-400" />
     }
+}
+
+function renderCreditAppCompletedBlock(meta: Record<string, unknown> | undefined): React.ReactNode {
+    if (!meta) return null;
+    const appId = meta.application_id; const formId = meta.form_id; const taxId = meta.tax_id;
+    if (appId == null && formId == null && taxId == null) return null;
+    return (
+        <div className="mt-2 p-2 bg-emerald-50 dark:bg-emerald-900/20 rounded text-sm">
+            {Boolean(appId) && <p><span className="font-medium">Application ID:</span> {String(appId)}</p>}
+            {Boolean(formId) && <p><span className="font-medium">Form ID:</span> {String(formId)}</p>}
+            {Boolean(taxId) && <p><span className="font-medium">Tax ID:</span> {String(taxId)}</p>}
+        </div>
+    ) as React.ReactNode;
 }
 
 function LeadAppointmentCompleteForm({
@@ -291,6 +315,7 @@ export default function LeadDetailsPage() {
     const { canAssignToSalesperson, canAssignToDealership, role, isDealershipLevel, isSuperAdmin, isSalesperson } = useRole()
     const user = useAuthStore(state => state.user)
     const { timezone } = useBrowserTimezone()
+    const { toast } = useToast()
     
     const [lead, setLead] = React.useState<Lead | null>(null)
     const [activities, setActivities] = React.useState<Activity[]>([])
@@ -324,6 +349,9 @@ export default function LeadDetailsPage() {
     
     // Lost reason modal
     const [showLostReasonModal, setShowLostReasonModal] = React.useState(false)
+    const [showStageNotesModal, setShowStageNotesModal] = React.useState(false)
+    const [pendingStageForNotes, setPendingStageForNotes] = React.useState<string | null>(null)
+    const [stageNotes, setStageNotes] = React.useState("")
     const [lostReason, setLostReason] = React.useState("")
     
     // Showroom check-in/out
@@ -343,6 +371,10 @@ export default function LeadDetailsPage() {
     // Appointment actions (lead detail Appointments tab)
     const [appointmentCompleteModal, setAppointmentCompleteModal] = React.useState<Appointment | null>(null)
     const [appointmentRescheduleModal, setAppointmentRescheduleModal] = React.useState<Appointment | null>(null)
+    // Credit app outcome (capture when user returns after initiating)
+    const [showCreditAppOutcomeModal, setShowCreditAppOutcomeModal] = React.useState(false)
+    const [creditAppOutcomeSubmitting, setCreditAppOutcomeSubmitting] = React.useState<"complete" | "abandon" | null>(null)
+    const [isInitiatingCreditApp, setIsInitiatingCreditApp] = React.useState(false)
     
     // Reply to note
     const [replyingTo, setReplyingTo] = React.useState<string | null>(null)
@@ -367,6 +399,9 @@ export default function LeadDetailsPage() {
     const [stipsUploadTotalFiles, setStipsUploadTotalFiles] = React.useState<number>(0)
     const [stipsUploadCompletedCount, setStipsUploadCompletedCount] = React.useState<number>(0)
     const [stipsViewDoc, setStipsViewDoc] = React.useState<{ url: string; fileName: string; contentType: string } | null>(null)
+    const [exportLoading, setExportLoading] = React.useState(false)
+    const [exportProgress, setExportProgress] = React.useState(0)
+    const [exportStatus, setExportStatus] = React.useState("")
 
     // Pipeline stages (for status dropdown with correct colors)
     const [stages, setStages] = React.useState<LeadStage[]>([])
@@ -645,6 +680,16 @@ export default function LeadDetailsPage() {
         fetchLeadAppointmentsAndFollowUps()
     }, [fetchLead, fetchActivities, fetchShowroomStatus, fetchLeadAppointmentsAndFollowUps])
 
+    // Pending credit app: most recent credit-app activity is "initiated" (not completed/abandoned)
+    const hasPendingCreditApp = React.useMemo(() => {
+        const creditTypes = ["credit_app_initiated", "credit_app_completed", "credit_app_abandoned"] as const
+        const creditActivities = activities
+            .filter((a) => creditTypes.includes(a.type as typeof creditTypes[number]))
+            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        const latest = creditActivities[0]
+        return latest?.type === "credit_app_initiated"
+    }, [activities])
+
     React.useEffect(() => {
         LeadStageService.list().then(setStages).catch(console.error)
     }, [])
@@ -691,7 +736,595 @@ export default function LeadDetailsPage() {
             fetchStipsDocuments()
         }
     }, [leadId, activeActivityTab, activeStipsCategoryId, fetchStipsDocuments])
-    
+
+    const handleExport = React.useCallback(async () => {
+        if (!leadId || !lead) return
+        setExportLoading(true)
+        setExportProgress(0)
+        setExportStatus("Fetching activities…")
+        toast({ title: "Preparing export…", description: "Gathering activities, notes, and documents." })
+        try {
+            const zip = new JSZip()
+            const leadName = (lead as any).customer
+                ? `${(lead as any).customer.first_name || ""} ${(lead as any).customer.last_name || ""}`.trim() || "Lead"
+                : "Lead"
+            const safeLeadName = leadName.replace(/[<>:"/\\|?*]/g, "_").slice(0, 80) || "Lead"
+
+            // Fetch all activities for export (paginate so we get full timeline and all notes)
+            let allActivities: Activity[] = []
+            let page = 1
+            const pageSize = 100
+            while (true) {
+                const res = await ActivityService.getLeadTimeline(leadId, { page, page_size: pageSize })
+                allActivities = allActivities.concat(res.items)
+                if (res.items.length < pageSize || allActivities.length >= res.total) break
+                page += 1
+            }
+            allActivities.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+            setExportProgress(20)
+            setExportStatus("Building README…")
+
+            const taxIdActivity = allActivities.find(
+                (a) => a.type === "credit_app_completed" && (a.meta_data as Record<string, unknown>)?.tax_id
+            )
+            const taxId = taxIdActivity
+                ? String((taxIdActivity.meta_data as Record<string, unknown>).tax_id)
+                : null
+
+            const getActivityLabel = (type: string) => (ACTIVITY_TYPE_INFO as Record<string, { label: string }>)[type]?.label ?? type
+            const getAuthor = (a: Activity) => a.user ? `${a.user.first_name} ${a.user.last_name}`.trim() : "System"
+            const getNoteContent = (a: Activity) => String((a.meta_data as Record<string, unknown>)?.content ?? a.description ?? "").trim()
+
+            let readme = `# Lead: ${leadName}\n\n`
+            if (taxId) {
+                readme += `## Tax ID\n\n${taxId}\n\n`
+            }
+
+            const creditAppActivities = allActivities.filter(
+                (a) => a.type === "credit_app_initiated" || a.type === "credit_app_completed" || a.type === "credit_app_abandoned"
+            )
+            if (creditAppActivities.length > 0) {
+                readme += `## Credit Application\n\n`
+                creditAppActivities.forEach((a) => {
+                    const date = a.created_at ? format(new Date(a.created_at), "yyyy-MM-dd HH:mm") : ""
+                    readme += `- **${getActivityLabel(a.type)}** — ${date} — ${getAuthor(a)}\n`
+                    readme += `  ${a.description || ""}\n`
+                    const meta = (a.meta_data || {}) as Record<string, unknown>
+                    if (a.type === "credit_app_completed") {
+                        if (meta.application_id) readme += `  Application ID: ${meta.application_id}\n`
+                        if (meta.form_id) readme += `  Form ID: ${meta.form_id}\n`
+                        if (meta.tax_id) readme += `  Tax ID: ${meta.tax_id}\n`
+                    } else if (a.type === "credit_app_abandoned" && meta.reason) {
+                        readme += `  Reason: ${meta.reason}\n`
+                    }
+                    readme += `\n`
+                })
+            }
+
+            readme += `## Activity Timeline\n\n`
+            allActivities.forEach((a) => {
+                const date = a.created_at ? format(new Date(a.created_at), "yyyy-MM-dd HH:mm") : ""
+                readme += `- **${getActivityLabel(a.type)}** — ${date} — ${getAuthor(a)}\n`
+                readme += `  ${a.description || ""}\n`
+                if (a.type === "note_added") {
+                    const content = getNoteContent(a)
+                    if (content) readme += `  ${content}\n`
+                }
+                readme += `\n`
+            })
+
+            const allNotes = allActivities.filter((a) => a.type === "note_added")
+            const parentNotes = allNotes
+                .filter((n) => !n.parent_id)
+                .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+            const repliesMap = allNotes.reduce((acc, note) => {
+                if (note.parent_id) {
+                    if (!acc[note.parent_id]) acc[note.parent_id] = []
+                    acc[note.parent_id].push(note)
+                }
+                return acc
+            }, {} as Record<string, Activity[]>)
+            Object.keys(repliesMap).forEach((parentId) => {
+                repliesMap[parentId].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+            })
+
+            readme += `## Notes\n\n`
+            if (parentNotes.length === 0) {
+                readme += `No notes.\n`
+            } else {
+                parentNotes.forEach((note) => {
+                    const author = getAuthor(note)
+                    const content = getNoteContent(note)
+                    const date = note.created_at ? format(new Date(note.created_at), "yyyy-MM-dd HH:mm") : ""
+                    readme += `### ${date} — ${author}\n\n${content || "(no content)"}\n\n`
+                    const replies = repliesMap[note.id] || []
+                    replies.forEach((reply) => {
+                        const replyAuthor = getAuthor(reply)
+                        const replyContent = getNoteContent(reply)
+                        const replyDate = reply.created_at ? format(new Date(reply.created_at), "yyyy-MM-dd HH:mm") : ""
+                        readme += `  - **${replyDate} — ${replyAuthor}:** ${replyContent || "(no content)"}\n`
+                    })
+                    if (replies.length) readme += `\n`
+                })
+            }
+            zip.file("README.md", readme)
+            setExportProgress(40)
+            setExportStatus("Loading document list…")
+
+            const allDocs = await StipsService.listDocuments(leadId)
+            setExportProgress(45)
+            const byCategory = allDocs.reduce((acc, doc) => {
+                const cat = doc.category_name || "Documents"
+                const safe = cat.replace(/[<>:"/\\|?*]/g, "_").trim() || "Documents"
+                if (!acc[safe]) acc[safe] = []
+                acc[safe].push(doc)
+                return acc
+            }, {} as Record<string, StipDocument[]>)
+
+            type DocTask = { folderName: string; doc: StipDocument; fileName: string }
+            const tasks: DocTask[] = []
+            for (const [folderName, docs] of Object.entries(byCategory)) {
+                const usedNames = new Set<string>()
+                for (const doc of docs) {
+                    let fileName = doc.file_name || "document"
+                    if (usedNames.has(fileName)) {
+                        const ext = fileName.includes(".") ? fileName.slice(fileName.lastIndexOf(".")) : ""
+                        const base = ext ? fileName.slice(0, -ext.length) : fileName
+                        let n = 1
+                        while (usedNames.has(fileName)) {
+                            fileName = base + " (" + String(n) + ")" + ext
+                            n += 1
+                        }
+                    }
+                    usedNames.add(fileName)
+                    tasks.push({ folderName, doc, fileName })
+                }
+            }
+
+            const totalDocs = tasks.length
+            const CONCURRENCY = 8
+            let completed = 0
+            const updateProgress = () => {
+                completed += 1
+                setExportStatus(`Downloading documents (${completed}/${totalDocs})…`)
+                setExportProgress(totalDocs > 0 ? 45 + Math.round((50 * completed) / totalDocs) : 95)
+            }
+
+            const runOne = async (task: DocTask) => {
+                try {
+                    const buf = await StipsService.downloadDocument(leadId, task.doc.id)
+                    zip.file(`${task.folderName}/${task.fileName}`, buf)
+                } catch {
+                    zip.file(`${task.folderName}/${task.fileName}`, "[download failed]")
+                }
+                updateProgress()
+            }
+
+            const queue = [...tasks]
+            const worker = async () => {
+                while (queue.length > 0) {
+                    const task = queue.shift()
+                    if (task) await runOne(task)
+                }
+            }
+            await Promise.all(
+                Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, () => worker())
+            )
+
+            setExportProgress(95)
+            setExportStatus("Generating ZIP…")
+            const blob = await zip.generateAsync({ type: "blob" })
+            setExportProgress(100)
+            setExportStatus("Done")
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement("a")
+            a.href = url
+            a.download = `${safeLeadName}-export-${format(new Date(), "yyyy-MM-dd")}.zip`
+            a.click()
+            URL.revokeObjectURL(url)
+            toast({ title: "Export ready", description: "ZIP file has been downloaded." })
+        } catch (e) {
+            console.error(e)
+            const msg = e && typeof e === "object" && "message" in e ? String((e as Error).message) : "Export failed"
+            toast({ title: "Export failed", description: msg, variant: "destructive" })
+        } finally {
+            setExportLoading(false)
+            setExportProgress(0)
+            setExportStatus("")
+        }
+    }, [leadId, lead, activities, toast])
+
+    const handleExportPdf = React.useCallback(async () => {
+        if (!leadId || !lead) return
+        setExportLoading(true)
+        setExportProgress(0)
+        setExportStatus("Fetching activities…")
+        toast({ title: "Preparing PDF export…", description: "Gathering lead info, notes, and documents." })
+        try {
+            const leadName = getLeadFullName(lead)
+            const safeLeadName = leadName.replace(/[<>:"/\\|?*]/g, "_").slice(0, 80) || "Lead"
+
+            let allActivities: Activity[] = []
+            let page = 1
+            const pageSize = 100
+            while (true) {
+                const res = await ActivityService.getLeadTimeline(leadId, { page, page_size: pageSize })
+                allActivities = allActivities.concat(res.items)
+                if (res.items.length < pageSize || allActivities.length >= res.total) break
+                page += 1
+            }
+            allActivities.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+            setExportProgress(20)
+            setExportStatus("Building PDF…")
+
+            const taxIdActivity = allActivities.find(
+                (a) => a.type === "credit_app_completed" && (a.meta_data as Record<string, unknown>)?.tax_id
+            )
+            const taxId = taxIdActivity
+                ? String((taxIdActivity.meta_data as Record<string, unknown>).tax_id)
+                : null
+            const getAuthor = (a: Activity) => a.user ? `${a.user.first_name} ${a.user.last_name}`.trim() : "System"
+            const getNoteContent = (a: Activity) => String((a.meta_data as Record<string, unknown>)?.content ?? a.description ?? "").trim()
+            const getActivityLabel = (type: string) => (ACTIVITY_TYPE_INFO as Record<string, { label: string }>)[type]?.label ?? type
+            const creditAppActivities = allActivities.filter(
+                (a) => a.type === "credit_app_initiated" || a.type === "credit_app_completed" || a.type === "credit_app_abandoned"
+            )
+            const allNotes = allActivities.filter((a) => a.type === "note_added")
+            const parentNotes = allNotes
+                .filter((n) => !n.parent_id)
+                .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+            const repliesMap = allNotes.reduce((acc, note) => {
+                if (note.parent_id) {
+                    if (!acc[note.parent_id]) acc[note.parent_id] = []
+                    acc[note.parent_id].push(note)
+                }
+                return acc
+            }, {} as Record<string, Activity[]>)
+            Object.keys(repliesMap).forEach((parentId) => {
+                repliesMap[parentId].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+            })
+
+            setExportProgress(40)
+            setExportStatus("Loading document list…")
+            const allDocs = await StipsService.listDocuments(leadId)
+            setExportProgress(45)
+
+            type DocWithUrl = StipDocument & { viewUrl?: string }
+            const docsWithUrls: DocWithUrl[] = []
+            const totalDocs = allDocs.length
+            const CONCURRENCY = 8
+            let completed = 0
+            const queue = [...allDocs]
+            const worker = async () => {
+                while (queue.length > 0) {
+                    const doc = queue.shift()
+                    if (!doc) continue
+                    try {
+                        const { url } = await StipsService.getViewUrl(leadId, doc.id)
+                        docsWithUrls.push({ ...doc, viewUrl: url })
+                    } catch {
+                        docsWithUrls.push({ ...doc, viewUrl: "" })
+                    }
+                    completed += 1
+                    setExportStatus(`Getting document links (${completed}/${totalDocs})…`)
+                    setExportProgress(totalDocs > 0 ? 45 + Math.round((50 * completed) / totalDocs) : 95)
+                }
+            }
+            await Promise.all(Array.from({ length: Math.min(CONCURRENCY, totalDocs) }, () => worker()))
+
+            setExportProgress(95)
+            setExportStatus("Generating PDF…")
+            const doc = new jsPDF({ format: "a4", unit: "mm" })
+            const margin = 14
+            const pageW = 210
+            const pageH = 297
+            let y = margin
+            const lineH = 6
+            const headH = 8
+            const primaryBlue = [37, 99, 235] as [number, number, number]
+            const white = [255, 255, 255] as [number, number, number]
+            const bodyText = [30, 30, 30] as [number, number, number]
+            const mutedBg = [248, 250, 252] as [number, number, number]
+            const borderGray = [226, 232, 240] as [number, number, number]
+            const mutedText = [100, 116, 139] as [number, number, number]
+            const titleSize = 20
+            const sectionSize = 14
+            const subsectionSize = 11
+            const bodySize = 10
+            const smallSize = 9
+            const sectionGap = 12
+            const blockPadding = 8
+            const cardPadding = 6
+            const labelWidth = 50
+            let currentPage = 1
+
+            const drawFooter = () => {
+                const yFooter = pageH - 10
+                doc.setDrawColor(...borderGray)
+                doc.setLineWidth(0.3)
+                doc.line(margin, yFooter - 2, pageW - margin, yFooter - 2)
+                doc.setFontSize(smallSize)
+                doc.setTextColor(...mutedText)
+                doc.text("Leeds CRM — Lead export", margin, yFooter + 2)
+                doc.text(`Page ${currentPage}`, pageW - margin, yFooter + 2, { align: "right" })
+            }
+
+            const ensureSpace = (requiredMm: number) => {
+                if (y + requiredMm > pageH - margin - 15) {
+                    drawFooter()
+                    doc.addPage()
+                    currentPage += 1
+                    y = margin
+                }
+            }
+
+            const drawHorizontalLine = (yPos: number) => {
+                doc.setDrawColor(...borderGray)
+                doc.setLineWidth(0.3)
+                doc.line(margin, yPos, pageW - margin, yPos)
+            }
+
+            const drawSectionHeader = (title: string, num?: number) => {
+                ensureSpace(sectionGap + headH + 6)
+                const leftBarW = 3
+                const barHeight = 7
+                doc.setFillColor(...primaryBlue)
+                doc.rect(margin, y, leftBarW, barHeight, "F")
+                doc.setTextColor(...primaryBlue)
+                doc.setFontSize(sectionSize)
+                doc.setFont("helvetica", "bold")
+                const headerText = num != null ? `${num}. ${title}` : title
+                doc.text(headerText, margin + leftBarW + 5, y + barHeight * 0.72)
+                doc.setFont("helvetica", "normal")
+                y += barHeight + sectionGap
+            }
+
+            const drawSubsectionHeader = (title: string) => {
+                ensureSpace(lineH + 4)
+                doc.setFillColor(...primaryBlue)
+                doc.rect(margin, y, 2, subsectionSize * 0.4, "F")
+                doc.setTextColor(...primaryBlue)
+                doc.setFontSize(subsectionSize)
+                doc.setFont("helvetica", "bold")
+                doc.text(title, margin + 5, y + subsectionSize * 0.35)
+                doc.setFont("helvetica", "normal")
+                y += lineH + 4
+            }
+
+            const drawCard = (estimatedHeightMm: number, drawContent: () => void) => {
+                const cardY = y
+                ensureSpace(estimatedHeightMm)
+                doc.setFillColor(...mutedBg)
+                doc.rect(margin, cardY, pageW - 2 * margin, estimatedHeightMm, "F")
+                y = cardY + cardPadding
+                drawContent()
+                y += cardPadding
+                const cardH = y - cardY
+                doc.setDrawColor(...borderGray)
+                doc.setLineWidth(0.2)
+                doc.rect(margin, cardY, pageW - 2 * margin, cardH, "S")
+            }
+
+            const addText = (text: string, fontSize?: number, color?: [number, number, number]) => {
+                doc.setTextColor(...(color ?? bodyText))
+                if (fontSize) doc.setFontSize(fontSize)
+                const lines = doc.splitTextToSize(text, pageW - 2 * margin)
+                for (const line of lines) {
+                    ensureSpace(lineH)
+                    doc.text(line, margin, y)
+                    y += lineH
+                }
+                if (fontSize) doc.setFontSize(bodySize)
+            }
+
+            const addLabelValue = (label: string, value: string) => {
+                ensureSpace(lineH)
+                doc.setFontSize(bodySize)
+                doc.setTextColor(...mutedText)
+                doc.setFont("helvetica", "bold")
+                doc.text(`${label}:`, margin, y)
+                doc.setFont("helvetica", "normal")
+                doc.setTextColor(...bodyText)
+                const valueLines = doc.splitTextToSize(value || "—", pageW - 2 * margin - labelWidth - 4)
+                doc.text(valueLines[0], margin + labelWidth, y)
+                y += lineH
+                for (let i = 1; i < valueLines.length; i++) {
+                    ensureSpace(lineH)
+                    doc.text(valueLines[i], margin + labelWidth, y)
+                    y += lineH
+                }
+            }
+
+            ensureSpace(35)
+            doc.setFillColor(...primaryBlue)
+            doc.rect(0, 0, pageW, 6, "F")
+            y = 10
+            doc.setTextColor(...primaryBlue)
+            doc.setFontSize(titleSize)
+            doc.setFont("helvetica", "bold")
+            doc.text(leadName, margin, y)
+            doc.setFont("helvetica", "normal")
+            y += lineH + 2
+            doc.setFontSize(smallSize)
+            doc.setTextColor(...mutedText)
+            doc.text("Lead export", margin, y)
+            y += lineH
+            doc.text(`Generated: ${format(new Date(), "yyyy-MM-dd HH:mm")}`, margin, y)
+            y += lineH + 4
+            drawHorizontalLine(y)
+            y += sectionGap
+
+            drawSectionHeader("Lead details", 1)
+            const sec = (lead as Lead).secondary_customer
+            const firstContact = (lead as Lead).first_contacted_at
+            const lastContact = (lead as Lead).last_contacted_at
+            const assigned = (lead as Lead).assigned_to_user
+            const dealership = (lead as Lead).dealership?.name
+            ensureSpace(95)
+            const leadFields: { label: string; value: string }[] = [
+                { label: "Lead", value: leadName },
+                { label: "Phone", value: getLeadPhone(lead) ?? "" },
+                { label: "Email", value: getLeadEmail(lead) ?? "" },
+                { label: "Secondary", value: sec ? [sec.first_name, sec.last_name].filter(Boolean).join(" ") : "" },
+                { label: "Stage", value: (lead as Lead).stage?.name ?? "" },
+                { label: "Source", value: (lead as Lead).source ?? "" },
+                { label: "Created", value: (lead as Lead).created_at ? format(new Date((lead as Lead).created_at), "yyyy-MM-dd HH:mm") : "" },
+                { label: "First contacted", value: firstContact ? format(new Date(firstContact), "yyyy-MM-dd HH:mm") : "" },
+                { label: "Last contacted", value: lastContact ? format(new Date(lastContact), "yyyy-MM-dd HH:mm") : "" },
+                { label: "Assigned to", value: assigned ? `${assigned.first_name} ${assigned.last_name}` : "" },
+                { label: "Dealership", value: dealership ?? "" },
+                { label: "Tax ID", value: taxId ?? "" },
+            ]
+            const leadCardHeight = Math.max(90, leadFields.length * lineH * 2 + 2 * cardPadding)
+            drawCard(leadCardHeight, () => {
+                leadFields.forEach(({ label, value }) => addLabelValue(label, value))
+            })
+            drawHorizontalLine(y)
+            y += sectionGap
+
+            drawSectionHeader("Notes", 2)
+            drawSubsectionHeader("2.1 Credit application notes")
+            doc.setFontSize(bodySize)
+
+            if (creditAppActivities.length > 0) {
+                creditAppActivities.forEach((a) => {
+                    ensureSpace(28)
+                    const cardStartY = y
+                    const date = a.created_at ? format(new Date(a.created_at), "yyyy-MM-dd HH:mm") : ""
+                    const author = getAuthor(a)
+                    const label = getActivityLabel(a.type)
+                    doc.setTextColor(...bodyText)
+                    doc.setFontSize(bodySize)
+                    doc.text(`${date} — ${author} — ${label}`, margin + 6, y + 4)
+                    y += lineH
+                    doc.text(a.description || "", margin + 6, y + 4)
+                    y += lineH
+                    const meta = (a.meta_data || {}) as Record<string, unknown>
+                    if (a.type === "credit_app_completed") {
+                        if (meta.application_id) { doc.text(`Application ID: ${String(meta.application_id)}`, margin + 6, y + 4); y += lineH }
+                        if (meta.form_id) { doc.text(`Form ID: ${String(meta.form_id)}`, margin + 6, y + 4); y += lineH }
+                        if (meta.tax_id) { doc.text(`Tax ID: ${String(meta.tax_id)}`, margin + 6, y + 4); y += lineH }
+                    } else if (a.type === "credit_app_abandoned" && meta.reason) {
+                        doc.text(`Reason: ${String(meta.reason)}`, margin + 6, y + 4)
+                        y += lineH
+                    }
+                    y += 4
+                    const cardH = y - cardStartY
+                    doc.setFillColor(...primaryBlue)
+                    doc.rect(margin, cardStartY, 2, cardH, "F")
+                    doc.setDrawColor(...borderGray)
+                    doc.setLineWidth(0.2)
+                    doc.rect(margin, cardStartY, pageW - 2 * margin, cardH, "S")
+                    y += blockPadding
+                })
+            } else {
+                doc.setTextColor(...mutedText)
+                addText("No credit application notes.")
+                y += blockPadding
+            }
+
+            drawSubsectionHeader("2.2 Activity notes")
+            doc.setFontSize(bodySize)
+
+            if (parentNotes.length === 0) {
+                doc.setTextColor(...mutedText)
+                addText("No activity notes.")
+            } else {
+                parentNotes.forEach((note) => {
+                    ensureSpace(35)
+                    const cardStartY = y
+                    const author = getAuthor(note)
+                    const content = getNoteContent(note)
+                    const date = note.created_at ? format(new Date(note.created_at), "yyyy-MM-dd HH:mm") : ""
+                    doc.setTextColor(...bodyText)
+                    doc.setFontSize(bodySize)
+                    doc.text(`${date} — ${author}`, margin + 6, y + 4)
+                    y += lineH
+                    const contentLines = doc.splitTextToSize(content || "(no content)", pageW - 2 * margin - 8)
+                    contentLines.forEach((line: string) => { doc.text(line, margin + 6, y + 4); y += lineH })
+                    const replies = repliesMap[note.id] || []
+                    replies.forEach((reply) => {
+                        const replyAuthor = getAuthor(reply)
+                        const replyContent = getNoteContent(reply)
+                        const replyDate = reply.created_at ? format(new Date(reply.created_at), "yyyy-MM-dd HH:mm") : ""
+                        const replyLines = doc.splitTextToSize(`Reply ${replyDate} — ${replyAuthor}: ${replyContent || "(no content)"}`, pageW - 2 * margin - 12)
+                        replyLines.forEach((line: string) => { doc.text(`  ${line}`, margin + 6, y + 4); y += lineH })
+                    })
+                    y += 4
+                    const cardH = y - cardStartY
+                    doc.setFillColor(...primaryBlue)
+                    doc.rect(margin, cardStartY, 2, cardH, "F")
+                    doc.setDrawColor(...borderGray)
+                    doc.setLineWidth(0.2)
+                    doc.rect(margin, cardStartY, pageW - 2 * margin, cardH, "S")
+                    y += blockPadding
+                })
+            }
+            y += sectionGap
+            drawHorizontalLine(y)
+            y += sectionGap
+
+            drawSectionHeader("Documents", 3)
+            const byCategory = docsWithUrls.reduce((acc, d) => {
+                const cat = d.category_name || "Documents"
+                if (!acc[cat]) acc[cat] = []
+                acc[cat].push(d)
+                return acc
+            }, {} as Record<string, DocWithUrl[]>)
+
+            for (const [categoryName, docs] of Object.entries(byCategory)) {
+                ensureSpace(40)
+                drawSubsectionHeader(categoryName)
+                doc.setTextColor(...bodyText)
+                const tableBody = docs.map((d, i) => [
+                    i + 1,
+                    d.file_name || "document",
+                    d.uploaded_by_name ?? "—",
+                    "Open document",
+                ])
+                const linkColumnIndex = 3
+                autoTable(doc, {
+                    startY: y,
+                    head: [["S. No.", "Document name", "Uploaded by", "Open document"]],
+                    body: tableBody,
+                    margin: { left: margin },
+                    styles: { fontSize: smallSize, cellPadding: 4 },
+                    headStyles: { fillColor: primaryBlue, textColor: white },
+                    alternateRowStyles: { fillColor: mutedBg },
+                    columnStyles: {
+                        0: { cellWidth: 16 },
+                        3: { cellWidth: 28 },
+                    },
+                    didDrawCell: (data) => {
+                        if (data.section === "body" && data.column.index === linkColumnIndex) {
+                            const rowIndex = data.row.index
+                            const viewUrl = docs[rowIndex]?.viewUrl
+                            if (viewUrl && typeof viewUrl === "string") {
+                                doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { url: viewUrl })
+                            }
+                        }
+                    },
+                })
+                const lastTable = (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable
+                y = (lastTable?.finalY ?? y) + 10
+            }
+
+            drawFooter()
+            setExportProgress(100)
+            setExportStatus("Done")
+            doc.save(`${safeLeadName}-${format(new Date(), "yyyy-MM-dd")}.pdf`)
+            toast({ title: "Export ready", description: "PDF has been downloaded." })
+        } catch (e) {
+            console.error("PDF export failed:", e)
+            const msg = e && typeof e === "object" && "message" in e ? String((e as Error).message) : "Export failed"
+            toast({ title: "Export failed", description: `${msg} Check console for details.`, variant: "destructive" })
+        } finally {
+            setExportLoading(false)
+            setExportProgress(0)
+            setExportStatus("")
+        }
+    }, [leadId, lead, toast])
+
     // When opened from mention notification (?note=activity_id): expand thread if reply, then scroll to note
     const scrolledToNoteRef = React.useRef<string | null>(null)
     React.useEffect(() => {
@@ -787,6 +1420,22 @@ export default function LeadDetailsPage() {
     
     useActivityEvents(leadId, handleNewActivity)
 
+    const onStatusSelect = (newStatus: string) => {
+        if (!lead) return
+        if (newStatus === "lost") {
+            setShowLostReasonModal(true)
+            return
+        }
+        const stage = stages.find((s) => s.name === newStatus)
+        if (stage?.is_terminal) {
+            setPendingStageForNotes(newStatus)
+            setStageNotes("")
+            setShowStageNotesModal(true)
+            return
+        }
+        handleStatusChange(newStatus)
+    }
+
     const handleStatusChange = async (newStatus: string, notes?: string, confirmSkate?: boolean) => {
         if (!lead) return
         
@@ -823,6 +1472,14 @@ export default function LeadDetailsPage() {
         await handleStatusChange("lost", `Lost Reason: ${lostReason}`)
         setShowLostReasonModal(false)
         setLostReason("")
+    }
+
+    const handleConfirmStageNotes = async () => {
+        if (pendingStageForNotes == null) return
+        await handleStatusChange(pendingStageForNotes, stageNotes.trim() || undefined)
+        setShowStageNotesModal(false)
+        setPendingStageForNotes(null)
+        setStageNotes("")
     }
 
     const handleDeleteLead = async () => {
@@ -993,7 +1650,7 @@ export default function LeadDetailsPage() {
     }
 
     if (isLoading) {
-        return (
+    return (
             <div className="flex h-[50vh] items-center justify-center">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
@@ -1087,10 +1744,10 @@ export default function LeadDetailsPage() {
                     {/* Profile Card */}
                     <Card className="overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
                         <CardContent className="p-6">
-                            <div className="flex flex-col items-center text-center">
+                        <div className="flex flex-col items-center text-center">
                                 <div className="h-20 w-20 rounded-full bg-primary/10 flex items-center justify-center text-primary text-3xl font-bold mb-4 ring-2 ring-primary/5 transition-transform duration-200 hover:scale-105">
                                     {(lead.customer?.first_name || "?").charAt(0)}
-                                </div>
+                            </div>
                                 <h1 className="text-2xl font-bold tracking-tight text-foreground">
                                     {getLeadFullName(lead)}
                                 </h1>
@@ -1100,7 +1757,7 @@ export default function LeadDetailsPage() {
                                 <div className="mt-3 w-full max-w-xs">
                                     <Select 
                                         value={lead.stage?.name || ""} 
-                                        onValueChange={handleStatusChange}
+                                        onValueChange={onStatusSelect}
                                         disabled={isUpdatingStatus}
                                     >
                                         <SelectTrigger className="w-full bg-white border-input hover:bg-muted/50 transition-colors duration-200 rounded-lg">
@@ -1109,7 +1766,7 @@ export default function LeadDetailsPage() {
                                                 <Badge size="sm" variant={getStatusVariant(lead.stage?.name ?? "")}>
                                                     {getStageLabel(lead.stage)}
                                                 </Badge>
-                                            </div>
+                            </div>
                                         </SelectTrigger>
                                         <SelectContent
                                             className="bg-white shadow-lg max-h-[420px]"
@@ -1117,8 +1774,8 @@ export default function LeadDetailsPage() {
                                         >
                                             {stages
                                                 .filter((stage) => {
-                                                    // Salespersons cannot set status to "lost" or "converted" - only admin/owner can
-                                                    if (isSalesperson && (stage.name === "lost" || stage.name === "converted")) return false
+                                                    if (STAGES_HIDDEN_FROM_STATUS_UI.includes(stage.name)) return false
+                                                    if (isSalesperson && (stage.name === "lost" || stage.name === "converted" || stage.name === "qualified" || stage.name === "couldnt_qualify")) return false
                                                     return true
                                                 })
                                                 .map((stage) => (
@@ -1127,7 +1784,7 @@ export default function LeadDetailsPage() {
                                                         <Badge size="sm" variant={getStatusVariant(stage.name)}>
                                                             {getStageLabel(stage)}
                                                         </Badge>
-                                                    </div>
+                        </div>
                                                 </SelectItem>
                                             ))}
                                         </SelectContent>
@@ -1138,55 +1795,69 @@ export default function LeadDetailsPage() {
                                 {/* Quick Actions - hidden for mention-only access */}
                                 {!isMentionOnly && (
                                 <div className="flex flex-col gap-3 mt-6 w-full">
-                                    <div className="flex flex-wrap gap-2">
-                                        {getLeadPhone(lead) && (
-                                            <>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="shrink-0 h-9 rounded-lg transition-all duration-200 hover:shadow-sm active:scale-[0.98]"
-                                                    onClick={() => setShowCallTextComingSoon(true)}
-                                                    title="Call this lead"
-                                                >
-                                                    <Phone className="h-4 w-4 mr-2 shrink-0" />
-                                                    <span className="whitespace-nowrap">Call</span>
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="shrink-0 h-9 rounded-lg transition-all duration-200 hover:shadow-sm active:scale-[0.98]"
-                                                    onClick={() => setShowCallTextComingSoon(true)}
-                                                    title="Text this lead"
-                                                >
-                                                    <MessageSquare className="h-4 w-4 mr-2 shrink-0" />
-                                                    <span className="whitespace-nowrap">Text</span>
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="shrink-0 h-9 rounded-lg bg-[#25D366]/10 border-[#25D366]/30 text-[#128C7E] hover:bg-[#25D366]/20 transition-all duration-200 hover:shadow-sm active:scale-[0.98]"
-                                                    title="Message on WhatsApp"
-                                                    asChild
-                                                >
-                                                    <Link href={`/whatsapp?lead=${lead.id}`} className="inline-flex items-center">
-                                                        <MessageCircle className="h-4 w-4 mr-2 shrink-0" />
-                                                        <span className="whitespace-nowrap">WhatsApp</span>
-                                                    </Link>
-                                                </Button>
-                                            </>
-                                        )}
-                                        {getLeadEmail(lead) && (
-                                            <Button 
-                                                variant="outline" 
-                                                size="sm"
-                                                className="shrink-0 h-9 rounded-lg transition-all duration-200 hover:shadow-sm active:scale-[0.98]"
-                                                onClick={() => setShowEmailComposer(true)}
+                                    {getLeadPhone(lead) && (
+                                        <div className="grid grid-cols-2 gap-2 w-full">
+                                            <Button
+                                                variant="outline"
+                                                className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
+                                                onClick={() => setShowCallTextComingSoon(true)}
+                                                title="Call this lead"
                                             >
-                                                <Mail className="h-4 w-4 mr-2 shrink-0" />
-                                                <span className="whitespace-nowrap">Email</span>
+                                                <Phone className="h-4 w-4 mr-2 shrink-0" />
+                                                <span className="whitespace-nowrap">Call</span>
                                             </Button>
-                                        )}
-                                    </div>
+                                            <Button
+                                                variant="outline"
+                                                className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
+                                                onClick={() => setShowCallTextComingSoon(true)}
+                                                title="Text this lead"
+                                            >
+                                                <MessageSquare className="h-4 w-4 mr-2 shrink-0" />
+                                                <span className="whitespace-nowrap">Text</span>
+                                            </Button>
+                                        </div>
+                                    )}
+                                    {getLeadEmail(lead) && (
+                                        <Button
+                                            variant="outline"
+                                            className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
+                                            onClick={() => setShowEmailComposer(true)}
+                                        >
+                                            <Mail className="h-4 w-4 mr-2 shrink-0" />
+                                            <span className="whitespace-nowrap">Email</span>
+                                        </Button>
+                                    )}
+                                    {!hasPendingCreditApp && (
+                                        <Button 
+                                            variant="outline" 
+                                            className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
+                                            title="Initiate credit application (opens Toyota South Atlanta)"
+                                            disabled={isInitiatingCreditApp}
+                                            onClick={() => {
+                                                setIsInitiatingCreditApp(true)
+                                                LeadService.creditAppInitiate(lead.id)
+                                                    .then((r) => {
+                                                        if (r?.redirect_url) window.open(r.redirect_url, "_blank")
+                                                        return Promise.all([fetchLead(), fetchActivities()])
+                                                    })
+                                                    .catch((e) => console.error(e))
+                                                    .finally(() => setIsInitiatingCreditApp(false))
+                                            }}
+                                        >
+                                            {isInitiatingCreditApp ? <Loader2 className="h-4 w-4 mr-2 shrink-0 animate-spin text-teal-500" /> : <FileText className="h-4 w-4 mr-2 shrink-0 text-teal-500" />}
+                                            Initiate Credit App
+                                        </Button>
+                                    )}
+                                    {hasPendingCreditApp && (
+                                        <Button 
+                                            variant="outline"
+                                            className="w-full h-10 rounded-lg border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-all duration-200 hover:shadow-sm active:scale-[0.99]"
+                                            onClick={() => setShowCreditAppOutcomeModal(true)}
+                                        >
+                                            <CheckCircle className="h-4 w-4 mr-2 shrink-0" />
+                                            Capture Credit App Outcome
+                                        </Button>
+                                    )}
                                     <Button 
                                         variant="outline" 
                                         className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
@@ -1235,37 +1906,37 @@ export default function LeadDetailsPage() {
                             {/* Contact Details */}
                             <div className="mt-8 space-y-4 pt-6 border-t border-border/60">
                                 {getLeadEmail(lead) && (
-                                    <div className="flex justify-between items-center text-sm">
+                            <div className="flex justify-between items-center text-sm">
                                         <span className="text-muted-foreground flex items-center gap-2">
                                             <Mail className="h-4 w-4" /> Email
                                         </span>
                                         <span className="font-medium">{getLeadEmail(lead)}</span>
-                                    </div>
+                            </div>
                                 )}
                                 {getLeadPhone(lead) && (
-                                    <div className="flex justify-between items-center text-sm">
+                            <div className="flex justify-between items-center text-sm">
                                         <span className="text-muted-foreground flex items-center gap-2">
                                             <Phone className="h-4 w-4" /> Phone
                                         </span>
                                         <span className="font-medium">{getLeadPhone(lead)}</span>
-                                    </div>
+                            </div>
                                 )}
                                 {(lead as any).customer?.alternate_phone && (
-                                    <div className="flex justify-between items-center text-sm">
+                            <div className="flex justify-between items-center text-sm">
                                         <span className="text-muted-foreground flex items-center gap-2">
                                             <Phone className="h-4 w-4" /> Alt. Phone
                                         </span>
                                         <span className="font-medium">{(lead as any).customer?.alternate_phone}</span>
-                                    </div>
+                            </div>
                                 )}
-                                <div className="flex justify-between items-center text-sm">
+                            <div className="flex justify-between items-center text-sm">
                                     <span className="text-muted-foreground flex items-center gap-2">
                                         <Calendar className="h-4 w-4" /> Created
                                     </span>
                                     <span className="font-medium">
                                         <LocalTime date={lead.created_at} />
                                     </span>
-                                </div>
+                            </div>
                                 {lead.last_contacted_at && (
                                     <div className="flex justify-between items-center text-sm">
                                         <span className="text-muted-foreground flex items-center gap-2">
@@ -1274,9 +1945,9 @@ export default function LeadDetailsPage() {
                                         <span className="font-medium">
                                             <LocalTime date={lead.last_contacted_at} />
                                         </span>
-                                    </div>
+                        </div>
                                 )}
-                            </div>
+                    </div>
                         </CardContent>
                     </Card>
 
@@ -1285,7 +1956,7 @@ export default function LeadDetailsPage() {
                         <CardHeader>
                             <CardTitle className="text-base flex items-center gap-2">
                                 <Building2 className="h-4 w-4 text-primary" />
-                                Lead Context
+                            Lead Context
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-4">
@@ -1309,7 +1980,7 @@ export default function LeadDetailsPage() {
                                     <div className="text-xs text-muted-foreground mt-0.5 space-y-0.5">
                                         {getLeadEmail(lead) && <p>{getLeadEmail(lead)}</p>}
                                         {getLeadPhone(lead) && <p>{getLeadPhone(lead)}</p>}
-                                    </div>
+                            </div>
                                 )}
                             </div>
 
@@ -1377,7 +2048,7 @@ export default function LeadDetailsPage() {
                                     Dealership
                                 </p>
                                 {lead.dealership ? (
-                                    <p className="font-medium flex items-center gap-2">
+                                <p className="font-medium flex items-center gap-2">
                                         <Building2 className="h-4 w-4 text-primary" />
                                         {lead.dealership.name}
                                     </p>
@@ -1396,7 +2067,7 @@ export default function LeadDetailsPage() {
                                                 Assign
                                             </Button>
                                         )}
-                                    </div>
+                            </div>
                                 )}
                             </div>
                             
@@ -1485,15 +2156,15 @@ export default function LeadDetailsPage() {
                                     <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
                                         Interested In
                                     </p>
-                                    <div className="rounded-lg bg-muted/50 p-3 mt-1 text-sm border">
+                                <div className="rounded-lg bg-muted/50 p-3 mt-1 text-sm border">
                                         <p className="font-bold text-primary">{lead.interested_in}</p>
                                         {lead.budget_range && (
                                             <p className="text-xs text-muted-foreground mt-0.5">
                                                 Budget: {lead.budget_range}
                                             </p>
                                         )}
-                                    </div>
                                 </div>
+                            </div>
                             )}
 
                             {lead.notes && !isEditingDetails && (
@@ -1502,7 +2173,7 @@ export default function LeadDetailsPage() {
                                         Notes
                                     </p>
                                     <p className="text-sm text-muted-foreground">{lead.notes}</p>
-                                </div>
+                        </div>
                             )}
                         </CardContent>
                     </Card>
@@ -1607,8 +2278,8 @@ export default function LeadDetailsPage() {
                                                 placeholder="Alternate phone"
                                                 className="h-8 text-sm"
                                             />
-                                        </div>
-                                    </div>
+                    </div>
+                </div>
 
                                     {/* Address */}
                                     <div>
@@ -1863,9 +2534,9 @@ export default function LeadDetailsPage() {
                         </CardHeader>
                         <CardContent className="space-y-2">
                             {getLeadPhone(lead) && (
-                                <div className="grid grid-cols-2 gap-2">
+                                <div className="grid grid-cols-2 gap-2 w-full">
                                     <Button 
-                                        className="justify-start" 
+                                        className="w-full justify-start" 
                                         variant="outline"
                                         onClick={() => setShowCallTextComingSoon(true)}
                                     >
@@ -1873,23 +2544,44 @@ export default function LeadDetailsPage() {
                                         Call
                                     </Button>
                                     <Button 
-                                        className="justify-start" 
+                                        className="w-full justify-start" 
                                         variant="outline"
                                         onClick={() => setShowCallTextComingSoon(true)}
                                     >
                                         <MessageSquare className="h-4 w-4 mr-2 text-purple-500" />
                                         Text
                                     </Button>
-                                    <Link href={`/whatsapp?lead=${lead.id}`} className="col-span-2">
-                                        <Button 
-                                            className="w-full justify-start bg-[#25D366]/10 border-[#25D366]/30 text-[#128C7E] hover:bg-[#25D366]/20" 
-                                            variant="outline"
-                                        >
-                                            <MessageCircle className="h-4 w-4 mr-2" />
-                                            Message on WhatsApp
-                                        </Button>
-                                    </Link>
                                 </div>
+                            )}
+                            {!hasPendingCreditApp && (
+                                <Button 
+                                    className="w-full justify-start" 
+                                    variant="outline"
+                                    disabled={isInitiatingCreditApp}
+                                    onClick={() => {
+                                        setIsInitiatingCreditApp(true)
+                                        LeadService.creditAppInitiate(lead.id)
+                                            .then((r) => {
+                                                if (r?.redirect_url) window.open(r.redirect_url, "_blank")
+                                                return Promise.all([fetchLead(), fetchActivities()])
+                                            })
+                                            .catch((e) => console.error(e))
+                                            .finally(() => setIsInitiatingCreditApp(false))
+                                    }}
+                                >
+                                    {isInitiatingCreditApp ? <Loader2 className="h-4 w-4 mr-2 animate-spin text-teal-500" /> : <FileText className="h-4 w-4 mr-2 text-teal-500" />}
+                                    Initiate Credit App
+                                </Button>
+                            )}
+                            {hasPendingCreditApp && (
+                                <Button 
+                                    className="w-full justify-start border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100" 
+                                    variant="outline"
+                                    onClick={() => setShowCreditAppOutcomeModal(true)}
+                                >
+                                    <CheckCircle className="h-4 w-4 mr-2" />
+                                    Capture Credit App Outcome
+                                </Button>
                             )}
                             <Button 
                                 className="w-full justify-start" 
@@ -1977,13 +2669,13 @@ export default function LeadDetailsPage() {
                 <div className="lg:col-span-2 flex flex-col min-h-0 overflow-hidden">
                     <Card className="flex-1 flex flex-col min-h-0 overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
                         <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as "timeline" | "notes" | "appointments" | "followups" | "stips")} className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                            <div className="border-b border-border/60 px-6">
+                            <div className="border-b border-border/60 px-6 flex items-center justify-between gap-4">
                                 <TabsList className="bg-transparent h-auto p-0 gap-1">
                                     <TabsTrigger 
                                         value="timeline"
                                         className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
-                                    >
-                                        Activity Timeline
+                            >
+                                Activity Timeline
                                     </TabsTrigger>
                                     <TabsTrigger 
                                         value="notes"
@@ -1998,7 +2690,7 @@ export default function LeadDetailsPage() {
                                         Appointments
                                         {appointmentBadgeCount > 0 && (
                                             <span
-                                                className={cn(
+                                className={cn(
                                                     "h-5 min-w-[20px] rounded-full text-white text-xs font-medium flex items-center justify-center px-1.5",
                                                     appointmentBadgeColor === "red" && "bg-red-500",
                                                     appointmentBadgeColor === "green" && "bg-green-500",
@@ -2016,7 +2708,7 @@ export default function LeadDetailsPage() {
                                         Follow-ups
                                         {followUpBadgeCount > 0 && (
                                             <span
-                                                className={cn(
+                                className={cn(
                                                     "h-5 min-w-[20px] rounded-full text-white text-xs font-medium flex items-center justify-center px-1.5",
                                                     followUpBadgeColor === "red" && "bg-red-500",
                                                     followUpBadgeColor === "green" && "bg-green-500",
@@ -2035,7 +2727,47 @@ export default function LeadDetailsPage() {
                                         Stips
                                     </TabsTrigger>
                                 </TabsList>
-                            </div>
+                                <div className="shrink-0 flex flex-col items-end gap-1.5 min-w-[140px]">
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="w-full"
+                                                disabled={exportLoading}
+                                                title="Export lead data"
+                                            >
+                                                {exportLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                                                <span className="ml-1.5">Export</span>
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                            <DropdownMenuItem onClick={() => handleExport()} disabled={exportLoading}>
+                                                <Download className="h-4 w-4 mr-2" />
+                                                Export as ZIP
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem onClick={() => handleExportPdf()} disabled={exportLoading}>
+                                                <FileText className="h-4 w-4 mr-2" />
+                                                Export as PDF
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                    {exportLoading && (
+                                        <>
+                                            <div className="w-full flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                                                <span className="truncate">{exportStatus}</span>
+                                                <span className="font-medium tabular-nums">{exportProgress}%</span>
+                                            </div>
+                                            <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                                                <div
+                                                    className="h-full rounded-full bg-primary transition-[width] duration-200"
+                                                    style={{ width: `${exportProgress}%` }}
+                                                />
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                        </div>
 
                             <TabsContent value="timeline" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
                                 {isLoadingActivities ? (
@@ -2050,7 +2782,14 @@ export default function LeadDetailsPage() {
                                     </div>
                                 ) : (
                                     <div className="space-y-4">
-                                        {activities.map((activity, index) => (
+                                        {activities.map((activity, index) => {
+                                            const updatedFieldsLabels: string[] = activity.type === "lead_updated" && Array.isArray(activity.meta_data?.updated_fields_labels) ? (activity.meta_data.updated_fields_labels as string[]) : [];
+                                            const showUpdatedFields: boolean = updatedFieldsLabels.length > 0 && !/^Secondary customer (added|removed|changed to):/.test(String(activity.description));
+                                            const updatedFieldsLabelText: string = updatedFieldsLabels.join(", ");
+                                            const updatedFieldsNode: React.ReactNode = (showUpdatedFields ? (
+                                                <div className="mt-1 text-xs text-muted-foreground">Fields: {updatedFieldsLabelText}</div>
+                                            ) : null) as unknown as React.ReactNode;
+                                            return (
                                             <div key={activity.id} className="flex gap-3 relative">
                                                 {/* Timeline line */}
                                                 {index < activities.length - 1 && (
@@ -2122,14 +2861,18 @@ export default function LeadDetailsPage() {
                                                             </Badge>
                                                         </div>
                                                     ) : null}
-                                                    {activity.type === "lead_updated" && Array.isArray(activity.meta_data?.updated_fields_labels) && activity.meta_data.updated_fields_labels.length > 0 && !/^Secondary customer (added|removed|changed to):/.test(String(activity.description)) ? (
-                                                        <div className="mt-1 text-xs text-muted-foreground">
-                                                            Fields: {(activity.meta_data.updated_fields_labels as string[]).join(", ")}
+                                                    {updatedFieldsNode}
+                                                    {null /* @ts-expect-error - Activity.meta_data Record<string,unknown> so call result inferred unknown */}
+                                                    {activity.type === "credit_app_completed" ? renderCreditAppCompletedBlock(activity.meta_data) : null}
+                                                    {activity.type === "credit_app_abandoned" && activity.meta_data?.reason && (
+                                                        <div className="mt-2 p-2 bg-amber-50 dark:bg-amber-900/20 rounded text-sm">
+                                                            <span className="font-medium">Reason:</span> {String(activity.meta_data.reason)}
                                                         </div>
-                                                    ) : null}
+                                                    )}
                                                 </div>
                                             </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 )}
                             </TabsContent>
@@ -2226,13 +2969,13 @@ export default function LeadDetailsPage() {
                                                                 </div>
                                                             )}
                                                             <div className="mt-2 flex items-center gap-3">
-                                                                <button
+                                        <button
                                                                     onClick={() => setReplyingTo(replyingTo === note.id ? null : note.id)}
                                                                     className="text-xs text-primary hover:underline flex items-center gap-1"
-                                                                >
+                                        >
                                                                     <MessageSquare className="h-3 w-3" />
                                                                     Reply
-                                                                </button>
+                                        </button>
                                                                 {replies.length > 0 && (
                                                                     <button
                                                                         onClick={() => {
@@ -2248,8 +2991,8 @@ export default function LeadDetailsPage() {
                                                                             : `View ${replies.length} reply${replies.length !== 1 ? "ies" : ""}`}
                                                                     </button>
                                                                 )}
-                                                            </div>
-                                                        </div>
+                                    </div>
+                                </div>
                                                         
                                                         {/* Replies - nested, shown only when expanded */}
                                                         {replies.length > 0 && expandedReplies.has(note.id) && (
@@ -2288,9 +3031,9 @@ export default function LeadDetailsPage() {
                                                                                             @{u.name}
                                                                                         </Badge>
                                                                                     ))}
-                                                                                </div>
-                                                                            )}
-                                                                        </div>
+                                </div>
+                            )}
+                        </div>
                                                                     )
                                                                 })}
                                                             </div>
@@ -2330,8 +3073,8 @@ export default function LeadDetailsPage() {
                                                                         )}
                                                                     </Button>
                                                                 </div>
-                                                            </div>
-                                                        )}
+                            </div>
+                        )}
                                                     </div>
                                                 )
                                             })}
@@ -2674,21 +3417,27 @@ export default function LeadDetailsPage() {
                                                                 setStipsUploadTotalFiles(files.length)
                                                                 setStipsUploadCompletedCount(0)
                                                                 const total = files.length
+                                                                const UPLOAD_CONCURRENCY = 6
+                                                                const runUpload = (file: File) =>
+                                                                    StipsService.uploadDocument(leadId, categoryId, file).then(() => {
+                                                                        setStipsUploadCompletedCount((c) => {
+                                                                            const next = c + 1
+                                                                            setStipsUploadProgress(total > 0 ? Math.round((next / total) * 100) : 0)
+                                                                            return next
+                                                                        })
+                                                                    })
                                                                 if (total === 1) {
                                                                     StipsService.uploadDocument(leadId, categoryId, files[0], (p) => setStipsUploadProgress(p))
                                                                         .then(() => fetchStipsDocuments())
                                                                         .catch((err) => alert(err?.response?.data?.detail ?? "Upload failed"))
                                                                         .finally(() => { setStipsUploadingCategoryId(null); setStipsUploadProgress(0); setStipsUploadTotalFiles(0); setStipsUploadCompletedCount(0) })
                                                                 } else {
-                                                                    Promise.all(files.map((file) =>
-                                                                        StipsService.uploadDocument(leadId, categoryId, file).then(() => {
-                                                                            setStipsUploadCompletedCount((c) => {
-                                                                                const next = c + 1
-                                                                                setStipsUploadProgress(Math.round((next / total) * 100))
-                                                                                return next
-                                                                            })
-                                                                        })
-                                                                    ))
+                                                                    const queue = files.slice()
+                                                                    const worker = (): Promise<void> =>
+                                                                        queue.length === 0
+                                                                            ? Promise.resolve()
+                                                                            : runUpload(queue.shift()!).then(() => worker())
+                                                                    Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, total) }, worker))
                                                                         .then(() => fetchStipsDocuments())
                                                                         .catch((err) => alert(err?.response?.data?.detail ?? "Upload failed"))
                                                                         .finally(() => { setStipsUploadingCategoryId(null); setStipsUploadProgress(0); setStipsUploadTotalFiles(0); setStipsUploadCompletedCount(0) })
@@ -2696,7 +3445,7 @@ export default function LeadDetailsPage() {
                                                             }}
                                                             onClick={() => document.getElementById(`stips-file-${activeStipsCategoryId}`)?.click()}
                                                         >
-                                                            <input
+                                    <input
                                                                 id={`stips-file-${activeStipsCategoryId}`}
                                                                 type="file"
                                                                 multiple
@@ -2712,21 +3461,27 @@ export default function LeadDetailsPage() {
                                                                     setStipsUploadTotalFiles(files.length)
                                                                     setStipsUploadCompletedCount(0)
                                                                     const total = files.length
+                                                                    const UPLOAD_CONCURRENCY = 6
+                                                                    const runUpload = (file: File) =>
+                                                                        StipsService.uploadDocument(leadId, categoryId, file).then(() => {
+                                                                            setStipsUploadCompletedCount((c) => {
+                                                                                const next = c + 1
+                                                                                setStipsUploadProgress(total > 0 ? Math.round((next / total) * 100) : 0)
+                                                                                return next
+                                                                            })
+                                                                        })
                                                                     if (total === 1) {
                                                                         StipsService.uploadDocument(leadId, categoryId, files[0], (p) => setStipsUploadProgress(p))
                                                                             .then(() => fetchStipsDocuments())
                                                                             .catch((err) => alert(err?.response?.data?.detail ?? "Upload failed"))
                                                                             .finally(() => { setStipsUploadingCategoryId(null); setStipsUploadProgress(0); setStipsUploadTotalFiles(0); setStipsUploadCompletedCount(0) })
                                                                     } else {
-                                                                        Promise.all(files.map((file) =>
-                                                                            StipsService.uploadDocument(leadId, categoryId, file).then(() => {
-                                                                                setStipsUploadCompletedCount((c) => {
-                                                                                    const next = c + 1
-                                                                                    setStipsUploadProgress(Math.round((next / total) * 100))
-                                                                                    return next
-                                                                                })
-                                                                            })
-                                                                        ))
+                                                                        const queue = files.slice()
+                                                                        const worker = (): Promise<void> =>
+                                                                            queue.length === 0
+                                                                                ? Promise.resolve()
+                                                                                : runUpload(queue.shift()!).then(() => worker())
+                                                                        Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, total) }, worker))
                                                                             .then(() => fetchStipsDocuments())
                                                                             .catch((err) => alert(err?.response?.data?.detail ?? "Upload failed"))
                                                                             .finally(() => { setStipsUploadingCategoryId(null); setStipsUploadProgress(0); setStipsUploadTotalFiles(0); setStipsUploadCompletedCount(0) })
@@ -2746,16 +3501,16 @@ export default function LeadDetailsPage() {
                                                                             className="h-full bg-primary transition-all duration-300 ease-out"
                                                                             style={{ width: `${stipsUploadProgress}%` }}
                                                                         />
-                                                                    </div>
-                                                                </div>
+                                    </div>
+                                </div>
                                                             ) : (
                                                                 <>
                                                                     <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
                                                                     <p className="text-sm text-muted-foreground">Drag and drop files here or click to browse (multiple allowed)</p>
                                                                 </>
                                                             )}
-                                                        </div>
-                                                    )}
+                            </div>
+                        )}
                                                     {stipsLoading ? (
                                                         <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
                                                     ) : stipsDocuments.length === 0 ? (
@@ -2770,7 +3525,7 @@ export default function LeadDetailsPage() {
                                                                             {doc.uploaded_by_name && `${doc.uploaded_by_name} · `}
                                                                             {format(new Date(doc.uploaded_at), "MMM d, yyyy HH:mm")}
                                                                         </p>
-                                                                    </div>
+                    </div>
                                                                     <div className="flex items-center gap-1 shrink-0">
                                                                         <Button
                                                                             variant="ghost"
@@ -2805,12 +3560,12 @@ export default function LeadDetailsPage() {
                                                                         >
                                                                             <Trash2 className="h-3.5 w-3.5" />
                                                                         </Button>
-                                                                    </div>
+                </div>
                                                                 </li>
                                                             ))}
                                                         </ul>
                                                     )}
-                                                </div>
+            </div>
                                             )}
                                         </Tabs>
                                     </>
@@ -2862,8 +3617,8 @@ export default function LeadDetailsPage() {
                                                 >
                                                     <ExternalLink className="h-4 w-4 mr-2" /> Open in new tab
                                                 </Button>
-                                            </div>
-                                        )
+        </div>
+    )
                                     )}
                                 </div>
                             </DialogContent>
@@ -3175,6 +3930,69 @@ export default function LeadDetailsPage() {
                 </DialogContent>
             </Dialog>
 
+            {/* Credit app outcome: Completed or Abandoned — no required identifiers */}
+            <Dialog open={showCreditAppOutcomeModal} onOpenChange={setShowCreditAppOutcomeModal}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <FileText className="h-5 w-5" />
+                            Credit Application Outcome
+                        </DialogTitle>
+                        <DialogDescription>
+                            Was the credit application completed or abandoned?
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="flex flex-col gap-3 pt-2">
+                        <Button
+                            disabled={creditAppOutcomeSubmitting !== null}
+                            onClick={async () => {
+                                if (!leadId) return
+                                setCreditAppOutcomeSubmitting("complete")
+                                try {
+                                    await LeadService.creditAppComplete(leadId, {})
+                                    setShowCreditAppOutcomeModal(false)
+                                    fetchLead()
+                                    fetchActivities()
+                                } catch (e: unknown) {
+                                    alert((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Failed to save")
+                                } finally {
+                                    setCreditAppOutcomeSubmitting(null)
+                                }
+                            }}
+                        >
+                            {creditAppOutcomeSubmitting === "complete" ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle className="h-4 w-4 mr-2" />}
+                            Completed
+                        </Button>
+                        <Button
+                            variant="outline"
+                            disabled={creditAppOutcomeSubmitting !== null}
+                            onClick={async () => {
+                                if (!leadId) return
+                                setCreditAppOutcomeSubmitting("abandon")
+                                try {
+                                    await LeadService.creditAppAbandon(leadId, {})
+                                    setShowCreditAppOutcomeModal(false)
+                                    fetchLead()
+                                    fetchActivities()
+                                } catch (e: unknown) {
+                                    alert((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Failed to save")
+                                } finally {
+                                    setCreditAppOutcomeSubmitting(null)
+                                }
+                            }}
+                        >
+                            {creditAppOutcomeSubmitting === "abandon" ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <XCircle className="h-4 w-4 mr-2" />}
+                            Abandoned
+                        </Button>
+                    </div>
+                    <DialogFooter>
+                        <Button variant="ghost" onClick={() => setShowCreditAppOutcomeModal(false)}>
+                            Cancel
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
             {/* Complete Appointment Modal (from lead Appointments tab) */}
             {appointmentCompleteModal && (
                 <Dialog open={!!appointmentCompleteModal} onOpenChange={(open) => !open && setAppointmentCompleteModal(null)}>
@@ -3379,6 +4197,41 @@ export default function LeadDetailsPage() {
                                 </span>
                             ) : (
                                 "Mark as Lost"
+                            )}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* Optional notes when setting terminal stage (e.g. Qualified / Not qualified) */}
+            <Dialog open={showStageNotesModal} onOpenChange={(open) => { if (!open) { setShowStageNotesModal(false); setPendingStageForNotes(null); setStageNotes("") } }}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Add notes (optional)</DialogTitle>
+                        <DialogDescription>
+                            Add notes for this status change. The assigned salesperson will see them if you are closing this lead.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                        <Textarea
+                            placeholder="e.g. Reason for decision, follow-up instructions..."
+                            value={stageNotes}
+                            onChange={(e) => setStageNotes(e.target.value)}
+                            rows={3}
+                        />
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => { setShowStageNotesModal(false); setPendingStageForNotes(null); setStageNotes("") }}>
+                            Cancel
+                        </Button>
+                        <Button onClick={handleConfirmStageNotes} disabled={isUpdatingStatus}>
+                            {isUpdatingStatus ? (
+                                <span className="inline-flex items-center">
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Updating...
+                                </span>
+                            ) : (
+                                "Confirm"
                             )}
                         </Button>
                     </DialogFooter>

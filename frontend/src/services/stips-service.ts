@@ -106,4 +106,13 @@ export const StipsService = {
         );
         return response.data;
     },
+
+    /** Download document as blob for export (arraybuffer). */
+    async downloadDocument(leadId: string, documentId: string): Promise<ArrayBuffer> {
+        const response = await apiClient.get(
+            `/leads/${leadId}/stips/documents/${documentId}/download`,
+            { responseType: "arraybuffer" }
+        );
+        return response.data;
+    },
 };

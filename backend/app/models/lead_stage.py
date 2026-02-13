@@ -27,6 +27,8 @@ DEFAULT_STAGES = [
     {"name": "negotiation", "display_name": "Negotiation", "order": 6, "color": "#06B6D4", "is_terminal": False},
     {"name": "browsing", "display_name": "Browsing", "order": 7, "color": "#EAB308", "is_terminal": False},
     {"name": "reschedule", "display_name": "Reschedule", "order": 8, "color": "#A855F7", "is_terminal": False},
+    {"name": "manager_review", "display_name": "Manager review", "order": 9, "color": "#6366F1", "is_terminal": False},
+    {"name": "qualified", "display_name": "Qualified", "order": 10, "color": "#059669", "is_terminal": True},
     {"name": "converted", "display_name": "Converted", "order": 100, "color": "#059669", "is_terminal": True},
     {"name": "lost", "display_name": "Lost", "order": 101, "color": "#E11D48", "is_terminal": True},
     {"name": "not_interested", "display_name": "Not Interested", "order": 102, "color": "#6B7280", "is_terminal": True},

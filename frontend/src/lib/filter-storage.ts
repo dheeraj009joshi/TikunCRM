@@ -15,6 +15,7 @@ export type LeadsFilterState = {
   status?: string
   source?: string
   view?: string
+  assigned_to?: string
 }
 
 export type AppointmentsFilterState = {

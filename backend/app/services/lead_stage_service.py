@@ -111,26 +111,50 @@ class LeadStageService:
 
     @staticmethod
     async def seed_default_stages(db: AsyncSession) -> List[LeadStage]:
-        """Create global default stages if none exist."""
+        """Create global default stages if none exist; upsert any missing default stages by name."""
         existing = await db.execute(
             select(LeadStage).where(LeadStage.dealership_id.is_(None)).limit(1)
         )
-        if existing.scalar_one_or_none():
-            logger.info("Global lead stages already exist, skipping seed.")
+        has_any_global = existing.scalar_one_or_none() is not None
+
+        if not has_any_global:
+            stages = []
+            for cfg in DEFAULT_STAGES:
+                stage = LeadStage(
+                    name=cfg["name"],
+                    display_name=cfg["display_name"],
+                    order=cfg["order"],
+                    color=cfg["color"],
+                    is_terminal=cfg["is_terminal"],
+                    dealership_id=None,
+                )
+                db.add(stage)
+                stages.append(stage)
+            await db.flush()
+            logger.info("Seeded %d global default lead stages.", len(stages))
             return await LeadStageService.list_stages(db, None)
 
-        stages = []
+        # Ensure any missing default stages exist (e.g. manager_review added later)
+        added = 0
         for cfg in DEFAULT_STAGES:
-            stage = LeadStage(
-                name=cfg["name"],
-                display_name=cfg["display_name"],
-                order=cfg["order"],
-                color=cfg["color"],
-                is_terminal=cfg["is_terminal"],
-                dealership_id=None,
+            existing_name = await db.execute(
+                select(LeadStage).where(
+                    LeadStage.dealership_id.is_(None),
+                    LeadStage.name == cfg["name"],
+                )
             )
-            db.add(stage)
-            stages.append(stage)
-        await db.flush()
-        logger.info("Seeded %d global default lead stages.", len(stages))
-        return stages
+            if existing_name.scalar_one_or_none() is None:
+                stage = LeadStage(
+                    name=cfg["name"],
+                    display_name=cfg["display_name"],
+                    order=cfg["order"],
+                    color=cfg["color"],
+                    is_terminal=cfg["is_terminal"],
+                    dealership_id=None,
+                )
+                db.add(stage)
+                added += 1
+        if added:
+            await db.flush()
+            logger.info("Inserted %d missing global default lead stages.", added)
+        return await LeadStageService.list_stages(db, None)

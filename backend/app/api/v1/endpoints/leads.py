@@ -9,7 +9,7 @@ from uuid import UUID
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,6 +68,18 @@ class EmailLogCreate(BaseModel):
     body: Optional[str] = None
     direction: str = "sent"  # sent or received
     confirm_skate: bool = False  # If True, user confirmed they want to proceed despite SKATE warning
+
+
+class CreditAppComplete(BaseModel):
+    """Schema for completing a credit application (all optional; just record completed)."""
+    application_id: Optional[str] = None
+    form_id: Optional[str] = None
+    tax_id: Optional[str] = None
+
+
+class CreditAppAbandon(BaseModel):
+    """Schema for abandoning a credit application (reason optional)."""
+    reason: Optional[str] = None
 
 
 router = APIRouter()
@@ -317,7 +329,8 @@ async def list_leads(
     search: Optional[str] = None,
     is_active: Optional[bool] = None,
     pool: Optional[str] = None,  # "unassigned" | "mine" | None (all)
-    fresh_only: Optional[bool] = Query(None, description="Only leads with no activity except creation (untouched/fresh)")
+    fresh_only: Optional[bool] = Query(None, description="Only leads with no activity except creation (untouched/fresh)"),
+    assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson (admin/owner only). Show only leads assigned to this user.")
 ) -> Any:
     """
     List leads with filtering and pagination.
@@ -372,6 +385,13 @@ async def list_leads(
                 # Admin/owner without dealership shouldn't see any leads
                 query = query.where(Lead.id.is_(None))  # Returns empty
         # Super admin sees all (no filter)
+    
+    # Filter by salesperson (admin/owner/super only; ignore for salespersons)
+    if assigned_to is not None:
+        if current_user.role not in (UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
+            assigned_to = None  # Ignore for salespersons
+        else:
+            query = query.where(Lead.assigned_to == assigned_to)
     
     # Filters
     if stage_id:
@@ -774,6 +794,133 @@ async def update_lead(
     return lead
 
 
+# ----- Credit application (initiate / complete / abandon) -----
+CREDIT_APP_URL = "https://www.toyotasouthatlanta.com/credit-application"
+
+
+@router.post("/{lead_id}/credit-app/initiate")
+async def credit_app_initiate(
+    lead_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Log that the user initiated the credit application (redirects to external URL).
+    Optionally stores pending state on lead meta_data for outcome capture when user returns.
+    Rejects if a credit app is already pending (prevents duplicate timeline entries).
+    """
+    lead = await _lead_access(db, lead_id, current_user)
+    if (lead.meta_data or {}).get("credit_app_initiated_at"):
+        raise HTTPException(
+            status_code=400,
+            detail="Credit app already initiated for this lead. Capture the outcome (complete or abandon) first.",
+        )
+    dealership_id = lead.dealership_id or current_user.dealership_id
+    cust_r = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+    cust = cust_r.scalar_one_or_none()
+    lead_name = f"{cust.first_name or ''} {cust.last_name or ''}".strip() if cust else "Customer"
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.CREDIT_APP_INITIATED,
+        description=f"Credit application initiated for {lead_name} by {performer_name}",
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=dealership_id,
+        meta_data={
+            "action": "initiated",
+            "redirect_url": CREDIT_APP_URL,
+            "performer_name": performer_name,
+        },
+    )
+    # Store pending so frontend can prompt for outcome when user returns
+    meta = dict(lead.meta_data or {})
+    meta["credit_app_initiated_at"] = utc_now().isoformat()
+    lead.meta_data = meta
+    await db.commit()
+    return {"ok": True, "redirect_url": CREDIT_APP_URL}
+
+
+@router.post("/{lead_id}/credit-app/complete")
+async def credit_app_complete(
+    lead_id: UUID,
+    body: CreditAppComplete,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Log that the credit application was completed; capture application_id / form_id / tax_id.
+    Clears pending credit_app_initiated_at from lead meta_data.
+    """
+    lead = await _lead_access(db, lead_id, current_user)
+    application_id = (body.application_id or "").strip() or None
+    form_id = (body.form_id or "").strip() or None
+    tax_id = (body.tax_id or "").strip() or None
+    dealership_id = lead.dealership_id or current_user.dealership_id
+    cust_r = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+    cust = cust_r.scalar_one_or_none()
+    lead_name = f"{cust.first_name or ''} {cust.last_name or ''}".strip() if cust else "Customer"
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.CREDIT_APP_COMPLETED,
+        description=f"Credit application completed for {lead_name} by {performer_name}",
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=dealership_id,
+        meta_data={
+            "action": "completed",
+            "application_id": application_id,
+            "form_id": form_id,
+            "tax_id": tax_id,
+            "performer_name": performer_name,
+        },
+    )
+    meta = dict(lead.meta_data or {})
+    meta.pop("credit_app_initiated_at", None)
+    lead.meta_data = meta
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/{lead_id}/credit-app/abandon")
+async def credit_app_abandon(
+    lead_id: UUID,
+    body: CreditAppAbandon,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Log that the credit application was abandoned. Reason optional.
+    Clears pending credit_app_initiated_at from lead meta_data.
+    """
+    lead = await _lead_access(db, lead_id, current_user)
+    reason = (body.reason or "").strip() or None
+    dealership_id = lead.dealership_id or current_user.dealership_id
+    cust_r = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+    cust = cust_r.scalar_one_or_none()
+    lead_name = f"{cust.first_name or ''} {cust.last_name or ''}".strip() if cust else "Customer"
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.CREDIT_APP_ABANDONED,
+        description=f"Credit application abandoned for {lead_name} by {performer_name}" + (f": {reason}" if reason else ""),
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=dealership_id,
+        meta_data={
+            "action": "abandoned",
+            "reason": reason or None,
+            "performer_name": performer_name,
+        },
+    )
+    meta = dict(lead.meta_data or {})
+    meta.pop("credit_app_initiated_at", None)
+    lead.meta_data = meta
+    await db.commit()
+    return {"ok": True}
+
+
 @router.get("/{lead_id}", response_model=LeadDetail)
 async def get_lead(
     lead_id: UUID,
@@ -1067,6 +1214,50 @@ async def update_lead_stage(
     )
 
     await db.flush()
+
+    # Notify managers when lead is set to Manager review; notify assigned salesperson when manager sets a terminal decision
+    from app.models.notification import NotificationType
+    if new_stage.name == "manager_review" and lead.dealership_id:
+        managers_result = await db.execute(
+            select(User).where(
+                User.dealership_id == lead.dealership_id,
+                User.is_active == True,
+                User.role.in_([UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]),
+            )
+        )
+        managers = managers_result.scalars().all()
+        cust_result = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+        cust = cust_result.scalar_one_or_none()
+        lead_name = cust.full_name if cust else "Lead"
+        for manager in managers:
+            if manager.id == current_user.id:
+                continue
+            await notification_service.create_notification(
+                user_id=manager.id,
+                notification_type=NotificationType.LEAD_UPDATED,
+                title="Lead awaiting review",
+                message=f"{lead_name} has been sent for manager review.",
+                link=f"/leads/{lead.id}",
+                related_id=lead.id,
+                related_type="lead",
+                send_push=True,
+                send_email=True,
+                send_sms=False,
+            )
+    if old_stage and old_stage.name == "manager_review" and new_stage.is_terminal and lead.assigned_to:
+        notes_preview = (stage_in.notes or "")[:200] or "No notes."
+        await notification_service.create_notification(
+            user_id=lead.assigned_to,
+            notification_type=NotificationType.LEAD_UPDATED,
+            title="Manager decision",
+            message=f"Manager set lead to {new_stage.display_name}. Notes: {notes_preview}",
+            link=f"/leads/{lead.id}",
+            related_id=lead.id,
+            related_type="lead",
+            send_push=True,
+            send_email=True,
+            send_sms=False,
+        )
 
     try:
         from app.services.notification_service import emit_lead_updated, emit_stats_refresh, emit_activity_added
@@ -1865,6 +2056,36 @@ async def view_lead_stip_document(
     if not url:
         raise HTTPException(status_code=503, detail="Could not generate view URL")
     return StipDocumentViewUrl(url=url)
+
+
+@router.get("/{lead_id}/stips/documents/{document_id}/download")
+async def download_lead_stip_document(
+    lead_id: UUID,
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Response:
+    """Download a Stips document as attachment (for export)."""
+    lead = await _lead_access(db, lead_id, current_user)
+    blob_path, _ = await resolve_document_for_lead(db, document_id, lead)
+    if not blob_path:
+        raise HTTPException(status_code=404, detail="Document not found or not accessible")
+    if not app_settings.is_azure_stips_configured:
+        raise HTTPException(status_code=503, detail="Stips storage is not configured")
+    content, content_type = azure_storage_service.download_stip_document(blob_path)
+    if not content:
+        raise HTTPException(status_code=503, detail="Could not download document")
+    doc_info = await get_document_info_for_lead(db, document_id, lead)
+    file_name = doc_info[0] if doc_info else "document"
+    import urllib.parse
+    safe_name = urllib.parse.quote(file_name)
+    return Response(
+        content=content,
+        media_type=content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{safe_name}",
+        },
+    )
 
 
 @router.post("/{lead_id}/log-call")

@@ -107,6 +107,8 @@ export interface LeadListParams {
     pool?: string;
     /** Only leads with no activity except creation (fresh/untouched) */
     fresh_only?: boolean;
+    /** Filter by salesperson (admin/owner only) */
+    assigned_to?: string;
 }
 
 export const LeadService = {
@@ -235,6 +237,23 @@ export const LeadService = {
 
     async assignLead(id: string, userId: string, notes?: string): Promise<Lead> {
         return this.assignToSalesperson(id, userId, notes);
+    },
+
+    /** Credit application (Toyota South Atlanta, etc.) */
+    async creditAppInitiate(leadId: string): Promise<{ ok: boolean; redirect_url: string }> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/${leadId}/credit-app/initiate`);
+        return response.data;
+    },
+    async creditAppComplete(
+        leadId: string,
+        data: { application_id?: string; form_id?: string; tax_id?: string }
+    ): Promise<{ ok: boolean }> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/${leadId}/credit-app/complete`, data);
+        return response.data;
+    },
+    async creditAppAbandon(leadId: string, data: { reason?: string } = {}): Promise<{ ok: boolean }> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/${leadId}/credit-app/abandon`, data);
+        return response.data;
     },
 
     async assignSecondarySalesperson(id: string, secondaryUserId: string | null, notes?: string): Promise<Lead> {

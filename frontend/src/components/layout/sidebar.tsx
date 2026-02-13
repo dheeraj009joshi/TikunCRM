@@ -22,6 +22,7 @@ import {
     UserPlus,
     InboxIcon,
     ClipboardList,
+    ClipboardCheck,
     Bell,
     MessageSquare,
     MessageCircle,
@@ -40,6 +41,7 @@ import { Badge, getRoleVariant } from "@/components/ui/badge"
 import { AppointmentService } from "@/services/appointment-service"
 import { FollowUpService } from "@/services/follow-up-service"
 import { LeadService } from "@/services/lead-service"
+import { LeadStageService } from "@/services/lead-stage-service"
 import apiClient from "@/lib/api-client"
 import { GlobalSearchModal } from "@/components/search/global-search-modal"
 
@@ -81,6 +83,12 @@ const allSidebarItems: SidebarItem[] = [
         icon: InboxIcon, 
         href: "/leads?filter=unassigned",
         roles: undefined  // Visible to all users
+    },
+    {
+        name: "Manager review",
+        icon: ClipboardCheck,
+        href: "/leads?filter=manager_review",
+        roles: ["super_admin", "dealership_admin", "dealership_owner"]
     },
     { 
         name: "Dealerships", 
@@ -164,6 +172,7 @@ interface BadgeCounts {
     appointments: number
     followUps: number
     unassigned: number
+    managerReview: number
     notifications: number
 }
 
@@ -178,6 +187,7 @@ export function Sidebar() {
         appointments: 0,
         followUps: 0,
         unassigned: 0,
+        managerReview: 0,
         notifications: 0
     })
     
@@ -214,6 +224,19 @@ export function Sidebar() {
                 } catch {
                     unassignedCount = 0
                 }
+
+                // Manager review count - leads pending manager decision (for admin/owner roles)
+                let managerReviewCount = 0
+                try {
+                    const stages = await LeadStageService.list()
+                    const mrStage = stages.find((s) => s.name === "manager_review")
+                    if (mrStage) {
+                        const mrRes = await LeadService.listLeads({ stage_id: mrStage.id, page_size: 1 })
+                        managerReviewCount = mrRes.total
+                    }
+                } catch {
+                    managerReviewCount = 0
+                }
                 
                 // Fetch unread notifications count
                 let unreadNotifications = 0
@@ -228,6 +251,7 @@ export function Sidebar() {
                     appointments: appointmentsToday,
                     followUps: overdueFollowUps,
                     unassigned: unassignedCount,
+                    managerReview: managerReviewCount,
                     notifications: unreadNotifications
                 })
             } catch (error) {
@@ -242,10 +266,20 @@ export function Sidebar() {
     }, [user, role])
     
     // Refetch specific badge counts (used by WebSocket handlers)
-    const refetchBadgeCounts = React.useCallback((which: { unassigned?: boolean; notifications?: boolean; appointments?: boolean; followUps?: boolean }) => {
+    const refetchBadgeCounts = React.useCallback((which: { unassigned?: boolean; managerReview?: boolean; notifications?: boolean; appointments?: boolean; followUps?: boolean }) => {
         if (which.unassigned) {
             LeadService.listLeads({ pool: "unassigned", page_size: 1 })
                 .then(res => setBadgeCounts(prev => ({ ...prev, unassigned: res.total })))
+                .catch(() => {})
+        }
+        if (which.managerReview) {
+            LeadStageService.list()
+                .then(stages => {
+                    const mr = stages.find((s) => s.name === "manager_review")
+                    if (!mr) return
+                    return LeadService.listLeads({ stage_id: mr.id, page_size: 1 })
+                })
+                .then(res => res != null ? setBadgeCounts(prev => ({ ...prev, managerReview: res.total })) : undefined)
                 .catch(() => {})
         }
         if (which.notifications) {
@@ -290,14 +324,18 @@ export function Sidebar() {
         if (data.update_type === "assigned" || data.update_type === "unassigned" || data.update_type === "created") {
             refetchBadgeCounts({ unassigned: true })
         }
+        if (data.update_type === "stage_changed" || data.update_type === "stage_updated") {
+            refetchBadgeCounts({ managerReview: true })
+        }
     }, [refetchBadgeCounts])
     
     useLeadUpdateEvents(null, handleLeadUpdate)
     
     // Listen for explicit badge refresh (e.g. stale leads returned to pool, new unassigned lead created)
-    const handleBadgesRefresh = React.useCallback((data: { unassigned?: boolean; notifications?: boolean }) => {
+    const handleBadgesRefresh = React.useCallback((data: { unassigned?: boolean; managerReview?: boolean; notifications?: boolean }) => {
         refetchBadgeCounts({
             unassigned: data.unassigned ?? false,
+            managerReview: data.managerReview ?? false,
             notifications: data.notifications ?? false,
         })
     }, [refetchBadgeCounts])
@@ -306,7 +344,7 @@ export function Sidebar() {
     
     // When stats refresh (lead/appointment/follow-up/showroom changes), update all sidebar counts via WebSocket
     const handleStatsRefresh = React.useCallback((_data: { dealership_id?: string; timestamp?: string }) => {
-        refetchBadgeCounts({ unassigned: true, appointments: true, followUps: true })
+        refetchBadgeCounts({ unassigned: true, managerReview: true, appointments: true, followUps: true })
     }, [refetchBadgeCounts])
     useStatsRefresh(handleStatsRefresh)
     
@@ -331,6 +369,9 @@ export function Sidebar() {
             }
             if (!item.children && item.href === "/leads?filter=unassigned" && badgeCounts.unassigned > 0) {
                 return { ...item, badge: badgeCounts.unassigned }
+            }
+            if (!item.children && item.href === "/leads?filter=manager_review" && badgeCounts.managerReview > 0) {
+                return { ...item, badge: badgeCounts.managerReview }
             }
             if (!item.children && item.href === "/notifications" && badgeCounts.notifications > 0) {
                 return { ...item, badge: badgeCounts.notifications }

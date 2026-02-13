@@ -19,12 +19,14 @@ const badgeVariants = cva(
                 follow_up: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
                 interested: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
                 not_interested: "bg-gray-500/10 text-gray-600 dark:text-gray-400",
-                converted: "bg-emerald-600 text-white dark:bg-emerald-600 font-bold",
+                converted: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
                 lost: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
                 in_showroom: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
                 couldnt_qualify: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-                browsing: "bg-yellow-500 text-white dark:bg-yellow-600 font-medium",
-                reschedule: "bg-purple-500 text-white dark:bg-purple-600 font-medium",
+                browsing: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
+                reschedule: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
+                manager_review: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400",
+                qualified: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
                 negotiation: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
                 // Role variants
                 super_admin: "bg-purple-500/15 text-purple-700 dark:text-purple-300",
@@ -103,6 +105,8 @@ function getStatusVariant(status: string): VariantProps<typeof badgeVariants>["v
         browsing: "browsing",
         reschedule: "reschedule",
         negotiation: "negotiation",
+        manager_review: "manager_review",
+        qualified: "qualified",
     }
     return statusMap[key] || "default"
 }

@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.v1.router import api_router
+from app.db.database import async_session_maker
+from app.services.lead_stage_service import LeadStageService
 from app.tasks.scheduler import setup_scheduler, start_scheduler, stop_scheduler
 
 # Configure logging
@@ -82,7 +84,15 @@ async def lifespan(app: FastAPI):
             logger.error(f"Failed to start scheduler: {e}")
     else:
         logger.info("Background scheduler skipped (another worker is the scheduler leader)")
-    
+
+    # Ensure default lead stages exist (e.g. manager_review for existing deployments)
+    try:
+        async with async_session_maker() as db:
+            await LeadStageService.seed_default_stages(db)
+            await db.commit()
+    except Exception as e:
+        logger.warning("Startup seed of default lead stages failed (non-fatal): %s", e)
+
     yield
     
     # Shutdown

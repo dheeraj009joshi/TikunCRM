@@ -3,7 +3,7 @@ Azure Blob Storage Service - For storing call recordings
 """
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, BinaryIO
+from typing import Optional, BinaryIO, Tuple
 from uuid import UUID
 
 from app.core.config import settings
@@ -344,6 +344,28 @@ class AzureStorageService:
         except Exception as e:
             logger.error(f"Failed to generate Stips SAS URL: {e}")
             return ""
+
+    def download_stip_document(self, blob_path: str) -> Tuple[bytes, Optional[str]]:
+        """
+        Download a Stips document from Azure. Returns (content_bytes, content_type or None).
+        """
+        if not settings.is_azure_stips_configured:
+            return b"", None
+        try:
+            container = self._get_stips_container_client()
+            if container is None:
+                return b"", None
+            blob_client = container.get_blob_client(blob_path)
+            stream = blob_client.download_blob()
+            content = stream.readall()
+            props = blob_client.get_blob_properties()
+            content_type = getattr(props, "content_settings", None) and getattr(
+                props.content_settings, "content_type", None
+            )
+            return content, content_type
+        except Exception as e:
+            logger.error(f"Failed to download stip document {blob_path}: {e}")
+            return b"", None
 
     async def delete_stip_document(self, blob_path: str) -> bool:
         """Delete a Stips document from Azure."""
