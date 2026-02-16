@@ -176,11 +176,12 @@ export default function SalespersonAnalyticsPage() {
         results.forEach((result, i) => {
             const key = keys[i]
             if (result.status === "fulfilled") {
-                if (key === "leads") setLeads(result.value.items ?? [])
-                else if (key === "notes") setNotes(result.value.items ?? [])
-                else if (key === "activities") setActivities(result.value.items ?? [])
-                else if (key === "appointments") setAppointments(result.value.items ?? [])
-                else if (key === "followUps") setFollowUps(Array.isArray(result.value) ? result.value : [])
+                const value = result.value
+                if (key === "leads") setLeads("items" in value && Array.isArray(value.items) ? value.items : [])
+                else if (key === "notes") setNotes("items" in value && Array.isArray(value.items) ? value.items : [])
+                else if (key === "activities") setActivities("items" in value && Array.isArray(value.items) ? value.items : [])
+                else if (key === "appointments") setAppointments("items" in value && Array.isArray(value.items) ? value.items : [])
+                else if (key === "followUps") setFollowUps(Array.isArray(value) ? value : [])
             } else {
                 nextErrors[key] = getErrorMessage(result.reason)
             }
