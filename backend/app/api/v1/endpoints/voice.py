@@ -7,7 +7,7 @@ from typing import Optional, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Query
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -463,7 +463,7 @@ async def get_recording_url(
             detail="No recording available for this call"
         )
     
-    # If it's an Azure URL, generate a fresh SAS URL
+    # If it's an Azure URL, generate a fresh SAS URL (playable in browser)
     from app.services.azure_storage_service import azure_storage_service
     
     if azure_storage_service.is_configured and "blob.core.windows.net" in call.recording_url:
@@ -473,8 +473,55 @@ async def get_recording_url(
         if secure_url:
             return {"recording_url": secure_url, "expires_in": 3600}
     
-    # Return the stored URL directly
+    # Twilio recording URLs require Basic auth; return our proxy URL so frontend can fetch with Bearer
+    if "api.twilio.com" in call.recording_url:
+        base = settings.backend_url.rstrip("/")
+        proxy_url = f"{base}/api/v1/voice/calls/{call_id}/recording"
+        return {"recording_url": proxy_url, "expires_in": 3600}
+    
+    # Fallback: return the stored URL directly
     return {"recording_url": call.recording_url, "expires_in": None}
+
+
+@router.get("/calls/{call_id}/recording")
+async def stream_recording(
+    call_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Stream call recording (for Twilio URLs that require auth).
+    Frontend fetches this URL with Bearer token and uses the response as blob for playback.
+    """
+    result = await db.execute(
+        select(CallLog).where(CallLog.id == call_id)
+    )
+    call = result.scalar_one_or_none()
+    if not call:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+    if current_user.role == UserRole.SALESPERSON and call.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    if not call.recording_url:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No recording available")
+
+    if "api.twilio.com" in call.recording_url:
+        import httpx
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.get(
+                    call.recording_url,
+                    auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+                    follow_redirects=True,
+                )
+                r.raise_for_status()
+                media_type = r.headers.get("content-type", "audio/wav")
+                return Response(content=r.content, media_type=media_type)
+        except Exception as e:
+            logger.warning(f"Failed to fetch Twilio recording for {call_id}: {e}")
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to load recording")
+
+    # Azure or other: redirect not needed here; get_recording_url returns SAS for Azure
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Use recording-url endpoint for this recording")
 
 
 # ============ Twilio Webhooks ============
@@ -544,7 +591,7 @@ async def handle_incoming_call(
     return Response(content=twiml, media_type="application/xml")
 
 
-@router.post("/webhook/outgoing", response_class=PlainTextResponse)
+@router.post("/webhook/outgoing")
 async def handle_outgoing_call(
     request: Request,
     db: AsyncSession = Depends(get_db)
@@ -553,20 +600,38 @@ async def handle_outgoing_call(
     Twilio webhook for outgoing calls initiated from WebRTC client.
     Returns TwiML to connect the call.
     """
-    form_data = await request.form()
-    
+    try:
+        form_data = await request.form()
+    except Exception as e:
+        logger.exception(f"Outgoing webhook failed to parse form: {e}")
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, an error occurred.</Say></Response>',
+            media_type="application/xml",
+        )
+
     call_sid = form_data.get("CallSid", "")
-    to_number = form_data.get("To", "")
-    from_identity = form_data.get("From", "")  # This is the client identity (email)
-    
-    logger.info(f"Outgoing call webhook: {call_sid} to {to_number} from {from_identity}")
-    
-    service = get_voice_service(db)
-    
-    # Generate TwiML for the outbound call
-    twiml = service.generate_twiml_for_outbound(to_number)
-    
-    return Response(content=twiml, media_type="application/xml")
+    to_number = (form_data.get("To") or "").strip()
+    from_identity = form_data.get("From", "")
+
+    logger.info(f"Outgoing call webhook: {call_sid} to {to_number!r} from {from_identity!r}")
+
+    if not to_number:
+        logger.warning("Outgoing webhook missing To number")
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response><Say>No number to dial.</Say></Response>',
+            media_type="application/xml",
+        )
+
+    try:
+        service = get_voice_service(db)
+        twiml = service.generate_twiml_for_outbound(to_number)
+        return Response(content=twiml, media_type="application/xml")
+    except Exception as e:
+        logger.exception(f"Outgoing webhook error for call {call_sid}: {e}")
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, the call could not be completed.</Say></Response>',
+            media_type="application/xml",
+        )
 
 
 @router.post("/webhook/status")

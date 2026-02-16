@@ -14,6 +14,7 @@ import {
 import { Phone, PhoneOff, X, Minimize2, Maximize2, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTwilioDevice } from "@/hooks/use-twilio-device";
+import { useCallLeadOptional } from "@/contexts/call-lead-context";
 import { DialPad } from "./dial-pad";
 import { CallControls } from "./call-controls";
 import { IncomingCallModal } from "./incoming-call-modal";
@@ -48,8 +49,21 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
   const [isMinimized, setIsMinimized] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState(leadPhone || "");
   const [showDialPad, setShowDialPad] = useState(true);
+  const [pendingLeadId, setPendingLeadId] = useState<string | undefined>(undefined);
+  const callLeadCtx = useCallLeadOptional();
 
-  // Update phone number when leadPhone changes
+  // When "Call lead" is set from context (e.g. lead page), open softphone and prefill number
+  useEffect(() => {
+    const lead = callLeadCtx?.callLead;
+    if (!lead?.phone) return;
+    setPhoneNumber(lead.phone);
+    setPendingLeadId(lead.leadId);
+    setIsOpen(true);
+    setIsMinimized(false);
+    callLeadCtx?.clearCallLead();
+  }, [callLeadCtx?.callLead]);
+
+  // Update phone number when leadPhone prop changes (e.g. from context via layout)
   useEffect(() => {
     if (leadPhone) {
       setPhoneNumber(leadPhone);
@@ -83,11 +97,12 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
     [isOnCall, sendDigits]
   );
 
-  // Handle call button click
+  // Handle call button click (use prop leadId or pending from context)
+  const effectiveLeadId = leadId ?? pendingLeadId;
   const handleCall = useCallback(async () => {
     if (!phoneNumber.trim()) return;
-    await makeCall(phoneNumber, leadId);
-  }, [phoneNumber, leadId, makeCall]);
+    await makeCall(phoneNumber, effectiveLeadId);
+  }, [phoneNumber, effectiveLeadId, makeCall]);
 
   // Handle backspace
   const handleBackspace = useCallback(() => {
@@ -139,7 +154,7 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
           Call
         </Button>
 
-        <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <Dialog open={isOpen} onOpenChange={(open) => { if (!open) setPendingLeadId(undefined); setIsOpen(open); }}>
           <DialogContent className="sm:max-w-sm">
             <DialogHeader>
               <DialogTitle>

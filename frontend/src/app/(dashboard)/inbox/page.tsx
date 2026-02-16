@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { format, isToday, isYesterday } from "date-fns";
 import {
   Phone,
@@ -69,6 +69,7 @@ export default function UnifiedInboxPage() {
   const [emails, setEmails] = useState<Email[]>([]);
   const [selectedItem, setSelectedItem] = useState<CommunicationItem | null>(null);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+  const recordingObjectUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -85,6 +86,15 @@ export default function UnifiedInboxPage() {
       setSmsConfig(sms);
       setWhatsappConfig(wa);
     });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (recordingObjectUrlRef.current) {
+        URL.revokeObjectURL(recordingObjectUrlRef.current);
+        recordingObjectUrlRef.current = null;
+      }
+    };
   }, []);
   
   const loadAll = useCallback(async () => {
@@ -248,20 +258,33 @@ export default function UnifiedInboxPage() {
   
   // Handle item selection
   const handleSelect = async (item: CommunicationItem) => {
+    // Revoke previous blob URL if we created one
+    if (recordingObjectUrlRef.current) {
+      URL.revokeObjectURL(recordingObjectUrlRef.current);
+      recordingObjectUrlRef.current = null;
+    }
     setSelectedItem(item);
     setRecordingUrl(null);
-    
-    // If it's a call with recording, fetch the URL
-    if (item.type === "call") {
-      const call = item.raw as CallLog;
-      if (call.recording_url) {
-        try {
-          const result = await voiceService.getRecordingUrl(call.id);
-          setRecordingUrl(result.recording_url);
-        } catch (err) {
-          console.error("Failed to get recording URL:", err);
-        }
+
+    if (item.type !== "call") return;
+    const call = item.raw as CallLog;
+    if (!call.recording_url) return;
+
+    try {
+      const result = await voiceService.getRecordingUrl(call.id);
+      const url = result.recording_url;
+      const isProxyUrl = url.includes("/voice/calls/") && url.includes("/recording") && !url.startsWith("blob:");
+      if (isProxyUrl) {
+        const res = await apiClient.get<Blob>(url, { responseType: "blob" });
+        const blob = res.data;
+        const objectUrl = URL.createObjectURL(blob);
+        recordingObjectUrlRef.current = objectUrl;
+        setRecordingUrl(objectUrl);
+      } else {
+        setRecordingUrl(url);
       }
+    } catch (err) {
+      console.error("Failed to get recording URL:", err);
     }
   };
   

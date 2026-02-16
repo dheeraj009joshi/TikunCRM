@@ -96,6 +96,8 @@ import { cn } from "@/lib/utils"
 import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
+import { useCallLeadOptional } from "@/contexts/call-lead-context"
+import { voiceService } from "@/services/voice-service"
 import JSZip from "jszip"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -328,6 +330,8 @@ export default function LeadDetailsPage() {
     // Call/Email logging
     const [showCallModal, setShowCallModal] = React.useState(false)
     const [showCallTextComingSoon, setShowCallTextComingSoon] = React.useState(false)
+    const [voiceEnabled, setVoiceEnabled] = React.useState(false)
+    const callLeadCtx = useCallLeadOptional()
     const [isLoggingCall, setIsLoggingCall] = React.useState(false)
     const [showEmailComposer, setShowEmailComposer] = React.useState(false)
     
@@ -429,6 +433,22 @@ export default function LeadDetailsPage() {
         budget_range: "",
         notes: "",
     })
+
+    // Voice: in-app call opens softphone when enabled
+    React.useEffect(() => {
+        voiceService.getConfig().then((c) => setVoiceEnabled(c.voice_enabled)).catch(() => {})
+    }, [])
+
+    const handleCallClick = React.useCallback(() => {
+        if (!lead) return
+        const phone = getLeadPhone(lead)
+        if (!phone) return
+        if (voiceEnabled && callLeadCtx) {
+            callLeadCtx.setCallLead({ phone, leadId: lead.id, leadName: getLeadFullName(lead) })
+        } else {
+            setShowCallTextComingSoon(true)
+        }
+    }, [lead, voiceEnabled, callLeadCtx])
 
     const fetchLead = React.useCallback(async () => {
         try {
@@ -1800,8 +1820,8 @@ export default function LeadDetailsPage() {
                                             <Button
                                                 variant="outline"
                                                 className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
-                                                onClick={() => setShowCallTextComingSoon(true)}
-                                                title="Call this lead"
+                                                onClick={handleCallClick}
+                                                title={voiceEnabled ? "Call in app" : "Call this lead"}
                                             >
                                                 <Phone className="h-4 w-4 mr-2 shrink-0" />
                                                 <span className="whitespace-nowrap">Call</span>
@@ -2538,7 +2558,7 @@ export default function LeadDetailsPage() {
                                     <Button 
                                         className="w-full justify-start" 
                                         variant="outline"
-                                        onClick={() => setShowCallTextComingSoon(true)}
+                                        onClick={handleCallClick}
                                     >
                                         <Phone className="h-4 w-4 mr-2 text-green-500" />
                                         Call

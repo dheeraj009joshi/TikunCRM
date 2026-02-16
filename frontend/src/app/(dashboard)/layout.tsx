@@ -8,6 +8,7 @@ import { SkateAlertDialog } from "@/components/skate-alert-dialog"
 import { SkateConfirmDialog } from "@/components/skate-confirm-dialog"
 import { WebSocketProvider } from "@/components/providers/websocket-provider"
 import { SidebarProvider, useSidebarOptional } from "@/contexts/sidebar-context"
+import { CallLeadProvider, useCallLeadOptional } from "@/contexts/call-lead-context"
 import { Softphone } from "@/components/softphone"
 import { useAuthStore } from "@/stores/auth-store"
 
@@ -59,14 +60,16 @@ export default function DashboardLayout({
 
     return (
         <WebSocketProvider>
-            <SidebarProvider>
-                <DashboardContent
+            <CallLeadProvider>
+                <SidebarProvider>
+                    <DashboardContent
                     showReminder={showReminder}
                     onReminderClose={handleReminderClose}
                 >
                     {children}
-                </DashboardContent>
-            </SidebarProvider>
+                    </DashboardContent>
+                </SidebarProvider>
+            </CallLeadProvider>
         </WebSocketProvider>
     )
 }
@@ -82,6 +85,7 @@ function DashboardContent({
 }) {
     const sidebar = useSidebarOptional()
     const collapsed = sidebar?.collapsed ?? false
+    const callLead = useCallLeadOptional()?.callLead ?? null
 
     return (
         <div className="flex min-h-screen bg-background text-foreground">
@@ -95,7 +99,11 @@ function DashboardContent({
             <EmailConfigReminderModal open={showReminder} onOpenChange={onReminderClose} />
             <SkateAlertDialog />
             <SkateConfirmDialog />
-            <Softphone />
+            <Softphone
+                leadPhone={callLead?.phone}
+                leadId={callLead?.leadId}
+                leadName={callLead?.leadName}
+            />
         </div>
     )
 }
