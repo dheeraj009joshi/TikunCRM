@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker, selectinload
 
 from app.core.config import settings
 from app.core.timezone import utc_now
+from app.db.database import get_engine_url_and_connect_args
 from app.core.websocket_manager import ws_manager
 from app.models.lead import Lead
 from app.models.activity import Activity, ActivityType
@@ -31,10 +32,12 @@ STALE_HOURS = 72  # Hours of inactivity before unassigning
 def get_assignment_session_maker():
     """Create a dedicated engine and session maker for assignment operations."""
     from sqlalchemy.pool import NullPool
+    url, connect_args = get_engine_url_and_connect_args()
     engine = create_async_engine(
-        settings.database_url,
+        url,
         echo=False,
         poolclass=NullPool,  # Use NullPool for background tasks
+        connect_args=connect_args,
     )
     return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

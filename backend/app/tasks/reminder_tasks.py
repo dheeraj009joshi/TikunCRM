@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
 from app.core.timezone import utc_now
+from app.db.database import get_engine_url_and_connect_args
 from app.models.appointment import Appointment, AppointmentStatus
 from app.models.follow_up import FollowUp, FollowUpStatus
 from app.models.lead import Lead
@@ -29,12 +30,14 @@ logger = logging.getLogger(__name__)
 
 def get_reminder_session_maker():
     """Create a dedicated engine and session maker for reminder tasks."""
+    url, connect_args = get_engine_url_and_connect_args()
     engine = create_async_engine(
-        settings.database_url,
+        url,
         echo=False,
         pool_size=2,
         max_overflow=0,
         pool_pre_ping=True,
+        connect_args=connect_args,
     )
     return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

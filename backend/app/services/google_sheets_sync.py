@@ -22,6 +22,7 @@ from app.services.lead_stage_service import LeadStageService
 from app.models.dealership import Dealership
 from app.models.activity import Activity, ActivityType
 from app.core.config import settings
+from app.db.database import get_engine_url_and_connect_args
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +37,12 @@ SHEET_EXPORT_URL = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/ex
 def get_sync_session_maker():
     """Create a dedicated engine and session maker for sync operations."""
     from sqlalchemy.pool import NullPool
+    url, connect_args = get_engine_url_and_connect_args()
     engine = create_async_engine(
-        settings.database_url,
+        url,
         echo=False,
         poolclass=NullPool,  # Use NullPool for background tasks
+        connect_args=connect_args,
     )
     return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

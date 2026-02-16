@@ -16,12 +16,16 @@ from sqlalchemy.pool import NullPool
 from app.core.config import settings
 
 
-def _database_url_and_connect_args():
-    """Build engine URL and connect_args. asyncpg does not accept sslmode in the URL."""
+def get_engine_url_and_connect_args():
+    """
+    Build engine URL and connect_args for asyncpg.
+    asyncpg does not accept sslmode/ssl in the URL; passing them causes TypeError.
+    Use this for any create_async_engine() that uses settings.database_url (e.g. background tasks).
+    """
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
     url = settings.database_url
     use_ssl = "ssl=require" in url or "sslmode=require" in url
-    # Strip ssl params so they are not passed to asyncpg.connect() (causes TypeError)
-    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
     parsed = urlparse(url)
     if parsed.query:
         qs = parse_qs(parsed.query, keep_blank_values=True)
@@ -39,7 +43,7 @@ def _database_url_and_connect_args():
     return url, connect_args
 
 
-_engine_url, _connect_args = _database_url_and_connect_args()
+_engine_url, _connect_args = get_engine_url_and_connect_args()
 
 # Create async engine with NullPool for multi-worker compatibility
 # NullPool creates connections on-demand and closes them immediately after use

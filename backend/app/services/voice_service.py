@@ -16,7 +16,6 @@ from app.models.lead import Lead
 from app.models.customer import Customer
 from app.models.user import User
 from app.models.activity import Activity, ActivityType
-from app.services.azure_storage_service import azure_storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -255,46 +254,15 @@ class VoiceService:
             return None
 
         try:
-            # Generate filename for Azure
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            filename = f"call_{call_sid}_{timestamp}.wav"
-            
-            # Download from Twilio and upload to Azure
-            # Twilio recording URLs require authentication
+            # Store Twilio recording URL in DB. Playback uses the proxy endpoint with Twilio auth.
+            # Azure upload is skipped for now to avoid SSL/storage issues; can be re-enabled later.
             twilio_recording_url = f"{recording_url}.wav"
-            
-            if azure_storage_service.is_configured:
-                azure_url = await azure_storage_service.upload_recording_from_url(
-                    source_url=twilio_recording_url,
-                    filename=filename,
-                    auth=(settings.twilio_account_sid, settings.twilio_auth_token),
-                    metadata={
-                        "call_sid": call_sid,
-                        "recording_sid": recording_sid,
-                        "lead_id": str(call_log.lead_id) if call_log.lead_id else "",
-                        "user_id": str(call_log.user_id) if call_log.user_id else ""
-                    }
-                )
-                
-                call_log.recording_url = azure_url
-                call_log.recording_sid = recording_sid
-                call_log.recording_duration_seconds = recording_duration
-                
-                await self.db.flush()
-                logger.info(f"Recording uploaded for call {call_sid}: {azure_url}")
-                
-                # Optionally delete from Twilio to save storage costs
-                # await self._delete_twilio_recording(recording_sid)
-            else:
-                # Just store Twilio URL if Azure not configured
-                call_log.recording_url = twilio_recording_url
-                call_log.recording_sid = recording_sid
-                call_log.recording_duration_seconds = recording_duration
-                await self.db.flush()
-                logger.warning("Azure not configured - storing Twilio recording URL directly")
-            
+            call_log.recording_url = twilio_recording_url
+            call_log.recording_sid = recording_sid
+            call_log.recording_duration_seconds = recording_duration
+            await self.db.flush()
+            logger.info(f"Recording stored for call {call_sid} (Twilio URL)")
             return call_log
-            
         except Exception as e:
             logger.error(f"Failed to process recording for call {call_sid}: {e}")
             return None

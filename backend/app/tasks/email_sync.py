@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
+from app.db.database import get_engine_url_and_connect_args
 from app.models.user import User
 from app.services.user_imap_service import sync_all_user_inboxes
 
@@ -32,10 +33,12 @@ class EmailSyncTask:
         """Create async session factory."""
         if self._engine is None:
             from sqlalchemy.pool import NullPool
+            url, connect_args = get_engine_url_and_connect_args()
             self._engine = create_async_engine(
-                settings.database_url,
+                url,
                 echo=False,
                 poolclass=NullPool,  # Use NullPool for background tasks
+                connect_args=connect_args,
             )
             self._session_factory = sessionmaker(
                 self._engine,
