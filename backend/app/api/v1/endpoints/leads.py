@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -269,6 +269,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
     # Activity count per lead (for "fresh" / untouched indicator: only creation activity = 1)
     lead_ids = [l.id for l in leads]
     activity_counts = {}
+    last_activity_by_lead = {}
     if lead_ids:
         act_result = await db.execute(
             select(Activity.lead_id, func.count(Activity.id).label("count"))
@@ -277,6 +278,28 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
         )
         for row in act_result.all():
             activity_counts[row.lead_id] = row.count
+        # Latest activity per lead (one row per lead_id via row_number); include type and meta_data for note content
+        rn = func.row_number().over(partition_by=Activity.lead_id, order_by=desc(Activity.created_at)).label("rn")
+        last_act_subq = (
+            select(Activity.lead_id, Activity.description, Activity.created_at, Activity.type, Activity.meta_data, rn)
+            .where(Activity.lead_id.in_(lead_ids))
+        ).subquery()
+        last_act_result = await db.execute(
+            select(
+                last_act_subq.c.lead_id,
+                last_act_subq.c.description,
+                last_act_subq.c.created_at,
+                last_act_subq.c.type,
+                last_act_subq.c.meta_data,
+            ).where(last_act_subq.c.rn == 1)
+        )
+        for row in last_act_result.all():
+            last_activity_by_lead[row.lead_id] = (
+                row.description,
+                row.created_at,
+                getattr(row, "type", None),
+                getattr(row, "meta_data", None) or {},
+            )
 
     # Build enriched response
     enriched_items = []
@@ -313,6 +336,21 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "dealership": dealerships_map.get(lead.dealership_id) if lead.dealership_id else None,
             "activity_count": activity_counts.get(lead.id, 0),
         }
+        last_act = last_activity_by_lead.get(lead.id)
+        if last_act:
+            lead_dict["last_activity_description"] = last_act[0]
+            lead_dict["last_activity_at"] = last_act[1].isoformat() if last_act[1] else None
+            # When latest activity is a note, expose its content for the Notes column
+            act_type = last_act[2] if len(last_act) > 2 else None
+            meta = last_act[3] if len(last_act) > 3 else {}
+            if act_type == ActivityType.NOTE_ADDED and isinstance(meta, dict):
+                lead_dict["last_note_content"] = meta.get("content") or None
+            else:
+                lead_dict["last_note_content"] = None
+        else:
+            lead_dict["last_activity_description"] = None
+            lead_dict["last_activity_at"] = None
+            lead_dict["last_note_content"] = None
         enriched_items.append(lead_dict)
 
     return enriched_items

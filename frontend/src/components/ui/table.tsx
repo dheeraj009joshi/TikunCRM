@@ -150,10 +150,17 @@ function TableLoading({ columns = 5, rows = 5 }: TableLoadingProps) {
     return (
         <>
             {Array.from({ length: rows }).map((_, rowIndex) => (
-                <TableRow key={rowIndex}>
+                <TableRow key={rowIndex} className="border-border/50">
                     {Array.from({ length: columns }).map((_, colIndex) => (
-                        <TableCell key={colIndex}>
-                            <div className="h-4 w-full animate-pulse rounded bg-muted" />
+                        <TableCell key={colIndex} className="py-4">
+                            <div
+                                className="h-4 rounded-lg max-w-[90%] bg-muted/80"
+                                style={{
+                                    background: "linear-gradient(90deg, hsl(var(--muted)) 0%, hsl(var(--muted) / 0.5) 50%, hsl(var(--muted)) 100%)",
+                                    backgroundSize: "200% 100%",
+                                    animation: "table-loading-shimmer 1.5s ease-in-out infinite",
+                                }}
+                            />
                         </TableCell>
                     ))}
                 </TableRow>

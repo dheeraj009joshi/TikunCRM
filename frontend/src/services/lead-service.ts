@@ -56,6 +56,12 @@ export interface Lead {
     updated_at: string;
     /** Number of activities (1 = only creation = fresh/untouched lead) */
     activity_count?: number;
+    /** Last activity description (list response) */
+    last_activity_description?: string | null;
+    /** Last activity timestamp (list response) */
+    last_activity_at?: string | null;
+    /** When last activity was a note, the note body (list response) */
+    last_note_content?: string | null;
     // Extended info (available in detail view)
     assigned_to_user?: UserBrief;
     secondary_salesperson?: UserBrief;

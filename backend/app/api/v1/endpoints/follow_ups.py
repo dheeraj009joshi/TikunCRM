@@ -37,12 +37,13 @@ async def list_follow_ups(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
     lead_id: Optional[UUID] = Query(None, description="Filter by lead"),
+    assigned_to: Optional[UUID] = Query(None, description="Filter by assigned user (admin/owner only)"),
     status: Optional[FollowUpStatus] = None,
     overdue: bool = False
 ) -> Any:
     """
     List follow-ups for the current user or dealership.
-    Optionally filter by lead_id (e.g. for lead detail page).
+    Optionally filter by lead_id (e.g. for lead detail page) or assigned_to (e.g. for salesperson report).
     """
     query = select(FollowUp).options(
         selectinload(FollowUp.lead),
@@ -57,6 +58,9 @@ async def list_follow_ups(
         query = query.join(User, FollowUp.assigned_to == User.id).where(
             User.dealership_id == current_user.dealership_id
         )
+    
+    if assigned_to is not None:
+        query = query.where(FollowUp.assigned_to == assigned_to)
         
     if lead_id is not None:
         query = query.where(FollowUp.lead_id == lead_id)

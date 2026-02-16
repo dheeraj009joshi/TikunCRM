@@ -96,18 +96,18 @@ class CallLog(Base):
         nullable=True
     )
     
-    # Call details
+    # Call details (values_callable so PostgreSQL receives 'inbound'/'outbound', not enum names)
     direction: Mapped[CallDirection] = mapped_column(
-        SQLEnum(CallDirection),
+        SQLEnum(CallDirection, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         index=True
     )
     from_number: Mapped[str] = mapped_column(String(20), nullable=False)
     to_number: Mapped[str] = mapped_column(String(20), nullable=False)
     
-    # Call status
+    # Call status (values_callable so PostgreSQL receives lowercase enum values)
     status: Mapped[CallStatus] = mapped_column(
-        SQLEnum(CallStatus),
+        SQLEnum(CallStatus, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         default=CallStatus.INITIATED,
         index=True

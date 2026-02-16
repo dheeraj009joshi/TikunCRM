@@ -848,13 +848,23 @@ export default function LeadsPage() {
                             <TableHead>Status</TableHead>
                             <TableHead>Source</TableHead>
                             <TableHead>Assigned To</TableHead>
+                            <TableHead className="max-w-[140px]">Notes</TableHead>
+                            <TableHead className="max-w-[180px]">Last action</TableHead>
                             <TableHead>Created</TableHead>
                             <TableHead className="w-20">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {isLoading ? (
-                            <TableLoading columns={6} rows={10} />
+                            <TableRow className="border-0 hover:bg-transparent">
+                                <TableCell colSpan={8} className="py-0">
+                                    <div className="flex flex-col items-center justify-center py-16">
+                                        <Loader2 className="h-10 w-10 text-primary animate-spin" />
+                                        <p className="mt-4 text-sm font-medium text-muted-foreground">Loading leads...</p>
+                                        <p className="mt-1 text-xs text-muted-foreground">Fetching your pipeline</p>
+                                    </div>
+                                </TableCell>
+                            </TableRow>
                         ) : leads.length === 0 ? (
                             <TableEmpty
                                 icon={<Inbox className="h-10 w-10" />}
@@ -966,6 +976,33 @@ export default function LeadsPage() {
                                                 <span className="text-xs text-amber-600">Not assigned to salesperson</span>
                                             ) : null}
                                         </div>
+                                    </TableCell>
+                                    <TableCell className="max-w-[140px]">
+                                        {(() => {
+                                            const noteText = lead.notes?.trim() || lead.last_note_content?.trim() || null;
+                                            const displayText = noteText ? (noteText.length > 45 ? `${noteText.slice(0, 45)}…` : noteText) : "—";
+                                            return (
+                                                <span className="text-xs text-muted-foreground truncate block" title={noteText ?? undefined}>
+                                                    {displayText}
+                                                </span>
+                                            );
+                                        })()}
+                                    </TableCell>
+                                    <TableCell className="max-w-[180px]">
+                                        {lead.last_activity_description ? (
+                                            <div className="space-y-0.5">
+                                                <span className="text-xs block truncate" title={lead.last_activity_description}>
+                                                    {lead.last_activity_description.length > 38 ? `${lead.last_activity_description.slice(0, 38)}…` : lead.last_activity_description}
+                                                </span>
+                                                {lead.last_activity_at && (
+                                                    <span className="text-xs text-muted-foreground block">
+                                                        {formatDateInTimezone(lead.last_activity_at, timezone, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <span className="text-xs text-muted-foreground">—</span>
+                                        )}
                                     </TableCell>
                                     <TableCell>
                                         <div className="flex items-center gap-1 text-xs text-muted-foreground">
