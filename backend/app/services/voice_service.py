@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from uuid import UUID
 
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -378,7 +378,53 @@ class VoiceService:
             select(CallLog).where(CallLog.twilio_call_sid == call_sid)
         )
         return result.scalar_one_or_none()
-    
+
+    async def update_pending_call_log_with_sid(
+        self,
+        call_sid: str,
+        from_identity: str,
+        to_number: str,
+    ) -> Optional[CallLog]:
+        """
+        When Twilio hits the outgoing webhook we get the real CallSid.
+        Find the pending call_log (created by POST /voice/call) and set twilio_call_sid to the real SID
+        so recording/status webhooks can find the row.
+        """
+        if not call_sid or not from_identity or not to_number:
+            return None
+        to_normalized = "".join(c for c in to_number if c.isdigit())[-10:] if to_number else ""
+        result = await self.db.execute(
+            select(User).where(User.email == from_identity).limit(1)
+        )
+        user = result.scalar_one_or_none()
+        if not user:
+            logger.warning(f"No user found for identity {from_identity!r}")
+            return None
+        result = await self.db.execute(
+            select(CallLog)
+            .where(
+                and_(
+                    CallLog.twilio_call_sid.like("pending_%"),
+                    CallLog.user_id == user.id,
+                    CallLog.direction == CallDirection.OUTBOUND,
+                    or_(
+                        CallLog.to_number == to_number,
+                        CallLog.to_number.like(f"%{to_normalized}"),
+                    ),
+                )
+            )
+            .order_by(CallLog.created_at.desc())
+            .limit(1)
+        )
+        call_log = result.scalar_one_or_none()
+        if not call_log:
+            logger.warning(f"No pending call_log for user {user.id} to {to_number!r}")
+            return None
+        call_log.twilio_call_sid = call_sid
+        await self.db.flush()
+        logger.info(f"Updated call_log {call_log.id} with real CallSid {call_sid}")
+        return call_log
+
     def generate_twiml_for_outbound(
         self,
         to_number: str,
@@ -387,19 +433,25 @@ class VoiceService:
     ) -> str:
         """Generate TwiML for outbound call"""
         from twilio.twiml.voice_response import VoiceResponse, Dial
-        
+
+        base = settings.backend_url.rstrip("/")
+        status_url = f"{base}/api/v1/voice/webhook/status"
+        recording_url = f"{base}/api/v1/voice/webhook/recording"
+
         response = VoiceResponse()
         dial = Dial(
             caller_id=caller_id or settings.twilio_phone_number,
             record="record-from-answer-dual" if record else "do-not-record",
-            recording_status_callback=f"{settings.backend_url.rstrip('/')}/api/v1/voice/webhook/recording",
-            recording_status_callback_event="completed"
+            action=status_url,
+            method="POST",
+            recording_status_callback=recording_url,
+            recording_status_callback_event="completed",
         )
         dial.number(to_number)
         response.append(dial)
-        
+
         return str(response)
-    
+
     def generate_twiml_for_incoming(
         self,
         client_identity: str,
@@ -407,16 +459,22 @@ class VoiceService:
     ) -> str:
         """Generate TwiML for incoming call - routes to WebRTC client"""
         from twilio.twiml.voice_response import VoiceResponse, Dial
-        
+
+        base = settings.backend_url.rstrip("/")
+        status_url = f"{base}/api/v1/voice/webhook/status"
+        recording_url = f"{base}/api/v1/voice/webhook/recording"
+
         response = VoiceResponse()
         dial = Dial(
             record="record-from-answer-dual" if record else "do-not-record",
-            recording_status_callback=f"{settings.backend_url.rstrip('/')}/api/v1/voice/webhook/recording",
-            recording_status_callback_event="completed"
+            action=status_url,
+            method="POST",
+            recording_status_callback=recording_url,
+            recording_status_callback_event="completed",
         )
         dial.client(client_identity)
         response.append(dial)
-        
+
         return str(response)
     
     def generate_twiml_voicemail(self, message: str = "Please leave a message after the beep.") -> str:

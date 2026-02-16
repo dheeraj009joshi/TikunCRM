@@ -115,6 +115,28 @@ async def get_voice_config(
     )
 
 
+@router.get("/config/status")
+async def get_voice_config_status(
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """
+    Debug: which env vars are set for voice (no values).
+    Use this on production to see what is missing when voice_enabled is false.
+    """
+    return {
+        "voice_enabled": settings.is_twilio_voice_configured,
+        "checks": {
+            "TWILIO_ACCOUNT_SID": bool(settings.twilio_account_sid),
+            "TWILIO_AUTH_TOKEN": bool(settings.twilio_auth_token),
+            "TWILIO_PHONE_NUMBER": bool(settings.twilio_phone_number),
+            "TWILIO_TWIML_APP_SID": bool(settings.twilio_twiml_app_sid),
+            "TWILIO_API_KEY_SID": bool(settings.twilio_api_key_sid),
+            "TWILIO_API_KEY_SECRET": bool(settings.twilio_api_key_secret),
+            "VOICE_ENABLED": settings.voice_enabled,
+        },
+    }
+
+
 @router.post("/token", response_model=VoiceTokenResponse)
 async def get_voice_token(
     current_user: User = Depends(deps.get_current_active_user),
@@ -624,6 +646,12 @@ async def handle_outgoing_call(
 
     try:
         service = get_voice_service(db)
+        await service.update_pending_call_log_with_sid(
+            call_sid=call_sid,
+            from_identity=from_identity,
+            to_number=to_number,
+        )
+        await db.commit()
         twiml = service.generate_twiml_for_outbound(to_number)
         return Response(content=twiml, media_type="application/xml")
     except Exception as e:
@@ -641,31 +669,32 @@ async def handle_call_status(
 ):
     """
     Twilio webhook for call status updates.
-    Updates call log with status changes.
+    Called either by call status callback or by Dial action when the dialed call ends.
+    Dial action sends DialCallStatus and DialCallDuration; status callback sends CallStatus and CallDuration.
     """
     form_data = await request.form()
-    
+
     call_sid = form_data.get("CallSid", "")
-    call_status = form_data.get("CallStatus", "")
-    call_duration = form_data.get("CallDuration")
-    
-    logger.info(f"Call status webhook: {call_sid} -> {call_status}")
-    
-    # Map Twilio status to our enum
+    call_status = form_data.get("CallStatus") or form_data.get("DialCallStatus", "")
+    call_duration = form_data.get("CallDuration") or form_data.get("DialCallDuration")
+
+    logger.info(f"Call status webhook: {call_sid} -> {call_status} (duration={call_duration})")
+
     status_map = {
         "queued": CallStatus.INITIATED,
         "ringing": CallStatus.RINGING,
         "in-progress": CallStatus.IN_PROGRESS,
         "completed": CallStatus.COMPLETED,
+        "answered": CallStatus.COMPLETED,
         "busy": CallStatus.BUSY,
         "no-answer": CallStatus.NO_ANSWER,
         "failed": CallStatus.FAILED,
-        "canceled": CallStatus.CANCELED
+        "canceled": CallStatus.CANCELED,
     }
-    
-    status = status_map.get(call_status.lower(), CallStatus.FAILED)
+
+    status = status_map.get((call_status or "").lower(), CallStatus.FAILED)
     duration = int(call_duration) if call_duration else None
-    
+
     service = get_voice_service(db)
     call_log = await service.update_call_status(
         call_sid=call_sid,
@@ -694,8 +723,12 @@ async def handle_call_status(
             )
     
     await db.commit()
-    
-    return {"status": "ok"}
+
+    # Dial action expects TwiML; return empty response so Twilio ends the call cleanly
+    return Response(
+        content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+        media_type="application/xml",
+    )
 
 
 @router.post("/webhook/recording")
