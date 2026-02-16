@@ -647,16 +647,29 @@ async def handle_call_status(
 ):
     """
     Twilio webhook for call status updates.
-    Called either by call status callback or by Dial action when the dialed call ends.
-    Dial action sends DialCallStatus and DialCallDuration; status callback sends CallStatus and CallDuration.
+    For Dial (incoming and outbound): Twilio POSTs to the Dial action URL when the dialed leg ends.
+    Request includes CallSid (parent call), DialCallStatus, DialCallDuration. We prefer those for Dial.
+    Always return 200 + TwiML so Twilio ends the call cleanly.
     """
-    form_data = await request.form()
+    empty_twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+    try:
+        form_data = await request.form()
+    except Exception as e:
+        logger.exception("Status webhook failed to parse form: %s", e)
+        return Response(content=empty_twiml, media_type="application/xml")
 
+    # CallSid is the parent call (the leg we have in call_log). Dial action sends DialCallStatus/DialCallDuration.
     call_sid = form_data.get("CallSid", "")
-    call_status = form_data.get("CallStatus") or form_data.get("DialCallStatus", "")
-    call_duration = form_data.get("CallDuration") or form_data.get("DialCallDuration")
+    call_status = form_data.get("DialCallStatus") or form_data.get("CallStatus", "")
+    call_duration = form_data.get("DialCallDuration") or form_data.get("CallDuration", "")
 
-    logger.info(f"Call status webhook: {call_sid} -> {call_status} (duration={call_duration})")
+    logger.info(
+        "Call status webhook: CallSid=%s DialCallStatus=%s CallStatus=%s duration=%s",
+        call_sid,
+        form_data.get("DialCallStatus"),
+        form_data.get("CallStatus"),
+        call_duration,
+    )
 
     status_map = {
         "queued": CallStatus.INITIATED,
@@ -671,42 +684,47 @@ async def handle_call_status(
     }
 
     status = status_map.get((call_status or "").lower(), CallStatus.FAILED)
-    duration = int(call_duration) if call_duration else None
+    try:
+        duration = int(call_duration) if call_duration else None
+    except (TypeError, ValueError):
+        duration = None
 
-    service = get_voice_service(db)
-    call_log = await service.update_call_status(
-        call_sid=call_sid,
-        status=status,
-        duration=duration
-    )
-    
-    if call_log:
-        # Log activity if call is completed
-        if status in [CallStatus.COMPLETED, CallStatus.BUSY, CallStatus.NO_ANSWER, CallStatus.FAILED]:
-            await service.log_call_activity(call_log)
-        
-        # Send real-time update
-        if call_log.user_id:
-            await ws_manager.send_to_user(
-                str(call_log.user_id),
-                {
-                    "type": "call:status",
-                    "payload": {
-                        "call_log_id": str(call_log.id),
-                        "call_sid": call_sid,
-                        "status": status.value,
-                        "duration_seconds": call_log.duration_seconds
+    try:
+        service = get_voice_service(db)
+        call_log = await service.update_call_status(
+            call_sid=call_sid,
+            status=status,
+            duration=duration
+        )
+
+        if call_log:
+            if status in [CallStatus.COMPLETED, CallStatus.BUSY, CallStatus.NO_ANSWER, CallStatus.FAILED]:
+                await service.log_call_activity(call_log)
+            if call_log.user_id:
+                await ws_manager.send_to_user(
+                    str(call_log.user_id),
+                    {
+                        "type": "call:status",
+                        "payload": {
+                            "call_log_id": str(call_log.id),
+                            "call_sid": call_sid,
+                            "status": status.value,
+                            "duration_seconds": call_log.duration_seconds
+                        }
                     }
-                }
-            )
-    
-    await db.commit()
+                )
+        else:
+            logger.warning("Status webhook: no call_log for CallSid=%s", call_sid)
 
-    # Dial action expects TwiML; return empty response so Twilio ends the call cleanly
-    return Response(
-        content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
-        media_type="application/xml",
-    )
+        await db.commit()
+    except Exception as e:
+        logger.exception("Status webhook error for CallSid=%s: %s", call_sid, e)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+    return Response(content=empty_twiml, media_type="application/xml")
 
 
 @router.post("/webhook/recording")
