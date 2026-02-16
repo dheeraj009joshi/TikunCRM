@@ -22,7 +22,7 @@ export interface InitiateCallRequest {
 }
 
 export interface InitiateCallResponse {
-  call_log_id: string;
+  call_log_id: string | null;
   call_sid: string;
   status: string;
 }

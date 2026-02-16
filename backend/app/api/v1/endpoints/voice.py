@@ -44,10 +44,10 @@ class InitiateCallRequest(BaseModel):
 
 
 class InitiateCallResponse(BaseModel):
-    """Response for call initiation"""
-    call_log_id: UUID
-    call_sid: str
-    status: str
+    """Response for call initiation (call_log_id is null until Twilio provides real SID in outgoing webhook)"""
+    call_log_id: Optional[UUID] = None
+    call_sid: str = "connecting"
+    status: str = "initiated"
 
 
 class CallLogResponse(BaseModel):
@@ -220,35 +220,12 @@ async def initiate_call(
         # Try to find lead by phone number
         lead = await service.find_lead_by_phone(formatted_number)
     
-    try:
-        # Create call log entry
-        call_log = await service.create_call_log(
-            twilio_call_sid=f"pending_{current_user.id}_{datetime.utcnow().timestamp()}",
-            direction=CallDirection.OUTBOUND,
-            from_number=settings.twilio_phone_number,
-            to_number=formatted_number,
-            user_id=current_user.id,
-            lead_id=lead.id if lead else None,
-            customer_id=lead.customer_id if lead else None,
-            dealership_id=dealership_id,
-            status=CallStatus.INITIATED
-        )
-        
-        await db.commit()
-        
-        return InitiateCallResponse(
-            call_log_id=call_log.id,
-            call_sid=call_log.twilio_call_sid,
-            status=call_log.status.value
-        )
-        
-    except Exception as e:
-        logger.error(f"Failed to initiate call: {e}")
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to initiate call"
-        )
+    # Do not create call_log here; it is created in the outgoing webhook when Twilio sends the real CallSid.
+    return InitiateCallResponse(
+        call_log_id=None,
+        call_sid="connecting",
+        status="initiated"
+    )
 
 
 @router.get("/calls", response_model=CallLogListResponse)
@@ -646,7 +623,8 @@ async def handle_outgoing_call(
 
     try:
         service = get_voice_service(db)
-        await service.update_pending_call_log_with_sid(
+        # Create call_log only here with real CallSid (no pending rows)
+        await service.ensure_call_log_for_outgoing(
             call_sid=call_sid,
             from_identity=from_identity,
             to_number=to_number,
@@ -756,6 +734,14 @@ async def handle_recording_complete(
         recording_url=recording_url,
         recording_duration=int(recording_duration)
     )
+    
+    if call_log and call_log.recording_url:
+        await service.update_call_activity_recording(
+            call_log_id=call_log.id,
+            recording_url=call_log.recording_url,
+            recording_sid=call_log.recording_sid,
+            recording_duration_seconds=call_log.recording_duration_seconds,
+        )
     
     if call_log and call_log.user_id:
         # Notify user that recording is ready

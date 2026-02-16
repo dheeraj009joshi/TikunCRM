@@ -15,7 +15,7 @@ from app.models.call_log import CallLog, CallDirection, CallStatus
 from app.models.lead import Lead
 from app.models.customer import Customer
 from app.models.user import User
-from app.models.activity import ActivityType
+from app.models.activity import Activity, ActivityType
 from app.services.azure_storage_service import azure_storage_service
 
 logger = logging.getLogger(__name__)
@@ -209,11 +209,11 @@ class VoiceService:
             select(CallLog).where(CallLog.twilio_call_sid == call_sid)
         )
         call_log = result.scalar_one_or_none()
-        
+
         if not call_log:
             logger.warning(f"Call log not found for SID: {call_sid}")
             return None
-        
+
         call_log.status = status
         
         if duration is not None:
@@ -249,11 +249,11 @@ class VoiceService:
             select(CallLog).where(CallLog.twilio_call_sid == call_sid)
         )
         call_log = result.scalar_one_or_none()
-        
+
         if not call_log:
             logger.warning(f"Call log not found for recording: {call_sid}")
             return None
-        
+
         try:
             # Generate filename for Azure
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -348,6 +348,40 @@ class VoiceService:
         call_log.activity_logged = True
         await self.db.flush()
         logger.info(f"Logged activity for call {call_log.id}")
+
+    async def update_call_activity_recording(
+        self,
+        call_log_id: UUID,
+        recording_url: str,
+        recording_sid: Optional[str] = None,
+        recording_duration_seconds: Optional[int] = None,
+    ) -> None:
+        """
+        Update the CALL_LOGGED activity's meta_data with recording info when recording webhook runs.
+        """
+        result = await self.db.execute(
+            select(Activity)
+            .where(
+                and_(
+                    Activity.type == ActivityType.CALL_LOGGED,
+                    Activity.meta_data["call_log_id"].astext == str(call_log_id),
+                )
+            )
+            .limit(1)
+        )
+        activity = result.scalar_one_or_none()
+        if not activity:
+            logger.debug(f"No CALL_LOGGED activity found for call_log_id {call_log_id}")
+            return
+        meta = dict(activity.meta_data or {})
+        meta["recording_url"] = recording_url
+        if recording_sid is not None:
+            meta["recording_sid"] = recording_sid
+        if recording_duration_seconds is not None:
+            meta["recording_duration_seconds"] = recording_duration_seconds
+        activity.meta_data = meta
+        await self.db.flush()
+        logger.info(f"Updated activity with recording for call_log {call_log_id}")
     
     async def get_call_history(
         self,
@@ -379,50 +413,53 @@ class VoiceService:
         )
         return result.scalar_one_or_none()
 
-    async def update_pending_call_log_with_sid(
+    def _normalize_identity(self, from_identity: str) -> str:
+        """Twilio may send 'client:email' or just 'email'."""
+        if not from_identity:
+            return ""
+        s = from_identity.strip()
+        if s.lower().startswith("client:"):
+            return s[7:].strip()
+        return s
+
+    def _normalize_phone_last10(self, phone: str) -> str:
+        """Last 10 digits for matching."""
+        if not phone:
+            return ""
+        digits = "".join(c for c in phone if c.isdigit())
+        return digits[-10:] if len(digits) >= 10 else digits
+
+    async def ensure_call_log_for_outgoing(
         self,
         call_sid: str,
         from_identity: str,
         to_number: str,
     ) -> Optional[CallLog]:
         """
-        When Twilio hits the outgoing webhook we get the real CallSid.
-        Find the pending call_log (created by POST /voice/call) and set twilio_call_sid to the real SID
-        so recording/status webhooks can find the row.
+        Create call_log with real Twilio CallSid when outgoing webhook runs.
+        This is the only place outbound call_log rows are created (no pending SIDs).
         """
-        if not call_sid or not from_identity or not to_number:
-            return None
-        to_normalized = "".join(c for c in to_number if c.isdigit())[-10:] if to_number else ""
+        identity = self._normalize_identity(from_identity)
         result = await self.db.execute(
-            select(User).where(User.email == from_identity).limit(1)
+            select(User).where(User.email == identity).limit(1)
         )
         user = result.scalar_one_or_none()
         if not user:
-            logger.warning(f"No user found for identity {from_identity!r}")
             return None
-        result = await self.db.execute(
-            select(CallLog)
-            .where(
-                and_(
-                    CallLog.twilio_call_sid.like("pending_%"),
-                    CallLog.user_id == user.id,
-                    CallLog.direction == CallDirection.OUTBOUND,
-                    or_(
-                        CallLog.to_number == to_number,
-                        CallLog.to_number.like(f"%{to_normalized}"),
-                    ),
-                )
-            )
-            .order_by(CallLog.created_at.desc())
-            .limit(1)
+        lead = await self.find_lead_by_phone(to_number)
+        dealership_id = user.dealership_id or (lead.dealership_id if lead else None)
+        call_log = await self.create_call_log(
+            twilio_call_sid=call_sid,
+            direction=CallDirection.OUTBOUND,
+            from_number=settings.twilio_phone_number,
+            to_number=to_number,
+            user_id=user.id,
+            lead_id=lead.id if lead else None,
+            customer_id=lead.customer_id if lead else None,
+            dealership_id=dealership_id,
+            status=CallStatus.INITIATED,
         )
-        call_log = result.scalar_one_or_none()
-        if not call_log:
-            logger.warning(f"No pending call_log for user {user.id} to {to_number!r}")
-            return None
-        call_log.twilio_call_sid = call_sid
-        await self.db.flush()
-        logger.info(f"Updated call_log {call_log.id} with real CallSid {call_sid}")
+        logger.info(f"Created call_log {call_log.id} for outgoing call {call_sid} (no pending found)")
         return call_log
 
     def generate_twiml_for_outbound(

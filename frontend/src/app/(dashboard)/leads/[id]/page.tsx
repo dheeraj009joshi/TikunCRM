@@ -98,6 +98,8 @@ import { useSkateAlertStore } from "@/stores/skate-alert-store"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
 import { useCallLeadOptional } from "@/contexts/call-lead-context"
 import { voiceService } from "@/services/voice-service"
+import { AudioPlayer } from "@/components/audio-player"
+import apiClient from "@/lib/api-client"
 import JSZip from "jszip"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -388,6 +390,10 @@ export default function LeadDetailsPage() {
     const pendingNoteSkateRef = React.useRef<{ content: string; userIds?: string[] } | null>(null)
     // Which note threads have replies expanded (click to load replies)
     const [expandedReplies, setExpandedReplies] = React.useState<Set<string>>(new Set())
+    // Call recording playback in timeline (activity id -> url for AudioPlayer)
+    const [recordingPlayback, setRecordingPlayback] = React.useState<{ activityId: string; url: string } | null>(null)
+    const [recordingPlaybackLoading, setRecordingPlaybackLoading] = React.useState<string | null>(null)
+    const recordingPlaybackObjectUrlRef = React.useRef<string | null>(null)
     // Active tab: default to Notes when opening from mention link (?note=activity_id)
     const [activeActivityTab, setActiveActivityTab] = React.useState<"timeline" | "notes" | "appointments" | "followups" | "stips">(
         noteIdFromUrl ? "notes" : "timeline"
@@ -439,6 +445,14 @@ export default function LeadDetailsPage() {
         voiceService.getConfig().then((c) => setVoiceEnabled(c.voice_enabled)).catch(() => setVoiceEnabled(false))
     }, [leadId])
 
+    // Revoke recording playback object URL on unmount
+    React.useEffect(() => () => {
+        if (recordingPlaybackObjectUrlRef.current) {
+            URL.revokeObjectURL(recordingPlaybackObjectUrlRef.current)
+            recordingPlaybackObjectUrlRef.current = null
+        }
+    }, [])
+
     const handleCallClick = React.useCallback(() => {
         if (!lead) return
         const phone = getLeadPhone(lead)
@@ -449,6 +463,32 @@ export default function LeadDetailsPage() {
             setShowCallTextComingSoon(true)
         }
     }, [lead, voiceEnabled, callLeadCtx])
+
+    const loadCallRecordingForActivity = React.useCallback(async (activityId: string, callLogId: string) => {
+        if (recordingPlaybackObjectUrlRef.current) {
+            URL.revokeObjectURL(recordingPlaybackObjectUrlRef.current)
+            recordingPlaybackObjectUrlRef.current = null
+        }
+        setRecordingPlayback(null)
+        setRecordingPlaybackLoading(activityId)
+        try {
+            const result = await voiceService.getRecordingUrl(callLogId)
+            const url = result.recording_url
+            const isProxyUrl = url.includes("/voice/calls/") && url.includes("/recording") && !url.startsWith("blob:")
+            if (isProxyUrl) {
+                const res = await apiClient.get<Blob>(url, { responseType: "blob" })
+                const objectUrl = URL.createObjectURL(res.data)
+                recordingPlaybackObjectUrlRef.current = objectUrl
+                setRecordingPlayback({ activityId, url: objectUrl })
+            } else {
+                setRecordingPlayback({ activityId, url })
+            }
+        } catch (err) {
+            console.error("Failed to load call recording:", err)
+        } finally {
+            setRecordingPlaybackLoading(null)
+        }
+    }, [])
 
     const fetchLead = React.useCallback(async () => {
         try {
@@ -2863,6 +2903,28 @@ export default function LeadDetailsPage() {
                                                             {activity.meta_data?.notes != null ? (
                                                                 <p className="text-muted-foreground mt-1">{String(activity.meta_data.notes)}</p>
                                                             ) : null}
+                                                            {(activity.meta_data?.call_log_id != null) && (
+                                                                <div className="mt-2">
+                                                                    {recordingPlaybackLoading === activity.id ? (
+                                                                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                                                            <Loader2 className="h-3 w-3 animate-spin" /> Loading recording…
+                                                                        </span>
+                                                                    ) : recordingPlayback?.activityId === activity.id && recordingPlayback?.url ? (
+                                                                        <AudioPlayer src={recordingPlayback.url} title="Call Recording" />
+                                                                    ) : (
+                                                                        <Button
+                                                                            type="button"
+                                                                            variant="ghost"
+                                                                            size="sm"
+                                                                            className="h-7 text-xs text-emerald-700 dark:text-emerald-400"
+                                                                            onClick={() => loadCallRecordingForActivity(activity.id, String(activity.meta_data!.call_log_id))}
+                                                                        >
+                                                                            <PhoneCall className="h-3 w-3 mr-1" />
+                                                                            Play recording
+                                                                        </Button>
+                                                                    )}
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     )}
                                                     {(activity.type === "email_sent" || activity.type === "email_received") && (
