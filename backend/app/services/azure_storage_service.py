@@ -1,6 +1,7 @@
 """
 Azure Blob Storage Service - For storing call recordings
 """
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, BinaryIO, Tuple
@@ -45,31 +46,55 @@ class AzureStorageService:
         return self._blob_service_client
     
     def _get_container_client(self):
-        """Get or create container client"""
+        """Get container client (assumes container exists; use _ensure_call_recordings_container for first-time setup)."""
         if self._container_client is None:
             service = self._get_blob_service_client()
             self._container_client = service.get_container_client(settings.azure_storage_container)
-            
-            # Create container if it doesn't exist
+        return self._container_client
+
+    async def _ensure_call_recordings_container(self) -> None:
+        """
+        Ensure the call-recordings container exists. Runs blocking Azure SDK calls in a thread
+        so the async event loop is not blocked (avoids server freeze/crash on slow Azure).
+        """
+        if self._container_client is not None:
+            return
+        service = self._get_blob_service_client()
+        self._container_client = service.get_container_client(settings.azure_storage_container)
+
+        def _check_and_create() -> None:
             try:
                 self._container_client.get_container_properties()
             except Exception:
                 logger.info(f"Creating container: {settings.azure_storage_container}")
                 self._container_client.create_container()
-        
-        return self._container_client
+
+        await asyncio.to_thread(_check_and_create)
 
     def _get_stips_container_client(self):
-        """Get or create Stips documents container client."""
+        """Get Stips container client (use _ensure_stips_container before first use in async code)."""
         if self._stips_container_client is None and settings.is_azure_stips_configured:
             service = self._get_blob_service_client()
             self._stips_container_client = service.get_container_client(settings.azure_storage_container_stips)
+        return self._stips_container_client
+
+    async def _ensure_stips_container(self) -> None:
+        """Ensure the Stips container exists. Runs blocking Azure calls in a thread."""
+        if not settings.is_azure_stips_configured:
+            return
+        if self._stips_container_client is not None:
+            return
+        service = self._get_blob_service_client()
+        self._stips_container_client = service.get_container_client(settings.azure_storage_container_stips)
+
+        def _check_and_create() -> None:
             try:
                 self._stips_container_client.get_container_properties()
             except Exception:
                 logger.info(f"Creating container: {settings.azure_storage_container_stips}")
                 self._stips_container_client.create_container()
-        return self._stips_container_client
+
+        await asyncio.to_thread(_check_and_create)
     
     async def upload_recording(
         self,
@@ -96,20 +121,23 @@ class AzureStorageService:
         
         try:
             from azure.storage.blob import ContentSettings
-            
+
+            await self._ensure_call_recordings_container()
             container = self._get_container_client()
             blob_client = container.get_blob_client(filename)
-            
-            # Upload the recording
-            blob_client.upload_blob(
-                recording_data,
-                overwrite=True,
-                content_settings=ContentSettings(content_type=content_type),
-                metadata=metadata or {}
-            )
-            
+
+            def _do_upload() -> str:
+                blob_client.upload_blob(
+                    recording_data,
+                    overwrite=True,
+                    content_settings=ContentSettings(content_type=content_type),
+                    metadata=metadata or {}
+                )
+                return blob_client.url
+
+            url = await asyncio.to_thread(_do_upload)
             logger.info(f"Uploaded recording to Azure: {filename}")
-            return blob_client.url
+            return url
             
         except Exception as e:
             logger.error(f"Failed to upload recording to Azure: {e}")
@@ -301,17 +329,23 @@ class AzureStorageService:
             return ""
         try:
             from azure.storage.blob import ContentSettings
+            await self._ensure_stips_container()
             container = self._get_stips_container_client()
             if container is None:
                 return ""
             blob_client = container.get_blob_client(blob_path)
-            blob_client.upload_blob(
-                data,
-                overwrite=True,
-                content_settings=ContentSettings(content_type=content_type),
-            )
+
+            def _do_upload() -> str:
+                blob_client.upload_blob(
+                    data,
+                    overwrite=True,
+                    content_settings=ContentSettings(content_type=content_type),
+                )
+                return blob_client.url
+
+            url = await asyncio.to_thread(_do_upload)
             logger.info(f"Uploaded stip document: {blob_path}")
-            return blob_client.url
+            return url
         except Exception as e:
             logger.error(f"Failed to upload stip document: {e}")
             raise
