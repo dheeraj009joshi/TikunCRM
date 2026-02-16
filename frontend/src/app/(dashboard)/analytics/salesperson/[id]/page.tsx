@@ -177,11 +177,11 @@ export default function SalespersonAnalyticsPage() {
             const key = keys[i]
             if (result.status === "fulfilled") {
                 const value = result.value
-                if (key === "leads") setLeads("items" in value && Array.isArray(value.items) ? value.items : [])
-                else if (key === "notes") setNotes("items" in value && Array.isArray(value.items) ? value.items : [])
-                else if (key === "activities") setActivities("items" in value && Array.isArray(value.items) ? value.items : [])
-                else if (key === "appointments") setAppointments("items" in value && Array.isArray(value.items) ? value.items : [])
-                else if (key === "followUps") setFollowUps(Array.isArray(value) ? value : [])
+                if (key === "leads") setLeads("items" in value && Array.isArray(value.items) ? (value.items as Lead[]) : [])
+                else if (key === "notes") setNotes("items" in value && Array.isArray(value.items) ? (value.items as ActivityItem[]) : [])
+                else if (key === "activities") setActivities("items" in value && Array.isArray(value.items) ? (value.items as ActivityItem[]) : [])
+                else if (key === "appointments") setAppointments("items" in value && Array.isArray(value.items) ? (value.items as AppointmentItem[]) : [])
+                else if (key === "followUps") setFollowUps(Array.isArray(value) ? (value as FollowUp[]) : [])
             } else {
                 nextErrors[key] = getErrorMessage(result.reason)
             }
