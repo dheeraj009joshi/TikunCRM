@@ -434,10 +434,10 @@ export default function LeadDetailsPage() {
         notes: "",
     })
 
-    // Voice: in-app call opens softphone when enabled
+    // Voice: in-app call opens softphone when enabled (refetch per lead so production gets fresh config)
     React.useEffect(() => {
-        voiceService.getConfig().then((c) => setVoiceEnabled(c.voice_enabled)).catch(() => {})
-    }, [])
+        voiceService.getConfig().then((c) => setVoiceEnabled(c.voice_enabled)).catch(() => setVoiceEnabled(false))
+    }, [leadId])
 
     const handleCallClick = React.useCallback(() => {
         if (!lead) return
