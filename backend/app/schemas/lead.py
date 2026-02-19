@@ -147,8 +147,9 @@ class LeadResponse(BaseModel):
     # Stage (embedded)
     stage_id: UUID
     stage: Optional[LeadStageResponse] = None
-    # Lead fields
-    source: LeadSource
+    # Lead fields (source is str for API responses - enum value or source_display from meta_data)
+    source: str
+    source_display: Optional[str] = None  # Custom display when present (e.g. from meta_data)
     is_active: bool
     outcome: Optional[str] = None
     interest_score: int = 0
@@ -199,7 +200,8 @@ class LeadBrief(BaseModel):
     id: UUID
     customer: Optional[CustomerBrief] = None
     stage: Optional[LeadStageResponse] = None
-    source: LeadSource
+    source: str
+    source_display: Optional[str] = None
     is_active: bool = True
 
     class Config:

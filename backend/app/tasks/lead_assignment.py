@@ -22,6 +22,7 @@ from app.models.activity import Activity, ActivityType
 from app.models.user import User
 from app.models.notification import Notification, NotificationType
 from app.services.notification_service import NotificationService
+from app.services.follow_up_schedule_service import schedule_outbound_call_follow_ups
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +181,13 @@ async def auto_assign_leads_from_activity():
                         first_activity.user_id,
                         {"type": "badges:refresh", "payload": {}}
                     )
-                    
+
+                    # Schedule outbound-call follow-ups (day 1–3, every 3 days, every Friday)
+                    try:
+                        await schedule_outbound_call_follow_ups(session, lead.id, first_activity.user_id)
+                    except Exception as e:
+                        logger.warning("Failed to schedule outbound call follow-ups for lead %s: %s", lead.id, e)
+
                     assigned_count += 1
                     logger.info(f"Auto-assigned lead {lead.id} to user {first_activity.user_id} (dealership {activity_user.dealership_id})")
             

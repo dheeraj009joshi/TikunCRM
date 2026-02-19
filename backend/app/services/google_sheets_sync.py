@@ -7,8 +7,10 @@ Uses the public CSV export feature (no API key needed for public sheets).
 import logging
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Set
+
+from dateutil import parser as dateutil_parser
 import httpx
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
@@ -71,6 +73,46 @@ def clean_phone(phone: str) -> Optional[str]:
     # Remove any non-phone characters except + and digits
     cleaned = ''.join(c for c in phone if c.isdigit() or c == '+')
     return cleaned if cleaned else None
+
+
+def _source_display_from_campaign(campaign_or_type: str) -> Optional[str]:
+    """Map campaign_name or lead_type (e.g. 'Toyota |Updated') to display source string."""
+    cn = (campaign_or_type or "").strip()
+    # Updated leads (with down payment info): "Toyota |Updated", "Cars Leads Campaign | Toyota | Updated", etc.
+    if "| Updated" in cn or "|Updated" in cn or "Cars Leads Campaign | Toyota | Updated" in cn:
+        return "Toyota Spanish Leads with Down payment"
+    if "Toyota" in cn or "Cars Leads Campaign | Toyota" in cn:
+        return "Toyota Spanish Leads"
+    return None
+
+
+def _get_first_non_empty(row: Dict[str, str], *keys: str) -> Optional[str]:
+    """Get first non-empty value from row for any of the given keys. Tries exact match first, then case-insensitive over row keys."""
+    for k in keys:
+        v = (row.get(k) or '').strip()
+        if v:
+            return v
+    row_lower_to_key = {key.lower(): key for key in row}
+    for k in keys:
+        kl = k.lower()
+        if kl in row_lower_to_key:
+            v = (row.get(row_lower_to_key[kl]) or '').strip()
+            if v:
+                return v
+    return None
+
+
+def _parse_created_time(created_time_str: str) -> Optional[datetime]:
+    """Parse created_time string to timezone-aware datetime. Returns None on failure."""
+    if not (created_time_str or "").strip():
+        return None
+    try:
+        dt = dateutil_parser.parse(created_time_str.strip())
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
 
 
 def parse_sheet_row(row: Dict[str, str], headers: List[str]) -> Optional[Dict[str, Any]]:
@@ -145,8 +187,10 @@ def parse_sheet_row(row: Dict[str, str], headers: List[str]) -> Optional[Dict[st
         # Get platform (fb, ig)
         platform = row.get('platform', '').strip()
         
-        # Get campaign info
-        campaign_name = row.get('campaign_name', '').strip()
+        # Get campaign info - check multiple possible column names for campaign/type (sheet may use "campaign_name", "Campaign", "Lead Type", etc.)
+        campaign_name = (
+            row.get('campaign_name', '') or row.get('Campaign', '') or row.get('campaign', '') or row.get('Lead Type', '') or row.get('lead_type', '')
+        ).strip()
         campaign_id = row.get('campaign_id', '').strip()
         ad_name = row.get('ad_name', '').strip()
         ad_id = row.get('ad_id', '').strip()
@@ -178,6 +222,35 @@ def parse_sheet_row(row: Dict[str, str], headers: List[str]) -> Optional[Dict[st
             'created_time': created_time,
         }
         
+        # Parse financial columns (for Toyota Spanish Leads with Down payment / Updated leads)
+        downpayment = _get_first_non_empty(
+            row, 'downpayment', 'down_payment', 'Down Payment', 'Down payment', 'down payment'
+        )
+        loan_amount = _get_first_non_empty(
+            row, 'loan_amount', 'Loan Amount', 'Loan amount', 'loan amount'
+        )
+        vehicle_price = _get_first_non_empty(
+            row, 'vehicle_price', 'Vehicle Price', 'Vehicle price', 'vehicle price', 'price'
+        )
+        if downpayment:
+            meta_data['downpayment'] = downpayment
+        if loan_amount:
+            meta_data['loan_amount'] = loan_amount
+        if vehicle_price:
+            meta_data['vehicle_price'] = vehicle_price
+        
+        # Add source_display when campaign maps to a known source
+        source_display = _source_display_from_campaign(campaign_name)
+        if source_display:
+            meta_data['source_display'] = source_display
+        
+        # Parse created_time for FB/Meta leads (platform fb or ig)
+        created_at = None
+        if platform.lower() in ('fb', 'ig'):
+            parsed = _parse_created_time(created_time)
+            if parsed:
+                created_at = parsed
+        
         return {
             'external_id': external_id,
             'first_name': first_name,
@@ -186,6 +259,7 @@ def parse_sheet_row(row: Dict[str, str], headers: List[str]) -> Optional[Dict[st
             'source': LeadSource.GOOGLE_SHEETS,
             'notes': notes,
             'meta_data': meta_data,
+            'created_at': created_at,
         }
         
     except Exception as e:
@@ -257,6 +331,19 @@ async def get_existing_external_ids(session: AsyncSession) -> Set[str]:
     return {row[0] for row in result.fetchall()}
 
 
+async def get_existing_leads_by_external_id(
+    session: AsyncSession, external_ids: Set[str]
+) -> Dict[str, Lead]:
+    """Get existing leads by external_id. Returns dict external_id -> Lead."""
+    if not external_ids:
+        return {}
+    result = await session.execute(
+        select(Lead).where(Lead.external_id.in_(external_ids))
+    )
+    leads = result.scalars().all()
+    return {lead.external_id: lead for lead in leads}
+
+
 async def get_existing_phones(session: AsyncSession) -> Set[str]:
     """Get all existing phone numbers (from customers who have leads). Lead has no phone column; phone lives on Customer."""
     result = await session.execute(
@@ -270,6 +357,7 @@ def _empty_sync_result(error: Optional[str] = None) -> Dict[str, Any]:
         "sheet_total_rows": 0,
         "sheet_valid_leads": 0,
         "new_added": 0,
+        "leads_updated": 0,
         "duplicates_skipped": 0,
         "skipped_invalid": 0,
         "error": error,
@@ -310,6 +398,7 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
                 "sheet_total_rows": sheet_total_rows,
                 "sheet_valid_leads": 0,
                 "new_added": 0,
+                "leads_updated": 0,
                 "duplicates_skipped": 0,
                 "skipped_invalid": skipped_invalid,
                 "error": None,
@@ -319,11 +408,13 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
         sync_session_maker = get_sync_session_maker()
         
         new_leads_count = 0
+        updated_count = 0
         duplicate_count = 0
         sync_result = {
             "sheet_total_rows": sheet_total_rows,
             "sheet_valid_leads": sheet_valid_leads,
             "new_added": 0,
+            "leads_updated": 0,
             "duplicates_skipped": 0,
             "skipped_invalid": skipped_invalid,
             "error": None,
@@ -344,29 +435,36 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
                 else:
                     logger.info(f"Auto-assigning leads to dealership: {toyota_south.name} (id: {toyota_south.id})")
                 
-                # Get all existing external_ids and phones in batch
-                existing_external_ids = await get_existing_external_ids(session)
+                sheet_external_ids = {ld["external_id"] for ld in parsed_leads}
+                existing_leads_map = await get_existing_leads_by_external_id(
+                    session, sheet_external_ids
+                )
                 existing_phones = await get_existing_phones(session)
+                tracked_external_ids: Set[str] = set()
+                tracked_phones: Set[str] = set()
                 
-                # Filter out duplicates
-                new_leads = []
+                new_leads: List[Dict[str, Any]] = []
                 for lead_data in parsed_leads:
-                    # Check external_id
-                    if lead_data['external_id'] in existing_external_ids:
-                        duplicate_count += 1
-                        continue
+                    ext_id = lead_data["external_id"]
+                    phone = lead_data.get("phone")
                     
-                    # Check phone
-                    if lead_data['phone'] and lead_data['phone'] in existing_phones:
+                    if ext_id in existing_leads_map:
+                        # Update existing lead
+                        lead = existing_leads_map[ext_id]
+                        if lead_data.get("created_at"):
+                            lead.created_at = lead_data["created_at"]
+                        lead.meta_data = {**(lead.meta_data or {}), **lead_data["meta_data"]}
+                        updated_count += 1
+                    elif ext_id in tracked_external_ids or (phone and phone in tracked_phones):
                         duplicate_count += 1
-                        continue
-                    
-                    # Add to new leads list and track to avoid duplicates within batch
-                    new_leads.append(lead_data)
-                    if lead_data['external_id']:
-                        existing_external_ids.add(lead_data['external_id'])
-                    if lead_data['phone']:
-                        existing_phones.add(lead_data['phone'])
+                    elif phone and phone in existing_phones:
+                        duplicate_count += 1
+                    else:
+                        new_leads.append(lead_data)
+                        if ext_id:
+                            tracked_external_ids.add(ext_id)
+                        if phone:
+                            tracked_phones.add(phone)
                 
                 # Batch insert new leads
                 created_leads = []
@@ -384,17 +482,20 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
                             last_name=lead_data['last_name'],
                             source="google_sheets",
                         )
-                        new_lead = Lead(
-                            customer_id=customer.id,
-                            stage_id=default_stage.id,
-                            source=lead_data['source'],
-                            notes=lead_data['notes'],
-                            meta_data=lead_data['meta_data'],
-                            external_id=lead_data['external_id'],
-                            dealership_id=target_dealership_id,
-                            assigned_to=None,
-                            created_by=None,
-                        )
+                        lead_kwargs: Dict[str, Any] = {
+                            "customer_id": customer.id,
+                            "stage_id": default_stage.id,
+                            "source": lead_data["source"],
+                            "notes": lead_data["notes"],
+                            "meta_data": lead_data["meta_data"],
+                            "external_id": lead_data["external_id"],
+                            "dealership_id": target_dealership_id,
+                            "assigned_to": None,
+                            "created_by": None,
+                        }
+                        if lead_data.get("created_at"):
+                            lead_kwargs["created_at"] = lead_data["created_at"]
+                        new_lead = Lead(**lead_kwargs)
                         session.add(new_lead)
                         created_leads.append(new_lead)
                     
@@ -417,10 +518,13 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
                         )
                         session.add(activity)
                     
-                    await session.commit()
                     new_leads_count = len(new_leads)
-                    
-                    # Emit WebSocket events and send notifications for each new lead
+                
+                # Commit to persist both updates and inserts
+                await session.commit()
+                
+                # Emit WebSocket events and send notifications for each new lead
+                if new_leads:
                     for lead in created_leads:
                         try:
                             from app.services.notification_service import (
@@ -428,6 +532,7 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
                                 emit_badges_refresh,
                                 notify_lead_assigned_to_dealership_background,
                             )
+                            source_display = (lead.meta_data or {}).get("source_display") or (lead.source.value if lead.source else "google_sheets")
                             await emit_lead_created(
                                 str(lead.id),
                                 str(lead.dealership_id) if lead.dealership_id else None,
@@ -435,14 +540,13 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
                                     "first_name": lead.first_name,
                                     "last_name": lead.last_name,
                                     "phone": lead.phone,
-                                    "source": lead.source.value if lead.source else None,
+                                    "source": source_display,
                                 }
                             )
                             
                             # Send notification to all dealership members
                             if lead.dealership_id:
                                 lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "New Lead"
-                                source_display = lead.source.value if lead.source else "google_sheets"
                                 await notify_lead_assigned_to_dealership_background(
                                     lead_id=lead.id,
                                     lead_name=lead_name,
@@ -468,10 +572,11 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
                 raise
         
         sync_result["new_added"] = new_leads_count
+        sync_result["leads_updated"] = updated_count
         sync_result["duplicates_skipped"] = duplicate_count
         logger.info(
             f"Google Sheet sync complete: "
-            f"{new_leads_count} new leads added, "
+            f"{new_leads_count} new leads added, {updated_count} updated, "
             f"{duplicate_count} duplicates, {skipped_invalid} invalid rows"
         )
         return sync_result
@@ -499,11 +604,12 @@ async def send_new_lead_notifications(session: AsyncSession, leads: List[Lead], 
                 lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
                 
                 # Use the new notification service method to broadcast to all dealership members
+                lead_source = (lead.meta_data or {}).get("source_display") or "google_sheets"
                 await notification_service.notify_new_lead_to_dealership(
                     dealership_id=dealership_id,
                     lead_name=lead_name,
                     lead_id=lead.id,
-                    lead_source="google_sheets"
+                    lead_source=lead_source
                 )
                 
                 logger.info(f"Sent new lead notifications for lead {lead.id} to dealership {dealership_id}")

@@ -28,6 +28,7 @@ class SyncTriggerResponse(BaseModel):
     success: bool
     message: str
     new_leads_added: int = 0
+    leads_updated: int = 0
     leads_in_sheet: int = 0
     leads_in_system: int = 0
     sheet_total_rows: int = 0
@@ -97,6 +98,7 @@ async def trigger_sync(
             "sheet_total_rows": 0,
             "sheet_valid_leads": 0,
             "new_added": 0,
+            "leads_updated": 0,
             "duplicates_skipped": 0,
             "skipped_invalid": 0,
             "error": str(e),
@@ -114,6 +116,7 @@ async def trigger_sync(
         message="Sync completed. Compare leads_in_sheet vs leads_in_system below."
             if success else f"Sync failed: {err}",
         new_leads_added=result.get("new_added", 0),
+        leads_updated=result.get("leads_updated", 0),
         leads_in_sheet=result.get("sheet_valid_leads", 0),
         leads_in_system=leads_in_system,
         sheet_total_rows=result.get("sheet_total_rows", 0),

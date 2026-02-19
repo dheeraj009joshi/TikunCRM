@@ -48,6 +48,10 @@ from app.services.notification_service import (
     send_skate_alert_background,
     notify_lead_assigned_to_dealership_background,
 )
+from app.services.follow_up_schedule_service import (
+    schedule_outbound_call_follow_ups,
+    cancel_pending_follow_ups_for_lead,
+)
 from app.core.config import settings as app_settings
 from app.services.azure_storage_service import azure_storage_service
 from app.utils.skate_helper import check_skate_condition, check_note_skate_condition
@@ -185,7 +189,13 @@ async def auto_assign_lead_on_activity(
         )
     except Exception:
         pass  # Don't fail auto-assign if WebSocket fails
-    
+
+    # Schedule outbound-call follow-ups (day 1–3, every 3 days, every Friday)
+    try:
+        await schedule_outbound_call_follow_ups(db, lead.id, user.id)
+    except Exception as e:
+        logger.warning("Failed to schedule outbound call follow-ups for lead %s: %s", lead.id, e)
+
     return True
 
 
@@ -312,7 +322,8 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "secondary_customer": customers_map.get(lead.secondary_customer_id) if getattr(lead, 'secondary_customer_id', None) else None,
             "stage_id": str(lead.stage_id),
             "stage": stages_map.get(lead.stage_id),
-            "source": lead.source.value if hasattr(lead.source, 'value') else str(lead.source),
+            "source": (lead.meta_data or {}).get("source_display") or (lead.source.value if isinstance(lead.source, LeadSource) else "google_sheets"),
+            "source_display": (lead.meta_data or {}).get("source_display"),
             "is_active": lead.is_active,
             "outcome": lead.outcome,
             "interest_score": lead.interest_score,
@@ -704,7 +715,7 @@ async def create_lead(
     )
 
     if dealership_id:
-        source_display = lead.source.value if lead.source else "unknown"
+        source_display = (lead.meta_data or {}).get("source_display") or (lead.source.value if lead.source else "unknown")
         background_tasks.add_task(
             notify_lead_assigned_to_dealership_background,
             lead_id=lead.id,
@@ -1058,6 +1069,14 @@ async def get_lead(
                 "email": sec_cust.email,
             }
 
+    # Source: use source_display when present, else enum value (schema accepts str for display)
+    _meta = lead.meta_data or {}
+    _source_display = _meta.get("source_display")
+    _raw = lead.source
+    _source_str = _source_display if _source_display else (
+        _raw.value if isinstance(_raw, LeadSource) else "google_sheets"
+    )
+
     # Build response
     response_data = {
         "id": lead.id,
@@ -1067,7 +1086,8 @@ async def get_lead(
         "secondary_customer": secondary_customer_brief,
         "stage_id": lead.stage_id,
         "stage": stage_data,
-        "source": lead.source,
+        "source": _source_str,
+        "source_display": _source_display,
         "is_active": lead.is_active,
         "outcome": lead.outcome,
         "interest_score": lead.interest_score,
@@ -1237,6 +1257,11 @@ async def update_lead_stage(
             lead.outcome = "lost"
         else:
             lead.outcome = new_stage.name
+        # Cancel all pending follow-ups when lead is closed
+        try:
+            await cancel_pending_follow_ups_for_lead(db, lead.id)
+        except Exception as e:
+            logger.warning("Failed to cancel follow-ups for closed lead %s: %s", lead.id, e)
 
     performer_name = f"{current_user.first_name} {current_user.last_name}"
     await ActivityService.log_lead_status_change(
@@ -1433,7 +1458,14 @@ async def assign_lead(
         )
     
     await db.flush()
-    
+
+    # On first assignment (not reassignment), schedule outbound-call follow-ups
+    if old_assigned_to_id is None:
+        try:
+            await schedule_outbound_call_follow_ups(db, lead.id, assign_in.assigned_to)
+        except Exception as e:
+            logger.warning("Failed to schedule outbound call follow-ups for lead %s: %s", lead.id, e)
+
     # Emit real-time WebSocket event with updated lead data
     try:
         from app.services.notification_service import emit_lead_updated
@@ -1477,6 +1509,84 @@ async def assign_lead(
     except Exception as e:
         logger.error(f"Failed to emit WebSocket events: {e}")
     
+    return lead
+
+
+@router.post("/{lead_id}/unassign", response_model=LeadResponse)
+async def unassign_lead(
+    lead_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.ASSIGN_LEAD_TO_SALESPERSON))
+) -> Any:
+    """
+    Unassign lead (remove primary and secondary salesperson).
+    Only admins and owners can unassign.
+    """
+    # Only admins and owners can unassign
+    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+        raise HTTPException(status_code=403, detail="Only admins and owners can unassign leads")
+
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    # Verify lead is in same dealership (unless super admin)
+    if current_user.role != UserRole.SUPER_ADMIN and lead.dealership_id != current_user.dealership_id:
+        raise HTTPException(status_code=403, detail="Cannot unassign lead from different dealership")
+
+    if not lead.assigned_to:
+        raise HTTPException(status_code=400, detail="Lead is not assigned to anyone")
+
+    old_assigned_to_id = lead.assigned_to
+    old_assigned_to_name = None
+    if old_assigned_to_id:
+        old_user_result = await db.execute(select(User).where(User.id == old_assigned_to_id))
+        old_user = old_user_result.scalar_one_or_none()
+        if old_user:
+            old_assigned_to_name = f"{old_user.first_name} {old_user.last_name}"
+
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
+    description = f"Lead unassigned from {old_assigned_to_name} by {performer_name}" if old_assigned_to_name else f"Lead unassigned by {performer_name}"
+
+    lead.assigned_to = None
+    lead.secondary_salesperson_id = None
+
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.LEAD_UNASSIGNED,
+        description=description,
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=lead.dealership_id,
+        meta_data={
+            "old_assigned_to": str(old_assigned_to_id),
+            "old_assigned_to_name": old_assigned_to_name,
+            "performer_name": performer_name,
+        }
+    )
+
+    # Cancel pending follow-ups for this lead (they were assigned to the salesperson)
+    try:
+        await cancel_pending_follow_ups_for_lead(db, lead.id)
+    except Exception as e:
+        logger.warning("Failed to cancel pending follow-ups for lead %s: %s", lead.id, e)
+
+    await db.flush()
+
+    try:
+        from app.services.notification_service import emit_lead_updated, emit_badges_refresh, emit_stats_refresh
+        await emit_lead_updated(
+            str(lead.id),
+            str(lead.dealership_id) if lead.dealership_id else None,
+            "unassigned",
+            {"assigned_to": None, "assigned_to_user": None}
+        )
+        await emit_badges_refresh({"unassigned": True})
+    except Exception as e:
+        logger.error("Failed to emit WebSocket events: %s", e)
+
     return lead
 
 
@@ -2537,7 +2647,7 @@ async def export_leads_csv(
             _cc.email or "" if _cc else "",
             _cc.phone or "" if _cc else "",
             _ss.display_name if _ss else "",
-            lead.source.value if lead.source else "",
+            (lead.meta_data or {}).get("source_display") or (lead.source.value if lead.source else ""),
             lead.created_at.isoformat() if lead.created_at else "",
             lead.last_contacted_at.isoformat() if lead.last_contacted_at else "",
             str(lead.dealership_id) if lead.dealership_id else "",
