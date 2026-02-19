@@ -189,7 +189,7 @@ export default function Customer360Page() {
                                                     </Badge>
                                                 </div>
                                                 <p className="text-xs text-muted-foreground">
-                                                    Source: {lead.source?.replace("_", " ")} | Created{" "}
+                                                    Source: {(lead.source_display ?? lead.source)?.replace(/_/g, ' ')} | Created{" "}
                                                     {formatDateInTimezone(lead.created_at, timezone, {
                                                         dateStyle: "medium",
                                                     })}

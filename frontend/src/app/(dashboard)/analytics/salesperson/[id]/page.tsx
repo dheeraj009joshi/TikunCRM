@@ -320,7 +320,7 @@ export default function SalespersonAnalyticsPage() {
                                                 <TableRow key={lead.id}>
                                                     <TableCell className="font-medium">{getLeadFullName(lead)}</TableCell>
                                                     <TableCell>{lead.stage?.display_name ?? lead.stage?.name ?? "—"}</TableCell>
-                                                    <TableCell>{lead.source ?? "—"}</TableCell>
+                                                    <TableCell>{(lead.source_display ?? lead.source)?.replace(/_/g, ' ') ?? "—"}</TableCell>
                                                     <TableCell className="text-muted-foreground text-sm">{lead.created_at ? formatDate(lead.created_at) : "—"}</TableCell>
                                                     <TableCell>
                                                         <Button variant="ghost" size="sm" asChild>

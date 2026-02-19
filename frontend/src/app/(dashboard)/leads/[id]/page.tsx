@@ -36,7 +36,11 @@ import {
     FileStack,
     Upload,
     ExternalLink,
-    FileText
+    FileText,
+    ChevronDown,
+    DollarSign,
+    UserMinus,
+    Plus
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -57,6 +61,7 @@ import { Badge, getStatusVariant, getSourceVariant, getRoleVariant } from "@/com
 import { UserAvatar } from "@/components/ui/avatar"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
     Select,
     SelectContent,
@@ -351,6 +356,9 @@ export default function LeadDetailsPage() {
     
     // Delete confirmation
     const [showDeleteDialog, setShowDeleteDialog] = React.useState(false)
+    const [showUnassignConfirm, setShowUnassignConfirm] = React.useState(false)
+    const [isUnassigning, setIsUnassigning] = React.useState(false)
+    const [completingFollowUpId, setCompletingFollowUpId] = React.useState<string | null>(null)
     const [isDeleting, setIsDeleting] = React.useState(false)
     
     // Lost reason modal
@@ -550,11 +558,14 @@ export default function LeadDetailsPage() {
         followUpBadgeColor,
         appointmentsToday,
         appointmentsUpcoming,
+        appointmentsPast,
         followUpsToday,
         followUpsUpcoming,
+        followUpsPast,
     } = React.useMemo(() => {
         const now = new Date()
         const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
         const isSameDay = (d: Date) =>
             d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
         const toDate = (s: string) => parseAsUTC(s)
@@ -570,8 +581,17 @@ export default function LeadDetailsPage() {
             if (isSameDay(d)) {
                 todayApt.push(a)
                 if (d.getTime() < now.getTime()) aptTodayOverdue = true
-            } else if (d.getTime() > endOfToday.getTime()) upcomingApt.push(a)
+            } else if (d.getTime() > endOfToday.getTime()) {
+                upcomingApt.push(a)
+            }
         })
+        // Past: all appointments (any status) with scheduled_at < startOfToday
+        const pastApt = leadAppointments
+            .filter((a) => {
+                const d = toDate(a.scheduled_at)
+                return !isNaN(d.getTime()) && d.getTime() < startOfToday.getTime()
+            })
+            .sort((a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime())
         todayApt.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
         upcomingApt.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
         const appointmentBadgeCount = todayApt.length
@@ -579,6 +599,10 @@ export default function LeadDetailsPage() {
         const relevantFollowUps = leadFollowUps.filter((f) => f.status === "pending")
         const todayFu: FollowUp[] = []
         const upcomingFu: FollowUp[] = []
+        const pastFu: FollowUp[] = leadFollowUps.filter((f) => {
+            const d = toDate(f.scheduled_at)
+            return !isNaN(d.getTime()) && d.getTime() < startOfToday.getTime()
+        })
         let fuTodayOverdue = false
         relevantFollowUps.forEach((f) => {
             const d = toDate(f.scheduled_at)
@@ -586,10 +610,14 @@ export default function LeadDetailsPage() {
             if (isSameDay(d)) {
                 todayFu.push(f)
                 if (d.getTime() < now.getTime()) fuTodayOverdue = true
-            } else if (d.getTime() > endOfToday.getTime()) upcomingFu.push(f)
+            } else if (d.getTime() > endOfToday.getTime()) {
+                upcomingFu.push(f)
+            }
+            // pastFu already populated from all leadFollowUps
         })
         todayFu.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
         upcomingFu.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
+        pastFu.sort((a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime())
         const followUpBadgeCount = todayFu.length
         const followUpBadgeColor = fuTodayOverdue ? "red" : "green"
         return {
@@ -599,8 +627,10 @@ export default function LeadDetailsPage() {
             followUpBadgeColor,
             appointmentsToday: todayApt,
             appointmentsUpcoming: upcomingApt,
+            appointmentsPast: pastApt,
             followUpsToday: todayFu,
             followUpsUpcoming: upcomingFu,
+            followUpsPast: pastFu,
         }
     }, [leadAppointments, leadFollowUps])
 
@@ -1227,7 +1257,7 @@ export default function LeadDetailsPage() {
                 { label: "Email", value: getLeadEmail(lead) ?? "" },
                 { label: "Secondary", value: sec ? [sec.first_name, sec.last_name].filter(Boolean).join(" ") : "" },
                 { label: "Stage", value: (lead as Lead).stage?.name ?? "" },
-                { label: "Source", value: (lead as Lead).source ?? "" },
+                { label: "Source", value: ((lead as Lead).source_display ?? (lead as Lead).source)?.replace(/_/g, ' ') ?? "" },
                 { label: "Created", value: (lead as Lead).created_at ? format(new Date((lead as Lead).created_at), "yyyy-MM-dd HH:mm") : "" },
                 { label: "First contacted", value: firstContact ? format(new Date(firstContact), "yyyy-MM-dd HH:mm") : "" },
                 { label: "Last contacted", value: lastContact ? format(new Date(lastContact), "yyyy-MM-dd HH:mm") : "" },
@@ -1557,6 +1587,45 @@ export default function LeadDetailsPage() {
         }
     }
 
+    const handleCompleteFollowUp = React.useCallback(async (fuId: string) => {
+        setCompletingFollowUpId(fuId)
+        try {
+            await FollowUpService.completeFollowUp(fuId)
+            fetchLeadAppointmentsAndFollowUps()
+            fetchActivities()
+        } catch (e) {
+            console.error(e)
+            alert("Failed to complete follow-up")
+        } finally {
+            setCompletingFollowUpId(null)
+        }
+    }, [fetchLeadAppointmentsAndFollowUps, fetchActivities])
+
+    const handleUnassignLead = async () => {
+        if (!lead) return
+        setIsUnassigning(true)
+        try {
+            await LeadService.unassignLead(lead.id)
+            setShowUnassignConfirm(false)
+            setLead(prev => prev ? {
+                ...prev,
+                assigned_to: undefined,
+                assigned_to_user: undefined,
+                secondary_salesperson_id: undefined,
+                secondary_salesperson: undefined,
+            } : null)
+            toast({ title: "Lead unassigned", description: "The lead has been returned to the pool." })
+            fetchLead()
+            fetchActivities()
+            fetchLeadAppointmentsAndFollowUps()
+        } catch (error) {
+            console.error("Failed to unassign lead:", error)
+            toast({ title: "Failed to unassign", description: "Could not unassign the lead.", variant: "destructive" })
+        } finally {
+            setIsUnassigning(false)
+        }
+    }
+
     const handleAddNote = async (confirmSkate?: boolean) => {
         if (!lead) return
         
@@ -1748,7 +1817,7 @@ export default function LeadDetailsPage() {
                 </Link>
                 <div className="flex items-center gap-2">
                     <Badge variant={getSourceVariant(lead.source)}>
-                        {lead.source.replace('_', ' ')}
+                        {(lead.source_display ?? lead.source)?.replace(/_/g, ' ') ?? ''}
                     </Badge>
                     <span className="text-xs text-muted-foreground">
                         Created <LocalTime date={lead.created_at} />
@@ -2138,18 +2207,36 @@ export default function LeadDetailsPage() {
                                         Assigned To
                                     </p>
                                     {!isMentionOnly && (canAssignToSalesperson || isDealershipLevel || isSuperAdmin) && lead.dealership_id && (
-                                        <Button 
-                                            size="sm" 
-                                            variant="ghost"
-                                            className="h-6 px-2 text-xs"
-                                            onClick={() => setShowSalespersonModal(true)}
-                                        >
-                                            {lead.assigned_to_user ? (
-                                                <span><RefreshCw className="h-3 w-3 mr-1 inline" />Reassign</span>
-                                            ) : (
-                                                <span><UserPlus className="h-3 w-3 mr-1 inline" />Assign</span>
+                                        <div className="flex items-center gap-1">
+                                            <Button 
+                                                size="sm" 
+                                                variant="ghost"
+                                                className="h-6 px-2 text-xs"
+                                                onClick={() => setShowSalespersonModal(true)}
+                                            >
+                                                {lead.assigned_to_user ? (
+                                                    <span><RefreshCw className="h-3 w-3 mr-1 inline" />Reassign</span>
+                                                ) : (
+                                                    <span><UserPlus className="h-3 w-3 mr-1 inline" />Assign</span>
+                                                )}
+                                            </Button>
+                                            {lead.assigned_to_user && canAssignToSalesperson && (
+                                                <Button 
+                                                    size="sm" 
+                                                    variant="ghost"
+                                                    className="h-6 px-2 text-xs text-muted-foreground hover:text-destructive"
+                                                    onClick={() => setShowUnassignConfirm(true)}
+                                                    disabled={isUnassigning}
+                                                >
+                                                    {isUnassigning ? (
+                                                        <Loader2 className="h-3 w-3 mr-1 inline animate-spin" />
+                                                    ) : (
+                                                        <UserMinus className="h-3 w-3 mr-1 inline" />
+                                                    )}
+                                                    Unassign
+                                                </Button>
                                             )}
-                                        </Button>
+                                        </div>
                                     )}
                                 </div>
                                 {lead.assigned_to_user ? (
@@ -2562,8 +2649,51 @@ export default function LeadDetailsPage() {
                                         </div>
                                     )}
 
+                                    {/* Display Mode - Financial Info (for Toyota Spanish Leads with Down payment / Updated leads) */}
+                                    {(() => {
+                                        const meta = (lead as Lead).meta_data as Record<string, unknown> | undefined
+                                        const downpayment = meta?.downpayment != null ? String(meta.downpayment) : null
+                                        const loanAmount = meta?.loan_amount != null ? String(meta.loan_amount) : null
+                                        const vehiclePrice = meta?.vehicle_price != null ? String(meta.vehicle_price) : null
+                                        if (downpayment || loanAmount || vehiclePrice) {
+                                            return (
+                                                <div>
+                                                    <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
+                                                        <DollarSign className="inline h-3 w-3 mr-1" />
+                                                        Financial Info
+                                                    </p>
+                                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+                                                        {downpayment && (
+                                                            <div>
+                                                                <span className="text-muted-foreground">Down Payment:</span>{" "}
+                                                                <span className="font-medium">{downpayment}</span>
+                                                            </div>
+                                                        )}
+                                                        {loanAmount && (
+                                                            <div>
+                                                                <span className="text-muted-foreground">Loan Amount:</span>{" "}
+                                                                <span className="font-medium">{loanAmount}</span>
+                                                            </div>
+                                                        )}
+                                                        {vehiclePrice && (
+                                                            <div>
+                                                                <span className="text-muted-foreground">Vehicle Price:</span>{" "}
+                                                                <span className="font-medium">{vehiclePrice}</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )
+                                        }
+                                        return null
+                                    })()}
+
                                     {/* If no details yet, show placeholder */}
-                                    {!_cu.address && !_cu.city && !_cu.company && !_cu.preferred_contact_method && (
+                                    {(() => {
+                                        const meta = (lead as Lead).meta_data as Record<string, unknown> | undefined
+                                        const hasFinancial = !!(meta?.downpayment || meta?.loan_amount || meta?.vehicle_price)
+                                        return !_cu.address && !_cu.city && !_cu.company && !_cu.preferred_contact_method && !hasFinancial
+                                    })() && (
                                         <div className="text-center py-4 text-muted-foreground">
                                             <User className="h-8 w-8 mx-auto opacity-20 mb-2" />
                                             <p className="text-sm">No additional details yet</p>
@@ -3166,6 +3296,16 @@ export default function LeadDetailsPage() {
                             </TabsContent>
 
                             <TabsContent value="appointments" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                                <div className="flex items-center justify-end gap-2 mb-4">
+                                    <Button variant="outline" size="sm" onClick={() => fetchLeadAppointmentsAndFollowUps()} disabled={loadingAppointmentsFollowUps}>
+                                        {loadingAppointmentsFollowUps ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                                        Refresh
+                                    </Button>
+                                    <Button size="sm" onClick={() => setShowBookAppointment(true)}>
+                                        <Plus className="h-4 w-4 mr-1" />
+                                        Add
+                                    </Button>
+                                </div>
                                 {loadingAppointmentsFollowUps ? (
                                     <div className="flex items-center justify-center py-12">
                                         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -3173,11 +3313,16 @@ export default function LeadDetailsPage() {
                                 ) : leadAppointments.length === 0 ? (
                                     <p className="text-sm text-muted-foreground py-4">No appointments for this lead.</p>
                                 ) : (
-                                    <div className="space-y-6">
+                                    <div className="space-y-4">
                                         {appointmentsToday.length > 0 && (
-                                            <div>
-                                                <h3 className="text-sm font-semibold text-foreground mb-2">Today&apos;s</h3>
-                                                <Table>
+                                            <Collapsible defaultOpen={true}>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <h3 className="text-sm font-semibold text-foreground">Today ({appointmentsToday.length})</h3>
+                                                    <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
+                                                </CollapsibleTrigger>
+                                                <CollapsibleContent>
+                                                    <div className="max-h-64 overflow-y-auto rounded-md border mt-1">
+                                                        <Table>
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Title</TableHead>
@@ -3261,12 +3406,19 @@ export default function LeadDetailsPage() {
                                                         ))}
                                                     </TableBody>
                                                 </Table>
-                                            </div>
+                                                    </div>
+                                                </CollapsibleContent>
+                                            </Collapsible>
                                         )}
                                         {appointmentsUpcoming.length > 0 && (
-                                            <div>
-                                                <h3 className="text-sm font-semibold text-foreground mb-2">Upcoming</h3>
-                                                <Table>
+                                            <Collapsible defaultOpen={true}>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <h3 className="text-sm font-semibold text-foreground">Upcoming ({appointmentsUpcoming.length})</h3>
+                                                    <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
+                                                </CollapsibleTrigger>
+                                                <CollapsibleContent>
+                                                    <div className="max-h-64 overflow-y-auto rounded-md border mt-1">
+                                                        <Table>
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Title</TableHead>
@@ -3350,16 +3502,124 @@ export default function LeadDetailsPage() {
                                                         ))}
                                                     </TableBody>
                                                 </Table>
-                                            </div>
+                                                    </div>
+                                                </CollapsibleContent>
+                                            </Collapsible>
                                         )}
-                                        {appointmentsToday.length === 0 && appointmentsUpcoming.length === 0 && (
-                                            <p className="text-sm text-muted-foreground py-4">No active appointments (past appointments are not listed here).</p>
+                                        {appointmentsPast.length > 0 && (
+                                            <Collapsible defaultOpen={false}>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <h3 className="text-sm font-semibold text-foreground">Past ({appointmentsPast.length})</h3>
+                                                    <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
+                                                </CollapsibleTrigger>
+                                                <CollapsibleContent>
+                                                    <div className="max-h-64 overflow-y-auto rounded-md border mt-1">
+                                                        <Table>
+                                                    <TableHeader>
+                                                        <TableRow>
+                                                            <TableHead>Title</TableHead>
+                                                            <TableHead>Date & time</TableHead>
+                                                            <TableHead>Status</TableHead>
+                                                            <TableHead className="text-right">Actions</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {appointmentsPast.map((apt) => (
+                                                            <TableRow key={apt.id}>
+                                                                <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell>
+                                                                    <LocalTime date={apt.scheduled_at} />
+                                                                    {apt.duration_minutes ? ` (${apt.duration_minutes}m)` : ""}
+                                                                </TableCell>
+                                                                <TableCell>
+                                                                    <Badge variant="outline" className={getAppointmentStatusColor(apt.status)} size="sm">
+                                                                        {getAppointmentStatusLabel(apt.status)}
+                                                                    </Badge>
+                                                                </TableCell>
+                                                                <TableCell className="text-right flex items-center justify-end gap-1">
+                                                                    <Link href={`/appointments?lead=${leadId}`} className="text-xs text-primary hover:underline">
+                                                                        View
+                                                                    </Link>
+                                                                    {!isAppointmentStatusTerminal(apt.status) && (
+                                                                        <DropdownMenu>
+                                                                            <DropdownMenuTrigger asChild>
+                                                                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                                                                                    <MoreVertical className="h-4 w-4" />
+                                                                                </Button>
+                                                                            </DropdownMenuTrigger>
+                                                                            <DropdownMenuContent align="end">
+                                                                                {apt.status === "scheduled" && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentConfirm(apt)}>
+                                                                                        <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
+                                                                                        Confirm
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                    <DropdownMenuItem onClick={() => setAppointmentRescheduleModal(apt)}>
+                                                                                        <CalendarClock className="mr-2 h-4 w-4" />
+                                                                                        Reschedule
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {apt.status === "arrived" && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentStatusUpdate(apt, "in_showroom")}>
+                                                                                        <Store className="mr-2 h-4 w-4" />
+                                                                                        Mark as In Showroom
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "arrived" || apt.status === "in_showroom") && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentStatusUpdate(apt, "in_progress")}>
+                                                                                        <Clock className="mr-2 h-4 w-4" />
+                                                                                        Mark as In Progress
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                    <DropdownMenuItem onClick={() => setAppointmentCompleteModal(apt)}>
+                                                                                        <CheckCircle className="mr-2 h-4 w-4 text-green-600" />
+                                                                                        Mark as Completed
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress") && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentNoShow(apt)}>
+                                                                                        <XCircle className="mr-2 h-4 w-4 text-amber-600" />
+                                                                                        No Show
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                                {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                    <DropdownMenuItem onClick={() => handleAppointmentCancel(apt)} className="text-red-600">
+                                                                                        <XCircle className="mr-2 h-4 w-4" />
+                                                                                        Cancel Appointment
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                            </DropdownMenuContent>
+                                                                        </DropdownMenu>
+                                                                    )}
+                                                                </TableCell>
+                                                            </TableRow>
+                                                        ))}
+                                                    </TableBody>
+                                                </Table>
+                                                    </div>
+                                                </CollapsibleContent>
+                                            </Collapsible>
+                                        )}
+                                        {appointmentsToday.length === 0 && appointmentsUpcoming.length === 0 && appointmentsPast.length === 0 && (
+                                            <p className="text-sm text-muted-foreground py-4">No appointments for this lead.</p>
                                         )}
                                     </div>
                                 )}
                             </TabsContent>
 
                             <TabsContent value="followups" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                                <div className="flex items-center justify-end gap-2 mb-4">
+                                    <Button variant="outline" size="sm" onClick={() => fetchLeadAppointmentsAndFollowUps()} disabled={loadingAppointmentsFollowUps}>
+                                        {loadingAppointmentsFollowUps ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                                        Refresh
+                                    </Button>
+                                    <Button size="sm" onClick={() => setShowScheduleFollowUp(true)}>
+                                        <Plus className="h-4 w-4 mr-1" />
+                                        Add
+                                    </Button>
+                                </div>
                                 {loadingAppointmentsFollowUps ? (
                                     <div className="flex items-center justify-center py-12">
                                         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -3367,11 +3627,16 @@ export default function LeadDetailsPage() {
                                 ) : leadFollowUps.length === 0 ? (
                                     <p className="text-sm text-muted-foreground py-4">No follow-ups for this lead.</p>
                                 ) : (
-                                    <div className="space-y-6">
+                                    <div className="space-y-4">
                                         {followUpsToday.length > 0 && (
-                                            <div>
-                                                <h3 className="text-sm font-semibold text-foreground mb-2">Today&apos;s</h3>
-                                                <Table>
+                                            <Collapsible defaultOpen={true}>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <h3 className="text-sm font-semibold text-foreground">Today ({followUpsToday.length})</h3>
+                                                    <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
+                                                </CollapsibleTrigger>
+                                                <CollapsibleContent>
+                                                    <div className="max-h-64 overflow-y-auto rounded-md border mt-1">
+                                                        <Table>
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Due</TableHead>
@@ -3392,17 +3657,12 @@ export default function LeadDetailsPage() {
                                                                     <TableCell className="max-w-[200px] truncate text-muted-foreground">{fu.notes || "—"}</TableCell>
                                                                     <TableCell className="text-right">
                                                                         {fu.status === "pending" && (
-                                                                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={async () => {
-                                                                                try {
-                                                                                    await FollowUpService.completeFollowUp(fu.id)
-                                                                                    fetchLeadAppointmentsAndFollowUps()
-                                                                                    fetchActivities()
-                                                                                } catch (e) {
-                                                                                    console.error(e)
-                                                                                    alert("Failed to complete follow-up")
-                                                                                }
-                                                                            }}>
-                                                                                Complete
+                                                                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
+                                                                                {completingFollowUpId === fu.id ? (
+                                                                                    <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Completing...</span>
+                                                                                ) : (
+                                                                                    "Complete"
+                                                                                )}
                                                                             </Button>
                                                                         )}
                                                                     </TableCell>
@@ -3411,12 +3671,19 @@ export default function LeadDetailsPage() {
                                                         })}
                                                     </TableBody>
                                                 </Table>
-                                            </div>
+                                                    </div>
+                                                </CollapsibleContent>
+                                            </Collapsible>
                                         )}
                                         {followUpsUpcoming.length > 0 && (
-                                            <div>
-                                                <h3 className="text-sm font-semibold text-foreground mb-2">Upcoming</h3>
-                                                <Table>
+                                            <Collapsible defaultOpen={true}>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <h3 className="text-sm font-semibold text-foreground">Upcoming ({followUpsUpcoming.length})</h3>
+                                                    <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
+                                                </CollapsibleTrigger>
+                                                <CollapsibleContent>
+                                                    <div className="max-h-64 overflow-y-auto rounded-md border mt-1">
+                                                        <Table>
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Due</TableHead>
@@ -3437,17 +3704,12 @@ export default function LeadDetailsPage() {
                                                                     <TableCell className="max-w-[200px] truncate text-muted-foreground">{fu.notes || "—"}</TableCell>
                                                                     <TableCell className="text-right">
                                                                         {fu.status === "pending" && (
-                                                                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={async () => {
-                                                                                try {
-                                                                                    await FollowUpService.completeFollowUp(fu.id)
-                                                                                    fetchLeadAppointmentsAndFollowUps()
-                                                                                    fetchActivities()
-                                                                                } catch (e) {
-                                                                                    console.error(e)
-                                                                                    alert("Failed to complete follow-up")
-                                                                                }
-                                                                            }}>
-                                                                                Complete
+                                                                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
+                                                                                {completingFollowUpId === fu.id ? (
+                                                                                    <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Completing...</span>
+                                                                                ) : (
+                                                                                    "Complete"
+                                                                                )}
                                                                             </Button>
                                                                         )}
                                                                     </TableCell>
@@ -3456,10 +3718,59 @@ export default function LeadDetailsPage() {
                                                         })}
                                                     </TableBody>
                                                 </Table>
-                                            </div>
+                                                    </div>
+                                                </CollapsibleContent>
+                                            </Collapsible>
                                         )}
-                                        {followUpsToday.length === 0 && followUpsUpcoming.length === 0 && (
-                                            <p className="text-sm text-muted-foreground py-4">No pending follow-ups for today or later.</p>
+                                        {followUpsPast.length > 0 && (
+                                            <Collapsible defaultOpen={false}>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <h3 className="text-sm font-semibold text-foreground">Past ({followUpsPast.length})</h3>
+                                                    <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
+                                                </CollapsibleTrigger>
+                                                <CollapsibleContent>
+                                                    <div className="max-h-64 overflow-y-auto rounded-md border mt-1">
+                                                        <Table>
+                                                    <TableHeader>
+                                                        <TableRow>
+                                                            <TableHead>Due</TableHead>
+                                                            <TableHead>Status</TableHead>
+                                                            <TableHead>Notes</TableHead>
+                                                            <TableHead className="text-right">Actions</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {followUpsPast.map((fu) => {
+                                                            const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status]
+                                                            return (
+                                                                <TableRow key={fu.id}>
+                                                                    <TableCell><LocalTime date={fu.scheduled_at} /></TableCell>
+                                                                    <TableCell>
+                                                                        <Badge variant={statusInfo.variant} size="sm">{statusInfo.label}</Badge>
+                                                                    </TableCell>
+                                                                    <TableCell className="max-w-[200px] truncate text-muted-foreground">{fu.notes || "—"}</TableCell>
+                                                                    <TableCell className="text-right">
+                                                                        {fu.status === "pending" && (
+                                                                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
+                                                                                {completingFollowUpId === fu.id ? (
+                                                                                    <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Completing...</span>
+                                                                                ) : (
+                                                                                    "Complete"
+                                                                                )}
+                                                                            </Button>
+                                                                        )}
+                                                                    </TableCell>
+                                                                </TableRow>
+                                                            )
+                                                        })}
+                                                    </TableBody>
+                                                </Table>
+                                                    </div>
+                                                </CollapsibleContent>
+                                            </Collapsible>
+                                        )}
+                                        {followUpsToday.length === 0 && followUpsUpcoming.length === 0 && followUpsPast.length === 0 && (
+                                            <p className="text-sm text-muted-foreground py-4">No follow-ups for this lead.</p>
                                         )}
                                     </div>
                                 )}
@@ -4199,6 +4510,43 @@ export default function LeadDetailsPage() {
                     </AlertDialogContent>
                 </AlertDialog>
             )}
+
+            {/* Unassign lead confirmation */}
+            <AlertDialog open={showUnassignConfirm} onOpenChange={(open) => !isUnassigning && setShowUnassignConfirm(open)}>
+                <AlertDialogContent className="!fixed left-1/2 top-1/2 z-50 max-h-[85vh] w-full max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto">
+                    {isUnassigning && (
+                        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-sm">
+                            <div className="flex flex-col items-center gap-3">
+                                <Loader2 className="h-10 w-10 animate-spin text-amber-600" />
+                                <p className="text-sm font-medium">Unassigning lead...</p>
+                            </div>
+                        </div>
+                    )}
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Unassign Lead</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            This will remove the salesperson from this lead and return it to the pool. The lead will appear in the unassigned list until someone else picks it up. Continue?
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={isUnassigning}>Cancel</AlertDialogCancel>
+                        <Button
+                            onClick={handleUnassignLead}
+                            disabled={isUnassigning}
+                            className="bg-amber-600 hover:bg-amber-700"
+                        >
+                            {isUnassigning ? (
+                                <span className="inline-flex items-center">
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Unassigning...
+                                </span>
+                            ) : (
+                                "Unassign"
+                            )}
+                        </Button>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
 
             {/* Remove secondary customer confirmation */}
             <AlertDialog open={showRemoveSecondaryConfirm} onOpenChange={setShowRemoveSecondaryConfirm}>

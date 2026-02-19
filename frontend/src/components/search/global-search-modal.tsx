@@ -204,7 +204,7 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
                                     {/* Source & Arrow */}
                                     <div className="flex items-center gap-2 shrink-0">
                                         <Badge variant={getSourceVariant(lead.source)} size="sm">
-                                            {lead.source.replace("_", " ")}
+                                            {(lead.source_display ?? lead.source)?.replace(/_/g, ' ') ?? ''}
                                         </Badge>
                                         <ArrowRight className="h-4 w-4 text-muted-foreground" />
                                     </div>

@@ -950,7 +950,7 @@ export default function LeadsPage() {
                                     </TableCell>
                                     <TableCell>
                                         <Badge variant={getSourceVariant(lead.source)} size="sm">
-                                            {lead.source.replace('_', ' ')}
+                                            {(lead.source_display ?? lead.source)?.replace(/_/g, ' ') ?? ''}
                                         </Badge>
                                     </TableCell>
                                     <TableCell>

@@ -79,7 +79,7 @@ function PipelineLeadCard({ lead, isDragging }: { lead: Lead; isDragging?: boole
                         </Badge>
                     )}
                     <Badge variant="outline" className="text-[10px]">
-                        {lead.source.replace("_", " ")}
+                        {(lead.source_display ?? lead.source)?.replace(/_/g, ' ') ?? ''}
                     </Badge>
                     {lead.interest_score > 0 && (
                         <span className="text-[10px] text-amber-600 font-medium">

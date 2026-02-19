@@ -129,6 +129,9 @@ function getSourceVariant(source: string): VariantProps<typeof badgeVariants>["v
         website: "website",
         referral: "referral",
         walk_in: "walk_in",
+        // Custom display sources from Google Sheets (use same green styling)
+        "Toyota Spanish Leads": "google_sheets",
+        "Toyota Spanish Leads with Down payment": "google_sheets",
     }
     return sourceMap[source] || "default"
 }

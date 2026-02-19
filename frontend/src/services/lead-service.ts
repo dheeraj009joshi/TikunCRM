@@ -36,6 +36,7 @@ export interface Lead {
     stage?: LeadStage;
     // Lead fields
     source: string;
+    source_display?: string | null;
     is_active: boolean;
     outcome?: string;
     interest_score: number;
@@ -243,6 +244,12 @@ export const LeadService = {
 
     async assignLead(id: string, userId: string, notes?: string): Promise<Lead> {
         return this.assignToSalesperson(id, userId, notes);
+    },
+
+    /** Unassign lead (remove salesperson). Admins/owners only. */
+    async unassignLead(id: string): Promise<Lead> {
+        const response = await apiClient.post(`${LEADS_PREFIX}/${id}/unassign`);
+        return response.data;
     },
 
     /** Credit application (Toyota South Atlanta, etc.) */
