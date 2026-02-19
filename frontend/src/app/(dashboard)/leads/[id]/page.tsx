@@ -549,8 +549,9 @@ export default function LeadDetailsPage() {
         }
     }, [leadId])
 
-    // Badge: only today's count; color = red if any of today's are overdue, else green. Hide when 0.
+    // Badge: today's count; color = red if overdue. Sections: Today, Upcoming, Overdue, Past (completed/terminal).
     const ACTIVE_APPOINTMENT_STATUSES = ["scheduled", "confirmed", "arrived", "in_showroom", "in_progress", "rescheduled"] as const
+    const FOLLOW_UP_TERMINAL_STATUSES = ["completed", "missed", "cancelled"] as const
     const {
         appointmentBadgeCount,
         appointmentBadgeColor,
@@ -558,9 +559,11 @@ export default function LeadDetailsPage() {
         followUpBadgeColor,
         appointmentsToday,
         appointmentsUpcoming,
+        appointmentsOverdue,
         appointmentsPast,
         followUpsToday,
         followUpsUpcoming,
+        followUpsOverdue,
         followUpsPast,
     } = React.useMemo(() => {
         const now = new Date()
@@ -569,54 +572,54 @@ export default function LeadDetailsPage() {
         const isSameDay = (d: Date) =>
             d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
         const toDate = (s: string) => parseAsUTC(s)
-        const relevantAppointments = leadAppointments.filter(
-            (a) => ACTIVE_APPOINTMENT_STATUSES.includes(a.status as typeof ACTIVE_APPOINTMENT_STATUSES[number])
-        )
+        // Appointments: Today (all), Upcoming (all), Overdue (active + past due), Past (terminal + past)
         const todayApt: Appointment[] = []
         const upcomingApt: Appointment[] = []
+        const overdueApt: Appointment[] = []
+        const pastApt: Appointment[] = []
         let aptTodayOverdue = false
-        relevantAppointments.forEach((a) => {
+        leadAppointments.forEach((a) => {
             const d = toDate(a.scheduled_at)
             if (isNaN(d.getTime())) return
+            const isActive = ACTIVE_APPOINTMENT_STATUSES.includes(a.status as typeof ACTIVE_APPOINTMENT_STATUSES[number])
             if (isSameDay(d)) {
                 todayApt.push(a)
-                if (d.getTime() < now.getTime()) aptTodayOverdue = true
+                if (isActive && d.getTime() < now.getTime()) aptTodayOverdue = true
             } else if (d.getTime() > endOfToday.getTime()) {
                 upcomingApt.push(a)
+            } else {
+                if (isActive) overdueApt.push(a)
+                else pastApt.push(a)
             }
         })
-        // Past: all appointments (any status) with scheduled_at < startOfToday
-        const pastApt = leadAppointments
-            .filter((a) => {
-                const d = toDate(a.scheduled_at)
-                return !isNaN(d.getTime()) && d.getTime() < startOfToday.getTime()
-            })
-            .sort((a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime())
         todayApt.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
         upcomingApt.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
+        overdueApt.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
+        pastApt.sort((a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime())
         const appointmentBadgeCount = todayApt.length
         const appointmentBadgeColor = aptTodayOverdue ? "red" : "green"
-        const relevantFollowUps = leadFollowUps.filter((f) => f.status === "pending")
+        // Follow-ups: same partition
         const todayFu: FollowUp[] = []
         const upcomingFu: FollowUp[] = []
-        const pastFu: FollowUp[] = leadFollowUps.filter((f) => {
-            const d = toDate(f.scheduled_at)
-            return !isNaN(d.getTime()) && d.getTime() < startOfToday.getTime()
-        })
+        const overdueFu: FollowUp[] = []
+        const pastFu: FollowUp[] = []
         let fuTodayOverdue = false
-        relevantFollowUps.forEach((f) => {
+        leadFollowUps.forEach((f) => {
             const d = toDate(f.scheduled_at)
             if (isNaN(d.getTime())) return
             if (isSameDay(d)) {
                 todayFu.push(f)
-                if (d.getTime() < now.getTime()) fuTodayOverdue = true
+                if (f.status === "pending" && d.getTime() < now.getTime()) fuTodayOverdue = true
             } else if (d.getTime() > endOfToday.getTime()) {
                 upcomingFu.push(f)
+            } else {
+                if (f.status === "pending") overdueFu.push(f)
+                else pastFu.push(f)
             }
-            // pastFu already populated from all leadFollowUps
         })
         todayFu.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
         upcomingFu.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
+        overdueFu.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
         pastFu.sort((a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime())
         const followUpBadgeCount = todayFu.length
         const followUpBadgeColor = fuTodayOverdue ? "red" : "green"
@@ -627,9 +630,11 @@ export default function LeadDetailsPage() {
             followUpBadgeColor,
             appointmentsToday: todayApt,
             appointmentsUpcoming: upcomingApt,
+            appointmentsOverdue: overdueApt,
             appointmentsPast: pastApt,
             followUpsToday: todayFu,
             followUpsUpcoming: upcomingFu,
+            followUpsOverdue: overdueFu,
             followUpsPast: pastFu,
         }
     }, [leadAppointments, leadFollowUps])
@@ -3506,10 +3511,104 @@ export default function LeadDetailsPage() {
                                                 </CollapsibleContent>
                                             </Collapsible>
                                         )}
-                                        {appointmentsPast.length > 0 && (
-                                            <Collapsible defaultOpen={false}>
+                                        {appointmentsOverdue.length > 0 && (
+                                            <Collapsible defaultOpen={true}>
                                                 <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
-                                                    <h3 className="text-sm font-semibold text-foreground">Past ({appointmentsPast.length})</h3>
+                                                    <h3 className="text-sm font-semibold text-amber-600">Overdue ({appointmentsOverdue.length})</h3>
+                                                    <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
+                                                </CollapsibleTrigger>
+                                                <CollapsibleContent>
+                                                    <div className="max-h-64 overflow-y-auto rounded-md border mt-1">
+                                                        <Table>
+                                                    <TableHeader>
+                                                        <TableRow>
+                                                            <TableHead>Title</TableHead>
+                                                            <TableHead>Date & time</TableHead>
+                                                            <TableHead>Status</TableHead>
+                                                            <TableHead className="text-right">Actions</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {appointmentsOverdue.map((apt) => (
+                                                            <TableRow key={apt.id}>
+                                                                <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell>
+                                                                    <LocalTime date={apt.scheduled_at} />
+                                                                    {apt.duration_minutes ? ` (${apt.duration_minutes}m)` : ""}
+                                                                </TableCell>
+                                                                <TableCell>
+                                                                    <Badge variant="outline" className={getAppointmentStatusColor(apt.status)} size="sm">
+                                                                        {getAppointmentStatusLabel(apt.status)}
+                                                                    </Badge>
+                                                                </TableCell>
+                                                                <TableCell className="text-right flex items-center justify-end gap-1">
+                                                                    <Link href={`/appointments?lead=${leadId}`} className="text-xs text-primary hover:underline">
+                                                                        View
+                                                                    </Link>
+                                                                    <DropdownMenu>
+                                                                        <DropdownMenuTrigger asChild>
+                                                                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                                                                                <MoreVertical className="h-4 w-4" />
+                                                                            </Button>
+                                                                        </DropdownMenuTrigger>
+                                                                        <DropdownMenuContent align="end">
+                                                                            {apt.status === "scheduled" && (
+                                                                                <DropdownMenuItem onClick={() => handleAppointmentConfirm(apt)}>
+                                                                                    <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
+                                                                                    Confirm
+                                                                                </DropdownMenuItem>
+                                                                            )}
+                                                                            {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                <DropdownMenuItem onClick={() => setAppointmentRescheduleModal(apt)}>
+                                                                                    <CalendarClock className="mr-2 h-4 w-4" />
+                                                                                    Reschedule
+                                                                                </DropdownMenuItem>
+                                                                            )}
+                                                                            {apt.status === "arrived" && (
+                                                                                <DropdownMenuItem onClick={() => handleAppointmentStatusUpdate(apt, "in_showroom")}>
+                                                                                    <Store className="mr-2 h-4 w-4" />
+                                                                                    Mark as In Showroom
+                                                                                </DropdownMenuItem>
+                                                                            )}
+                                                                            {(apt.status === "arrived" || apt.status === "in_showroom") && (
+                                                                                <DropdownMenuItem onClick={() => handleAppointmentStatusUpdate(apt, "in_progress")}>
+                                                                                    <Clock className="mr-2 h-4 w-4" />
+                                                                                    Mark as In Progress
+                                                                                </DropdownMenuItem>
+                                                                            )}
+                                                                            {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                <DropdownMenuItem onClick={() => setAppointmentCompleteModal(apt)}>
+                                                                                    <CheckCircle className="mr-2 h-4 w-4 text-green-600" />
+                                                                                    Mark as Completed
+                                                                                </DropdownMenuItem>
+                                                                            )}
+                                                                            {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress") && (
+                                                                                <DropdownMenuItem onClick={() => handleAppointmentNoShow(apt)}>
+                                                                                    <XCircle className="mr-2 h-4 w-4 text-amber-600" />
+                                                                                    No Show
+                                                                                </DropdownMenuItem>
+                                                                            )}
+                                                                            {(apt.status === "scheduled" || apt.status === "confirmed" || apt.status === "arrived" || apt.status === "in_showroom" || apt.status === "in_progress" || apt.status === "no_show") && (
+                                                                                <DropdownMenuItem onClick={() => handleAppointmentCancel(apt)} className="text-red-600">
+                                                                                    <XCircle className="mr-2 h-4 w-4" />
+                                                                                    Cancel Appointment
+                                                                                </DropdownMenuItem>
+                                                                            )}
+                                                                        </DropdownMenuContent>
+                                                                    </DropdownMenu>
+                                                                </TableCell>
+                                                            </TableRow>
+                                                        ))}
+                                                    </TableBody>
+                                                </Table>
+                                                    </div>
+                                                </CollapsibleContent>
+                                            </Collapsible>
+                                        )}
+                                        {appointmentsPast.length > 0 && (
+                                            <Collapsible defaultOpen={true}>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <h3 className="text-sm font-semibold text-foreground">Past / Completed ({appointmentsPast.length})</h3>
                                                     <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
                                                 </CollapsibleTrigger>
                                                 <CollapsibleContent>
@@ -3602,7 +3701,7 @@ export default function LeadDetailsPage() {
                                                 </CollapsibleContent>
                                             </Collapsible>
                                         )}
-                                        {appointmentsToday.length === 0 && appointmentsUpcoming.length === 0 && appointmentsPast.length === 0 && (
+                                        {appointmentsToday.length === 0 && appointmentsUpcoming.length === 0 && appointmentsOverdue.length === 0 && appointmentsPast.length === 0 && (
                                             <p className="text-sm text-muted-foreground py-4">No appointments for this lead.</p>
                                         )}
                                     </div>
@@ -3647,7 +3746,7 @@ export default function LeadDetailsPage() {
                                                     </TableHeader>
                                                     <TableBody>
                                                         {followUpsToday.map((fu) => {
-                                                            const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status]
+                                                            const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status as keyof typeof FOLLOW_UP_STATUS_INFO] ?? { label: fu.status || "—", variant: "secondary" as const }
                                                             return (
                                                                 <TableRow key={fu.id}>
                                                                     <TableCell><LocalTime date={fu.scheduled_at} /></TableCell>
@@ -3694,7 +3793,7 @@ export default function LeadDetailsPage() {
                                                     </TableHeader>
                                                     <TableBody>
                                                         {followUpsUpcoming.map((fu) => {
-                                                            const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status]
+                                                            const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status as keyof typeof FOLLOW_UP_STATUS_INFO] ?? { label: fu.status || "—", variant: "secondary" as const }
                                                             return (
                                                                 <TableRow key={fu.id}>
                                                                     <TableCell><LocalTime date={fu.scheduled_at} /></TableCell>
@@ -3722,10 +3821,55 @@ export default function LeadDetailsPage() {
                                                 </CollapsibleContent>
                                             </Collapsible>
                                         )}
+                                        {followUpsOverdue.length > 0 && (
+                                            <Collapsible defaultOpen={true}>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <h3 className="text-sm font-semibold text-amber-600">Overdue ({followUpsOverdue.length})</h3>
+                                                    <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
+                                                </CollapsibleTrigger>
+                                                <CollapsibleContent>
+                                                    <div className="max-h-64 overflow-y-auto rounded-md border mt-1">
+                                                        <Table>
+                                                    <TableHeader>
+                                                        <TableRow>
+                                                            <TableHead>Due</TableHead>
+                                                            <TableHead>Status</TableHead>
+                                                            <TableHead>Notes</TableHead>
+                                                            <TableHead className="text-right">Actions</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {followUpsOverdue.map((fu) => {
+                                                            const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status as keyof typeof FOLLOW_UP_STATUS_INFO] ?? { label: fu.status || "—", variant: "secondary" as const }
+                                                            return (
+                                                                <TableRow key={fu.id}>
+                                                                    <TableCell><LocalTime date={fu.scheduled_at} /></TableCell>
+                                                                    <TableCell>
+                                                                        <Badge variant={statusInfo.variant} size="sm">{statusInfo.label}</Badge>
+                                                                    </TableCell>
+                                                                    <TableCell className="max-w-[200px] truncate text-muted-foreground">{fu.notes || "—"}</TableCell>
+                                                                    <TableCell className="text-right">
+                                                                        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
+                                                                            {completingFollowUpId === fu.id ? (
+                                                                                <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Completing...</span>
+                                                                            ) : (
+                                                                                "Complete"
+                                                                            )}
+                                                                        </Button>
+                                                                    </TableCell>
+                                                                </TableRow>
+                                                            )
+                                                        })}
+                                                    </TableBody>
+                                                </Table>
+                                                    </div>
+                                                </CollapsibleContent>
+                                            </Collapsible>
+                                        )}
                                         {followUpsPast.length > 0 && (
                                             <Collapsible defaultOpen={true}>
                                                 <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
-                                                    <h3 className="text-sm font-semibold text-foreground">Past ({followUpsPast.length})</h3>
+                                                    <h3 className="text-sm font-semibold text-foreground">Past / Completed ({followUpsPast.length})</h3>
                                                     <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
                                                 </CollapsibleTrigger>
                                                 <CollapsibleContent>
@@ -3770,7 +3914,7 @@ export default function LeadDetailsPage() {
                                                 </CollapsibleContent>
                                             </Collapsible>
                                         )}
-                                        {followUpsToday.length === 0 && followUpsUpcoming.length === 0 && followUpsPast.length === 0 && (
+                                        {followUpsToday.length === 0 && followUpsUpcoming.length === 0 && followUpsOverdue.length === 0 && followUpsPast.length === 0 && (
                                             <p className="text-sm text-muted-foreground py-4">No follow-ups for this lead.</p>
                                         )}
                                     </div>
