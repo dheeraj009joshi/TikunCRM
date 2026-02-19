@@ -14,7 +14,7 @@ const badgeVariants = cva(
                 destructive: "bg-destructive text-destructive-foreground",
                 outline: "border border-input bg-background text-foreground",
                 // Status variants
-                new: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+                new: "bg-secondary text-secondary-foreground",
                 contacted: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
                 follow_up: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
                 interested: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
