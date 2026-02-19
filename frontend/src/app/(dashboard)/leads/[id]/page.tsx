@@ -605,6 +605,7 @@ export default function LeadDetailsPage() {
         const pastFu: FollowUp[] = []
         let fuTodayOverdue = false
         leadFollowUps.forEach((f) => {
+            if (f.status === "cancelled") return
             const d = toDate(f.scheduled_at)
             if (isNaN(d.getTime())) return
             if (isSameDay(d)) {
@@ -4197,14 +4198,22 @@ export default function LeadDetailsPage() {
                 open={showDealershipModal}
                 onOpenChange={setShowDealershipModal}
                 selectedLeads={lead ? [lead] : []}
-                onSuccess={fetchLead}
+                onSuccess={() => {
+                    fetchLead()
+                    fetchActivities()
+                    fetchLeadAppointmentsAndFollowUps()
+                }}
             />
             
             <AssignToSalespersonModal
                 open={showSalespersonModal}
                 onOpenChange={setShowSalespersonModal}
                 lead={lead}
-                onSuccess={fetchLead}
+                onSuccess={() => {
+                    fetchLead()
+                    fetchActivities()
+                    fetchLeadAppointmentsAndFollowUps()
+                }}
             />
 
             <AssignSecondaryCustomerModal
