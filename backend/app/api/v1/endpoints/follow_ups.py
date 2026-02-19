@@ -44,26 +44,42 @@ async def list_follow_ups(
     """
     List follow-ups for the current user or dealership.
     Optionally filter by lead_id (e.g. for lead detail page) or assigned_to (e.g. for salesperson report).
+    When lead_id is provided, returns all follow-ups for that lead (including past/completed) for users who can view the lead.
     """
     query = select(FollowUp).options(
         selectinload(FollowUp.lead),
         selectinload(FollowUp.assigned_to_user)
     )
     
-    # RBAC Isolation
-    if current_user.role == UserRole.SALESPERSON:
-        query = query.where(FollowUp.assigned_to == current_user.id)
-    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        # Show follow-ups whose assignee is in the same dealership (explicit join on assigned_to)
-        query = query.join(User, FollowUp.assigned_to == User.id).where(
-            User.dealership_id == current_user.dealership_id
-        )
+    # When filtering by lead: verify lead access, then return ALL follow-ups for that lead (including completed)
+    if lead_id is not None:
+        lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
+        lead = lead_result.scalar_one_or_none()
+        if not lead:
+            return []
+        is_unassigned_pool = lead.dealership_id is None
+        if is_unassigned_pool:
+            has_access = current_user.role == UserRole.SUPER_ADMIN or current_user.dealership_id is not None
+        else:
+            has_access = (
+                current_user.role == UserRole.SUPER_ADMIN
+                or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
+                or (current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and lead.dealership_id == current_user.dealership_id)
+            )
+        if not has_access:
+            return []
+        query = query.where(FollowUp.lead_id == lead_id)
+    else:
+        # RBAC Isolation (when not filtering by specific lead)
+        if current_user.role == UserRole.SALESPERSON:
+            query = query.where(FollowUp.assigned_to == current_user.id)
+        elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+            query = query.join(User, FollowUp.assigned_to == User.id).where(
+                User.dealership_id == current_user.dealership_id
+            )
     
     if assigned_to is not None:
         query = query.where(FollowUp.assigned_to == assigned_to)
-        
-    if lead_id is not None:
-        query = query.where(FollowUp.lead_id == lead_id)
         
     if status:
         query = query.where(FollowUp.status == status)
