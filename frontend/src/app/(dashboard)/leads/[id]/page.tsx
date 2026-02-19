@@ -572,13 +572,21 @@ export default function LeadDetailsPage() {
         const isSameDay = (d: Date) =>
             d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
         const toDate = (s: string) => parseAsUTC(s)
-        // Appointments: Today (all), Upcoming (all), Overdue (active + past due), Past (terminal + past)
+        const leadAssignedTo = lead?.assigned_to
+        // If item's assigned_to differs from lead's assigned_to, show in Past (history)
+        const isAssignedToDifferentUser = (itemAssignedTo?: string) =>
+            Boolean(leadAssignedTo && itemAssignedTo && itemAssignedTo !== leadAssignedTo)
+        // Appointments: Today (all), Upcoming (all), Overdue (active + past due), Past (terminal + past or different assignee)
         const todayApt: Appointment[] = []
         const upcomingApt: Appointment[] = []
         const overdueApt: Appointment[] = []
         const pastApt: Appointment[] = []
         let aptTodayOverdue = false
         leadAppointments.forEach((a) => {
+            if (isAssignedToDifferentUser(a.assigned_to)) {
+                pastApt.push(a)
+                return
+            }
             const d = toDate(a.scheduled_at)
             if (isNaN(d.getTime())) return
             const isActive = ACTIVE_APPOINTMENT_STATUSES.includes(a.status as typeof ACTIVE_APPOINTMENT_STATUSES[number])
@@ -598,7 +606,7 @@ export default function LeadDetailsPage() {
         pastApt.sort((a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime())
         const appointmentBadgeCount = todayApt.length
         const appointmentBadgeColor = aptTodayOverdue ? "red" : "green"
-        // Follow-ups: same partition
+        // Follow-ups: same partition (assigned_to different from lead -> Past)
         const todayFu: FollowUp[] = []
         const upcomingFu: FollowUp[] = []
         const overdueFu: FollowUp[] = []
@@ -606,6 +614,10 @@ export default function LeadDetailsPage() {
         let fuTodayOverdue = false
         leadFollowUps.forEach((f) => {
             if (f.status === "cancelled") return
+            if (isAssignedToDifferentUser(f.assigned_to)) {
+                pastFu.push(f)
+                return
+            }
             const d = toDate(f.scheduled_at)
             if (isNaN(d.getTime())) return
             if (isSameDay(d)) {
@@ -638,7 +650,7 @@ export default function LeadDetailsPage() {
             followUpsOverdue: overdueFu,
             followUpsPast: pastFu,
         }
-    }, [leadAppointments, leadFollowUps])
+    }, [lead?.assigned_to, leadAppointments, leadFollowUps])
 
     const doCheckIn = async (appointmentId: string | null) => {
         setIsCheckingIn(true)
