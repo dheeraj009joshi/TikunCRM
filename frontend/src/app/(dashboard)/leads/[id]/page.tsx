@@ -3723,7 +3723,7 @@ export default function LeadDetailsPage() {
                                             </Collapsible>
                                         )}
                                         {followUpsPast.length > 0 && (
-                                            <Collapsible defaultOpen={false}>
+                                            <Collapsible defaultOpen={true}>
                                                 <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
                                                     <h3 className="text-sm font-semibold text-foreground">Past ({followUpsPast.length})</h3>
                                                     <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
@@ -3741,14 +3741,15 @@ export default function LeadDetailsPage() {
                                                     </TableHeader>
                                                     <TableBody>
                                                         {followUpsPast.map((fu) => {
-                                                            const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status]
+                                                            const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status as keyof typeof FOLLOW_UP_STATUS_INFO] ?? { label: fu.status || "—", variant: "secondary" as const }
+                                                            const notesDisplay = fu.status === "completed" && fu.completion_notes ? fu.completion_notes : (fu.notes || "—")
                                                             return (
                                                                 <TableRow key={fu.id}>
                                                                     <TableCell><LocalTime date={fu.scheduled_at} /></TableCell>
                                                                     <TableCell>
                                                                         <Badge variant={statusInfo.variant} size="sm">{statusInfo.label}</Badge>
                                                                     </TableCell>
-                                                                    <TableCell className="max-w-[200px] truncate text-muted-foreground">{fu.notes || "—"}</TableCell>
+                                                                    <TableCell className="max-w-[200px] truncate text-muted-foreground">{notesDisplay}</TableCell>
                                                                     <TableCell className="text-right">
                                                                         {fu.status === "pending" && (
                                                                             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
