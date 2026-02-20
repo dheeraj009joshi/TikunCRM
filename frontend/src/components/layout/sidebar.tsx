@@ -29,7 +29,8 @@ import {
     Phone,
     MessagesSquare,
     Store,
-    Contact
+    Contact,
+    Activity
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -141,6 +142,12 @@ const allSidebarItems: SidebarItem[] = [
         name: "Analytics", 
         icon: BarChart3, 
         href: "/analytics",
+        roles: ["super_admin", "dealership_admin", "dealership_owner"]
+    },
+    { 
+        name: "Team Activity", 
+        icon: Activity, 
+        href: "/team-activity",
         roles: ["super_admin", "dealership_admin", "dealership_owner"]
     },
     { 

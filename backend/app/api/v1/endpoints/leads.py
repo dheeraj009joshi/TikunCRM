@@ -111,6 +111,10 @@ async def auto_assign_lead_on_activity(
     if lead.assigned_to is not None:
         return False
     
+    # Do not auto-assign leads to admins or owners - only salespersons should get leads on first activity
+    if user.role in (UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
+        return False
+    
     # User must have a dealership to claim a lead
     if not user.dealership_id:
         return False

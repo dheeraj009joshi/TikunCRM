@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     twilio_twiml_app_sid: str = ""  # TwiML Application SID for voice
     twilio_api_key_sid: str = ""     # API Key SID for Access Tokens
     twilio_api_key_secret: str = ""  # API Key Secret
-    voice_enabled: bool = False
+    voice_enabled: bool = True  # Set to false to disable voice even when Twilio credentials are set
     
     # Azure Blob Storage (for call recordings)
     azure_storage_connection_string: str = ""
@@ -138,15 +138,17 @@ class Settings(BaseSettings):
 
     @property
     def is_twilio_voice_configured(self) -> bool:
-        """Check if Twilio Voice is properly configured for WebRTC"""
+        """Check if Twilio Voice is properly configured for WebRTC.
+        True when all 6 Twilio voice credentials are set. Set VOICE_ENABLED=false in .env to disable voice."""
+        if self.voice_enabled is False:
+            return False
         return bool(
-            self.twilio_account_sid and 
-            self.twilio_auth_token and 
-            self.twilio_phone_number and
-            self.twilio_twiml_app_sid and
-            self.twilio_api_key_sid and
-            self.twilio_api_key_secret and
-            self.voice_enabled
+            self.twilio_account_sid
+            and self.twilio_auth_token
+            and self.twilio_phone_number
+            and self.twilio_twiml_app_sid
+            and self.twilio_api_key_sid
+            and self.twilio_api_key_secret
         )
     
     @property

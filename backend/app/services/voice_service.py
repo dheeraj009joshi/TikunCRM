@@ -2,17 +2,22 @@
 Twilio Voice Service - WebRTC Softphone Integration
 """
 import logging
+import traceback
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from uuid import UUID
 
 from sqlalchemy import select, or_, and_
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.core.timezone import utc_now
+from app.core.permissions import UserRole
 from app.models.call_log import CallLog, CallDirection, CallStatus
 from app.models.lead import Lead
+from app.services.lead_stage_service import LeadStageService
 from app.models.customer import Customer
 from app.models.user import User
 from app.models.activity import Activity, ActivityType
@@ -160,6 +165,157 @@ class VoiceService:
             return result.scalar_one_or_none()
         
         return None
+
+    async def find_users_for_incoming_call(
+        self,
+        lead: Optional[Lead],
+        dealership_id: Optional[UUID] = None
+    ) -> Tuple[List[User], bool]:
+        """
+        Find users to ring for an incoming call (ring group support).
+        
+        Returns:
+            Tuple of (list_of_users_to_ring, is_unknown_caller)
+            - If lead has assigned_to: ring only that user
+            - If lead unassigned or unknown caller: ring all active salespersons in dealership
+        """
+        is_unknown_caller = lead is None
+        
+        # If lead has an assigned user, ring only them
+        if lead and lead.assigned_to:
+            result = await self.db.execute(
+                select(User).where(
+                    User.id == lead.assigned_to,
+                    User.is_active == True
+                )
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                return ([user], is_unknown_caller)
+        
+        # Ring all active salespersons in the dealership
+        target_dealership = dealership_id or (lead.dealership_id if lead else None)
+        if target_dealership:
+            result = await self.db.execute(
+                select(User).where(
+                    User.dealership_id == target_dealership,
+                    User.is_active == True,
+                    User.role.in_([UserRole.SALESPERSON, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER])
+                )
+            )
+            users = list(result.scalars().all())
+            if users:
+                return (users, is_unknown_caller)
+        
+        return ([], is_unknown_caller)
+
+    async def find_customer_by_phone(self, phone: str, dealership_id: Optional[UUID] = None) -> Optional[Customer]:
+        """Find a customer by phone number."""
+        normalized = "".join(c for c in phone if c.isdigit())
+        if len(normalized) < 10:
+            return None
+        suffix = normalized[-10:]
+        
+        query = select(Customer).where(
+            or_(
+                Customer.phone.ilike(f"%{suffix}"),
+                Customer.alternate_phone.ilike(f"%{suffix}"),
+            )
+        )
+        if dealership_id:
+            query = query.where(Customer.dealership_id == dealership_id)
+        query = query.limit(1)
+        
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def create_minimal_lead_for_unknown_caller(
+        self,
+        phone: str,
+        dealership_id: UUID
+    ) -> Tuple[Lead, Customer]:
+        """
+        Create a minimal lead + customer for an unknown caller.
+        The lead.requires_lead_details flag is set via call_log.
+        """
+        # Create customer with phone only
+        customer = Customer(
+            phone=phone,
+            dealership_id=dealership_id,
+            first_name="Unknown",
+            last_name="Caller",
+        )
+        self.db.add(customer)
+        await self.db.flush()
+        
+        # Get default stage and create lead with minimal info
+        default_stage = await LeadStageService.get_default_stage(self.db, dealership_id)
+        lead = Lead(
+            customer_id=customer.id,
+            dealership_id=dealership_id,
+            source="inbound_call",
+            stage_id=default_stage.id,
+        )
+        self.db.add(lead)
+        await self.db.flush()
+        
+        logger.info(f"Created minimal lead {lead.id} for unknown caller {phone}")
+        return lead, customer
+
+    async def auto_assign_lead_on_answer(
+        self,
+        call_log: CallLog,
+        answered_by_user: User
+    ) -> bool:
+        """
+        Auto-assign lead to user who answered if not already assigned.
+        Returns True if assignment was made.
+        """
+        if not call_log.lead_id:
+            return False
+        
+        result = await self.db.execute(
+            select(Lead).where(Lead.id == call_log.lead_id)
+        )
+        lead = result.scalar_one_or_none()
+        
+        if not lead:
+            return False
+        
+        # Only assign if lead is currently unassigned
+        if lead.assigned_to:
+            return False
+        
+        lead.assigned_to = answered_by_user.id
+        await self.db.flush()
+        
+        # Log activity for assignment
+        from app.services.activity import ActivityService
+        await ActivityService.log_activity(
+            db=self.db,
+            activity_type=ActivityType.LEAD_ASSIGNED,
+            description=f"Lead auto-assigned to {answered_by_user.full_name} via incoming call",
+            user_id=answered_by_user.id,
+            lead_id=lead.id,
+            dealership_id=lead.dealership_id,
+            meta_data={
+                "call_log_id": str(call_log.id),
+                "assignment_method": "incoming_call_answer",
+            }
+        )
+        
+        logger.info(f"Auto-assigned lead {lead.id} to user {answered_by_user.id} via call answer")
+        return True
+
+    async def get_user_by_identity(self, identity: str) -> Optional[User]:
+        """Get user by email (identity used in Twilio client)."""
+        normalized = self._normalize_identity(identity)
+        if not normalized:
+            return None
+        result = await self.db.execute(
+            select(User).where(User.email == normalized).limit(1)
+        )
+        return result.scalar_one_or_none()
     
     async def create_call_log(
         self,
@@ -481,6 +637,54 @@ class VoiceService:
         response.append(dial)
 
         return str(response)
+
+    def generate_twiml_ring_group(
+        self,
+        user_identities: List[str],
+        timeout: int = 30,
+        record: bool = True
+    ) -> str:
+        """
+        Generate TwiML for ring group - rings multiple WebRTC clients simultaneously.
+        First person to answer gets the call.
+        Falls back to voicemail if no one answers.
+        """
+        from twilio.twiml.voice_response import VoiceResponse, Dial
+
+        base = settings.backend_url.rstrip("/")
+        status_url = f"{base}/api/v1/voice/webhook/status"
+        recording_url = f"{base}/api/v1/voice/webhook/recording"
+
+        response = VoiceResponse()
+        
+        if not user_identities:
+            # No one to ring - go straight to voicemail
+            response.say("Sorry, no one is available to take your call. Please leave a message after the beep.")
+            response.record(
+                max_length=120,
+                transcribe=True,
+                play_beep=True
+            )
+            response.hangup()
+            return str(response)
+        
+        dial = Dial(
+            timeout=timeout,
+            record="record-from-answer-dual" if record else "do-not-record",
+            action=status_url,
+            method="POST",
+            recording_status_callback=recording_url,
+            recording_status_callback_event="completed",
+        )
+        
+        # Add all clients to dial simultaneously
+        for identity in user_identities:
+            dial.client(identity)
+        
+        response.append(dial)
+        
+        # Fallback if no one answers (Dial action handles this)
+        return str(response)
     
     def generate_twiml_voicemail(self, message: str = "Please leave a message after the beep.") -> str:
         """Generate TwiML for voicemail"""
@@ -501,3 +705,118 @@ class VoiceService:
 # Factory function for creating service instances
 def get_voice_service(db: AsyncSession) -> VoiceService:
     return VoiceService(db)
+
+
+async def upload_recording_to_azure_background(
+    call_sid: str,
+    recording_url: str,
+    recording_sid: str,
+    recording_duration: int,
+) -> None:
+    """
+    Background task to download recording from Twilio and upload to Azure.
+    Creates its own database session (runs outside request context).
+    """
+    from app.services.azure_storage_service import azure_storage_service
+    from app.core.websocket_manager import ws_manager
+    
+    logger.info(f"Background recording upload started for call {call_sid}")
+    
+    # Create dedicated engine and session for background task
+    engine = create_async_engine(
+        settings.database_url,
+        poolclass=NullPool,
+    )
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    
+    try:
+        async with async_session() as db:
+            # Find the call log
+            result = await db.execute(
+                select(CallLog).where(CallLog.twilio_call_sid == call_sid)
+            )
+            call_log = result.scalar_one_or_none()
+            
+            if not call_log:
+                logger.warning(f"Background upload: call log not found for {call_sid}")
+                return
+            
+            # Update status to uploading
+            call_log.recording_upload_status = "uploading"
+            await db.commit()
+            
+            # Check if Azure is configured
+            if not azure_storage_service.is_configured:
+                logger.warning("Azure storage not configured, keeping Twilio URL")
+                call_log.recording_url = f"{recording_url}.wav"
+                call_log.recording_sid = recording_sid
+                call_log.recording_duration_seconds = recording_duration
+                call_log.recording_upload_status = "completed"
+                await db.commit()
+                return
+            
+            try:
+                # Download from Twilio and upload to Azure
+                filename = f"call_{call_sid}_{recording_sid}.wav"
+                twilio_wav_url = f"{recording_url}.wav"
+                
+                azure_url = await azure_storage_service.upload_recording_from_url(
+                    source_url=twilio_wav_url,
+                    filename=filename,
+                    auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+                    metadata={
+                        "call_sid": call_sid,
+                        "recording_sid": recording_sid,
+                        "duration": str(recording_duration),
+                    }
+                )
+                
+                if azure_url:
+                    call_log.recording_url = azure_url
+                    call_log.recording_upload_status = "completed"
+                    logger.info(f"Recording uploaded to Azure: {filename}")
+                else:
+                    # Fallback to Twilio URL
+                    call_log.recording_url = twilio_wav_url
+                    call_log.recording_upload_status = "failed"
+                    logger.warning(f"Azure upload failed, using Twilio URL for {call_sid}")
+                
+            except Exception as upload_err:
+                logger.error(f"Recording upload error for {call_sid}: {upload_err}")
+                call_log.recording_url = f"{recording_url}.wav"
+                call_log.recording_upload_status = "failed"
+            
+            call_log.recording_sid = recording_sid
+            call_log.recording_duration_seconds = recording_duration
+            await db.commit()
+            
+            # Update activity if it exists
+            service = VoiceService(db)
+            await service.update_call_activity_recording(
+                call_log_id=call_log.id,
+                recording_url=call_log.recording_url,
+                recording_sid=recording_sid,
+                recording_duration_seconds=recording_duration,
+            )
+            await db.commit()
+            
+            # Notify user via WebSocket that recording is ready
+            if call_log.user_id:
+                await ws_manager.send_to_user(
+                    str(call_log.user_id),
+                    {
+                        "type": "call:recording_ready",
+                        "payload": {
+                            "call_log_id": str(call_log.id),
+                            "call_sid": call_sid,
+                            "recording_url": call_log.recording_url,
+                        }
+                    }
+                )
+            
+            logger.info(f"Background recording upload completed for {call_sid}")
+            
+    except Exception as e:
+        logger.error(f"Background recording upload failed for {call_sid}: {e}\n{traceback.format_exc()}")
+    finally:
+        await engine.dispose()

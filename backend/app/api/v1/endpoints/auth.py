@@ -54,8 +54,8 @@ async def login(
     
     if not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User account is inactive"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="account_deactivated",
         )
     
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
@@ -168,8 +168,8 @@ async def refresh_access_token(
     
     if not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User account is inactive"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="account_deactivated",
         )
     
     # Generate new access token

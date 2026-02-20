@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status, Query
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
@@ -92,26 +92,64 @@ class UpdateCallNotesRequest(BaseModel):
     outcome: Optional[str] = None
 
 
+class UpdateLeadDetailsRequest(BaseModel):
+    """Update lead details after call with unknown caller"""
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    email: Optional[str] = Field(None, max_length=255)
+
+
+class UpdateLeadDetailsResponse(BaseModel):
+    """Response for lead details update"""
+    lead_id: UUID
+    customer_id: UUID
+    message: str
+
+
 class VoiceConfigResponse(BaseModel):
     """Voice configuration status"""
     voice_enabled: bool
-    phone_number: Optional[str]
-    recording_enabled: bool
-    azure_storage_configured: bool
+    phone_number: Optional[str] = None
+    recording_enabled: bool = True
+    azure_storage_configured: bool = False
+    missing_credentials: Optional[List[str]] = None  # When voice_enabled is false, list of env var names to set
 
 
 # ============ Endpoints ============
+
+def _voice_missing_credentials() -> List[str]:
+    """Return list of env var names that are missing for voice to be enabled."""
+    missing = []
+    if not settings.twilio_account_sid:
+        missing.append("TWILIO_ACCOUNT_SID")
+    if not settings.twilio_auth_token:
+        missing.append("TWILIO_AUTH_TOKEN")
+    if not settings.twilio_phone_number:
+        missing.append("TWILIO_PHONE_NUMBER")
+    if not settings.twilio_twiml_app_sid:
+        missing.append("TWILIO_TWIML_APP_SID")
+    if not settings.twilio_api_key_sid:
+        missing.append("TWILIO_API_KEY_SID")
+    if not settings.twilio_api_key_secret:
+        missing.append("TWILIO_API_KEY_SECRET")
+    if not settings.voice_enabled:
+        missing.append("VOICE_ENABLED (set to true)")
+    return missing
+
 
 @router.get("/config", response_model=VoiceConfigResponse)
 async def get_voice_config(
     current_user: User = Depends(deps.get_current_active_user)
 ):
-    """Get voice configuration status"""
+    """Get voice configuration status. When voice_enabled is false, missing_credentials lists env vars to set."""
+    enabled = settings.is_twilio_voice_configured
+    missing = None if enabled else _voice_missing_credentials()
     return VoiceConfigResponse(
-        voice_enabled=settings.is_twilio_voice_configured,
-        phone_number=settings.twilio_phone_number if settings.is_twilio_voice_configured else None,
-        recording_enabled=True,  # Always record for compliance
-        azure_storage_configured=settings.is_azure_storage_configured
+        voice_enabled=enabled,
+        phone_number=settings.twilio_phone_number if enabled else None,
+        recording_enabled=True,
+        azure_storage_configured=settings.is_azure_storage_configured,
+        missing_credentials=missing,
     )
 
 
@@ -428,6 +466,88 @@ async def update_call_notes(
     return {"message": "Call updated successfully"}
 
 
+@router.post("/calls/{call_id}/update-lead-details", response_model=UpdateLeadDetailsResponse)
+async def update_lead_details_from_call(
+    call_id: UUID,
+    request: UpdateLeadDetailsRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update lead details after a call with an unknown caller.
+    This is called when the salesperson completes a call and needs to add 
+    the caller's name/email to the auto-created lead.
+    """
+    from app.models.customer import Customer
+    
+    result = await db.execute(
+        select(CallLog).where(CallLog.id == call_id)
+    )
+    call = result.scalar_one_or_none()
+    
+    if not call:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Call not found"
+        )
+    
+    # Check access - only the user who answered or admins can update
+    can_access = (
+        current_user.role in [UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]
+        or call.answered_by == current_user.id
+        or call.user_id == current_user.id
+    )
+    if not can_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
+    
+    if not call.lead_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No lead associated with this call"
+        )
+    
+    # Get the lead
+    lead_result = await db.execute(
+        select(Lead).where(Lead.id == call.lead_id)
+    )
+    lead = lead_result.scalar_one_or_none()
+    
+    if not lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Lead not found"
+        )
+    
+    # Update the customer with the provided details
+    if lead.customer_id:
+        customer_result = await db.execute(
+            select(Customer).where(Customer.id == lead.customer_id)
+        )
+        customer = customer_result.scalar_one_or_none()
+        
+        if customer:
+            customer.first_name = request.first_name
+            customer.last_name = request.last_name
+            if request.email:
+                customer.email = request.email
+    
+    # Clear the requires_lead_details flag
+    call.requires_lead_details = False
+    
+    await db.commit()
+    
+    logger.info(f"Updated lead details for call {call_id}: {request.first_name} {request.last_name}")
+    
+    return UpdateLeadDetailsResponse(
+        lead_id=lead.id,
+        customer_id=lead.customer_id,
+        message="Lead details updated successfully"
+    )
+
+
 @router.get("/calls/{call_id}/recording-url")
 async def get_recording_url(
     call_id: UUID,
@@ -532,7 +652,12 @@ async def handle_incoming_call(
 ):
     """
     Twilio webhook for incoming calls.
-    Routes call to the appropriate user's WebRTC client.
+    Routes call to appropriate user(s) WebRTC client(s).
+    
+    Ring rules:
+    - If caller is known and lead is assigned: ring only assigned user
+    - If caller is known but lead unassigned: ring all salespersons (first to answer gets assigned)
+    - If caller is unknown: create minimal lead, ring all salespersons
     """
     form_data = await request.form()
     
@@ -546,9 +671,33 @@ async def handle_incoming_call(
     
     # Try to find the lead by phone number
     lead = await service.find_lead_by_phone(from_number)
+    is_unknown_caller = lead is None
+    requires_lead_details = False
     
-    # Find user to route the call to
-    user = await service.find_user_for_incoming_call(lead)
+    # Determine dealership from Twilio phone number config or use default
+    # For now, we'll get dealership from lead or first available user
+    dealership_id = lead.dealership_id if lead else None
+    
+    # If unknown caller, we need a dealership to create the lead
+    # Get it from any user that has this Twilio number configured (simplified: use first dealership)
+    if is_unknown_caller and not dealership_id:
+        from app.models.dealership import Dealership
+        result = await db.execute(select(Dealership).limit(1))
+        dealership = result.scalar_one_or_none()
+        if dealership:
+            dealership_id = dealership.id
+    
+    # For unknown callers, create minimal lead
+    if is_unknown_caller and dealership_id:
+        lead, customer = await service.create_minimal_lead_for_unknown_caller(
+            phone=from_number,
+            dealership_id=dealership_id
+        )
+        requires_lead_details = True
+        logger.info(f"Created minimal lead {lead.id} for unknown caller {from_number}")
+    
+    # Find users to ring (ring group)
+    users_to_ring, _ = await service.find_users_for_incoming_call(lead, dealership_id)
     
     # Create call log
     call_log = await service.create_call_log(
@@ -556,17 +705,21 @@ async def handle_incoming_call(
         direction=CallDirection.INBOUND,
         from_number=from_number,
         to_number=to_number,
-        user_id=user.id if user else None,
+        user_id=users_to_ring[0].id if len(users_to_ring) == 1 else None,  # Only set if single user
         lead_id=lead.id if lead else None,
         customer_id=lead.customer_id if lead else None,
-        dealership_id=(lead.dealership_id if lead else None) or (user.dealership_id if user else None),
+        dealership_id=dealership_id or (users_to_ring[0].dealership_id if users_to_ring else None),
         status=CallStatus.RINGING
     )
     
+    # Set requires_lead_details flag for unknown callers
+    if requires_lead_details:
+        call_log.requires_lead_details = True
+    
     await db.commit()
     
-    # Send real-time notification to user
-    if user:
+    # Send real-time notification to all users being ringed
+    for user in users_to_ring:
         await ws_manager.send_to_user(
             str(user.id),
             {
@@ -576,15 +729,24 @@ async def handle_incoming_call(
                     "call_sid": call_sid,
                     "from_number": from_number,
                     "lead_id": str(lead.id) if lead else None,
-                    "lead_name": lead.full_name if lead else None
+                    "lead_name": lead.full_name if lead else None,
+                    "is_ring_group": len(users_to_ring) > 1,
                 }
             }
         )
-        
-        # Generate TwiML to route to user's WebRTC client
-        twiml = service.generate_twiml_for_incoming(user.email)
+    
+    # Generate TwiML
+    if users_to_ring:
+        if len(users_to_ring) == 1:
+            # Single user - use direct routing
+            twiml = service.generate_twiml_for_incoming(users_to_ring[0].email)
+        else:
+            # Multiple users - use ring group (simultaneous ring)
+            user_identities = [u.email for u in users_to_ring]
+            twiml = service.generate_twiml_ring_group(user_identities, timeout=30)
+            logger.info(f"Ring group for call {call_sid}: {len(users_to_ring)} users")
     else:
-        # No user available - go to voicemail
+        # No users available - go to voicemail
         twiml = service.generate_twiml_voicemail()
     
     return Response(content=twiml, media_type="application/xml")
@@ -649,6 +811,12 @@ async def handle_call_status(
     Twilio webhook for call status updates.
     For Dial (incoming and outbound): Twilio POSTs to the Dial action URL when the dialed leg ends.
     Request includes CallSid (parent call), DialCallStatus, DialCallDuration. We prefer those for Dial.
+    
+    Also handles:
+    - Tracking who answered (via Called parameter for ring groups)
+    - Auto-assigning lead to person who answered
+    - Sending WebSocket event for unknown caller lead details
+    
     Always return 200 + TwiML so Twilio ends the call cleanly.
     """
     empty_twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
@@ -662,13 +830,16 @@ async def handle_call_status(
     call_sid = form_data.get("CallSid", "")
     call_status = form_data.get("DialCallStatus") or form_data.get("CallStatus", "")
     call_duration = form_data.get("DialCallDuration") or form_data.get("CallDuration", "")
+    # Called contains the client identity that answered (e.g., "client:user@email.com")
+    called_identity = form_data.get("Called", "")
 
     logger.info(
-        "Call status webhook: CallSid=%s DialCallStatus=%s CallStatus=%s duration=%s",
+        "Call status webhook: CallSid=%s DialCallStatus=%s CallStatus=%s duration=%s Called=%s",
         call_sid,
         form_data.get("DialCallStatus"),
         form_data.get("CallStatus"),
         call_duration,
+        called_identity,
     )
 
     status_map = {
@@ -698,11 +869,46 @@ async def handle_call_status(
         )
 
         if call_log:
+            # Track who answered the call (for ring groups)
+            answered_by_user = None
+            if called_identity and status == CallStatus.IN_PROGRESS:
+                answered_by_user = await service.get_user_by_identity(called_identity)
+                if answered_by_user:
+                    call_log.answered_by = answered_by_user.id
+                    # Also set user_id if not already set (ring group scenario)
+                    if not call_log.user_id:
+                        call_log.user_id = answered_by_user.id
+                    logger.info(f"Call {call_sid} answered by user {answered_by_user.id}")
+                    
+                    # Auto-assign lead if unassigned
+                    if call_log.direction == CallDirection.INBOUND:
+                        assigned = await service.auto_assign_lead_on_answer(call_log, answered_by_user)
+                        if assigned:
+                            logger.info(f"Lead auto-assigned to {answered_by_user.id} via call {call_sid}")
+            
+            # Log activity for completed calls
             if status in [CallStatus.COMPLETED, CallStatus.BUSY, CallStatus.NO_ANSWER, CallStatus.FAILED]:
                 await service.log_call_activity(call_log)
-            if call_log.user_id:
+                
+                # Send WebSocket event for unknown caller needing lead details
+                if call_log.requires_lead_details and call_log.answered_by and status == CallStatus.COMPLETED:
+                    await ws_manager.send_to_user(
+                        str(call_log.answered_by),
+                        {
+                            "type": "call:needs_lead_details",
+                            "payload": {
+                                "call_log_id": str(call_log.id),
+                                "lead_id": str(call_log.lead_id) if call_log.lead_id else None,
+                                "phone_number": call_log.from_number,
+                            }
+                        }
+                    )
+            
+            # Send status update to user
+            target_user_id = call_log.answered_by or call_log.user_id
+            if target_user_id:
                 await ws_manager.send_to_user(
-                    str(call_log.user_id),
+                    str(target_user_id),
                     {
                         "type": "call:status",
                         "payload": {
@@ -730,11 +936,12 @@ async def handle_call_status(
 @router.post("/webhook/recording")
 async def handle_recording_complete(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Twilio webhook for recording completion.
-    Downloads recording and uploads to Azure Blob Storage.
+    Returns immediately to Twilio, then downloads recording and uploads to Azure in background.
     """
     form_data = await request.form()
     
@@ -745,36 +952,31 @@ async def handle_recording_complete(
     
     logger.info(f"Recording webhook: {call_sid} -> {recording_sid}")
     
-    service = get_voice_service(db)
-    call_log = await service.handle_recording_complete(
+    try:
+        duration = int(recording_duration)
+    except (TypeError, ValueError):
+        duration = 0
+    
+    # Mark recording as pending upload in the call_log
+    result = await db.execute(
+        select(CallLog).where(CallLog.twilio_call_sid == call_sid)
+    )
+    call_log = result.scalar_one_or_none()
+    
+    if call_log:
+        call_log.recording_upload_status = "pending"
+        await db.commit()
+    
+    # Queue background task for downloading from Twilio and uploading to Azure
+    # This runs outside the request context with its own DB session
+    from app.services.voice_service import upload_recording_to_azure_background
+    background_tasks.add_task(
+        upload_recording_to_azure_background,
         call_sid=call_sid,
-        recording_sid=recording_sid,
         recording_url=recording_url,
-        recording_duration=int(recording_duration)
+        recording_sid=recording_sid,
+        recording_duration=duration,
     )
     
-    if call_log and call_log.recording_url:
-        await service.update_call_activity_recording(
-            call_log_id=call_log.id,
-            recording_url=call_log.recording_url,
-            recording_sid=call_log.recording_sid,
-            recording_duration_seconds=call_log.recording_duration_seconds,
-        )
-    
-    if call_log and call_log.user_id:
-        # Notify user that recording is ready
-        await ws_manager.send_to_user(
-            str(call_log.user_id),
-            {
-                "type": "call:recording_ready",
-                "payload": {
-                    "call_log_id": str(call_log.id),
-                    "call_sid": call_sid,
-                    "recording_url": call_log.recording_url
-                }
-            }
-        )
-    
-    await db.commit()
-    
+    # Return immediately to Twilio
     return {"status": "ok"}

@@ -226,6 +226,59 @@ class ActivitiesOverTimeResponse(BaseModel):
     series: List[ActivitiesOverTimeItem]
 
 
+# Daily Activity Tracking Schemas
+class DailyActivityItem(BaseModel):
+    """Individual activity item with full details."""
+    id: str
+    type: str  # note_added, call_logged, follow_up_completed, etc.
+    user_id: Optional[str]
+    user_name: Optional[str]
+    lead_id: Optional[str]
+    lead_name: Optional[str]
+    description: str
+    meta_data: Optional[dict] = None  # note content, call duration, etc.
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SalespersonDailySummary(BaseModel):
+    """Summary of a salesperson's activities for a given date/period."""
+    user_id: str
+    user_name: str
+    user_email: str
+    notes_count: int
+    calls_count: int
+    call_duration_total: int  # seconds
+    follow_ups_completed: int
+    follow_ups_scheduled: int
+    appointments_completed: int
+    appointments_scheduled: int
+    emails_sent: int
+    leads_worked: int  # unique leads touched
+    activities: List[DailyActivityItem]
+
+    class Config:
+        from_attributes = True
+
+
+class DailyActivityResponse(BaseModel):
+    """Response for daily activity tracking endpoint."""
+    date_from: str
+    date_to: str
+    dealership_id: Optional[str]
+    total_activities: int
+    total_notes: int
+    total_calls: int
+    total_follow_ups_completed: int
+    total_appointments: int
+    salespersons: List[SalespersonDailySummary]
+
+    class Config:
+        from_attributes = True
+
+
 # Helper function to check admin/owner permissions
 def require_admin_or_owner(current_user: User = Depends(deps.get_current_active_user)) -> User:
     """Require user to be dealership admin, owner, or super admin."""
@@ -1433,3 +1486,579 @@ async def get_activities_over_time(
         for d in all_dates
     ]
     return ActivitiesOverTimeResponse(series=series)
+
+
+@router.get("/daily-activities", response_model=DailyActivityResponse)
+async def get_daily_activities(
+    date_from: str = Query(..., description="ISO date for range start (YYYY-MM-DD or ISO datetime)"),
+    date_to: str = Query(..., description="ISO date for range end (YYYY-MM-DD or ISO datetime)"),
+    dealership_id: Optional[UUID] = Query(None, description="Dealership to scope (super_admin only)"),
+    user_id: Optional[UUID] = Query(None, description="Filter by specific salesperson"),
+    activity_types: Optional[str] = Query(None, description="Comma-separated activity types to filter"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_owner),
+) -> Any:
+    """
+    Get detailed daily activities for all salespersons in a dealership.
+    
+    Returns activities grouped by salesperson with full details including:
+    - Notes (with content)
+    - Calls (with duration, outcome)
+    - Follow-ups scheduled/completed
+    - Appointments scheduled/completed
+    - Emails sent
+    
+    Admins can see what each salesperson did on any given day.
+    """
+    # Resolve dealership
+    if current_user.role == UserRole.SUPER_ADMIN and dealership_id is not None:
+        resolved_dealership_id = dealership_id
+    else:
+        resolved_dealership_id = current_user.dealership_id
+    
+    if not resolved_dealership_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Dealership context required."
+        )
+    
+    # Parse dates
+    try:
+        if "T" in date_from:
+            date_from_dt = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+        else:
+            date_from_dt = datetime.fromisoformat(f"{date_from}T00:00:00+00:00")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date_from format")
+    
+    try:
+        if "T" in date_to:
+            date_to_dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+        else:
+            date_to_dt = datetime.fromisoformat(f"{date_to}T23:59:59+00:00")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date_to format")
+    
+    # Parse activity types filter
+    type_filter = None
+    if activity_types:
+        type_names = [t.strip().upper() for t in activity_types.split(",")]
+        valid_types = []
+        for tn in type_names:
+            try:
+                valid_types.append(ActivityType[tn])
+            except KeyError:
+                pass
+        if valid_types:
+            type_filter = valid_types
+    
+    # Get salespersons in dealership
+    sp_filters = [
+        User.dealership_id == resolved_dealership_id,
+        User.is_active == True,
+        User.role.in_([UserRole.SALESPERSON, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]),
+    ]
+    if user_id:
+        sp_filters.append(User.id == user_id)
+    
+    sp_result = await db.execute(select(User).where(and_(*sp_filters)))
+    salespersons = sp_result.scalars().all()
+    sp_ids = [sp.id for sp in salespersons]
+    sp_map = {sp.id: sp for sp in salespersons}
+    
+    if not sp_ids:
+        return DailyActivityResponse(
+            date_from=date_from,
+            date_to=date_to,
+            dealership_id=str(resolved_dealership_id),
+            total_activities=0,
+            total_notes=0,
+            total_calls=0,
+            total_follow_ups_completed=0,
+            total_appointments=0,
+            salespersons=[],
+        )
+    
+    # Build activity query
+    activity_filters = [
+        Activity.user_id.in_(sp_ids),
+        Activity.created_at >= date_from_dt,
+        Activity.created_at <= date_to_dt,
+    ]
+    if type_filter:
+        activity_filters.append(Activity.type.in_(type_filter))
+    
+    # Fetch activities with lead info
+    activity_q = (
+        select(Activity, Lead, Customer)
+        .outerjoin(Lead, Activity.lead_id == Lead.id)
+        .outerjoin(Customer, Lead.customer_id == Customer.id)
+        .where(and_(*activity_filters))
+        .order_by(Activity.created_at.desc())
+    )
+    activity_result = await db.execute(activity_q)
+    activities_raw = activity_result.all()
+    
+    # Get call logs for duration info
+    call_filters = [
+        CallLog.user_id.in_(sp_ids),
+        CallLog.created_at >= date_from_dt,
+        CallLog.created_at <= date_to_dt,
+    ]
+    call_result = await db.execute(
+        select(CallLog).where(and_(*call_filters))
+    )
+    call_logs = {cl.id: cl for cl in call_result.scalars().all()}
+    
+    # Group activities by user
+    user_activities: dict[UUID, list] = {sp_id: [] for sp_id in sp_ids}
+    user_leads_touched: dict[UUID, set] = {sp_id: set() for sp_id in sp_ids}
+    user_stats: dict[UUID, dict] = {
+        sp_id: {
+            "notes_count": 0,
+            "calls_count": 0,
+            "call_duration_total": 0,
+            "follow_ups_completed": 0,
+            "follow_ups_scheduled": 0,
+            "appointments_completed": 0,
+            "appointments_scheduled": 0,
+            "emails_sent": 0,
+        }
+        for sp_id in sp_ids
+    }
+    
+    for activity, lead, customer in activities_raw:
+        if activity.user_id not in user_activities:
+            continue
+        
+        # Build lead name
+        lead_name = None
+        if customer:
+            lead_name = f"{customer.first_name or ''} {customer.last_name or ''}".strip() or None
+        elif lead:
+            lead_name = f"Lead {str(lead.id)[:8]}"
+        
+        # Track leads touched
+        if activity.lead_id:
+            user_leads_touched[activity.user_id].add(activity.lead_id)
+        
+        # Build description based on type
+        description = activity.description or ""
+        meta = activity.meta_data if isinstance(activity.meta_data, dict) else {}
+        
+        # Update stats based on activity type
+        if activity.type == ActivityType.NOTE_ADDED:
+            user_stats[activity.user_id]["notes_count"] += 1
+            if meta.get("content"):
+                description = meta["content"][:200] + ("..." if len(meta.get("content", "")) > 200 else "")
+        elif activity.type == ActivityType.CALL_LOGGED:
+            user_stats[activity.user_id]["calls_count"] += 1
+            duration = meta.get("duration_seconds", 0) or 0
+            user_stats[activity.user_id]["call_duration_total"] += duration
+            outcome = meta.get("outcome", "")
+            description = f"Call ({duration}s) - {outcome}" if outcome else f"Call ({duration}s)"
+        elif activity.type == ActivityType.FOLLOW_UP_COMPLETED:
+            user_stats[activity.user_id]["follow_ups_completed"] += 1
+        elif activity.type == ActivityType.FOLLOW_UP_SCHEDULED:
+            user_stats[activity.user_id]["follow_ups_scheduled"] += 1
+        elif activity.type == ActivityType.APPOINTMENT_COMPLETED:
+            user_stats[activity.user_id]["appointments_completed"] += 1
+        elif activity.type == ActivityType.APPOINTMENT_SCHEDULED:
+            user_stats[activity.user_id]["appointments_scheduled"] += 1
+        elif activity.type == ActivityType.EMAIL_SENT:
+            user_stats[activity.user_id]["emails_sent"] += 1
+            subject = meta.get("subject", "")
+            description = f"Email: {subject}" if subject else "Email sent"
+        
+        user_activities[activity.user_id].append(
+            DailyActivityItem(
+                id=str(activity.id),
+                type=activity.type.value if hasattr(activity.type, "value") else str(activity.type),
+                user_id=str(activity.user_id) if activity.user_id else None,
+                user_name=sp_map[activity.user_id].full_name if activity.user_id in sp_map else None,
+                lead_id=str(activity.lead_id) if activity.lead_id else None,
+                lead_name=lead_name,
+                description=description,
+                meta_data=meta if meta else None,
+                created_at=activity.created_at,
+            )
+        )
+    
+    # Build salesperson summaries
+    salesperson_summaries = []
+    total_activities = 0
+    total_notes = 0
+    total_calls = 0
+    total_follow_ups_completed = 0
+    total_appointments = 0
+    
+    for sp_id in sp_ids:
+        sp = sp_map[sp_id]
+        stats = user_stats[sp_id]
+        activities = user_activities[sp_id]
+        
+        total_activities += len(activities)
+        total_notes += stats["notes_count"]
+        total_calls += stats["calls_count"]
+        total_follow_ups_completed += stats["follow_ups_completed"]
+        total_appointments += stats["appointments_completed"] + stats["appointments_scheduled"]
+        
+        salesperson_summaries.append(
+            SalespersonDailySummary(
+                user_id=str(sp_id),
+                user_name=sp.full_name,
+                user_email=sp.email,
+                notes_count=stats["notes_count"],
+                calls_count=stats["calls_count"],
+                call_duration_total=stats["call_duration_total"],
+                follow_ups_completed=stats["follow_ups_completed"],
+                follow_ups_scheduled=stats["follow_ups_scheduled"],
+                appointments_completed=stats["appointments_completed"],
+                appointments_scheduled=stats["appointments_scheduled"],
+                emails_sent=stats["emails_sent"],
+                leads_worked=len(user_leads_touched[sp_id]),
+                activities=activities,
+            )
+        )
+    
+    # Sort by total activities descending
+    salesperson_summaries.sort(key=lambda x: len(x.activities), reverse=True)
+    
+    return DailyActivityResponse(
+        date_from=date_from,
+        date_to=date_to,
+        dealership_id=str(resolved_dealership_id),
+        total_activities=total_activities,
+        total_notes=total_notes,
+        total_calls=total_calls,
+        total_follow_ups_completed=total_follow_ups_completed,
+        total_appointments=total_appointments,
+        salespersons=salesperson_summaries,
+    )
+
+
+@router.get("/daily-activities", response_model=DailyActivityResponse)
+async def get_daily_activities(
+    date_from: Optional[str] = Query(None, description="ISO date for range start (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="ISO date for range end (YYYY-MM-DD)"),
+    dealership_id: Optional[UUID] = Query(None, description="Dealership to scope (super_admin only)"),
+    user_id: Optional[UUID] = Query(None, description="Filter by specific salesperson"),
+    activity_types: Optional[str] = Query(None, description="Comma-separated activity types to filter"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_owner),
+) -> Any:
+    """
+    Get detailed daily activities grouped by salesperson.
+    Returns all activities with full details for admin oversight.
+    """
+    # Resolve dealership
+    if current_user.role == UserRole.SUPER_ADMIN and dealership_id is not None:
+        resolved_dealership_id = dealership_id
+    else:
+        resolved_dealership_id = current_user.dealership_id
+
+    if not resolved_dealership_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Dealership context required.",
+        )
+
+    # Parse dates (default to today if not provided)
+    now = utc_now()
+    if date_from:
+        try:
+            date_from_dt = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+            if date_from_dt.tzinfo is None:
+                date_from_dt = date_from_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        except ValueError:
+            date_from_dt = datetime(now.year, now.month, now.day, 0, 0, 0)
+    else:
+        date_from_dt = datetime(now.year, now.month, now.day, 0, 0, 0)
+
+    if date_to:
+        try:
+            date_to_dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            if date_to_dt.tzinfo is None:
+                date_to_dt = date_to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        except ValueError:
+            date_to_dt = datetime(now.year, now.month, now.day, 23, 59, 59, 999999)
+    else:
+        date_to_dt = datetime(now.year, now.month, now.day, 23, 59, 59, 999999)
+
+    # Parse activity types filter
+    type_filter = None
+    if activity_types:
+        type_names = [t.strip().upper() for t in activity_types.split(",")]
+        valid_types = []
+        for tn in type_names:
+            try:
+                valid_types.append(ActivityType[tn])
+            except KeyError:
+                pass
+        if valid_types:
+            type_filter = valid_types
+
+    # Get salespersons in dealership
+    sp_filters = [
+        User.dealership_id == resolved_dealership_id,
+        User.role == UserRole.SALESPERSON,
+        User.is_active == True,
+    ]
+    if user_id:
+        sp_filters.append(User.id == user_id)
+
+    salespersons_result = await db.execute(select(User).where(and_(*sp_filters)))
+    salespersons = salespersons_result.scalars().all()
+    sp_ids = [sp.id for sp in salespersons]
+
+    if not sp_ids:
+        return DailyActivityResponse(
+            date_from=date_from_dt.isoformat(),
+            date_to=date_to_dt.isoformat(),
+            dealership_id=str(resolved_dealership_id),
+            total_activities=0,
+            total_notes=0,
+            total_calls=0,
+            total_follow_ups_completed=0,
+            total_appointments=0,
+            salespersons=[],
+        )
+
+    # Build activity query
+    activity_filters = [
+        Activity.user_id.in_(sp_ids),
+        Activity.created_at >= date_from_dt,
+        Activity.created_at <= date_to_dt,
+    ]
+    if type_filter:
+        activity_filters.append(Activity.type.in_(type_filter))
+
+    # Fetch activities
+    activities_result = await db.execute(
+        select(Activity)
+        .where(and_(*activity_filters))
+        .order_by(Activity.created_at.desc())
+        .limit(2000)
+    )
+    activities = activities_result.scalars().all()
+
+    # Collect lead IDs for name resolution
+    lead_ids = list({a.lead_id for a in activities if a.lead_id})
+    lead_names: dict[UUID, str] = {}
+    if lead_ids:
+        leads_result = await db.execute(
+            select(Lead.id, Customer.first_name, Customer.last_name)
+            .select_from(Lead)
+            .outerjoin(Customer, Lead.customer_id == Customer.id)
+            .where(Lead.id.in_(lead_ids))
+        )
+        for row in leads_result.all():
+            name = f"{row.first_name or ''} {row.last_name or ''}".strip() or "Unknown"
+            lead_names[row.id] = name
+
+    # Get call logs for the period (separate table)
+    call_filters = [
+        CallLog.user_id.in_(sp_ids),
+        CallLog.created_at >= date_from_dt,
+        CallLog.created_at <= date_to_dt,
+    ]
+    calls_result = await db.execute(
+        select(CallLog)
+        .where(and_(*call_filters))
+        .order_by(CallLog.created_at.desc())
+        .limit(1000)
+    )
+    calls = calls_result.scalars().all()
+
+    # Collect call lead names
+    call_lead_ids = list({c.lead_id for c in calls if c.lead_id})
+    if call_lead_ids:
+        call_leads_result = await db.execute(
+            select(Lead.id, Customer.first_name, Customer.last_name)
+            .select_from(Lead)
+            .outerjoin(Customer, Lead.customer_id == Customer.id)
+            .where(Lead.id.in_(call_lead_ids))
+        )
+        for row in call_leads_result.all():
+            name = f"{row.first_name or ''} {row.last_name or ''}".strip() or "Unknown"
+            lead_names[row.id] = name
+
+    # Build user lookup
+    user_lookup = {sp.id: sp for sp in salespersons}
+
+    # Group activities by user
+    user_activities: dict[UUID, list[DailyActivityItem]] = {sp_id: [] for sp_id in sp_ids}
+    user_leads_touched: dict[UUID, set[UUID]] = {sp_id: set() for sp_id in sp_ids}
+    user_stats: dict[UUID, dict[str, int]] = {
+        sp_id: {
+            "notes": 0,
+            "calls": 0,
+            "call_duration": 0,
+            "fu_completed": 0,
+            "fu_scheduled": 0,
+            "appt_completed": 0,
+            "appt_scheduled": 0,
+            "emails": 0,
+        }
+        for sp_id in sp_ids
+    }
+
+    # Process activities
+    for act in activities:
+        if act.user_id not in user_activities:
+            continue
+
+        user = user_lookup.get(act.user_id)
+        user_name = user.full_name if user else "Unknown"
+        lead_name = lead_names.get(act.lead_id) if act.lead_id else None
+
+        # Build description based on activity type
+        meta = act.meta_data if isinstance(act.meta_data, dict) else {}
+        description = act.description or ""
+        
+        # Update stats
+        if act.type == ActivityType.NOTE_ADDED:
+            user_stats[act.user_id]["notes"] += 1
+            content = meta.get("content", "")
+            if content:
+                description = content[:200] + "..." if len(content) > 200 else content
+        elif act.type == ActivityType.CALL_LOGGED:
+            user_stats[act.user_id]["calls"] += 1
+            duration = meta.get("duration", 0)
+            user_stats[act.user_id]["call_duration"] += duration or 0
+            outcome = meta.get("outcome", "")
+            description = f"Call ({outcome})" if outcome else "Call logged"
+            if duration:
+                mins = duration // 60
+                secs = duration % 60
+                description += f" - {mins}m {secs}s"
+        elif act.type == ActivityType.FOLLOW_UP_COMPLETED:
+            user_stats[act.user_id]["fu_completed"] += 1
+        elif act.type == ActivityType.FOLLOW_UP_SCHEDULED:
+            user_stats[act.user_id]["fu_scheduled"] += 1
+        elif act.type == ActivityType.APPOINTMENT_COMPLETED:
+            user_stats[act.user_id]["appt_completed"] += 1
+        elif act.type == ActivityType.APPOINTMENT_SCHEDULED:
+            user_stats[act.user_id]["appt_scheduled"] += 1
+        elif act.type == ActivityType.EMAIL_SENT:
+            user_stats[act.user_id]["emails"] += 1
+            subject = meta.get("subject", "")
+            description = f"Email: {subject}" if subject else "Email sent"
+
+        if act.lead_id:
+            user_leads_touched[act.user_id].add(act.lead_id)
+
+        user_activities[act.user_id].append(
+            DailyActivityItem(
+                id=str(act.id),
+                type=act.type.value.lower(),
+                user_id=str(act.user_id) if act.user_id else None,
+                user_name=user_name,
+                lead_id=str(act.lead_id) if act.lead_id else None,
+                lead_name=lead_name,
+                description=description,
+                meta_data=meta,
+                created_at=act.created_at,
+            )
+        )
+
+    # Process calls (from CallLog table)
+    for call in calls:
+        if call.user_id not in user_activities:
+            continue
+
+        user = user_lookup.get(call.user_id)
+        user_name = user.full_name if user else "Unknown"
+        lead_name = lead_names.get(call.lead_id) if call.lead_id else None
+
+        duration = call.duration_seconds or 0
+        mins = duration // 60
+        secs = duration % 60
+        direction = call.direction.value if call.direction else "unknown"
+        status_val = call.status.value if call.status else ""
+        description = f"{direction.capitalize()} call - {status_val}"
+        if duration:
+            description += f" ({mins}m {secs}s)"
+
+        user_stats[call.user_id]["calls"] += 1
+        user_stats[call.user_id]["call_duration"] += duration
+
+        if call.lead_id:
+            user_leads_touched[call.user_id].add(call.lead_id)
+
+        user_activities[call.user_id].append(
+            DailyActivityItem(
+                id=str(call.id),
+                type="call_logged",
+                user_id=str(call.user_id) if call.user_id else None,
+                user_name=user_name,
+                lead_id=str(call.lead_id) if call.lead_id else None,
+                lead_name=lead_name,
+                description=description,
+                meta_data={
+                    "direction": direction,
+                    "status": status_val,
+                    "duration": duration,
+                    "recording_url": call.recording_url,
+                },
+                created_at=call.created_at,
+            )
+        )
+
+    # Build response
+    salesperson_summaries = []
+    total_activities = 0
+    total_notes = 0
+    total_calls = 0
+    total_fu_completed = 0
+    total_appointments = 0
+
+    for sp in salespersons:
+        stats = user_stats[sp.id]
+        activities_list = user_activities[sp.id]
+        # Sort by created_at descending
+        activities_list.sort(key=lambda x: x.created_at, reverse=True)
+
+        notes_count = stats["notes"]
+        calls_count = stats["calls"]
+        fu_completed = stats["fu_completed"]
+        appt_completed = stats["appt_completed"]
+
+        total_activities += len(activities_list)
+        total_notes += notes_count
+        total_calls += calls_count
+        total_fu_completed += fu_completed
+        total_appointments += appt_completed + stats["appt_scheduled"]
+
+        salesperson_summaries.append(
+            SalespersonDailySummary(
+                user_id=str(sp.id),
+                user_name=sp.full_name,
+                user_email=sp.email,
+                notes_count=notes_count,
+                calls_count=calls_count,
+                call_duration_total=stats["call_duration"],
+                follow_ups_completed=fu_completed,
+                follow_ups_scheduled=stats["fu_scheduled"],
+                appointments_completed=appt_completed,
+                appointments_scheduled=stats["appt_scheduled"],
+                emails_sent=stats["emails"],
+                leads_worked=len(user_leads_touched[sp.id]),
+                activities=activities_list,
+            )
+        )
+
+    # Sort salespersons by activity count descending
+    salesperson_summaries.sort(key=lambda x: len(x.activities), reverse=True)
+
+    return DailyActivityResponse(
+        date_from=date_from_dt.isoformat(),
+        date_to=date_to_dt.isoformat(),
+        dealership_id=str(resolved_dealership_id),
+        total_activities=total_activities,
+        total_notes=total_notes,
+        total_calls=total_calls,
+        total_follow_ups_completed=total_fu_completed,
+        total_appointments=total_appointments,
+        salespersons=salesperson_summaries,
+    )

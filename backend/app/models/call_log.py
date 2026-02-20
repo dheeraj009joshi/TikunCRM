@@ -172,6 +172,27 @@ class CallLog(Base):
         nullable=False
     )
     
+    # Who actually answered the call (may differ from lead.assigned_to for ring groups)
+    answered_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
+    
+    # For unknown callers - auto-created lead needs details after call
+    requires_lead_details: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False
+    )
+    
+    # Recording upload status tracking: pending, uploading, completed, failed
+    recording_upload_status: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True
+    )
+    
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
@@ -197,7 +218,13 @@ class CallLog(Base):
     user: Mapped[Optional["User"]] = relationship(
         "User",
         back_populates="call_logs",
-        lazy="noload"
+        lazy="noload",
+        foreign_keys=[user_id]
+    )
+    answered_by_user: Mapped[Optional["User"]] = relationship(
+        "User",
+        lazy="noload",
+        foreign_keys=[answered_by]
     )
     dealership: Mapped[Optional["Dealership"]] = relationship(
         "Dealership",

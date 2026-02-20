@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.timezone import utc_now
 from app.db.database import get_engine_url_and_connect_args
 from app.core.websocket_manager import ws_manager
+from app.core.permissions import UserRole
 from app.models.lead import Lead
 from app.models.activity import Activity, ActivityType
 from app.models.user import User
@@ -101,95 +102,92 @@ async def auto_assign_leads_from_activity():
             assigned_count = 0
             
             for lead in unassigned_leads:
-                # Get the first user activity for this lead
+                # Get the first user activity for this lead that was performed by a salesperson
+                # (admins/owners should not auto-claim leads on first activity)
                 first_activity_result = await session.execute(
-                    select(Activity)
+                    select(Activity, User)
+                    .join(User, Activity.user_id == User.id)
                     .where(
                         Activity.lead_id == lead.id,
                         Activity.type.in_(assignable_activity_types),
-                        Activity.user_id.isnot(None)
+                        Activity.user_id.isnot(None),
+                        User.role == UserRole.SALESPERSON,
                     )
                     .order_by(Activity.created_at.asc())
                     .limit(1)
                 )
-                first_activity = first_activity_result.scalar_one_or_none()
+                first_row = first_activity_result.first()
                 
-                if first_activity and first_activity.user_id:
-                    # Get the user to get their dealership
-                    user_result = await session.execute(
-                        select(User).where(User.id == first_activity.user_id)
-                    )
-                    activity_user = user_result.scalar_one_or_none()
-                    
-                    if not activity_user or not activity_user.dealership_id:
-                        # User must have a dealership to claim a lead
-                        continue
-                    
-                    # Check if lead is in a different dealership (user can't claim it)
-                    if lead.dealership_id is not None and lead.dealership_id != activity_user.dealership_id:
-                        logger.debug(f"User {activity_user.id} can't claim lead {lead.id} - belongs to different dealership")
-                        continue
-                    
-                    # Auto-assign to the user who performed the first activity
-                    lead.assigned_to = first_activity.user_id
-                    if lead.dealership_id is None:
-                        # Only set dealership if lead is in global pool
-                        lead.dealership_id = activity_user.dealership_id
-                    lead.last_activity_at = utc_now()
-                    
-                    # Create assignment activity
-                    activity = Activity(
-                        type=ActivityType.LEAD_ASSIGNED,
-                        description=f"Lead auto-assigned to {activity_user.first_name} {activity_user.last_name} based on first activity",
-                        user_id=first_activity.user_id,
-                        lead_id=lead.id,
-                        dealership_id=activity_user.dealership_id,
-                        meta_data={
-                            "auto_assigned": True,
-                            "reason": "first_activity",
-                            "activity_type": first_activity.type.value if hasattr(first_activity.type, 'value') else str(first_activity.type),
-                            "user_name": f"{activity_user.first_name} {activity_user.last_name}"
-                        }
-                    )
-                    session.add(activity)
-                    
-                    # Create notification for the assigned user using NotificationService
-                    notification_service = NotificationService(session)
-                    lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
-                    await notification_service.notify_lead_assigned(
-                        user_id=first_activity.user_id,
-                        lead_name=lead_name,
-                        lead_id=lead.id,
-                        assigned_by="System (auto-assignment)"
-                    )
-                    
-                    # Emit WebSocket events for real-time updates
-                    await ws_manager.send_to_user(
-                        first_activity.user_id,
-                        {
-                            "type": "lead:updated",
-                            "payload": {
-                                "lead_id": str(lead.id),
-                                "update_type": "assigned",
-                                "assigned_to": str(first_activity.user_id)
+                if first_row:
+                    first_activity, activity_user = first_row
+                    if first_activity and first_activity.user_id and activity_user:
+                        if not activity_user.dealership_id:
+                            continue
+                        # Check if lead is in a different dealership (user can't claim it)
+                        if lead.dealership_id is not None and lead.dealership_id != activity_user.dealership_id:
+                            logger.debug(f"User {activity_user.id} can't claim lead {lead.id} - belongs to different dealership")
+                            continue
+                        
+                        # Auto-assign to the salesperson who performed the first activity
+                        lead.assigned_to = first_activity.user_id
+                        if lead.dealership_id is None:
+                            # Only set dealership if lead is in global pool
+                            lead.dealership_id = activity_user.dealership_id
+                        lead.last_activity_at = utc_now()
+                        
+                        # Create assignment activity
+                        activity = Activity(
+                            type=ActivityType.LEAD_ASSIGNED,
+                            description=f"Lead auto-assigned to {activity_user.first_name} {activity_user.last_name} based on first activity",
+                            user_id=first_activity.user_id,
+                            lead_id=lead.id,
+                            dealership_id=activity_user.dealership_id,
+                            meta_data={
+                                "auto_assigned": True,
+                                "reason": "first_activity",
+                                "activity_type": first_activity.type.value if hasattr(first_activity.type, 'value') else str(first_activity.type),
+                                "user_name": f"{activity_user.first_name} {activity_user.last_name}"
                             }
-                        }
-                    )
-                    
-                    # Refresh badges
-                    await ws_manager.send_to_user(
-                        first_activity.user_id,
-                        {"type": "badges:refresh", "payload": {}}
-                    )
+                        )
+                        session.add(activity)
+                        
+                        # Create notification for the assigned user using NotificationService
+                        notification_service = NotificationService(session)
+                        lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+                        await notification_service.notify_lead_assigned(
+                            user_id=first_activity.user_id,
+                            lead_name=lead_name,
+                            lead_id=lead.id,
+                            assigned_by="System (auto-assignment)"
+                        )
+                        
+                        # Emit WebSocket events for real-time updates
+                        await ws_manager.send_to_user(
+                            first_activity.user_id,
+                            {
+                                "type": "lead:updated",
+                                "payload": {
+                                    "lead_id": str(lead.id),
+                                    "update_type": "assigned",
+                                    "assigned_to": str(first_activity.user_id)
+                                }
+                            }
+                        )
+                        
+                        # Refresh badges
+                        await ws_manager.send_to_user(
+                            first_activity.user_id,
+                            {"type": "badges:refresh", "payload": {}}
+                        )
 
-                    # Schedule outbound-call follow-ups (day 1–3, every 3 days, every Friday)
-                    try:
-                        await schedule_outbound_call_follow_ups(session, lead.id, first_activity.user_id)
-                    except Exception as e:
-                        logger.warning("Failed to schedule outbound call follow-ups for lead %s: %s", lead.id, e)
+                        # Schedule outbound-call follow-ups (day 1–3, every 3 days, every Friday)
+                        try:
+                            await schedule_outbound_call_follow_ups(session, lead.id, first_activity.user_id)
+                        except Exception as e:
+                            logger.warning("Failed to schedule outbound call follow-ups for lead %s: %s", lead.id, e)
 
-                    assigned_count += 1
-                    logger.info(f"Auto-assigned lead {lead.id} to user {first_activity.user_id} (dealership {activity_user.dealership_id})")
+                        assigned_count += 1
+                        logger.info(f"Auto-assigned lead {lead.id} to user {first_activity.user_id} (dealership {activity_user.dealership_id})")
             
             if assigned_count > 0:
                 await session.commit()

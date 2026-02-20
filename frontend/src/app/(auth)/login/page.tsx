@@ -3,24 +3,36 @@
 import * as React from "react"
 import Link from "next/link"
 import Image from "next/image"
-import { useRouter } from "next/navigation"
-import { Mail, Lock, Eye, EyeOff } from "lucide-react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { Mail, Lock, Eye, EyeOff, UserX } from "lucide-react"
 
 import { useAuthStore } from "@/stores/auth-store"
 import { registerFCMToken } from "@/hooks/use-fcm-notifications"
 
 export default function LoginPage() {
     const router = useRouter()
+    const searchParams = useSearchParams()
     const setAuth = useAuthStore((state) => state.setAuth)
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const [formData, setFormData] = React.useState({ email: "", password: "" })
     const [showPassword, setShowPassword] = React.useState(false)
+    const [accountDeactivated, setAccountDeactivated] = React.useState(false)
+
+    // Show deactivated screen when redirected with ?deactivated=1 or when login returns account_deactivated
+    const showDeactivatedScreen = accountDeactivated || searchParams.get("deactivated") === "1"
+
+    const clearDeactivatedAndError = () => {
+        setAccountDeactivated(false)
+        setError(null)
+        router.replace("/login", { scroll: false })
+    }
 
     async function onSubmit(event: React.SyntheticEvent) {
         event.preventDefault()
         setIsLoading(true)
         setError(null)
+        setAccountDeactivated(false)
 
         try {
             // OAuth2 expects username and password in form data
@@ -35,9 +47,15 @@ export default function LoginPage() {
                 body: formBody
             })
 
+            const errorData = response.ok ? null : await response.json().catch(() => ({}))
+            const detail = errorData?.detail
+
             if (!response.ok) {
-                const errorData = await response.json()
-                throw new Error(errorData.detail || "Login failed")
+                if (response.status === 403 && (detail === "account_deactivated" || detail === "Account deactivated")) {
+                    setAccountDeactivated(true)
+                    return
+                }
+                throw new Error(typeof detail === "string" ? detail : "Login failed")
             }
 
             const data = await response.json()
@@ -88,23 +106,49 @@ export default function LoginPage() {
                 </div>
             </div>
 
-            {/* Right side: Login Form */}
+            {/* Right side: Login Form or Deactivated Screen */}
             <div className="lg:p-8">
                 <div className="mx-auto flex w-full flex-col justify-center space-y-6 sm:w-[350px]">
-                    <div className="flex flex-col space-y-2 text-center">
-                        <h1 className="text-2xl font-semibold tracking-tight">Welcome back</h1>
-                        <p className="text-sm text-muted-foreground">
-                            Enter your credentials to access your dashboard
-                        </p>
-                    </div>
-
-                    <div className="grid gap-6">
-                        {error && (
-                            <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md border border-destructive/20">
-                                {error}
+                    {showDeactivatedScreen ? (
+                        <>
+                            <div className="flex flex-col space-y-4 text-center">
+                                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+                                    <UserX className="h-7 w-7 text-amber-600 dark:text-amber-500" />
+                                </div>
+                                <h1 className="text-2xl font-semibold tracking-tight">Account deactivated</h1>
+                                <p className="text-sm text-muted-foreground">
+                                    Your account has been deactivated. You cannot sign in at this time.
+                                </p>
+                                <p className="text-sm text-muted-foreground">
+                                    Contact your <strong>dealership administrator</strong> or <strong>owner</strong> for further assistance. Only an admin or owner can reactivate your account.
+                                </p>
                             </div>
-                        )}
-                        <form onSubmit={onSubmit}>
+                            <div className="flex flex-col gap-2">
+                                <button
+                                    type="button"
+                                    onClick={clearDeactivatedAndError}
+                                    className="inline-flex items-center justify-center rounded-md border border-input bg-background py-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+                                >
+                                    Back to sign in
+                                </button>
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="flex flex-col space-y-2 text-center">
+                                <h1 className="text-2xl font-semibold tracking-tight">Welcome back</h1>
+                                <p className="text-sm text-muted-foreground">
+                                    Enter your credentials to access your dashboard
+                                </p>
+                            </div>
+
+                            <div className="grid gap-6">
+                                {error && (
+                                    <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md border border-destructive/20">
+                                        {error}
+                                    </div>
+                                )}
+                                <form onSubmit={onSubmit}>
                             <div className="grid gap-4">
                                 <div className="grid gap-2">
                                     <label className="text-sm font-medium leading-none" htmlFor="email">
@@ -181,6 +225,8 @@ export default function LoginPage() {
                         </Link>
                         .
                     </p>
+                        </>
+                    )}
                 </div>
             </div>
         </div>

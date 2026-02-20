@@ -123,12 +123,9 @@ async def get_team_with_stats(
         if dealership:
             dealership_name = dealership.name
     
-    # Get team members
+    # Get team members (include inactive so admin/owner can see and reactivate them)
     query = select(User).where(
-        and_(
-            User.role.in_([UserRole.SALESPERSON, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]),
-            User.is_active == True
-        )
+        User.role.in_([UserRole.SALESPERSON, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER])
     )
     if target_dealership_id:
         query = query.where(User.dealership_id == target_dealership_id)
@@ -340,6 +337,65 @@ async def update_current_user_profile(
     await db.refresh(current_user)
     
     return current_user
+
+
+@router.patch("/{user_id}", response_model=UserResponse)
+async def update_user(
+    user_id: UUID,
+    user_update: UserUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Update a user by ID.
+    Only Super Admin, Dealership Admin, or Dealership Owner can update users.
+    Only Dealership Admin or Dealership Owner can change is_active (deactivate/activate team members).
+    Users cannot deactivate themselves.
+    """
+    # Only admin or owner can update other users
+    if current_user.role not in (UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators or dealership owners can update team members",
+        )
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Dealership isolation: admin/owner can only update users in their dealership
+    if current_user.role in (UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
+        if user.dealership_id != current_user.dealership_id:
+            raise HTTPException(status_code=403, detail="Not authorized to update this user")
+
+    update_data = user_update.model_dump(exclude_unset=True)
+
+    # Only Dealership Admin or Dealership Owner can change is_active (deactivate/activate).
+    # Super Admin cannot deactivate/activate; only admins or owners of the dealership can.
+    if "is_active" in update_data:
+        if current_user.role not in (UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only dealership administrators or owners can deactivate or activate team members",
+            )
+        if current_user.id == user_id:
+            # Cannot deactivate yourself
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You cannot deactivate your own account",
+            )
+        setattr(user, "is_active", update_data["is_active"])
+        update_data.pop("is_active")
+
+    # Apply other allowed fields (name, phone, etc.) - exclude role/dealership unless super_admin if needed
+    for field, value in update_data.items():
+        if hasattr(user, field):
+            setattr(user, field, value)
+
+    await db.commit()
+    await db.refresh(user)
+    return user
 
 
 @router.get("/{user_id}", response_model=UserResponse)

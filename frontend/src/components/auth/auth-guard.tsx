@@ -72,41 +72,64 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                         router.replace('/dashboard')
                     }
                 } else {
-                    // Token invalid, try to refresh if we have refresh token
-                    const refreshToken = localStorage.getItem('refresh_token')
-                    if (refreshToken) {
-                        try {
-                            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
-                            const refreshResponse = await fetch(`${apiUrl}/auth/refresh`, {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ refresh_token: refreshToken })
-                            })
-                            
-                            if (refreshResponse.ok) {
-                                const refreshData = await refreshResponse.json()
-                                localStorage.setItem('auth_token', refreshData.access_token)
-                                if (refreshData.refresh_token) {
-                                    localStorage.setItem('refresh_token', refreshData.refresh_token)
-                                }
-                                setAuth(refreshData.user, refreshData.access_token, refreshData.refresh_token)
+                    const errorBody = await response.json().catch(() => ({}))
+                    const detail = errorBody?.detail
+                    const isDeactivated = response.status === 403 && (detail === "account_deactivated" || detail === "User account is deactivated")
+
+                    // Token invalid, try to refresh if we have refresh token (unless account is deactivated)
+                    if (!isDeactivated) {
+                        const refreshToken = localStorage.getItem('refresh_token')
+                        if (refreshToken) {
+                            try {
+                                const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
+                                const refreshResponse = await fetch(`${apiUrl}/auth/refresh`, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ refresh_token: refreshToken })
+                                })
                                 
-                                // Check if user must change password
-                                if (refreshData.user?.must_change_password && !isChangePasswordPath) {
-                                    router.replace('/change-password?required=true')
+                                if (refreshResponse.ok) {
+                                    const refreshData = await refreshResponse.json()
+                                    localStorage.setItem('auth_token', refreshData.access_token)
+                                    if (refreshData.refresh_token) {
+                                        localStorage.setItem('refresh_token', refreshData.refresh_token)
+                                    }
+                                    setAuth(refreshData.user, refreshData.access_token, refreshData.refresh_token)
+                                    
+                                    // Check if user must change password
+                                    if (refreshData.user?.must_change_password && !isChangePasswordPath) {
+                                        router.replace('/change-password?required=true')
+                                        setIsInitialized(true)
+                                        return
+                                    }
+                                    
+                                    if (isPublicPath) {
+                                        router.replace('/dashboard')
+                                    }
                                     setIsInitialized(true)
                                     return
                                 }
-                                
-                                if (isPublicPath) {
-                                    router.replace('/dashboard')
+                                const refreshErrorBody = await refreshResponse.json().catch(() => ({}))
+                                const refreshDetail = refreshErrorBody?.detail
+                                if (refreshResponse.status === 403 && (refreshDetail === "account_deactivated" || refreshDetail === "User account is deactivated")) {
+                                    localStorage.removeItem('auth_token')
+                                    localStorage.removeItem('refresh_token')
+                                    logout()
+                                    router.replace('/login?deactivated=1')
+                                    setIsInitialized(true)
+                                    return
                                 }
-                                setIsInitialized(true)
-                                return
+                            } catch (refreshError) {
+                                console.error("Token refresh failed:", refreshError)
                             }
-                        } catch (refreshError) {
-                            console.error("Token refresh failed:", refreshError)
                         }
+                    } else {
+                        localStorage.removeItem('auth_token')
+                        localStorage.removeItem('refresh_token')
+                        logout()
+                        router.replace('/login?deactivated=1')
+                        setIsInitialized(true)
+                        return
                     }
                     
                     // Refresh failed or no refresh token - clear and redirect

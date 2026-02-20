@@ -8,6 +8,8 @@ export interface VoiceConfig {
   phone_number: string | null;
   recording_enabled: boolean;
   azure_storage_configured: boolean;
+  /** When voice_enabled is false, list of env var names to set in backend .env */
+  missing_credentials?: string[] | null;
 }
 
 export interface VoiceToken {
@@ -59,6 +61,18 @@ export interface CallLogListResponse {
 export interface RecordingUrlResponse {
   recording_url: string;
   expires_in: number | null;
+}
+
+export interface UpdateLeadDetailsRequest {
+  first_name: string;
+  last_name: string;
+  email?: string;
+}
+
+export interface UpdateLeadDetailsResponse {
+  lead_id: string;
+  customer_id: string;
+  message: string;
 }
 
 class VoiceService {
@@ -119,6 +133,20 @@ class VoiceService {
    */
   async getRecordingUrl(callId: string): Promise<RecordingUrlResponse> {
     const response = await apiClient.get<RecordingUrlResponse>(`/voice/calls/${callId}/recording-url`);
+    return response.data;
+  }
+
+  /**
+   * Update lead details after call with unknown caller
+   */
+  async updateLeadDetails(
+    callId: string,
+    data: UpdateLeadDetailsRequest
+  ): Promise<UpdateLeadDetailsResponse> {
+    const response = await apiClient.post<UpdateLeadDetailsResponse>(
+      `/voice/calls/${callId}/update-lead-details`,
+      data
+    );
     return response.data;
   }
 }

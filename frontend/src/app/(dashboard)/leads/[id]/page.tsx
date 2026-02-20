@@ -4600,10 +4600,10 @@ export default function LeadDetailsPage() {
                         <DialogHeader>
                             <DialogTitle className="flex items-center gap-2">
                                 <Phone className="h-5 w-5 text-primary" />
-                                Call &amp; Text Coming Soon
+                                Call &amp; Text
                             </DialogTitle>
                             <DialogDescription>
-                                In-app calling and SMS are being set up. You can still contact this lead using your own phone.
+                                In-app calling and call logs are available when voice is configured in Integrations. Until then, use the number below to call or text from your phone.
                             </DialogDescription>
                         </DialogHeader>
                         <div className="space-y-4 py-2">

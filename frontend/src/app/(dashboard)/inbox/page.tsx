@@ -336,8 +336,9 @@ export default function UnifiedInboxPage() {
             ) : activeTab === "calls" && !voiceConfig?.voice_enabled ? (
               <ComingSoonMessage
                 icon={<Phone className="h-10 w-10" />}
-                title="Voice Calling Coming Soon"
-                description="In-app calling is being configured. You can still call leads from your phone."
+                title="Voice calling not configured"
+                description="Call logs and in-app calling need Twilio voice configured in the backend .env. Ask your administrator to add the required variables."
+                missingCredentials={voiceConfig?.missing_credentials}
               />
             ) : activeTab === "sms" && !smsConfig?.sms_enabled ? (
               <ComingSoonMessage
@@ -628,14 +629,16 @@ function EmailDetail({ email }: { email: Email }) {
 }
 
 // Coming Soon Message Component
-function ComingSoonMessage({ 
-  icon, 
-  title, 
-  description 
-}: { 
-  icon: React.ReactNode; 
-  title: string; 
+function ComingSoonMessage({
+  icon,
+  title,
+  description,
+  missingCredentials,
+}: {
+  icon: React.ReactNode;
+  title: string;
   description: string;
+  missingCredentials?: string[] | null;
 }) {
   return (
     <div className="flex flex-col items-center justify-center h-full text-center p-6">
@@ -646,7 +649,17 @@ function ComingSoonMessage({
         <Clock className="h-4 w-4 text-muted-foreground" />
         <h3 className="font-semibold">{title}</h3>
       </div>
-      <p className="text-sm text-muted-foreground max-w-[250px]">{description}</p>
+      <p className="text-sm text-muted-foreground max-w-[280px]">{description}</p>
+      {missingCredentials && missingCredentials.length > 0 && (
+        <div className="mt-3 text-left max-w-[280px]">
+          <p className="text-xs font-medium text-muted-foreground mb-1">Missing in backend .env:</p>
+          <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
+            {missingCredentials.map((name) => (
+              <li key={name}>{name}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

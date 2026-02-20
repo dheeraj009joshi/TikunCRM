@@ -188,6 +188,55 @@ export interface ActivitiesOverTimeResponse {
     series: ActivitiesOverTimeItem[];
 }
 
+// Daily Activity Tracking Types
+export interface DailyActivityItem {
+    id: string;
+    type: string;
+    user_id?: string;
+    user_name?: string;
+    lead_id?: string;
+    lead_name?: string;
+    description: string;
+    meta_data?: Record<string, unknown>;
+    created_at: string;
+}
+
+export interface SalespersonDailySummary {
+    user_id: string;
+    user_name: string;
+    user_email: string;
+    notes_count: number;
+    calls_count: number;
+    call_duration_total: number;
+    follow_ups_completed: number;
+    follow_ups_scheduled: number;
+    appointments_completed: number;
+    appointments_scheduled: number;
+    emails_sent: number;
+    leads_worked: number;
+    activities: DailyActivityItem[];
+}
+
+export interface DailyActivityResponse {
+    date_from: string;
+    date_to: string;
+    dealership_id?: string;
+    total_activities: number;
+    total_notes: number;
+    total_calls: number;
+    total_follow_ups_completed: number;
+    total_appointments: number;
+    salespersons: SalespersonDailySummary[];
+}
+
+export interface DailyActivityFilters {
+    date_from?: string;
+    date_to?: string;
+    dealership_id?: string;
+    user_id?: string;
+    activity_types?: string;
+}
+
 export const ReportsService = {
     /**
      * Get pending tasks for a salesperson
@@ -258,6 +307,15 @@ export const ReportsService = {
 
     async getActivitiesOverTime(filters?: AnalyticsFilters): Promise<ActivitiesOverTimeResponse> {
         const response = await apiClient.get("/reports/analytics/activities-over-time", { params: filters });
+        return response.data;
+    },
+
+    /**
+     * Get detailed daily activities grouped by salesperson.
+     * For admin oversight of daily salesperson work.
+     */
+    async getDailyActivities(filters?: DailyActivityFilters): Promise<DailyActivityResponse> {
+        const response = await apiClient.get("/reports/daily-activities", { params: filters });
         return response.data;
     },
 };

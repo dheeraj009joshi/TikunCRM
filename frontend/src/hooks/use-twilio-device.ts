@@ -5,6 +5,14 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { twilioVoiceManager, DeviceState, TwilioCall, IncomingCallInfo } from "@/lib/twilio-voice";
 import { voiceService, VoiceConfig } from "@/services/voice-service";
 import { useToast } from "./use-toast";
+import { useWebSocketEvent } from "./use-websocket";
+
+export interface LeadDetailsPrompt {
+  callLogId: string;
+  leadId: string | null;
+  phoneNumber: string;
+  durationSeconds?: number;
+}
 
 export interface UseTwilioDeviceReturn {
   // State
@@ -16,6 +24,7 @@ export interface UseTwilioDeviceReturn {
   callDuration: number;
   currentCallInfo: CallInfo | null;
   incomingCall: IncomingCallInfo | null;
+  pendingLeadDetails: LeadDetailsPrompt | null;
   
   // Actions
   initialize: () => Promise<void>;
@@ -25,6 +34,7 @@ export interface UseTwilioDeviceReturn {
   hangup: () => void;
   toggleMute: () => void;
   sendDigits: (digits: string) => void;
+  clearPendingLeadDetails: () => void;
 }
 
 interface CallInfo {
@@ -47,9 +57,32 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   const [callDuration, setCallDuration] = useState(0);
   const [currentCallInfo, setCurrentCallInfo] = useState<CallInfo | null>(null);
   const [incomingCall, setIncomingCall] = useState<IncomingCallInfo | null>(null);
+  const [pendingLeadDetails, setPendingLeadDetails] = useState<LeadDetailsPrompt | null>(null);
   
   // Refs
   const durationInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Listen for WebSocket event when unknown caller needs lead details
+  useWebSocketEvent("call:needs_lead_details", (payload: {
+    call_log_id: string;
+    lead_id: string | null;
+    phone_number: string;
+  }) => {
+    setPendingLeadDetails({
+      callLogId: payload.call_log_id,
+      leadId: payload.lead_id,
+      phoneNumber: payload.phone_number,
+    });
+    toast({
+      title: "New Contact",
+      description: "Add details for the caller you just spoke with",
+    });
+  });
+
+  // Clear pending lead details
+  const clearPendingLeadDetails = useCallback(() => {
+    setPendingLeadDetails(null);
+  }, []);
 
   /**
    * Start call duration timer
@@ -288,6 +321,7 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     callDuration,
     currentCallInfo,
     incomingCall,
+    pendingLeadDetails,
     initialize,
     makeCall,
     acceptCall,
@@ -295,5 +329,6 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     hangup,
     toggleMute,
     sendDigits,
+    clearPendingLeadDetails,
   };
 }

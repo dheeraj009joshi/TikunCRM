@@ -44,6 +44,16 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
     Select,
     SelectContent,
     SelectItem,
@@ -85,6 +95,14 @@ export default function TeamPage() {
     const [notifyDialogOpen, setNotifyDialogOpen] = React.useState(false)
     const [selectedUserId, setSelectedUserId] = React.useState<string | null>(null)
     const [selectedUserName, setSelectedUserName] = React.useState<string>("")
+    // Deactivate/activate confirmation (only admin or owner can deactivate)
+    const [toggleStatusConfirm, setToggleStatusConfirm] = React.useState<{
+        userId: string
+        userName: string
+        isActive: boolean
+    } | null>(null)
+    const [isTogglingStatus, setIsTogglingStatus] = React.useState(false)
+    const [togglingUserId, setTogglingUserId] = React.useState<string | null>(null)
 
     const fetchTeam = React.useCallback(async () => {
         try {
@@ -144,13 +162,36 @@ export default function TeamPage() {
         }
     }
 
+    const handleToggleStatusClick = (member: UserWithStats) => {
+        if (member.is_active) {
+            setToggleStatusConfirm({
+                userId: member.id,
+                userName: `${member.first_name} ${member.last_name}`,
+                isActive: true,
+            })
+        } else {
+            handleToggleStatus(member.id, member.is_active)
+        }
+    }
+
     const handleToggleStatus = async (userId: string, currentStatus: boolean) => {
         try {
+            setIsTogglingStatus(true)
+            setTogglingUserId(userId)
             await TeamService.toggleUserStatus(userId, !currentStatus)
-            fetchTeam()
+            setToggleStatusConfirm(null)
+            await fetchTeam()
         } catch (error) {
             console.error("Failed to toggle status:", error)
+        } finally {
+            setIsTogglingStatus(false)
+            setTogglingUserId(null)
         }
+    }
+
+    const handleConfirmDeactivate = () => {
+        if (!toggleStatusConfirm) return
+        handleToggleStatus(toggleStatusConfirm.userId, toggleStatusConfirm.isActive)
     }
 
     // Calculate team stats
@@ -355,14 +396,21 @@ export default function TeamPage() {
                                         </span>
                                     </TableCell>
                                     <TableCell>
-                                        <Badge variant={member.is_active ? "interested" : "not_interested"}>
-                                            {member.is_active ? "Active" : "Inactive"}
-                                        </Badge>
+                                        {togglingUserId === member.id ? (
+                                            <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                Updating...
+                                            </span>
+                                        ) : (
+                                            <Badge variant={member.is_active ? "interested" : "not_interested"}>
+                                                {member.is_active ? "Active" : "Inactive"}
+                                            </Badge>
+                                        )}
                                     </TableCell>
                                     <TableCell>
                                         <DropdownMenu>
                                             <DropdownMenuTrigger asChild>
-                                                <Button variant="ghost" size="icon">
+                                                <Button variant="ghost" size="icon" disabled={togglingUserId === member.id}>
                                                     <MoreVertical className="h-4 w-4" />
                                                 </Button>
                                             </DropdownMenuTrigger>
@@ -401,23 +449,32 @@ export default function TeamPage() {
                                                     <Mail className="mr-2 h-4 w-4" />
                                                     Send Email
                                                 </DropdownMenuItem>
-                                                <DropdownMenuSeparator />
-                                                <DropdownMenuItem 
-                                                    onClick={() => handleToggleStatus(member.id, member.is_active)}
-                                                    className={member.is_active ? "text-rose-600" : "text-emerald-600"}
-                                                >
-                                                    {member.is_active ? (
-                                                        <>
-                                                            <XCircle className="mr-2 h-4 w-4" />
-                                                            Deactivate
-                                                        </>
-                                                    ) : (
-                                                        <>
-                                                            <CheckCircle className="mr-2 h-4 w-4" />
-                                                            Activate
-                                                        </>
-                                                    )}
-                                                </DropdownMenuItem>
+                                                {/* Only dealership admin or owner can deactivate/activate team members; cannot deactivate yourself */}
+                                                {(isDealershipAdmin || isDealershipOwner) && (
+                                                    <>
+                                                        <DropdownMenuSeparator />
+                                                        <DropdownMenuItem 
+                                                            onClick={() => user?.id !== member.id && handleToggleStatusClick(member)}
+                                                            disabled={user?.id === member.id}
+                                                            className={cn(
+                                                                member.is_active ? "text-rose-600" : "text-emerald-600",
+                                                                user?.id === member.id && "opacity-50 cursor-not-allowed"
+                                                            )}
+                                                        >
+                                                            {member.is_active ? (
+                                                                <>
+                                                                    <XCircle className="mr-2 h-4 w-4" />
+                                                                    Deactivate
+                                                                </>
+                                                            ) : (
+                                                                <>
+                                                                    <CheckCircle className="mr-2 h-4 w-4" />
+                                                                    Activate
+                                                                </>
+                                                            )}
+                                                        </DropdownMenuItem>
+                                                    </>
+                                                )}
                                             </DropdownMenuContent>
                                         </DropdownMenu>
                                     </TableCell>
@@ -573,6 +630,39 @@ export default function TeamPage() {
                     userName={selectedUserName}
                 />
             )}
+
+            {/* Deactivate team member confirmation (admin/owner only) */}
+            <AlertDialog open={!!toggleStatusConfirm} onOpenChange={(open) => !open && setToggleStatusConfirm(null)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Deactivate team member?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            {toggleStatusConfirm && (
+                                <>
+                                    <strong>{toggleStatusConfirm.userName}</strong> will be deactivated and will no longer be able to sign in. They will see a message to contact an administrator or owner to reactivate their account. You can reactivate them anytime from this page.
+                                </>
+                            )}
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={isTogglingStatus}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={handleConfirmDeactivate}
+                            disabled={isTogglingStatus}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                            {isTogglingStatus ? (
+                                <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Deactivating...
+                                </>
+                            ) : (
+                                "Deactivate"
+                            )}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     )
 }

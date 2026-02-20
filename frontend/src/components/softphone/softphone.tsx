@@ -18,6 +18,9 @@ import { useCallLeadOptional } from "@/contexts/call-lead-context";
 import { DialPad } from "./dial-pad";
 import { CallControls } from "./call-controls";
 import { IncomingCallModal } from "./incoming-call-modal";
+import { LeadDetailsModal } from "./lead-details-modal";
+import { voiceService } from "@/services/voice-service";
+import { useToast } from "@/hooks/use-toast";
 
 interface SoftphoneProps {
   className?: string;
@@ -37,13 +40,17 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
     callDuration,
     currentCallInfo,
     incomingCall,
+    pendingLeadDetails,
     makeCall,
     acceptCall,
     rejectCall,
     hangup,
     toggleMute,
     sendDigits,
+    clearPendingLeadDetails,
   } = useTwilioDevice();
+  
+  const { toast } = useToast();
 
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -118,6 +125,28 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
     }
   }, [isOnCall]);
 
+  // Handle saving lead details for unknown caller
+  const handleSaveLeadDetails = useCallback(async (data: {
+    firstName: string;
+    lastName: string;
+    email?: string;
+  }) => {
+    if (!pendingLeadDetails) return;
+    
+    await voiceService.updateLeadDetails(pendingLeadDetails.callLogId, {
+      first_name: data.firstName,
+      last_name: data.lastName,
+      email: data.email,
+    });
+    
+    toast({
+      title: "Lead Saved",
+      description: `${data.firstName} ${data.lastName} has been added as a lead`,
+    });
+    
+    clearPendingLeadDetails();
+  }, [pendingLeadDetails, toast, clearPendingLeadDetails]);
+
   // If not enabled, show "Coming Soon" message
   if (!isEnabled) {
     if (asButton) {
@@ -189,15 +218,22 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
           onAccept={acceptCall}
           onReject={rejectCall}
         />
+
+        <LeadDetailsModal
+          info={pendingLeadDetails}
+          onSave={handleSaveLeadDetails}
+          onSkip={clearPendingLeadDetails}
+        />
       </>
     );
   }
 
-  // Floating softphone widget
+  // Floating softphone widget – only show FAB when there's a lead to call or we're on a call (not on every page forever)
+  const showFloatingButton = !isOpen && (!!leadPhone || !!leadId || isOnCall);
   return (
     <>
-      {/* Floating button when minimized or closed */}
-      {!isOpen && (
+      {/* Floating button when minimized or closed – only when lead context or on call */}
+      {showFloatingButton && (
         <Button
           className={cn(
             "fixed bottom-4 right-4 h-14 w-14 rounded-full shadow-lg z-50",
@@ -317,6 +353,13 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
         call={incomingCall}
         onAccept={acceptCall}
         onReject={rejectCall}
+      />
+
+      {/* Lead details modal for unknown callers */}
+      <LeadDetailsModal
+        info={pendingLeadDetails}
+        onSave={handleSaveLeadDetails}
+        onSkip={clearPendingLeadDetails}
       />
     </>
   );
