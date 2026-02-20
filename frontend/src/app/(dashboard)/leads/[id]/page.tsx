@@ -7,6 +7,7 @@ import {
     Mail,
     Calendar,
     CalendarClock,
+    CalendarCheck,
     Clock,
     ChevronLeft,
     MessageSquare,
@@ -18,6 +19,7 @@ import {
     CheckCircle,
     XCircle,
     AlertCircle,
+    AlertTriangle,
     UserPlus,
     PhoneCall,
     RefreshCw,
@@ -40,7 +42,8 @@ import {
     ChevronDown,
     DollarSign,
     UserMinus,
-    Plus
+    Plus,
+    History
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -3334,8 +3337,11 @@ export default function LeadDetailsPage() {
                                     <div className="space-y-4">
                                         {appointmentsToday.length > 0 && (
                                             <Collapsible defaultOpen={true}>
-                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
-                                                    <h3 className="text-sm font-semibold text-foreground">Today ({appointmentsToday.length})</h3>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-2 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <div className="flex items-center gap-2">
+                                                        <CalendarCheck className="h-4 w-4 text-green-600" />
+                                                        <h3 className="text-sm font-semibold text-foreground">Today ({appointmentsToday.length})</h3>
+                                                    </div>
                                                     <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
                                                 </CollapsibleTrigger>
                                                 <CollapsibleContent>
@@ -3430,8 +3436,11 @@ export default function LeadDetailsPage() {
                                         )}
                                         {appointmentsUpcoming.length > 0 && (
                                             <Collapsible defaultOpen={true}>
-                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
-                                                    <h3 className="text-sm font-semibold text-foreground">Upcoming ({appointmentsUpcoming.length})</h3>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-2 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <div className="flex items-center gap-2">
+                                                        <CalendarClock className="h-4 w-4 text-blue-600" />
+                                                        <h3 className="text-sm font-semibold text-foreground">Upcoming ({appointmentsUpcoming.length})</h3>
+                                                    </div>
                                                     <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
                                                 </CollapsibleTrigger>
                                                 <CollapsibleContent>
@@ -3526,8 +3535,11 @@ export default function LeadDetailsPage() {
                                         )}
                                         {appointmentsOverdue.length > 0 && (
                                             <Collapsible defaultOpen={true}>
-                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
-                                                    <h3 className="text-sm font-semibold text-amber-600">Overdue ({appointmentsOverdue.length})</h3>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-2 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <div className="flex items-center gap-2">
+                                                        <AlertTriangle className="h-4 w-4 text-amber-600" />
+                                                        <h3 className="text-sm font-semibold text-amber-600">Overdue ({appointmentsOverdue.length})</h3>
+                                                    </div>
                                                     <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
                                                 </CollapsibleTrigger>
                                                 <CollapsibleContent>
@@ -3619,9 +3631,12 @@ export default function LeadDetailsPage() {
                                             </Collapsible>
                                         )}
                                         {appointmentsPast.length > 0 && (
-                                            <Collapsible defaultOpen={true}>
-                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
-                                                    <h3 className="text-sm font-semibold text-foreground">Past / Completed ({appointmentsPast.length})</h3>
+                                            <Collapsible defaultOpen={false}>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-2 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <div className="flex items-center gap-2">
+                                                        <History className="h-4 w-4 text-muted-foreground" />
+                                                        <h3 className="text-sm font-semibold text-muted-foreground">History ({appointmentsPast.length})</h3>
+                                                    </div>
                                                     <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
                                                 </CollapsibleTrigger>
                                                 <CollapsibleContent>
@@ -3742,8 +3757,11 @@ export default function LeadDetailsPage() {
                                     <div className="space-y-4">
                                         {followUpsToday.length > 0 && (
                                             <Collapsible defaultOpen={true}>
-                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
-                                                    <h3 className="text-sm font-semibold text-foreground">Today ({followUpsToday.length})</h3>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-2 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <div className="flex items-center gap-2">
+                                                        <CalendarCheck className="h-4 w-4 text-green-600" />
+                                                        <h3 className="text-sm font-semibold text-foreground">Today ({followUpsToday.length})</h3>
+                                                    </div>
                                                     <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
                                                 </CollapsibleTrigger>
                                                 <CollapsibleContent>
@@ -3789,8 +3807,11 @@ export default function LeadDetailsPage() {
                                         )}
                                         {followUpsUpcoming.length > 0 && (
                                             <Collapsible defaultOpen={true}>
-                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
-                                                    <h3 className="text-sm font-semibold text-foreground">Upcoming ({followUpsUpcoming.length})</h3>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-2 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <div className="flex items-center gap-2">
+                                                        <CalendarClock className="h-4 w-4 text-blue-600" />
+                                                        <h3 className="text-sm font-semibold text-foreground">Upcoming ({followUpsUpcoming.length})</h3>
+                                                    </div>
                                                     <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
                                                 </CollapsibleTrigger>
                                                 <CollapsibleContent>
@@ -3836,8 +3857,11 @@ export default function LeadDetailsPage() {
                                         )}
                                         {followUpsOverdue.length > 0 && (
                                             <Collapsible defaultOpen={true}>
-                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
-                                                    <h3 className="text-sm font-semibold text-amber-600">Overdue ({followUpsOverdue.length})</h3>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-2 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <div className="flex items-center gap-2">
+                                                        <AlertTriangle className="h-4 w-4 text-amber-600" />
+                                                        <h3 className="text-sm font-semibold text-amber-600">Overdue ({followUpsOverdue.length})</h3>
+                                                    </div>
                                                     <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
                                                 </CollapsibleTrigger>
                                                 <CollapsibleContent>
@@ -3880,9 +3904,12 @@ export default function LeadDetailsPage() {
                                             </Collapsible>
                                         )}
                                         {followUpsPast.length > 0 && (
-                                            <Collapsible defaultOpen={true}>
-                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-1 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
-                                                    <h3 className="text-sm font-semibold text-foreground">Past / Completed ({followUpsPast.length})</h3>
+                                            <Collapsible defaultOpen={false}>
+                                                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 rounded-md py-2 px-2 hover:bg-muted/50 transition-colors [&[data-state=open]_.chevron]:rotate-180">
+                                                    <div className="flex items-center gap-2">
+                                                        <History className="h-4 w-4 text-muted-foreground" />
+                                                        <h3 className="text-sm font-semibold text-muted-foreground">History ({followUpsPast.length})</h3>
+                                                    </div>
                                                     <ChevronDown className="chevron h-4 w-4 shrink-0 transition-transform" />
                                                 </CollapsibleTrigger>
                                                 <CollapsibleContent>
