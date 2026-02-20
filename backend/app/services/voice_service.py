@@ -269,9 +269,17 @@ class VoiceService:
     ) -> bool:
         """
         Auto-assign lead to user who answered if not already assigned.
+        Only salespersons can be auto-assigned leads - admins and owners are excluded.
         Returns True if assignment was made.
         """
         if not call_log.lead_id:
+            return False
+        
+        # Only salespersons can be auto-assigned leads via call answer
+        if answered_by_user.role != UserRole.SALESPERSON:
+            logger.debug(
+                f"Skipping auto-assign for {answered_by_user.id}: role {answered_by_user.role} is not SALESPERSON"
+            )
             return False
         
         result = await self.db.execute(
@@ -747,7 +755,9 @@ async def upload_recording_to_azure_background(
             
             # Check if Azure is configured
             if not azure_storage_service.is_configured:
-                logger.warning("Azure storage not configured, keeping Twilio URL")
+                logger.warning(
+                    "Azure storage not configured (set AZURE_STORAGE_CONNECTION_STRING), keeping Twilio URL for playback"
+                )
                 call_log.recording_url = f"{recording_url}.wav"
                 call_log.recording_sid = recording_sid
                 call_log.recording_duration_seconds = recording_duration
@@ -782,7 +792,9 @@ async def upload_recording_to_azure_background(
                     logger.warning(f"Azure upload failed, using Twilio URL for {call_sid}")
                 
             except Exception as upload_err:
-                logger.error(f"Recording upload error for {call_sid}: {upload_err}")
+                logger.error(
+                    f"Recording upload error for {call_sid}: {upload_err}\n{traceback.format_exc()}"
+                )
                 call_log.recording_url = f"{recording_url}.wav"
                 call_log.recording_upload_status = "failed"
             

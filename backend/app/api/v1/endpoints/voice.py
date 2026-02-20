@@ -569,12 +569,13 @@ async def get_recording_url(
             detail="Call not found"
         )
     
-    # Check access
-    if current_user.role == UserRole.SALESPERSON and call.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
+    # Check access: salesperson can access if they are call owner or the one who answered
+    if current_user.role == UserRole.SALESPERSON:
+        if call.user_id != current_user.id and call.answered_by != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
     
     if not call.recording_url:
         raise HTTPException(
@@ -618,8 +619,9 @@ async def stream_recording(
     call = result.scalar_one_or_none()
     if not call:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
-    if current_user.role == UserRole.SALESPERSON and call.user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    if current_user.role == UserRole.SALESPERSON:
+        if call.user_id != current_user.id and call.answered_by != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     if not call.recording_url:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No recording available")
 
@@ -957,7 +959,7 @@ async def handle_recording_complete(
     except (TypeError, ValueError):
         duration = 0
     
-    # Mark recording as pending upload in the call_log
+    # Store Twilio recording URL immediately so playback works before Azure upload completes
     result = await db.execute(
         select(CallLog).where(CallLog.twilio_call_sid == call_sid)
     )
@@ -965,6 +967,9 @@ async def handle_recording_complete(
     
     if call_log:
         call_log.recording_upload_status = "pending"
+        call_log.recording_url = f"{recording_url}.wav" if recording_url else None
+        call_log.recording_sid = recording_sid
+        call_log.recording_duration_seconds = duration
         await db.commit()
     
     # Queue background task for downloading from Twilio and uploading to Azure

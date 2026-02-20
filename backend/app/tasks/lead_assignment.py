@@ -111,12 +111,34 @@ async def auto_assign_leads_from_activity():
                         Activity.lead_id == lead.id,
                         Activity.type.in_(assignable_activity_types),
                         Activity.user_id.isnot(None),
-                        User.role == UserRole.SALESPERSON,
+                        User.role == UserRole.SALESPERSON,  # Only salespersons can be auto-assigned
                     )
                     .order_by(Activity.created_at.asc())
                     .limit(1)
                 )
                 first_row = first_activity_result.first()
+                
+                if not first_row:
+                    # No salesperson activity found - check if there are admin activities we're skipping
+                    admin_activity_result = await session.execute(
+                        select(Activity, User)
+                        .join(User, Activity.user_id == User.id)
+                        .where(
+                            Activity.lead_id == lead.id,
+                            Activity.type.in_(assignable_activity_types),
+                            Activity.user_id.isnot(None),
+                            User.role != UserRole.SALESPERSON,  # Non-salesperson activities
+                        )
+                        .limit(1)
+                    )
+                    admin_row = admin_activity_result.first()
+                    if admin_row:
+                        _, admin_user = admin_row
+                        logger.debug(
+                            f"Lead {lead.id} has activities from non-salesperson {admin_user.email} "
+                            f"(role={admin_user.role.value}), skipping auto-assignment"
+                        )
+                    continue
                 
                 if first_row:
                     first_activity, activity_user = first_row
@@ -129,6 +151,10 @@ async def auto_assign_leads_from_activity():
                             continue
                         
                         # Auto-assign to the salesperson who performed the first activity
+                        logger.info(
+                            f"Auto-assigning lead {lead.id} to {activity_user.email} "
+                            f"(role={activity_user.role.value}) based on {first_activity.type.value} activity"
+                        )
                         lead.assigned_to = first_activity.user_id
                         if lead.dealership_id is None:
                             # Only set dealership if lead is in global pool
