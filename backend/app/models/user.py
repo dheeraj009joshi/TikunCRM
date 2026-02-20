@@ -206,6 +206,7 @@ class User(Base):
     call_logs: Mapped[List["CallLog"]] = relationship(
         "CallLog",
         back_populates="user",
+        foreign_keys="CallLog.user_id",
         lazy="noload"
     )
     

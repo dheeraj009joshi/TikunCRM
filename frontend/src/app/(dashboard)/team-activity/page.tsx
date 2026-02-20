@@ -167,7 +167,7 @@ function ActivityItem({ activity }: { activity: DailyActivityItem }) {
                     </p>
                 )}
                 <p className="text-xs text-muted-foreground mt-1">
-                    <LocalTime dateString={activity.created_at} format="h:mm a" />
+                    <LocalTime date={activity.created_at} />
                 </p>
             </div>
         </div>
