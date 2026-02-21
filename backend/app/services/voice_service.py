@@ -276,9 +276,12 @@ class VoiceService:
             return False
         
         # Only salespersons can be auto-assigned leads via call answer
-        if answered_by_user.role != UserRole.SALESPERSON:
-            logger.debug(
-                f"Skipping auto-assign for {answered_by_user.id}: role {answered_by_user.role} is not SALESPERSON"
+        # Admins, owners, and super admins should NEVER be auto-assigned leads
+        # Use both enum and string check for defense-in-depth
+        role_val = answered_by_user.role.value if hasattr(answered_by_user.role, 'value') else str(answered_by_user.role)
+        if answered_by_user.role != UserRole.SALESPERSON or role_val != "salesperson":
+            logger.warning(
+                f"BLOCKED auto-assign on call: {answered_by_user.email} has role={role_val} (raw: {answered_by_user.role!r}), only SALESPERSON can be auto-assigned"
             )
             return False
         

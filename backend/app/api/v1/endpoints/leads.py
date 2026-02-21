@@ -112,8 +112,14 @@ async def auto_assign_lead_on_activity(
         return False
     
     # Only salespersons can be auto-assigned leads on first activity
-    # Admins, owners, and super admins should not claim leads this way
-    if user.role != UserRole.SALESPERSON:
+    # Admins, owners, and super admins should NEVER be auto-assigned leads
+    # Use both enum comparison AND string comparison for defense-in-depth
+    user_role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)
+    if user.role != UserRole.SALESPERSON or user_role_value != "salesperson":
+        logger.warning(
+            f"BLOCKED inline auto-assign: {user.email} has role={user_role_value} (raw: {user.role!r}), "
+            f"only SALESPERSON can be auto-assigned"
+        )
         return False
     
     # User must have a dealership to claim a lead

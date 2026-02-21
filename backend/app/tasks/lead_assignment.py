@@ -51,7 +51,8 @@ async def auto_assign_leads_from_activity():
     Logic:
     - Find leads with no salesperson assigned (assigned_to is NULL)
     - That have at least one user-initiated activity (note, call, email, etc.)
-    - Assign to the user who performed the FIRST activity
+    - Assign to the user who performed the FIRST activity BY A SALESPERSON
+    - NEVER assign to admins, owners, or super admins
     - Also assign to that user's dealership if lead is in global pool
     
     This runs every minute as a fallback for inline auto-assignment.
@@ -59,7 +60,7 @@ async def auto_assign_leads_from_activity():
     - Leads in global pool (no dealership)
     - Leads in a dealership but no salesperson assigned
     """
-    logger.debug("Running auto-assign check...")
+    logger.info("=== AUTO-ASSIGN TASK STARTED ===")
     
     session_maker = get_assignment_session_maker()
     
@@ -96,14 +97,17 @@ async def auto_assign_leads_from_activity():
             unassigned_leads = result.scalars().all()
             
             if not unassigned_leads:
-                logger.debug("No unassigned leads with activities found")
+                logger.info("No unassigned leads with activities found - nothing to process")
                 return
             
+            logger.info(f"Found {len(unassigned_leads)} unassigned leads with activities to process")
             assigned_count = 0
+            skipped_count = 0
             
             for lead in unassigned_leads:
                 # Get the first user activity for this lead that was performed by a salesperson
                 # (admins/owners should not auto-claim leads on first activity)
+                # IMPORTANT: Use explicit string "salesperson" to avoid enum comparison issues
                 first_activity_result = await session.execute(
                     select(Activity, User)
                     .join(User, Activity.user_id == User.id)
@@ -111,7 +115,7 @@ async def auto_assign_leads_from_activity():
                         Activity.lead_id == lead.id,
                         Activity.type.in_(assignable_activity_types),
                         Activity.user_id.isnot(None),
-                        User.role == UserRole.SALESPERSON,  # Only salespersons can be auto-assigned
+                        User.role == "salesperson",  # Use string literal to avoid enum issues
                     )
                     .order_by(Activity.created_at.asc())
                     .limit(1)
@@ -127,101 +131,127 @@ async def auto_assign_leads_from_activity():
                             Activity.lead_id == lead.id,
                             Activity.type.in_(assignable_activity_types),
                             Activity.user_id.isnot(None),
-                            User.role != UserRole.SALESPERSON,  # Non-salesperson activities
+                            User.role != "salesperson",  # Use string literal
                         )
                         .limit(1)
                     )
                     admin_row = admin_activity_result.first()
                     if admin_row:
                         _, admin_user = admin_row
-                        logger.debug(
-                            f"Lead {lead.id} has activities from non-salesperson {admin_user.email} "
-                            f"(role={admin_user.role.value}), skipping auto-assignment"
+                        logger.info(
+                            f"SKIPPED Lead {lead.id}: has activities from non-salesperson {admin_user.email} "
+                            f"(role={admin_user.role.value if hasattr(admin_user.role, 'value') else admin_user.role}), "
+                            f"ONLY salespersons can be auto-assigned"
                         )
+                    skipped_count += 1
                     continue
                 
-                if first_row:
-                    first_activity, activity_user = first_row
-                    if first_activity and first_activity.user_id and activity_user:
-                        if not activity_user.dealership_id:
-                            continue
-                        # Check if lead is in a different dealership (user can't claim it)
-                        if lead.dealership_id is not None and lead.dealership_id != activity_user.dealership_id:
-                            logger.debug(f"User {activity_user.id} can't claim lead {lead.id} - belongs to different dealership")
-                            continue
+                first_activity, activity_user = first_row
+                
+                # CRITICAL DEFENSE-IN-DEPTH: Double-check role in Python
+                # This catches any case where the SQL filter might fail
+                user_role_value = activity_user.role.value if hasattr(activity_user.role, 'value') else str(activity_user.role)
+                if user_role_value != "salesperson":
+                    logger.error(
+                        f"SQL FILTER BYPASS DETECTED! Lead {lead.id} would be assigned to {activity_user.email} "
+                        f"but role is '{user_role_value}', not 'salesperson'. "
+                        f"Raw role value: {activity_user.role!r}. BLOCKING assignment."
+                    )
+                    skipped_count += 1
+                    continue
+                
+                if not first_activity or not first_activity.user_id or not activity_user:
+                    skipped_count += 1
+                    continue
+                    
+                if not activity_user.dealership_id:
+                    logger.debug(f"SKIPPED Lead {lead.id}: User {activity_user.email} has no dealership_id")
+                    skipped_count += 1
+                    continue
+                    
+                # Check if lead is in a different dealership (user can't claim it)
+                if lead.dealership_id is not None and lead.dealership_id != activity_user.dealership_id:
+                    logger.debug(f"SKIPPED Lead {lead.id}: User {activity_user.id} is in different dealership")
+                    skipped_count += 1
+                    continue
                         
-                        # Auto-assign to the salesperson who performed the first activity
-                        logger.info(
-                            f"Auto-assigning lead {lead.id} to {activity_user.email} "
-                            f"(role={activity_user.role.value}) based on {first_activity.type.value} activity"
-                        )
-                        lead.assigned_to = first_activity.user_id
-                        if lead.dealership_id is None:
-                            # Only set dealership if lead is in global pool
-                            lead.dealership_id = activity_user.dealership_id
-                        lead.last_activity_at = utc_now()
-                        
-                        # Create assignment activity
-                        activity = Activity(
-                            type=ActivityType.LEAD_ASSIGNED,
-                            description=f"Lead auto-assigned to {activity_user.first_name} {activity_user.last_name} based on first activity",
-                            user_id=first_activity.user_id,
-                            lead_id=lead.id,
-                            dealership_id=activity_user.dealership_id,
-                            meta_data={
-                                "auto_assigned": True,
-                                "reason": "first_activity",
-                                "activity_type": first_activity.type.value if hasattr(first_activity.type, 'value') else str(first_activity.type),
-                                "user_name": f"{activity_user.first_name} {activity_user.last_name}"
-                            }
-                        )
-                        session.add(activity)
-                        
-                        # Create notification for the assigned user using NotificationService
-                        notification_service = NotificationService(session)
-                        lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
-                        await notification_service.notify_lead_assigned(
-                            user_id=first_activity.user_id,
-                            lead_name=lead_name,
-                            lead_id=lead.id,
-                            assigned_by="System (auto-assignment)"
-                        )
-                        
-                        # Emit WebSocket events for real-time updates
-                        await ws_manager.send_to_user(
-                            first_activity.user_id,
-                            {
-                                "type": "lead:updated",
-                                "payload": {
-                                    "lead_id": str(lead.id),
-                                    "update_type": "assigned",
-                                    "assigned_to": str(first_activity.user_id)
-                                }
-                            }
-                        )
-                        
-                        # Refresh badges
-                        await ws_manager.send_to_user(
-                            first_activity.user_id,
-                            {"type": "badges:refresh", "payload": {}}
-                        )
+                # Auto-assign to the salesperson who performed the first activity
+                logger.info(
+                    f"AUTO-ASSIGNING lead {lead.id} to SALESPERSON {activity_user.email} "
+                    f"(role={user_role_value}, user_id={activity_user.id}) "
+                    f"based on {first_activity.type.value if hasattr(first_activity.type, 'value') else first_activity.type} activity"
+                )
+                lead.assigned_to = first_activity.user_id
+                if lead.dealership_id is None:
+                    lead.dealership_id = activity_user.dealership_id
+                lead.last_activity_at = utc_now()
+                
+                # Create assignment activity
+                activity = Activity(
+                    type=ActivityType.LEAD_ASSIGNED,
+                    description=f"Lead auto-assigned to {activity_user.first_name} {activity_user.last_name} based on first activity",
+                    user_id=first_activity.user_id,
+                    lead_id=lead.id,
+                    dealership_id=activity_user.dealership_id,
+                    meta_data={
+                        "auto_assigned": True,
+                        "reason": "first_activity",
+                        "activity_type": first_activity.type.value if hasattr(first_activity.type, 'value') else str(first_activity.type),
+                        "user_name": f"{activity_user.first_name} {activity_user.last_name}",
+                        "user_role": user_role_value
+                    }
+                )
+                session.add(activity)
+                
+                # Create notification for the assigned user using NotificationService
+                notification_service = NotificationService(session)
+                lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+                await notification_service.notify_lead_assigned(
+                    user_id=first_activity.user_id,
+                    lead_name=lead_name,
+                    lead_id=lead.id,
+                    assigned_by="System (auto-assignment)"
+                )
+                
+                # Emit WebSocket events for real-time updates
+                await ws_manager.send_to_user(
+                    first_activity.user_id,
+                    {
+                        "type": "lead:updated",
+                        "payload": {
+                            "lead_id": str(lead.id),
+                            "update_type": "assigned",
+                            "assigned_to": str(first_activity.user_id)
+                        }
+                    }
+                )
+                
+                # Refresh badges
+                await ws_manager.send_to_user(
+                    first_activity.user_id,
+                    {"type": "badges:refresh", "payload": {}}
+                )
 
-                        # Schedule outbound-call follow-ups (day 1–3, every 3 days, every Friday)
-                        try:
-                            await schedule_outbound_call_follow_ups(session, lead.id, first_activity.user_id)
-                        except Exception as e:
-                            logger.warning("Failed to schedule outbound call follow-ups for lead %s: %s", lead.id, e)
+                # Schedule outbound-call follow-ups (day 1–3, every 3 days, every Friday)
+                try:
+                    await schedule_outbound_call_follow_ups(session, lead.id, first_activity.user_id)
+                except Exception as e:
+                    logger.warning("Failed to schedule outbound call follow-ups for lead %s: %s", lead.id, e)
 
-                        assigned_count += 1
-                        logger.info(f"Auto-assigned lead {lead.id} to user {first_activity.user_id} (dealership {activity_user.dealership_id})")
+                assigned_count += 1
+                logger.info(f"Successfully auto-assigned lead {lead.id} to salesperson {activity_user.email} (dealership {activity_user.dealership_id})")
             
             if assigned_count > 0:
                 await session.commit()
-                logger.info(f"Auto-assigned {assigned_count} leads")
+            
+            logger.info(
+                f"=== AUTO-ASSIGN TASK COMPLETED === "
+                f"Processed: {len(unassigned_leads)}, Assigned: {assigned_count}, Skipped: {skipped_count}"
+            )
                 
         except Exception as e:
             await session.rollback()
-            logger.error(f"Auto-assign failed: {e}")
+            logger.error(f"Auto-assign task failed with error: {e}", exc_info=True)
 
 
 async def unassign_stale_leads():
