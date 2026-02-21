@@ -115,7 +115,7 @@ async def auto_assign_leads_from_activity():
             for lead in unassigned_leads:
                 # Get the first user activity for this lead that was performed by a salesperson
                 # (admins/owners should not auto-claim leads on first activity)
-                # IMPORTANT: Use explicit string "salesperson" to avoid enum comparison issues
+                # IMPORTANT: Use BOTH inclusion (salesperson) AND exclusion (not admin roles) for maximum safety
                 first_activity_result = await session.execute(
                     select(Activity, User)
                     .join(User, Activity.user_id == User.id)
@@ -123,7 +123,8 @@ async def auto_assign_leads_from_activity():
                         Activity.lead_id == lead.id,
                         Activity.type.in_(assignable_activity_types),
                         Activity.user_id.isnot(None),
-                        User.role == "salesperson",  # Use string literal to avoid enum issues
+                        User.role == "salesperson",  # Must be salesperson
+                        User.role.notin_(["super_admin", "dealership_admin", "dealership_owner"]),  # Explicitly exclude admins
                     )
                     .order_by(Activity.created_at.asc())
                     .limit(1)
