@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 # Configuration
 STALE_HOURS = 72  # Hours of inactivity before unassigning
 
+# Roles that must NEVER receive auto-assignment (only salespersons can)
+AUTO_ASSIGN_BLOCKED_ROLES = frozenset({
+    UserRole.SUPER_ADMIN.value,
+    UserRole.DEALERSHIP_OWNER.value,
+    UserRole.DEALERSHIP_ADMIN.value,
+})
+
 
 def get_assignment_session_maker():
     """Create a dedicated engine and session maker for assignment operations."""
@@ -60,7 +67,8 @@ async def auto_assign_leads_from_activity():
     - Leads in global pool (no dealership)
     - Leads in a dealership but no salesperson assigned
     """
-    logger.info("=== AUTO-ASSIGN TASK STARTED ===")
+    # Unique marker so server logs can confirm this code version is running (no auto-assign to admins)
+    logger.info("=== AUTO-ASSIGN TASK STARTED (salesperson-only, no admin assign) ===")
     
     session_maker = get_assignment_session_maker()
     
@@ -149,13 +157,13 @@ async def auto_assign_leads_from_activity():
                 first_activity, activity_user = first_row
                 
                 # CRITICAL DEFENSE-IN-DEPTH: Double-check role in Python
-                # This catches any case where the SQL filter might fail
+                # Never assign to admins/owners - only salespersons
                 user_role_value = activity_user.role.value if hasattr(activity_user.role, 'value') else str(activity_user.role)
-                if user_role_value != "salesperson":
+                if user_role_value != "salesperson" or user_role_value in AUTO_ASSIGN_BLOCKED_ROLES:
                     logger.error(
-                        f"SQL FILTER BYPASS DETECTED! Lead {lead.id} would be assigned to {activity_user.email} "
-                        f"but role is '{user_role_value}', not 'salesperson'. "
-                        f"Raw role value: {activity_user.role!r}. BLOCKING assignment."
+                        f"BLOCKED auto-assign: Lead {lead.id} would be assigned to {activity_user.email} "
+                        f"but role is '{user_role_value}' (blocked or not salesperson). "
+                        f"Raw: {activity_user.role!r}. Only SALESPERSON can be auto-assigned."
                     )
                     skipped_count += 1
                     continue
@@ -172,6 +180,20 @@ async def auto_assign_leads_from_activity():
                 # Check if lead is in a different dealership (user can't claim it)
                 if lead.dealership_id is not None and lead.dealership_id != activity_user.dealership_id:
                     logger.debug(f"SKIPPED Lead {lead.id}: User {activity_user.id} is in different dealership")
+                    skipped_count += 1
+                    continue
+                
+                # Final server-safe check: re-fetch user from DB and verify role (avoids stale/cached data)
+                user_recheck = await session.get(User, first_activity.user_id)
+                if not user_recheck:
+                    skipped_count += 1
+                    continue
+                recheck_role = user_recheck.role.value if hasattr(user_recheck.role, 'value') else str(user_recheck.role)
+                if recheck_role != "salesperson" or recheck_role in AUTO_ASSIGN_BLOCKED_ROLES:
+                    logger.warning(
+                        f"BLOCKED auto-assign (recheck): Lead {lead.id} user {user_recheck.email} "
+                        f"has role '{recheck_role}' on re-fetch. Only salespersons can be auto-assigned."
+                    )
                     skipped_count += 1
                     continue
                         

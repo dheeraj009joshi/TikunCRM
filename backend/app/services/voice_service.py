@@ -24,6 +24,13 @@ from app.models.activity import Activity, ActivityType
 
 logger = logging.getLogger(__name__)
 
+# Roles that must NEVER receive auto-assignment on call answer (only salespersons can)
+_AUTO_ASSIGN_BLOCKED_ROLES = frozenset({
+    UserRole.SUPER_ADMIN.value,
+    UserRole.DEALERSHIP_OWNER.value,
+    UserRole.DEALERSHIP_ADMIN.value,
+})
+
 
 class VoiceService:
     """
@@ -277,9 +284,12 @@ class VoiceService:
         
         # Only salespersons can be auto-assigned leads via call answer
         # Admins, owners, and super admins should NEVER be auto-assigned leads
-        # Use both enum and string check for defense-in-depth
         role_val = answered_by_user.role.value if hasattr(answered_by_user.role, 'value') else str(answered_by_user.role)
-        if answered_by_user.role != UserRole.SALESPERSON or role_val != "salesperson":
+        if (
+            answered_by_user.role != UserRole.SALESPERSON
+            or role_val != "salesperson"
+            or role_val in _AUTO_ASSIGN_BLOCKED_ROLES
+        ):
             logger.warning(
                 f"BLOCKED auto-assign on call: {answered_by_user.email} has role={role_val} (raw: {answered_by_user.role!r}), only SALESPERSON can be auto-assigned"
             )
