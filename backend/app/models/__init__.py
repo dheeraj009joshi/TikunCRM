@@ -25,6 +25,8 @@ from app.models.showroom_visit import ShowroomVisit, ShowroomOutcome
 from app.models.stips_category import StipsCategory
 from app.models.customer_stip_document import CustomerStipDocument
 from app.models.lead_stip_document import LeadStipDocument
+from app.models.lead_sync_source import LeadSyncSource, SyncSourceType
+from app.models.campaign_mapping import CampaignMapping, MatchType
 
 __all__ = [
     "Customer",
@@ -67,4 +69,8 @@ __all__ = [
     "StipsCategory",
     "CustomerStipDocument",
     "LeadStipDocument",
+    "LeadSyncSource",
+    "SyncSourceType",
+    "CampaignMapping",
+    "MatchType",
 ]

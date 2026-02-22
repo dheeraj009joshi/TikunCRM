@@ -12,7 +12,10 @@ import {
     ChevronRight,
     FileText,
     Send,
-    FolderOpen
+    FolderOpen,
+    Database,
+    Tag,
+    GitBranch,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +27,7 @@ interface SettingSection {
     href: string
     icon: React.ComponentType<{ className?: string }>
     adminOnly?: boolean
+    superAdminOnly?: boolean
     highlight?: boolean
 }
 
@@ -67,6 +71,27 @@ const settingsSections: SettingSection[] = [
         adminOnly: true,
     },
     {
+        title: "Lead Stages",
+        description: "Configure pipeline stages for leads",
+        href: "/settings/lead-stages",
+        icon: GitBranch,
+        adminOnly: true,
+    },
+    {
+        title: "Campaign Display Names",
+        description: "Customize how campaign names are displayed for your leads",
+        href: "/settings/campaign-names",
+        icon: Tag,
+        adminOnly: true,
+    },
+    {
+        title: "Lead Sync Sources",
+        description: "Configure Google Sheets and other lead import sources",
+        href: "/settings/sync-sources",
+        icon: Database,
+        superAdminOnly: true,
+    },
+    {
         title: "Stips Categories",
         description: "Configure document categories (Personal, Finance, etc.) for lead Stips",
         href: "/settings/stips-categories",
@@ -86,6 +111,7 @@ export default function SettingsPage() {
     const isAdmin = isSuperAdmin || isDealershipLevel
     
     const filteredSections = settingsSections.filter(section => {
+        if (section.superAdminOnly && !isSuperAdmin) return false
         if (section.adminOnly && !isAdmin) return false
         return true
     })

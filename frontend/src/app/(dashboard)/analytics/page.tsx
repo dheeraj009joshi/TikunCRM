@@ -100,12 +100,25 @@ function buildFilters(
     stageId: string | null
 ): AnalyticsFilters {
     const params: AnalyticsFilters = {}
+    
+    // Helper to convert local date string to UTC ISO string
+    const toLocalStartOfDay = (dateStr: string): string => {
+        const d = new Date(dateStr)
+        d.setHours(0, 0, 0, 0)
+        return d.toISOString()
+    }
+    const toLocalEndOfDay = (dateStr: string): string => {
+        const d = new Date(dateStr)
+        d.setHours(23, 59, 59, 999)
+        return d.toISOString()
+    }
+    
     if (dateMode === "single" && singleDate) {
-        params.date_from = `${singleDate}T00:00:00.000Z`
-        params.date_to = `${singleDate}T23:59:59.999Z`
+        params.date_from = toLocalStartOfDay(singleDate)
+        params.date_to = toLocalEndOfDay(singleDate)
     } else {
-        if (dateFrom) params.date_from = `${dateFrom}T00:00:00.000Z`
-        if (dateTo) params.date_to = `${dateTo}T23:59:59.999Z`
+        if (dateFrom) params.date_from = toLocalStartOfDay(dateFrom)
+        if (dateTo) params.date_to = toLocalEndOfDay(dateTo)
     }
     if (dealershipId) params.dealership_id = dealershipId
     if (assignedTo) params.assigned_to = assignedTo

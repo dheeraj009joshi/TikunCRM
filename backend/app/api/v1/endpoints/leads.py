@@ -1,5 +1,6 @@
 """
 Lead Endpoints
+CODE VERSION: 2024-01-28-v2 (admin-auto-assign-blocked)
 """
 import logging
 from datetime import datetime
@@ -7,6 +8,9 @@ from typing import Any, List, Optional
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
+
+# Log on module import to confirm code version
+logger.info("=== LEADS.PY LOADED: VERSION 2024-01-28-v2 (admin auto-assign blocked with enhanced logging) ===")
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse, Response
@@ -114,26 +118,48 @@ async def auto_assign_lead_on_activity(
     
     Returns True if auto-assignment occurred, False otherwise.
     """
+    # UNIQUE MARKER v2: Log every call to track auto-assignment attempts
+    logger.info(
+        f"[INLINE-AUTO-ASSIGN-v2] Called: user={user.email}, role={user.role!r}, "
+        f"lead={lead.id}, assigned_to={lead.assigned_to}, activity={activity_type}"
+    )
+    
     # Lead already has a salesperson assigned - no auto-assign needed
     if lead.assigned_to is not None:
+        logger.info(f"[INLINE-AUTO-ASSIGN-v2] SKIP: lead {lead.id} already assigned to {lead.assigned_to}")
         return False
     
     # Only salespersons can be auto-assigned leads on first activity
     # Admins, owners, and super admins should NEVER be auto-assigned leads
     user_role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)
-    if (
-        user.role != UserRole.SALESPERSON
-        or user_role_value != "salesperson"
-        or user_role_value in _AUTO_ASSIGN_BLOCKED_ROLES
-    ):
+    logger.info(
+        f"[INLINE-AUTO-ASSIGN-v2] Role check: user.role={user.role!r}, "
+        f"user_role_value={user_role_value!r}, UserRole.SALESPERSON={UserRole.SALESPERSON!r}, "
+        f"blocked_roles={_AUTO_ASSIGN_BLOCKED_ROLES}"
+    )
+    
+    # Block if NOT salesperson (using multiple checks for safety)
+    is_not_salesperson_enum = user.role != UserRole.SALESPERSON
+    is_not_salesperson_str = user_role_value != "salesperson"
+    is_in_blocked = user_role_value in _AUTO_ASSIGN_BLOCKED_ROLES
+    
+    logger.info(
+        f"[INLINE-AUTO-ASSIGN-v2] Check results: is_not_salesperson_enum={is_not_salesperson_enum}, "
+        f"is_not_salesperson_str={is_not_salesperson_str}, is_in_blocked={is_in_blocked}"
+    )
+    
+    if is_not_salesperson_enum or is_not_salesperson_str or is_in_blocked:
         logger.warning(
-            f"BLOCKED inline auto-assign: {user.email} has role={user_role_value} (raw: {user.role!r}), "
-            f"only SALESPERSON can be auto-assigned"
+            f"[INLINE-AUTO-ASSIGN-v2] BLOCKED: {user.email} has role={user_role_value} (raw: {user.role!r}), "
+            f"only SALESPERSON can be auto-assigned. Checks: enum={is_not_salesperson_enum}, str={is_not_salesperson_str}, blocked={is_in_blocked}"
         )
         return False
     
+    logger.info(f"[INLINE-AUTO-ASSIGN-v2] PASSED role checks - proceeding with auto-assign for {user.email}")
+    
     # User must have a dealership to claim a lead
     if not user.dealership_id:
+        logger.info(f"[INLINE-AUTO-ASSIGN-v2] SKIP: user {user.email} has no dealership_id")
         return False
     
     # Check if lead is either in global pool OR in the user's dealership
@@ -142,9 +168,20 @@ async def auto_assign_lead_on_activity(
     
     if not (lead_in_global_pool or lead_in_user_dealership):
         # Lead is in a different dealership - user can't claim it
+        logger.info(f"[INLINE-AUTO-ASSIGN-v2] SKIP: lead not in user's dealership")
+        return False
+    
+    # FINAL SAFEGUARD: Double-check role one more time before actual assignment
+    final_role_check = user.role.value if hasattr(user.role, 'value') else str(user.role)
+    if final_role_check != "salesperson":
+        logger.error(
+            f"[INLINE-AUTO-ASSIGN-v2] FINAL SAFEGUARD BLOCKED: {user.email} role={final_role_check}. "
+            f"This should NEVER happen - report as bug!"
+        )
         return False
     
     # Perform the auto-assignment
+    logger.info(f"[INLINE-AUTO-ASSIGN-v2] ASSIGNING lead {lead.id} to {user.email} (role verified: {final_role_check})")
     lead.assigned_to = user.id
     dealership_just_assigned = lead.dealership_id is None
     if lead.dealership_id is None:
@@ -157,11 +194,11 @@ async def auto_assign_lead_on_activity(
     cust = cust_result.scalar_one_or_none()
     lead_name = cust.full_name if cust else "Lead"
 
-    # Log auto-assignment activity
+    # Log auto-assignment activity (include source marker for debugging)
     await ActivityService.log_activity(
         db,
         activity_type=ActivityType.LEAD_ASSIGNED,
-        description=f"Lead auto-assigned to {performer_name} based on first {activity_type}",
+        description=f"Lead auto-assigned to {performer_name} based on first {activity_type} [inline-v2]",
         user_id=user.id,
         lead_id=lead.id,
         dealership_id=user.dealership_id,
@@ -169,7 +206,8 @@ async def auto_assign_lead_on_activity(
             "auto_assigned": True,
             "reason": "first_activity",
             "activity_type": activity_type,
-            "performer_name": performer_name
+            "performer_name": performer_name,
+            "source": "inline-v2"
         }
     )
     
@@ -2019,6 +2057,7 @@ async def add_lead_note(
     )
     
     # Validate parent_id if provided (for replies)
+    parent_note = None
     if note_in.parent_id:
         from app.models.activity import Activity
         parent_result = await db.execute(
@@ -2077,11 +2116,41 @@ async def add_lead_note(
     # Update lead's last activity timestamp
     lead.last_activity_at = utc_now()
     
+    # Get lead name for notifications
+    from app.models.notification import NotificationType
+    _mc = (await db.execute(select(Customer).where(Customer.id == lead.customer_id))).scalar_one_or_none()
+    lead_name = _mc.full_name if _mc else "Lead"
+    
+    # Send notification to original note author when someone replies
+    if note_in.parent_id and parent_note and parent_note.user_id:
+        # Only notify if replier is different from original author
+        if parent_note.user_id != current_user.id:
+            await notification_service.create_notification(
+                user_id=parent_note.user_id,
+                notification_type=NotificationType.MENTION,
+                title=f"{performer_name} replied to your note",
+                message=f"On lead: {lead_name}",
+                link=f"/leads/{lead.id}?note={note_activity.id}",
+                related_id=lead.id,
+                related_type="lead",
+                meta_data={
+                    "lead_id": str(lead.id),
+                    "activity_id": str(note_activity.id),
+                    "parent_activity_id": str(parent_note.id),
+                    "lead_name": lead_name,
+                    "replied_by": performer_name,
+                    "note_preview": note_in.content[:100] + "..." if len(note_in.content) > 100 else note_in.content,
+                    "is_reply_notification": True,
+                },
+                send_push=True,
+                send_email=True,
+                send_sms=True,
+            )
+            from app.services.notification_service import emit_badges_refresh
+            await emit_badges_refresh(notifications=True)
+    
     # Send notifications to mentioned users (link includes note id so frontend can scroll to it)
     if note_in.mentioned_user_ids:
-        from app.models.notification import NotificationType
-        _mc = (await db.execute(select(Customer).where(Customer.id == lead.customer_id))).scalar_one_or_none()
-        lead_name = _mc.full_name if _mc else "Lead"
         for mentioned_user_id in note_in.mentioned_user_ids:
             if mentioned_user_id != current_user.id:  # Don't notify yourself
                 await notification_service.create_notification(

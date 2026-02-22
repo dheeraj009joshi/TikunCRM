@@ -199,6 +199,8 @@ export interface DailyActivityItem {
     description: string;
     meta_data?: Record<string, unknown>;
     created_at: string;
+    is_reply?: boolean;
+    parent_id?: string;
 }
 
 export interface SalespersonDailySummary {
@@ -214,6 +216,7 @@ export interface SalespersonDailySummary {
     appointments_scheduled: number;
     emails_sent: number;
     leads_worked: number;
+    customers_contacted: number;
     activities: DailyActivityItem[];
 }
 

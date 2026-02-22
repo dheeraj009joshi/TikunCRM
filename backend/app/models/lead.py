@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from app.models.call_log import CallLog
     from app.models.sms_log import SMSLog
     from app.models.whatsapp_log import WhatsAppLog
+    from app.models.lead_sync_source import LeadSyncSource
+    from app.models.campaign_mapping import CampaignMapping
 
 
 class LeadSource(str, Enum):
@@ -121,6 +123,27 @@ class Lead(Base):
     external_id: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True, index=True
     )
+
+    # --- Lead Sync Source tracking ---
+    sync_source_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("lead_sync_sources.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Sync source this lead came from (if synced)"
+    )
+    campaign_mapping_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("campaign_mappings.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Campaign mapping that matched this lead"
+    )
+    source_campaign_raw: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True,
+        comment="Original campaign name from the sync source"
+    )
+
     interested_in: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     budget_range: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
@@ -190,6 +213,12 @@ class Lead(Base):
     )
     whatsapp_logs: Mapped[List["WhatsAppLog"]] = relationship(
         "WhatsAppLog", back_populates="lead", lazy="noload"
+    )
+    sync_source: Mapped[Optional["LeadSyncSource"]] = relationship(
+        "LeadSyncSource", foreign_keys=[sync_source_id], lazy="noload"
+    )
+    campaign_mapping: Mapped[Optional["CampaignMapping"]] = relationship(
+        "CampaignMapping", foreign_keys=[campaign_mapping_id], lazy="noload"
     )
 
     # ── Backward-compat proxy properties (contact info lives on Customer) ──

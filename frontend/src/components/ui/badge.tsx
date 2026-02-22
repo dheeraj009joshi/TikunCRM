@@ -129,11 +129,16 @@ function getSourceVariant(source: string): VariantProps<typeof badgeVariants>["v
         website: "website",
         referral: "referral",
         walk_in: "walk_in",
-        // Custom display sources from Google Sheets (use same green styling)
-        "Toyota Spanish Leads": "google_sheets",
-        "Toyota Spanish Leads with Down payment": "google_sheets",
     }
-    return sourceMap[source] || "default"
+    
+    // Check exact match first
+    if (sourceMap[source]) {
+        return sourceMap[source]
+    }
+    
+    // Default to google_sheets (green) for any custom campaign/source from sync
+    // This includes campaign display names like "Google Sheets Import", "Urban Equity Campaign", etc.
+    return "google_sheets"
 }
 
 export { Badge, badgeVariants, getStatusVariant, getRoleVariant, getSourceVariant }

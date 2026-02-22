@@ -238,6 +238,8 @@ class DailyActivityItem(BaseModel):
     description: str
     meta_data: Optional[dict] = None  # note content, call duration, etc.
     created_at: datetime
+    is_reply: bool = False  # True if this is a reply to another note
+    parent_id: Optional[str] = None  # ID of parent note if this is a reply
 
     class Config:
         from_attributes = True
@@ -257,6 +259,7 @@ class SalespersonDailySummary(BaseModel):
     appointments_scheduled: int
     emails_sent: int
     leads_worked: int  # unique leads touched
+    customers_contacted: int  # unique customers contacted
     activities: List[DailyActivityItem]
 
     class Config:
@@ -1613,6 +1616,7 @@ async def get_daily_activities(
     # Group activities by user
     user_activities: dict[UUID, list] = {sp_id: [] for sp_id in sp_ids}
     user_leads_touched: dict[UUID, set] = {sp_id: set() for sp_id in sp_ids}
+    user_customers_touched: dict[UUID, set] = {sp_id: set() for sp_id in sp_ids}
     user_stats: dict[UUID, dict] = {
         sp_id: {
             "notes_count": 0,
@@ -1642,9 +1646,17 @@ async def get_daily_activities(
         if activity.lead_id:
             user_leads_touched[activity.user_id].add(activity.lead_id)
         
+        # Track unique customers contacted
+        if lead and lead.customer_id:
+            user_customers_touched[activity.user_id].add(lead.customer_id)
+        
         # Build description based on type
         description = activity.description or ""
         meta = activity.meta_data if isinstance(activity.meta_data, dict) else {}
+        
+        # Check if this is a reply to another note
+        is_reply = bool(activity.parent_id)
+        parent_id_str = str(activity.parent_id) if activity.parent_id else None
         
         # Update stats based on activity type
         if activity.type == ActivityType.NOTE_ADDED:
@@ -1681,6 +1693,8 @@ async def get_daily_activities(
                 description=description,
                 meta_data=meta if meta else None,
                 created_at=activity.created_at,
+                is_reply=is_reply,
+                parent_id=parent_id_str,
             )
         )
     
@@ -1717,6 +1731,7 @@ async def get_daily_activities(
                 appointments_scheduled=stats["appointments_scheduled"],
                 emails_sent=stats["emails_sent"],
                 leads_worked=len(user_leads_touched[sp_id]),
+                customers_contacted=len(user_customers_touched[sp_id]),
                 activities=activities,
             )
         )

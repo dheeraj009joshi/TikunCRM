@@ -48,6 +48,7 @@ import {
     Send,
     AlertCircle,
     XCircle,
+    Reply,
 } from "lucide-react"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
@@ -61,7 +62,10 @@ import {
 import { TeamService, type UserBrief } from "@/services/team-service"
 import { DealershipService, type Dealership } from "@/services/dealership-service"
 import { ACTIVITY_TYPE_INFO, type ActivityType } from "@/services/activity-service"
+import { LeadService } from "@/services/lead-service"
 import { LocalTime } from "@/components/ui/local-time"
+import { Textarea } from "@/components/ui/textarea"
+import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -142,18 +146,75 @@ function SummaryCard({
     )
 }
 
-function ActivityItem({ activity }: { activity: DailyActivityItem }) {
+function ActivityItem({ 
+    activity, 
+    onReplySubmitted 
+}: { 
+    activity: DailyActivityItem
+    onReplySubmitted?: () => void
+}) {
+    const { toast } = useToast()
+    const isNote = activity.type === "note_added"
+    const [isReplying, setIsReplying] = React.useState(false)
+    const [replyContent, setReplyContent] = React.useState("")
+    const [isSubmitting, setIsSubmitting] = React.useState(false)
+    
+    const handleReplyClick = () => {
+        setIsReplying(true)
+    }
+    
+    const handleCancelReply = () => {
+        setIsReplying(false)
+        setReplyContent("")
+    }
+    
+    const handleSubmitReply = async () => {
+        if (!replyContent.trim() || !activity.lead_id) return
+        
+        setIsSubmitting(true)
+        try {
+            await LeadService.addNote(activity.lead_id, replyContent.trim(), {
+                parent_id: activity.id,
+            })
+            toast({
+                title: "Reply added",
+                description: "Your reply has been posted successfully.",
+            })
+            setReplyContent("")
+            setIsReplying(false)
+            onReplySubmitted?.()
+        } catch (error: any) {
+            toast({
+                title: "Failed to add reply",
+                description: error.response?.data?.detail || "Something went wrong",
+                variant: "destructive",
+            })
+        } finally {
+            setIsSubmitting(false)
+        }
+    }
+    
     return (
-        <div className="flex items-start gap-3 py-3 border-b last:border-b-0">
+        <div className={cn(
+            "flex items-start gap-3 py-3 border-b last:border-b-0 group",
+            activity.is_reply && "pl-4 border-l-2 border-l-muted"
+        )}>
             <div className="mt-0.5">
                 {getActivityIcon(activity.type)}
             </div>
             <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium">{getActivityLabel(activity.type)}</span>
+                    <span className="text-sm font-medium">
+                        {activity.is_reply && activity.type === "note_added" ? "Reply" : getActivityLabel(activity.type)}
+                    </span>
+                    {activity.is_reply && (
+                        <Badge variant="outline" className="text-xs px-1.5 py-0">
+                            Reply
+                        </Badge>
+                    )}
                     {activity.lead_id && activity.lead_name && (
                         <Link
-                            href={`/leads/${activity.lead_id}`}
+                            href={`/leads/${activity.lead_id}${activity.parent_id ? `?note=${activity.parent_id}` : ''}`}
                             className="text-sm text-primary hover:underline flex items-center gap-1"
                         >
                             {activity.lead_name}
@@ -166,10 +227,234 @@ function ActivityItem({ activity }: { activity: DailyActivityItem }) {
                         {activity.description}
                     </p>
                 )}
-                <p className="text-xs text-muted-foreground mt-1">
-                    <LocalTime date={activity.created_at} />
-                </p>
+                <div className="flex items-center gap-3 mt-1">
+                    <p className="text-xs text-muted-foreground">
+                        <LocalTime date={activity.created_at} />
+                    </p>
+                    {isNote && activity.lead_id && !isReplying && (
+                        <button
+                            onClick={handleReplyClick}
+                            className="text-xs text-primary hover:underline flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                            <Reply className="h-3 w-3" />
+                            Reply
+                        </button>
+                    )}
+                </div>
+                
+                {/* Inline Reply Input */}
+                {isReplying && (
+                    <div className="mt-3 space-y-2">
+                        <Textarea
+                            placeholder="Write your reply..."
+                            value={replyContent}
+                            onChange={(e) => setReplyContent(e.target.value)}
+                            className="min-h-[80px] text-sm"
+                            autoFocus
+                        />
+                        <div className="flex items-center gap-2">
+                            <Button
+                                size="sm"
+                                onClick={handleSubmitReply}
+                                disabled={!replyContent.trim() || isSubmitting}
+                            >
+                                {isSubmitting ? (
+                                    <>
+                                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                        Sending...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Send className="h-3 w-3 mr-1" />
+                                        Send Reply
+                                    </>
+                                )}
+                            </Button>
+                            <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={handleCancelReply}
+                                disabled={isSubmitting}
+                            >
+                                Cancel
+                            </Button>
+                        </div>
+                    </div>
+                )}
             </div>
+        </div>
+    )
+}
+
+function NoteThread({
+    parentNote,
+    replies,
+    onReplySubmitted,
+}: {
+    parentNote: DailyActivityItem
+    replies: DailyActivityItem[]
+    onReplySubmitted?: () => void
+}) {
+    const { toast } = useToast()
+    const [isExpanded, setIsExpanded] = React.useState(false)
+    const [isReplying, setIsReplying] = React.useState(false)
+    const [replyContent, setReplyContent] = React.useState("")
+    const [isSubmitting, setIsSubmitting] = React.useState(false)
+    
+    const handleSubmitReply = async () => {
+        if (!replyContent.trim() || !parentNote.lead_id) return
+        
+        setIsSubmitting(true)
+        try {
+            await LeadService.addNote(parentNote.lead_id, replyContent.trim(), {
+                parent_id: parentNote.id,
+            })
+            toast({
+                title: "Reply added",
+                description: "Your reply has been posted successfully.",
+            })
+            setReplyContent("")
+            setIsReplying(false)
+            setIsExpanded(true)
+            onReplySubmitted?.()
+        } catch (error: any) {
+            toast({
+                title: "Failed to add reply",
+                description: error.response?.data?.detail || "Something went wrong",
+                variant: "destructive",
+            })
+        } finally {
+            setIsSubmitting(false)
+        }
+    }
+    
+    return (
+        <div className="border-b last:border-b-0">
+            {/* Parent Note */}
+            <div className="flex items-start gap-3 py-3 group">
+                <div className="mt-0.5">
+                    {getActivityIcon(parentNote.type)}
+                </div>
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium">{getActivityLabel(parentNote.type)}</span>
+                        {parentNote.lead_id && parentNote.lead_name && (
+                            <Link
+                                href={`/leads/${parentNote.lead_id}?note=${parentNote.id}`}
+                                className="text-sm text-primary hover:underline flex items-center gap-1"
+                            >
+                                {parentNote.lead_name}
+                                <ExternalLink className="h-3 w-3" />
+                            </Link>
+                        )}
+                    </div>
+                    {parentNote.description && (
+                        <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                            {parentNote.description}
+                        </p>
+                    )}
+                    <div className="flex items-center gap-3 mt-1">
+                        <p className="text-xs text-muted-foreground">
+                            <LocalTime date={parentNote.created_at} />
+                        </p>
+                        {parentNote.lead_id && !isReplying && (
+                            <button
+                                onClick={() => setIsReplying(true)}
+                                className="text-xs text-primary hover:underline flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                                <Reply className="h-3 w-3" />
+                                Reply
+                            </button>
+                        )}
+                        {replies.length > 0 && (
+                            <button
+                                onClick={() => setIsExpanded(!isExpanded)}
+                                className="text-xs text-muted-foreground hover:text-foreground hover:underline flex items-center gap-1"
+                            >
+                                {isExpanded
+                                    ? `Hide ${replies.length} repl${replies.length !== 1 ? "ies" : "y"}`
+                                    : `View ${replies.length} repl${replies.length !== 1 ? "ies" : "y"}`}
+                            </button>
+                        )}
+                    </div>
+                    
+                    {/* Inline Reply Input */}
+                    {isReplying && (
+                        <div className="mt-3 space-y-2">
+                            <Textarea
+                                placeholder="Write your reply..."
+                                value={replyContent}
+                                onChange={(e) => setReplyContent(e.target.value)}
+                                className="min-h-[80px] text-sm"
+                                autoFocus
+                            />
+                            <div className="flex items-center gap-2">
+                                <Button
+                                    size="sm"
+                                    onClick={handleSubmitReply}
+                                    disabled={!replyContent.trim() || isSubmitting}
+                                >
+                                    {isSubmitting ? (
+                                        <>
+                                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                            Sending...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Send className="h-3 w-3 mr-1" />
+                                            Send Reply
+                                        </>
+                                    )}
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                        setIsReplying(false)
+                                        setReplyContent("")
+                                    }}
+                                    disabled={isSubmitting}
+                                >
+                                    Cancel
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+            
+            {/* Nested Replies */}
+            {replies.length > 0 && isExpanded && (
+                <div className="border-t border-l-4 border-l-primary/30 bg-muted/20 ml-6 mr-3 mb-2 rounded-r">
+                    <div className="text-xs font-medium text-muted-foreground px-3 pt-2 pb-1">
+                        {replies.length} repl{replies.length !== 1 ? "ies" : "y"}
+                    </div>
+                    {replies.map(reply => (
+                        <div key={reply.id} className="px-3 py-2 border-b last:border-b-0 border-border/50">
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-medium text-muted-foreground">Reply</span>
+                                {reply.lead_id && reply.lead_name && (
+                                    <Link
+                                        href={`/leads/${reply.lead_id}?note=${reply.id}`}
+                                        className="text-xs text-primary hover:underline flex items-center gap-1"
+                                    >
+                                        {reply.lead_name}
+                                        <ExternalLink className="h-3 w-3" />
+                                    </Link>
+                                )}
+                            </div>
+                            {reply.description && (
+                                <p className="text-sm text-muted-foreground mt-1">
+                                    {reply.description}
+                                </p>
+                            )}
+                            <p className="text-xs text-muted-foreground mt-1">
+                                <LocalTime date={reply.created_at} />
+                            </p>
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     )
 }
@@ -177,12 +462,47 @@ function ActivityItem({ activity }: { activity: DailyActivityItem }) {
 function SalespersonActivityCard({
     summary,
     defaultOpen = false,
+    onReplySubmitted,
 }: {
     summary: SalespersonDailySummary
     defaultOpen?: boolean
+    onReplySubmitted?: () => void
 }) {
     const [isOpen, setIsOpen] = React.useState(defaultOpen)
     const totalActivities = summary.activities.length
+    
+    // Group notes into parent notes and replies
+    const noteActivities = summary.activities.filter(a => a.type === "note_added")
+    const otherActivities = summary.activities.filter(a => a.type !== "note_added")
+    
+    // Parent notes (no parent_id)
+    const parentNotes = noteActivities
+        .filter(n => !n.parent_id)
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    
+    // Get all parent note IDs in the current view
+    const parentNoteIds = new Set(parentNotes.map(n => n.id))
+    
+    // Build replies map keyed by parent_id
+    const repliesMap = noteActivities.reduce((acc, note) => {
+        if (note.parent_id) {
+            if (!acc[note.parent_id]) acc[note.parent_id] = []
+            acc[note.parent_id].push(note)
+        }
+        return acc
+    }, {} as Record<string, DailyActivityItem[]>)
+    
+    // Sort replies by created_at (oldest first)
+    Object.keys(repliesMap).forEach(parentId => {
+        repliesMap[parentId].sort((a, b) => 
+            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        )
+    })
+    
+    // Orphan replies: replies whose parent note is not in today's view
+    const orphanReplies = noteActivities
+        .filter(n => n.parent_id && !parentNoteIds.has(n.parent_id))
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     
     const stats = [
         { label: "Notes", value: summary.notes_count, show: summary.notes_count > 0 },
@@ -192,6 +512,7 @@ function SalespersonActivityCard({
         { label: "Appts Done", value: summary.appointments_completed, show: summary.appointments_completed > 0 },
         { label: "Appts Sched", value: summary.appointments_scheduled, show: summary.appointments_scheduled > 0 },
         { label: "Emails", value: summary.emails_sent, show: summary.emails_sent > 0 },
+        { label: "Customers", value: summary.customers_contacted, show: summary.customers_contacted > 0 },
     ].filter(s => s.show)
     
     return (
@@ -250,10 +571,84 @@ function SalespersonActivityCard({
                                 No activities recorded for this period.
                             </p>
                         ) : (
-                            <div className="max-h-[400px] overflow-y-auto">
-                                {summary.activities.map((activity) => (
-                                    <ActivityItem key={activity.id} activity={activity} />
-                                ))}
+                            <div className="max-h-[500px] overflow-y-auto">
+                                {/* Threaded Notes Section */}
+                                {parentNotes.length > 0 && (
+                                    <div className="mb-4">
+                                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-2">
+                                            <MessageSquare className="h-3 w-3" />
+                                            Notes ({parentNotes.length})
+                                        </div>
+                                        {parentNotes.map((note) => (
+                                            <NoteThread
+                                                key={note.id}
+                                                parentNote={note}
+                                                replies={repliesMap[note.id] || []}
+                                                onReplySubmitted={onReplySubmitted}
+                                            />
+                                        ))}
+                                    </div>
+                                )}
+                                
+                                {/* Orphan Replies Section - replies whose parent notes are not in today's view */}
+                                {orphanReplies.length > 0 && (
+                                    <div className="mb-4">
+                                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-2">
+                                            <Reply className="h-3 w-3" />
+                                            Replies ({orphanReplies.length})
+                                        </div>
+                                        {orphanReplies.map((reply) => (
+                                            <div key={reply.id} className="border-b last:border-b-0 pl-4 border-l-2 border-l-primary/30">
+                                                <div className="flex items-start gap-3 py-3">
+                                                    <div className="mt-0.5">
+                                                        {getActivityIcon(reply.type)}
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2 flex-wrap">
+                                                            <Badge variant="outline" className="text-xs">Reply</Badge>
+                                                            {reply.lead_id && reply.lead_name && (
+                                                                <Link
+                                                                    href={`/leads/${reply.lead_id}?note=${reply.parent_id || reply.id}`}
+                                                                    className="text-sm text-primary hover:underline flex items-center gap-1"
+                                                                >
+                                                                    {reply.lead_name}
+                                                                    <ExternalLink className="h-3 w-3" />
+                                                                </Link>
+                                                            )}
+                                                        </div>
+                                                        {reply.description && (
+                                                            <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                                                                {reply.description}
+                                                            </p>
+                                                        )}
+                                                        <p className="text-xs text-muted-foreground mt-1">
+                                                            <LocalTime date={reply.created_at} />
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                
+                                {/* Other Activities Section */}
+                                {otherActivities.length > 0 && (
+                                    <div>
+                                        {(parentNotes.length > 0 || orphanReplies.length > 0) && (
+                                            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-2">
+                                                <Activity className="h-3 w-3" />
+                                                Other Activities ({otherActivities.length})
+                                            </div>
+                                        )}
+                                        {otherActivities.map((activity) => (
+                                            <ActivityItem 
+                                                key={activity.id} 
+                                                activity={activity} 
+                                                onReplySubmitted={onReplySubmitted}
+                                            />
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         )}
                     </CardContent>
@@ -359,9 +754,16 @@ export default function TeamActivityPage() {
         
         try {
             const { from, to } = getDateRange()
+            
+            // Convert local dates to UTC properly
+            const fromDate = new Date(from)
+            fromDate.setHours(0, 0, 0, 0)
+            const toDate = new Date(to)
+            toDate.setHours(23, 59, 59, 999)
+            
             const filters: DailyActivityFilters = {
-                date_from: `${from}T00:00:00.000Z`,
-                date_to: `${to}T23:59:59.999Z`,
+                date_from: fromDate.toISOString(),
+                date_to: toDate.toISOString(),
             }
             if (isSuperAdmin && selectedDealershipId) {
                 filters.dealership_id = selectedDealershipId
@@ -728,6 +1130,7 @@ export default function TeamActivityPage() {
                                     key={sp.user_id}
                                     summary={sp}
                                     defaultOpen={index === 0 && sp.activities.length > 0}
+                                    onReplySubmitted={fetchData}
                                 />
                             ))}
                         </div>
