@@ -22,6 +22,12 @@ interface Customer {
   lead_status?: string;
 }
 
+export interface SelectedCustomer {
+  id: string;
+  name: string;
+  phone: string;
+}
+
 interface NewChatDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
