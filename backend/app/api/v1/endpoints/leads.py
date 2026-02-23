@@ -827,17 +827,39 @@ async def update_lead(
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to update this lead")
     
-    # Update lead fields
+    # Separate customer fields from lead fields
     update_data = lead_in.model_dump(exclude_unset=True)
-    new_secondary_id = update_data.get("secondary_customer_id")
+    
+    customer_fields = {
+        "first_name", "last_name", "email", "phone", "alternate_phone",
+        "address", "city", "state", "postal_code", "country",
+        "company", "job_title", "date_of_birth",
+        "preferred_contact_method", "preferred_contact_time"
+    }
+    lead_fields = {"notes", "meta_data", "interested_in", "budget_range", "secondary_customer_id"}
+    
+    customer_update_data = {k: v for k, v in update_data.items() if k in customer_fields}
+    lead_update_data = {k: v for k, v in update_data.items() if k in lead_fields}
+    
+    new_secondary_id = lead_update_data.get("secondary_customer_id")
     new_secondary_customer = None  # reused for activity description
-    if "secondary_customer_id" in update_data:
+    if "secondary_customer_id" in lead_update_data:
         if new_secondary_id is not None:
             new_secondary_customer = await CustomerService.get_customer(db, new_secondary_id)
             if not new_secondary_customer:
                 raise HTTPException(status_code=400, detail="Secondary customer not found")
             if new_secondary_id == lead.customer_id:
                 raise HTTPException(status_code=400, detail="Secondary customer cannot be the same as primary")
+
+    # Update customer record if customer fields are provided
+    if customer_update_data and lead.customer_id:
+        from app.models.customer import Customer
+        customer_result = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+        customer = customer_result.scalar_one_or_none()
+        if customer:
+            for field, value in customer_update_data.items():
+                setattr(customer, field, value)
+            customer.updated_at = utc_now()
 
     # Build human-readable description (added/removed for secondary customer, "updated" for others)
     field_labels = {
@@ -846,12 +868,27 @@ async def update_lead(
         "budget_range": "Budget range",
         "meta_data": "Metadata",
         "secondary_customer_id": "Secondary customer",
+        "first_name": "First name",
+        "last_name": "Last name",
+        "email": "Email",
+        "phone": "Phone",
+        "alternate_phone": "Alternate phone",
+        "address": "Address",
+        "city": "City",
+        "state": "State",
+        "postal_code": "Postal code",
+        "country": "Country",
+        "company": "Company",
+        "job_title": "Job title",
+        "date_of_birth": "Date of birth",
+        "preferred_contact_method": "Preferred contact method",
+        "preferred_contact_time": "Preferred contact time",
     }
     updated_fields = list(update_data.keys())
     labels = [field_labels.get(f, f.replace("_", " ").title()) for f in updated_fields]
     description_parts = []
 
-    if "secondary_customer_id" in update_data:
+    if "secondary_customer_id" in lead_update_data:
         old_secondary_id = getattr(lead, "secondary_customer_id", None)
         if old_secondary_id is None and new_secondary_id is not None:
             name = f"{getattr(new_secondary_customer, 'first_name', '') or ''} {getattr(new_secondary_customer, 'last_name', '') or ''}".strip() if new_secondary_customer else "Unknown"
@@ -876,7 +913,8 @@ async def update_lead(
 
     description = ". ".join(description_parts) if description_parts else "Lead updated"
 
-    for field, value in update_data.items():
+    # Update lead fields
+    for field, value in lead_update_data.items():
         setattr(lead, field, value)
     
     lead.updated_at = utc_now()

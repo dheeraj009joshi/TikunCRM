@@ -66,14 +66,38 @@ class LeadCreate(BaseModel):
 
 
 class LeadUpdate(BaseModel):
-    """Schema for updating lead-specific fields (not contact info)."""
+    """Schema for updating lead-specific fields and customer contact info."""
+    # Lead-specific fields
     notes: Optional[str] = None
     meta_data: Optional[Dict[str, Any]] = None
     interested_in: Optional[str] = None
     budget_range: Optional[str] = None
     secondary_customer_id: Optional[UUID] = None
+    
+    # Customer contact fields (will update associated customer)
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    alternate_phone: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    company: Optional[str] = None
+    job_title: Optional[str] = None
+    date_of_birth: Optional[datetime] = None
+    preferred_contact_method: Optional[str] = None
+    preferred_contact_time: Optional[str] = None
 
-    @field_validator("notes", "interested_in", "budget_range", mode="before")
+    @field_validator(
+        "notes", "interested_in", "budget_range",
+        "last_name", "email", "phone", "alternate_phone",
+        "address", "city", "state", "postal_code", "country",
+        "company", "job_title", "preferred_contact_method", "preferred_contact_time",
+        mode="before"
+    )
     @classmethod
     def empty_string_to_none(cls, v: Any) -> Any:
         if v == "" or v is None:
