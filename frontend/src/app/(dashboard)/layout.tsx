@@ -22,20 +22,17 @@ export default function DashboardLayout({
     const [hasShownReminder, setHasShownReminder] = React.useState(false)
 
     React.useEffect(() => {
-        // Check if user is logged in and email is not verified
-        if (user && !user.email_config_verified) {
-            // Check if we've already shown the reminder in this session
-            const reminderDismissed = sessionStorage.getItem('email_config_reminder_dismissed')
-            
-            if (!reminderDismissed && !hasShownReminder) {
-                // Show reminder after a short delay to let the page load
-                const timer = setTimeout(() => {
-                    setShowReminder(true)
-                    setHasShownReminder(true)
-                }, 1000)
-                return () => clearTimeout(timer)
-            }
-        }
+        // Email config reminder disabled - uncomment to re-enable
+        // if (user && !user.email_config_verified) {
+        //     const reminderDismissed = sessionStorage.getItem('email_config_reminder_dismissed')
+        //     if (!reminderDismissed && !hasShownReminder) {
+        //         const timer = setTimeout(() => {
+        //             setShowReminder(true)
+        //             setHasShownReminder(true)
+        //         }, 1000)
+        //         return () => clearTimeout(timer)
+        //     }
+        // }
     }, [user, hasShownReminder])
 
     // Reset reminder flag when user logs out or email gets verified

@@ -341,6 +341,119 @@ async def complete_follow_up(
     return FollowUpResponse(**follow_up_dict)
 
 
+@router.patch("/{follow_up_id}", response_model=FollowUpResponse)
+async def update_follow_up(
+    follow_up_id: UUID,
+    update_data: FollowUpUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Update a follow-up (scheduled_at, notes, status).
+    """
+    result = await db.execute(
+        select(FollowUp)
+        .options(selectinload(FollowUp.lead), selectinload(FollowUp.assigned_to_user))
+        .where(FollowUp.id == follow_up_id)
+    )
+    follow_up = result.scalar_one_or_none()
+    
+    if not follow_up:
+        raise HTTPException(status_code=404, detail="Follow-up not found")
+    
+    # Authorization: Only assigned user, dealership admin/owner, or super admin can edit
+    if current_user.role == UserRole.SALESPERSON:
+        if follow_up.assigned_to != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to edit this follow-up")
+    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+        if follow_up.assigned_to_user and follow_up.assigned_to_user.dealership_id != current_user.dealership_id:
+            raise HTTPException(status_code=403, detail="Not authorized to edit this follow-up")
+    # Super Admin can edit any follow-up
+    
+    # Track what changed for activity log
+    changes = []
+    
+    if update_data.scheduled_at is not None and update_data.scheduled_at != follow_up.scheduled_at:
+        changes.append(f"rescheduled to {update_data.scheduled_at.strftime('%Y-%m-%d %H:%M')}")
+        follow_up.scheduled_at = update_data.scheduled_at
+    
+    if update_data.notes is not None and update_data.notes != follow_up.notes:
+        changes.append("notes updated")
+        follow_up.notes = update_data.notes
+    
+    if update_data.status is not None and update_data.status != follow_up.status:
+        changes.append(f"status changed to {update_data.status.value}")
+        follow_up.status = update_data.status
+        if update_data.status == FollowUpStatus.COMPLETED:
+            follow_up.completed_at = utc_now()
+    
+    if update_data.completion_notes is not None:
+        follow_up.completion_notes = update_data.completion_notes
+    
+    if changes:
+        await db.flush()
+        
+        # Get lead for dealership_id context
+        lead_result = await db.execute(select(Lead).where(Lead.id == follow_up.lead_id))
+        lead = lead_result.scalar_one()
+        
+        # Log activity
+        await ActivityService.log_activity(
+            db,
+            activity_type=ActivityType.FOLLOW_UP_SCHEDULED,
+            description=f"Follow-up updated: {', '.join(changes)}",
+            user_id=current_user.id,
+            lead_id=follow_up.lead_id,
+            dealership_id=lead.dealership_id,
+            meta_data={"changes": changes}
+        )
+        
+        await db.commit()
+        
+        try:
+            await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None)
+        except Exception:
+            pass
+    
+    # Re-fetch with relationships loaded
+    result = await db.execute(
+        select(FollowUp)
+        .options(selectinload(FollowUp.lead), selectinload(FollowUp.assigned_to_user))
+        .where(FollowUp.id == follow_up.id)
+    )
+    follow_up = result.scalar_one()
+    
+    # Enrich response
+    follow_up_dict = {
+        **follow_up.__dict__,
+        "lead": {
+            "id": str(follow_up.lead.id),
+            "customer": {
+                "id": str(follow_up.lead.customer_id),
+                "first_name": follow_up.lead.first_name,
+                "last_name": follow_up.lead.last_name,
+                "phone": follow_up.lead.phone,
+                "email": follow_up.lead.email,
+            } if follow_up.lead else None,
+            "source": follow_up.lead.source.value if follow_up.lead else None,
+            "is_active": follow_up.lead.is_active if follow_up.lead else True,
+        } if follow_up.lead else None,
+        "assigned_to_user": UserBrief(
+            id=follow_up.assigned_to_user.id,
+            email=follow_up.assigned_to_user.email,
+            first_name=follow_up.assigned_to_user.first_name,
+            last_name=follow_up.assigned_to_user.last_name,
+            role=follow_up.assigned_to_user.role,
+            is_active=follow_up.assigned_to_user.is_active,
+            dealership_id=follow_up.assigned_to_user.dealership_id,
+            smtp_email=follow_up.assigned_to_user.smtp_email,
+            email_config_verified=follow_up.assigned_to_user.email_config_verified
+        ) if follow_up.assigned_to_user else None
+    }
+    
+    return FollowUpResponse(**follow_up_dict)
+
+
 @router.delete("/{follow_up_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_follow_up(
     follow_up_id: UUID,

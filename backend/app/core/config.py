@@ -161,6 +161,13 @@ class Settings(BaseSettings):
         """Check if Azure Blob Storage is configured for Stips documents"""
         return bool(self.azure_storage_connection_string and self.azure_storage_container_stips)
 
+    # Baileys WhatsApp Service (Node.js)
+    baileys_service_url: str = "http://localhost:3001"  # URL to the Node.js Baileys service
+    baileys_enabled: bool = False  # Enable Baileys WhatsApp integration
+    baileys_daily_message_limit: int = 100  # Daily message limit for bulk sends
+    baileys_min_delay_seconds: int = 5  # Min delay between bulk messages
+    baileys_max_delay_seconds: int = 30  # Max delay between bulk messages
+
     # Firebase Cloud Messaging (FCM) HTTP V1 - for push notifications
     # Path to the service account JSON file from Firebase Console (Project Settings > Service accounts)
     fcm_service_account_path: str = ""  # e.g. /path/to/firebase-service-account.json
@@ -178,6 +185,11 @@ class Settings(BaseSettings):
     def is_push_configured(self) -> bool:
         """Check if push notifications are configured (FCM only)"""
         return self.is_fcm_configured
+
+    @property
+    def is_baileys_configured(self) -> bool:
+        """Check if Baileys WhatsApp service is configured"""
+        return bool(self.baileys_service_url and self.baileys_enabled)
 
 
 @lru_cache()

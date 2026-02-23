@@ -34,6 +34,7 @@ import {
     Store,
     LogOut,
     MoreVertical,
+    MoreHorizontal,
     Download,
     FileStack,
     Upload,
@@ -43,7 +44,8 @@ import {
     DollarSign,
     UserMinus,
     Plus,
-    History
+    History,
+    Check
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -88,6 +90,7 @@ import { AssignToDealershipModal, AssignToSalespersonModal, AssignSecondaryCusto
 import { getCustomerFullName } from "@/services/customer-service"
 import { EmailComposerModal } from "@/components/emails/email-composer-modal"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
+import { EditFollowUpModal } from "@/components/follow-ups/edit-follow-up-modal"
 import { BookAppointmentModal } from "@/components/appointments/book-appointment-modal"
 import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal } from "@/services/appointment-service"
 import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
@@ -362,6 +365,8 @@ export default function LeadDetailsPage() {
     const [showUnassignConfirm, setShowUnassignConfirm] = React.useState(false)
     const [isUnassigning, setIsUnassigning] = React.useState(false)
     const [completingFollowUpId, setCompletingFollowUpId] = React.useState<string | null>(null)
+    const [editFollowUpModalOpen, setEditFollowUpModalOpen] = React.useState(false)
+    const [editingFollowUp, setEditingFollowUp] = React.useState<FollowUp | null>(null)
     const [isDeleting, setIsDeleting] = React.useState(false)
     
     // Lost reason modal
@@ -1621,6 +1626,18 @@ export default function LeadDetailsPage() {
             setCompletingFollowUpId(null)
         }
     }, [fetchLeadAppointmentsAndFollowUps, fetchActivities])
+
+    const isFutureFollowUp = (dateStr: string) => {
+        const date = new Date(dateStr)
+        const today = new Date()
+        today.setHours(23, 59, 59, 999)
+        return date > today
+    }
+
+    const openEditFollowUpModal = (fu: FollowUp) => {
+        setEditingFollowUp(fu)
+        setEditFollowUpModalOpen(true)
+    }
 
     const handleUnassignLead = async () => {
         if (!lead) return
@@ -3786,15 +3803,27 @@ export default function LeadDetailsPage() {
                                                                     </TableCell>
                                                                     <TableCell className="max-w-[200px] truncate text-muted-foreground">{fu.notes || "—"}</TableCell>
                                                                     <TableCell className="text-right">
-                                                                        {fu.status === "pending" && (
-                                                                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
-                                                                                {completingFollowUpId === fu.id ? (
-                                                                                    <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Completing...</span>
-                                                                                ) : (
-                                                                                    "Complete"
+                                                                        <DropdownMenu>
+                                                                            <DropdownMenuTrigger asChild>
+                                                                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                                                                                    {completingFollowUpId === fu.id ? (
+                                                                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                                                                    ) : (
+                                                                                        <MoreHorizontal className="h-4 w-4" />
+                                                                                    )}
+                                                                                </Button>
+                                                                            </DropdownMenuTrigger>
+                                                                            <DropdownMenuContent align="end">
+                                                                                <DropdownMenuItem onClick={() => openEditFollowUpModal(fu)}>
+                                                                                    <Pencil className="h-4 w-4 mr-2" /> Edit
+                                                                                </DropdownMenuItem>
+                                                                                {!isFutureFollowUp(fu.scheduled_at) && fu.status === "pending" && (
+                                                                                    <DropdownMenuItem onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
+                                                                                        <Check className="h-4 w-4 mr-2" /> Complete
+                                                                                    </DropdownMenuItem>
                                                                                 )}
-                                                                            </Button>
-                                                                        )}
+                                                                            </DropdownMenuContent>
+                                                                        </DropdownMenu>
                                                                     </TableCell>
                                                                 </TableRow>
                                                             )
@@ -3836,15 +3865,27 @@ export default function LeadDetailsPage() {
                                                                     </TableCell>
                                                                     <TableCell className="max-w-[200px] truncate text-muted-foreground">{fu.notes || "—"}</TableCell>
                                                                     <TableCell className="text-right">
-                                                                        {fu.status === "pending" && (
-                                                                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
-                                                                                {completingFollowUpId === fu.id ? (
-                                                                                    <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Completing...</span>
-                                                                                ) : (
-                                                                                    "Complete"
+                                                                        <DropdownMenu>
+                                                                            <DropdownMenuTrigger asChild>
+                                                                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                                                                                    {completingFollowUpId === fu.id ? (
+                                                                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                                                                    ) : (
+                                                                                        <MoreHorizontal className="h-4 w-4" />
+                                                                                    )}
+                                                                                </Button>
+                                                                            </DropdownMenuTrigger>
+                                                                            <DropdownMenuContent align="end">
+                                                                                <DropdownMenuItem onClick={() => openEditFollowUpModal(fu)}>
+                                                                                    <Pencil className="h-4 w-4 mr-2" /> Edit
+                                                                                </DropdownMenuItem>
+                                                                                {!isFutureFollowUp(fu.scheduled_at) && fu.status === "pending" && (
+                                                                                    <DropdownMenuItem onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
+                                                                                        <Check className="h-4 w-4 mr-2" /> Complete
+                                                                                    </DropdownMenuItem>
                                                                                 )}
-                                                                            </Button>
-                                                                        )}
+                                                                            </DropdownMenuContent>
+                                                                        </DropdownMenu>
                                                                     </TableCell>
                                                                 </TableRow>
                                                             )
@@ -3886,13 +3927,27 @@ export default function LeadDetailsPage() {
                                                                     </TableCell>
                                                                     <TableCell className="max-w-[200px] truncate text-muted-foreground">{fu.notes || "—"}</TableCell>
                                                                     <TableCell className="text-right">
-                                                                        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
-                                                                            {completingFollowUpId === fu.id ? (
-                                                                                <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Completing...</span>
-                                                                            ) : (
-                                                                                "Complete"
-                                                                            )}
-                                                                        </Button>
+                                                                        <DropdownMenu>
+                                                                            <DropdownMenuTrigger asChild>
+                                                                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                                                                                    {completingFollowUpId === fu.id ? (
+                                                                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                                                                    ) : (
+                                                                                        <MoreHorizontal className="h-4 w-4" />
+                                                                                    )}
+                                                                                </Button>
+                                                                            </DropdownMenuTrigger>
+                                                                            <DropdownMenuContent align="end">
+                                                                                <DropdownMenuItem onClick={() => openEditFollowUpModal(fu)}>
+                                                                                    <Pencil className="h-4 w-4 mr-2" /> Edit
+                                                                                </DropdownMenuItem>
+                                                                                {fu.status === "pending" && (
+                                                                                    <DropdownMenuItem onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
+                                                                                        <Check className="h-4 w-4 mr-2" /> Complete
+                                                                                    </DropdownMenuItem>
+                                                                                )}
+                                                                            </DropdownMenuContent>
+                                                                        </DropdownMenu>
                                                                     </TableCell>
                                                                 </TableRow>
                                                             )
@@ -3935,15 +3990,27 @@ export default function LeadDetailsPage() {
                                                                     </TableCell>
                                                                     <TableCell className="max-w-[200px] truncate text-muted-foreground">{notesDisplay}</TableCell>
                                                                     <TableCell className="text-right">
-                                                                        {fu.status === "pending" && (
-                                                                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
-                                                                                {completingFollowUpId === fu.id ? (
-                                                                                    <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Completing...</span>
-                                                                                ) : (
-                                                                                    "Complete"
+                                                                        <DropdownMenu>
+                                                                            <DropdownMenuTrigger asChild>
+                                                                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                                                                                    {completingFollowUpId === fu.id ? (
+                                                                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                                                                    ) : (
+                                                                                        <MoreHorizontal className="h-4 w-4" />
+                                                                                    )}
+                                                                                </Button>
+                                                                            </DropdownMenuTrigger>
+                                                                            <DropdownMenuContent align="end">
+                                                                                <DropdownMenuItem onClick={() => openEditFollowUpModal(fu)}>
+                                                                                    <Pencil className="h-4 w-4 mr-2" /> Edit
+                                                                                </DropdownMenuItem>
+                                                                                {fu.status === "pending" && (
+                                                                                    <DropdownMenuItem onClick={() => handleCompleteFollowUp(fu.id)} disabled={completingFollowUpId !== null}>
+                                                                                        <Check className="h-4 w-4 mr-2" /> Complete
+                                                                                    </DropdownMenuItem>
                                                                                 )}
-                                                                            </Button>
-                                                                        )}
+                                                                            </DropdownMenuContent>
+                                                                        </DropdownMenu>
                                                                     </TableCell>
                                                                 </TableRow>
                                                             )
@@ -4287,6 +4354,20 @@ export default function LeadDetailsPage() {
                     }}
                 />
             )}
+
+            {/* Edit Follow-up Modal */}
+            <EditFollowUpModal
+                followUp={editingFollowUp}
+                open={editFollowUpModalOpen}
+                onOpenChange={(open) => {
+                    setEditFollowUpModalOpen(open)
+                    if (!open) setEditingFollowUp(null)
+                }}
+                onSuccess={() => {
+                    fetchActivities()
+                    fetchLeadAppointmentsAndFollowUps()
+                }}
+            />
             
             {/* Book Appointment Modal */}
             {lead && (
