@@ -270,12 +270,10 @@ export default function WhatsAppAdminPage() {
     }
   }, []);
 
-  // Initial status fetch (WebSocket will take over after connection)
+  // Initial status fetch on mount (WebSocket updates will override)
   useEffect(() => {
-    if (!wsConnected) {
-      fetchStatus();
-    }
-  }, [fetchStatus, wsConnected]);
+    fetchStatus();
+  }, [fetchStatus]);
 
   // Fetch conversations (deduplicated by last 10 digits of phone)
   const fetchConversations = useCallback(async () => {

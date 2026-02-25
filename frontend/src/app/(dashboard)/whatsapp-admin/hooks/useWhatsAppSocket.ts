@@ -66,8 +66,26 @@ interface UseWhatsAppSocketReturn {
 const RECONNECT_DELAY = 3000;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
+// Get WebSocket URL from environment or default to localhost
+const getDefaultWsUrl = () => {
+  if (typeof window !== "undefined") {
+    // In browser, check for environment variable or use dynamic URL based on current location
+    const envUrl = process.env.NEXT_PUBLIC_WHATSAPP_WS_URL;
+    if (envUrl) return envUrl;
+    
+    // If on production (not localhost), construct WebSocket URL from current host
+    const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    if (!isLocalhost) {
+      // On production, assume WhatsApp service is on same host with /ws path or port 3001
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return `${protocol}//${window.location.hostname}:3001/ws`;
+    }
+  }
+  return "ws://localhost:3001/ws";
+};
+
 export function useWhatsAppSocket({
-  url = "ws://localhost:3001/ws",
+  url = getDefaultWsUrl(),
   onMessage,
   onStatusChange,
   onMessageStatus,
