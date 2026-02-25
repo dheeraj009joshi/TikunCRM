@@ -284,8 +284,8 @@ async def unassign_stale_leads():
     Logic:
     - Find assigned leads (assigned_to is NOT NULL)
     - Check the last activity performed BY the assigned user on this lead
-    - If more than 72 hours ago (or no activity by them), unassign
-    - Clear both assigned_to AND dealership_id (back to unassigned pool)
+    - If more than 72 hours ago (or no activity by them), unassign the salesperson
+    - Keep the dealership_id intact (lead stays in dealership, just unassigned from salesperson)
     - Notify the original assignee
     
     This runs every hour.
@@ -350,9 +350,8 @@ async def unassign_stale_leads():
                 old_dealership_id = lead.dealership_id
                 old_assignee = lead.assigned_to_user
                 
-                # Unassign the lead AND remove from dealership (back to pool)
+                # Unassign the salesperson only - keep the dealership assignment
                 lead.assigned_to = None
-                lead.dealership_id = None
                 lead.last_activity_at = None  # Reset for next assignment cycle
                 
                 # Create unassignment activity
@@ -360,13 +359,13 @@ async def unassign_stale_leads():
                     type=ActivityType.LEAD_UNASSIGNED,
                     description=f"Lead returned to unassigned pool due to {STALE_HOURS} hours of inactivity by assigned user",
                     lead_id=lead.id,
-                    dealership_id=None,  # No longer associated with dealership
+                    dealership_id=old_dealership_id,  # Keep the dealership association
                     meta_data={
                         "auto_unassigned": True,
                         "reason": "stale_no_activity",
                         "hours_inactive": STALE_HOURS,
                         "previous_assignee_id": str(old_assignee_id) if old_assignee_id else None,
-                        "previous_dealership_id": str(old_dealership_id) if old_dealership_id else None
+                        "dealership_id": str(old_dealership_id) if old_dealership_id else None
                     }
                 )
                 session.add(activity)
@@ -378,8 +377,8 @@ async def unassign_stale_leads():
                     await notification_service.create_notification(
                         user_id=old_assignee_id,
                         notification_type=NotificationType.SYSTEM,
-                        title="Lead Returned to Pool - No Activity",
-                        message=f"Lead {lead_name} was returned to the unassigned pool due to {STALE_HOURS} hours of inactivity",
+                        title="Lead Unassigned - No Activity",
+                        message=f"Lead {lead_name} was unassigned from you due to {STALE_HOURS} hours of inactivity. The lead remains in the dealership.",
                         link=f"/leads/{lead.id}",
                         related_id=lead.id,
                         related_type="lead",
@@ -405,11 +404,11 @@ async def unassign_stale_leads():
                     )
                 
                 unassigned_count += 1
-                logger.info(f"Returned stale lead {lead.id} to unassigned pool (was assigned to {old_assignee_id}, dealership {old_dealership_id})")
+                logger.info(f"Unassigned stale lead {lead.id} from salesperson {old_assignee_id} (dealership {old_dealership_id} kept)")
             
             if unassigned_count > 0:
                 await session.commit()
-                logger.info(f"Returned {unassigned_count} stale leads to unassigned pool")
+                logger.info(f"Unassigned {unassigned_count} stale leads from salespersons (dealership assignments kept)")
                 
                 # Emit WebSocket event so sidebar unassigned count updates in real time
                 try:
@@ -434,7 +433,7 @@ async def unassign_stale_leads():
                         users = users_result.scalars().all()
                         
                         if users:
-                            message = f"🔔 {unassigned_count} lead(s) now available in the pool!\nNo activity for {STALE_HOURS}h. First activity claims them!"
+                            message = f"🔔 {unassigned_count} lead(s) now unassigned from salespersons!\nNo activity for {STALE_HOURS}h. First activity claims them!"
                             for user in users:
                                 if user.phone:
                                     await sms_service.send_sms(user.phone, message)
