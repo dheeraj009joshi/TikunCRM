@@ -332,19 +332,25 @@ export default function WhatsAppAdminPage() {
   }, [status?.connected, fetchConversations]);
 
   // Fetch messages for selected phone (initial load only - WebSocket handles updates)
-  const fetchMessages = useCallback(async (phone: string, showLoading = true) => {
+  const fetchMessages = useCallback(async (phone: string, showLoading = true): Promise<void> => {
+    if (showLoading) {
+      setMessagesLoading(true);
+    }
+    
     try {
-      if (showLoading) {
-        setMessagesLoading(true);
-      }
+      console.log("[WhatsApp] Fetching messages for:", phone);
       const response = await whatsappBaileysService.getMessages(phone);
-      setMessages(response.messages);
+      console.log("[WhatsApp] Messages response:", response?.messages?.length, "messages");
+      
+      // Always set messages, even if empty array
+      setMessages(response.messages || []);
+      
       if (response.customer_name) {
         setSelectedCustomerName(response.customer_name);
       }
 
       // Mark unread inbound messages as read and send read receipts
-      const unreadInboundIds = response.messages
+      const unreadInboundIds = (response.messages || [])
         .filter((m) => m.direction === "inbound" && !m.is_read && m.wa_message_id)
         .map((m) => m.wa_message_id as string);
 
@@ -363,10 +369,12 @@ export default function WhatsAppAdminPage() {
         );
       }
     } catch (error) {
-      console.error("Failed to fetch messages:", error);
-    } finally {
-      setMessagesLoading(false);
+      console.error("[WhatsApp] Failed to fetch messages:", error);
+      setMessages([]); // Clear messages on error
     }
+    
+    // Always clear loading state
+    setMessagesLoading(false);
   }, []);
 
   // Fetch bulk send history
@@ -744,12 +752,13 @@ export default function WhatsAppAdminPage() {
     const normalizedPhone = normalizePhone(phone);
     setSelectedPhone(normalizedPhone);
     setMessages([]); // Clear previous messages immediately
-    setMessagesLoading(true); // Show loader
     const conversation = conversations.find(
       (c) => getPhoneSuffix(c.phone_number) === getPhoneSuffix(normalizedPhone)
     );
     setSelectedCustomerName(conversation?.customer_name || conversation?.lead_name || "");
-    fetchMessages(normalizedPhone);
+    
+    // Fetch messages - loading state is managed inside fetchMessages
+    fetchMessages(normalizedPhone, true);
   };
 
   // Handle new chat from customer selection
