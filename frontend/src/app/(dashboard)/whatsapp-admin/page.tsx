@@ -234,18 +234,32 @@ export default function WhatsAppAdminPage() {
     onMessage: handleWebSocketMessage,
     onMessageStatus: handleMessageStatusUpdate,
     onStatusChange: (wsStatus) => {
-      setStatus({
-        connected: wsStatus.isConnected,
-        status: wsStatus.state,
-        phone_number: wsStatus.phoneNumber,
-        qr_available: wsStatus.hasQr,
-      });
-      if (wsStatus.qr) {
-        setQrCode(wsStatus.qr);
-      } else if (wsStatus.isConnected) {
-        setQrCode(null);
+      // Only update status if WebSocket has meaningful data:
+      // - If connected: must have phone number to be valid
+      // - If disconnected with QR: has actual QR code
+      // - If state is explicitly "connected" or "disconnected"
+      const hasValidConnectedStatus = wsStatus.isConnected && wsStatus.phoneNumber;
+      const hasValidQrStatus = !wsStatus.isConnected && wsStatus.hasQr && wsStatus.qr;
+      const isExplicitStatus = wsStatus.state === "connected" || wsStatus.state === "disconnected";
+      
+      if (hasValidConnectedStatus || hasValidQrStatus || isExplicitStatus) {
+        console.log("[WhatsApp WS] Updating status:", wsStatus);
+        setStatus({
+          connected: wsStatus.isConnected,
+          status: wsStatus.state,
+          phone_number: wsStatus.phoneNumber,
+          qr_available: wsStatus.hasQr,
+        });
+        
+        if (wsStatus.qr) {
+          setQrCode(wsStatus.qr);
+        } else if (wsStatus.isConnected) {
+          setQrCode(null);
+        }
+        setStatusLoading(false);
+      } else {
+        console.log("[WhatsApp WS] Ignoring incomplete status update:", wsStatus);
       }
-      setStatusLoading(false);
     },
     enabled: isAdmin,
   });
@@ -270,9 +284,30 @@ export default function WhatsAppAdminPage() {
     }
   }, []);
 
-  // Initial status fetch on mount (WebSocket updates will override)
+  // Initial status fetch on mount and periodic refresh every 30s
   useEffect(() => {
     fetchStatus();
+    
+    // Periodic status check as fallback (every 30 seconds)
+    const interval = setInterval(() => {
+      whatsappBaileysService.getStatus().then((s) => {
+        // Only update if there's a meaningful change
+        setStatus((prev) => {
+          if (!prev) return s;
+          // Update if connection state changed or phone number changed
+          if (prev.connected !== s.connected || prev.phone_number !== s.phone_number) {
+            console.log("[WhatsApp] Periodic status update:", s);
+            if (s.connected) {
+              setQrCode(null);
+            }
+            return s;
+          }
+          return prev;
+        });
+      }).catch(console.error);
+    }, 30000);
+    
+    return () => clearInterval(interval);
   }, [fetchStatus]);
 
   // Fetch conversations (deduplicated by last 10 digits of phone)
