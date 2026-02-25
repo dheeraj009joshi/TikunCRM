@@ -267,13 +267,33 @@ export async function createSyncSourceWithMappings(
 
 // ============== DEALERSHIP ADMIN/OWNER: Campaign Mapping Display Name ==============
 
-export async function getDealershipCampaignMappings(): Promise<CampaignMapping[]> {
-    const response = await apiClient.get<CampaignMapping[]>(CAMPAIGN_MAPPINGS_PREFIX);
-    return response.data;
+// Response type for dealership campaign mappings endpoint
+export interface DealershipCampaignMappingResponse {
+    id: string;
+    sync_source_id: string;
+    sync_source_name: string;
+    match_pattern: string;
+    match_type: MatchType;
+    display_name: string;
+    is_active: boolean;
+    leads_matched: number;
+    updated_at?: string | null;
 }
 
-export async function getCampaignMapping(mappingId: string): Promise<CampaignMapping> {
-    const response = await apiClient.get<CampaignMapping>(
+export interface DealershipCampaignMappingList {
+    dealership_id: string;
+    dealership_name: string;
+    items: DealershipCampaignMappingResponse[];
+    total: number;
+}
+
+export async function getDealershipCampaignMappings(): Promise<DealershipCampaignMappingResponse[]> {
+    const response = await apiClient.get<DealershipCampaignMappingList>(CAMPAIGN_MAPPINGS_PREFIX);
+    return response.data.items || [];
+}
+
+export async function getCampaignMapping(mappingId: string): Promise<DealershipCampaignMappingResponse> {
+    const response = await apiClient.get<DealershipCampaignMappingResponse>(
         `${CAMPAIGN_MAPPINGS_PREFIX}/${mappingId}`
     );
     return response.data;
@@ -282,8 +302,8 @@ export async function getCampaignMapping(mappingId: string): Promise<CampaignMap
 export async function updateCampaignMappingDisplayName(
     mappingId: string,
     displayName: string
-): Promise<CampaignMapping> {
-    const response = await apiClient.put<CampaignMapping>(
+): Promise<DealershipCampaignMappingResponse> {
+    const response = await apiClient.put<DealershipCampaignMappingResponse>(
         `${CAMPAIGN_MAPPINGS_PREFIX}/${mappingId}/display-name`,
         { display_name: displayName }
     );

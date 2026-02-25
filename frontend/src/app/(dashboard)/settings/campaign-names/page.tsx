@@ -16,13 +16,13 @@ import { Badge } from "@/components/ui/badge"
 import { useRole } from "@/hooks/use-role"
 import { useToast } from "@/hooks/use-toast"
 import {
-    CampaignMapping,
+    DealershipCampaignMappingResponse,
     getDealershipCampaignMappings,
     updateCampaignMappingDisplayName,
 } from "@/services/sync-source-service"
 
 export default function CampaignNamesSettingsPage() {
-    const [mappings, setMappings] = React.useState<CampaignMapping[]>([])
+    const [mappings, setMappings] = React.useState<DealershipCampaignMappingResponse[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const [editingId, setEditingId] = React.useState<string | null>(null)
     const [editValue, setEditValue] = React.useState("")
@@ -35,7 +35,7 @@ export default function CampaignNamesSettingsPage() {
     const loadMappings = React.useCallback(async () => {
         try {
             const data = await getDealershipCampaignMappings()
-            setMappings(Array.isArray(data) ? data : [])
+            setMappings(data)
         } catch (error) {
             console.error("Failed to load campaign mappings:", error)
             setMappings([])
@@ -53,7 +53,7 @@ export default function CampaignNamesSettingsPage() {
         loadMappings()
     }, [loadMappings])
 
-    const startEdit = (mapping: CampaignMapping) => {
+    const startEdit = (mapping: DealershipCampaignMappingResponse) => {
         setEditingId(mapping.id)
         setEditValue(mapping.display_name)
     }
@@ -202,9 +202,9 @@ export default function CampaignNamesSettingsPage() {
                                                 </p>
                                                 <p className="text-xs text-muted-foreground mt-0.5">
                                                     Pattern: <code className="bg-muted px-1 rounded">{mapping.match_pattern}</code>
-                                                    {mapping.sync_source && (
+                                                    {mapping.sync_source_name && (
                                                         <span className="ml-2">
-                                                            Source: {mapping.sync_source.display_name}
+                                                            Source: {mapping.sync_source_name}
                                                         </span>
                                                     )}
                                                 </p>

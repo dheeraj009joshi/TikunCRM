@@ -17,13 +17,13 @@ import { Badge } from "@/components/ui/badge"
 import { useRole } from "@/hooks/use-role"
 import { useToast } from "@/hooks/use-toast"
 import {
-    CampaignMapping,
+    DealershipCampaignMappingResponse,
     getDealershipCampaignMappings,
     updateCampaignMappingDisplayName,
 } from "@/services/sync-source-service"
 
 export default function CampaignMappingsPage() {
-    const [mappings, setMappings] = React.useState<CampaignMapping[]>([])
+    const [mappings, setMappings] = React.useState<DealershipCampaignMappingResponse[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const [editingId, setEditingId] = React.useState<string | null>(null)
     const [editValue, setEditValue] = React.useState("")
@@ -57,7 +57,7 @@ export default function CampaignMappingsPage() {
         }
     }, [loadMappings, canEdit])
 
-    const startEdit = (mapping: CampaignMapping) => {
+    const startEdit = (mapping: DealershipCampaignMappingResponse) => {
         setEditingId(mapping.id)
         setEditValue(mapping.display_name)
     }
@@ -125,7 +125,7 @@ export default function CampaignMappingsPage() {
     // Group mappings by sync source
     const groupedMappings = mappings.reduce((acc, mapping) => {
         const sourceId = mapping.sync_source_id
-        const sourceName = mapping.sync_source?.display_name || mapping.sync_source?.name || "Unknown Source"
+        const sourceName = mapping.sync_source_name || "Unknown Source"
         
         if (!acc[sourceId]) {
             acc[sourceId] = {
@@ -135,7 +135,7 @@ export default function CampaignMappingsPage() {
         }
         acc[sourceId].mappings.push(mapping)
         return acc
-    }, {} as Record<string, { name: string; mappings: CampaignMapping[] }>)
+    }, {} as Record<string, { name: string; mappings: DealershipCampaignMappingResponse[] }>)
 
     return (
         <div className="space-y-6 max-w-3xl">
@@ -239,11 +239,6 @@ export default function CampaignMappingsPage() {
                                                 )}
                                                 
                                                 <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                                                    {mapping.dealership && (
-                                                        <span>
-                                                            Dealership: {mapping.dealership.name}
-                                                        </span>
-                                                    )}
                                                     <span>
                                                         {mapping.leads_matched} leads matched
                                                     </span>
