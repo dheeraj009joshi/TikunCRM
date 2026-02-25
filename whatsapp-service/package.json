@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-service",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "description": "WhatsApp messaging service using Baileys for LeedsCRM",
   "main": "src/index.js",
   "type": "module",
@@ -9,12 +9,13 @@
     "dev": "node --watch src/index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.9",
+    "@whiskeysockets/baileys": "^6.7.5",
+    "@hapi/boom": "^10.0.1",
+    "pino": "^9.0.0",
     "express": "^4.21.0",
     "cors": "^2.8.5",
     "qrcode": "^1.5.4",
     "ws": "^8.18.0",
-    "pino": "^9.5.0",
     "axios": "^1.7.7"
   },
   "engines": {

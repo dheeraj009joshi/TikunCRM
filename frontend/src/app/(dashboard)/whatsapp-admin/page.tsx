@@ -16,6 +16,9 @@ import {
   AlertCircle,
   Wifi,
   WifiOff,
+  Image as ImageIcon,
+  Video,
+  FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -100,6 +103,9 @@ export default function WhatsAppAdminPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [sendingBulk, setSendingBulk] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [bulkMedia, setBulkMedia] = useState<string | null>(null);
+  const [bulkMediaType, setBulkMediaType] = useState<"image" | "file" | "video" | null>(null);
+  const [bulkMediaName, setBulkMediaName] = useState<string>("");
 
   // Conversations state
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
@@ -182,9 +188,9 @@ export default function WhatsAppAdminPage() {
   const handleMessageStatusUpdate = useCallback((update: MessageStatusUpdate) => {
     console.log("[WhatsApp] Status update received:", update);
 
-    // Get phone suffix from remoteJid for matching
+    // Get phone suffix - prefer direct phone field, fallback to remoteJid extraction
     const updatePhoneSuffix = getPhoneSuffix(
-      update.remoteJid?.replace(/@.*$/, "") || ""
+      update.phone || update.remoteJid?.replace(/@.*$/, "") || ""
     );
 
     setMessages((prev) => {
@@ -209,10 +215,12 @@ export default function WhatsAppAdminPage() {
 
     // Also update the conversation list status using phone suffix comparison
     if (updatePhoneSuffix) {
+      console.log("[WhatsApp] Updating conversation list for phone suffix:", updatePhoneSuffix);
       setConversations((prev) =>
         prev.map((conv) => {
           const convPhoneSuffix = getPhoneSuffix(conv.phone_number);
           if (convPhoneSuffix === updatePhoneSuffix) {
+            console.log("[WhatsApp] Matched conversation, updating status to:", update.status);
             return { ...conv, last_message_status: update.status };
           }
           return conv;
@@ -283,6 +291,13 @@ export default function WhatsAppAdminPage() {
     }
   }, []);
 
+  // Auto-fetch conversations when WhatsApp becomes connected
+  useEffect(() => {
+    if (status?.connected) {
+      fetchConversations();
+    }
+  }, [status?.connected, fetchConversations]);
+
   // Fetch messages for selected phone (initial load only - WebSocket handles updates)
   const fetchMessages = useCallback(async (phone: string, showLoading = true) => {
     try {
@@ -293,6 +308,26 @@ export default function WhatsAppAdminPage() {
       setMessages(response.messages);
       if (response.customer_name) {
         setSelectedCustomerName(response.customer_name);
+      }
+
+      // Mark unread inbound messages as read and send read receipts
+      const unreadInboundIds = response.messages
+        .filter((m) => m.direction === "inbound" && !m.is_read && m.wa_message_id)
+        .map((m) => m.wa_message_id as string);
+
+      if (unreadInboundIds.length > 0) {
+        whatsappBaileysService.markAsRead(phone, unreadInboundIds).catch((err) => {
+          console.error("Failed to mark messages as read:", err);
+        });
+
+        // Update conversation unread count
+        setConversations((prev) =>
+          prev.map((conv) =>
+            getPhoneSuffix(conv.phone_number) === getPhoneSuffix(phone)
+              ? { ...conv, unread_count: 0 }
+              : conv
+          )
+        );
       }
     } catch (error) {
       console.error("Failed to fetch messages:", error);
@@ -354,10 +389,10 @@ export default function WhatsAppAdminPage() {
 
   // Send bulk messages
   const sendBulkMessages = async () => {
-    if (!message.trim()) {
+    if (!message.trim() && !bulkMedia) {
       toast({
-        title: "Message required",
-        description: "Please enter a message to send.",
+        title: "Content required",
+        description: "Please enter a message or attach media to send.",
         variant: "destructive",
       });
       return;
@@ -375,9 +410,12 @@ export default function WhatsAppAdminPage() {
     try {
       setSendingBulk(true);
       const response = await whatsappBaileysService.sendBulk({
-        message: message.trim(),
+        message: message.trim() || undefined,
         lead_statuses: selectedStatuses,
         name: campaignName || undefined,
+        media: bulkMedia || undefined,
+        media_type: bulkMediaType || undefined,
+        media_filename: bulkMediaName || undefined,
       });
 
       setConfirmDialogOpen(false);
@@ -391,6 +429,9 @@ export default function WhatsAppAdminPage() {
         setCampaignName("");
         setSelectedStatuses([]);
         setRecipients([]);
+        setBulkMedia(null);
+        setBulkMediaType(null);
+        setBulkMediaName("");
         fetchHistory();
       } else {
         toast({
@@ -536,10 +577,141 @@ export default function WhatsAppAdminPage() {
     }
   };
 
+  // Send media message in conversation
+  const sendMediaMessage = async (attachment: { type: string; file: File; base64?: string; preview?: string }, caption: string) => {
+    if (!selectedPhone || !attachment.base64) return;
+
+    const selectedPhoneSuffix = getPhoneSuffix(selectedPhone);
+    const mediaLabel = attachment.type === "image" ? "Photo" : attachment.type === "video" ? "Video" : attachment.file.name;
+
+    // Create data URL for immediate preview
+    const mimeTypes: Record<string, string> = {
+      image: "image/jpeg",
+      video: "video/mp4",
+      audio: "audio/mpeg",
+      file: "application/octet-stream",
+    };
+    const mimeType = attachment.file.type || mimeTypes[attachment.type] || mimeTypes.file;
+    const mediaDataUrl = `data:${mimeType};base64,${attachment.base64}`;
+
+    // Optimistically add the message to UI
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMessage: MessageItem = {
+      id: tempId,
+      wa_message_id: tempId,
+      direction: "outbound",
+      body: caption || "",
+      media_type: attachment.type,
+      media_url: mediaDataUrl,
+      status: "pending",
+      created_at: new Date().toISOString(),
+      sent_at: new Date().toISOString(),
+      is_read: false,
+    };
+    
+    setMessages((prev) => [...prev, optimisticMessage]);
+
+    // Update conversation list
+    setConversations((prev) => {
+      const idx = prev.findIndex(
+        (c) => getPhoneSuffix(c.phone_number) === selectedPhoneSuffix
+      );
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = {
+          ...updated[idx],
+          last_message: caption || `[${mediaLabel}]`,
+          last_message_at: new Date().toISOString(),
+          direction: "outbound",
+          last_message_status: "pending",
+        };
+        const [item] = updated.splice(idx, 1);
+        return [item, ...updated];
+      }
+      return prev;
+    });
+
+    try {
+      let response;
+      if (attachment.type === "image") {
+        response = await whatsappBaileysService.sendImage({
+          phone: selectedPhone,
+          image: attachment.base64,
+          filename: attachment.file.name,
+          caption: caption || undefined,
+        });
+      } else {
+        response = await whatsappBaileysService.sendFile({
+          phone: selectedPhone,
+          file: attachment.base64,
+          filename: attachment.file.name,
+          caption: caption || undefined,
+        });
+      }
+
+      if (response.success) {
+        const realMsgId = response.wa_message_id || response.message_id || tempId;
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId
+              ? { ...msg, id: realMsgId, wa_message_id: realMsgId, status: "sent" }
+              : msg
+          )
+        );
+        setConversations((prev) =>
+          prev.map((conv) =>
+            getPhoneSuffix(conv.phone_number) === selectedPhoneSuffix
+              ? { ...conv, last_message_status: "sent" }
+              : conv
+          )
+        );
+      } else {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId ? { ...msg, status: "failed" } : msg
+          )
+        );
+        setConversations((prev) =>
+          prev.map((conv) =>
+            getPhoneSuffix(conv.phone_number) === selectedPhoneSuffix
+              ? { ...conv, last_message_status: "failed" }
+              : conv
+          )
+        );
+        toast({
+          title: "Failed to send",
+          description: response.error,
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error("Failed to send media:", error);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === tempId ? { ...msg, status: "failed" } : msg
+        )
+      );
+      setConversations((prev) =>
+        prev.map((conv) =>
+          getPhoneSuffix(conv.phone_number) === selectedPhoneSuffix
+            ? { ...conv, last_message_status: "failed" }
+            : conv
+        )
+      );
+      toast({
+        title: "Error",
+        description: "Failed to send media.",
+        variant: "destructive",
+      });
+    }
+  };
+
   // Handle selecting a conversation
   const handleSelectConversation = (phone: string) => {
     const normalizedPhone = normalizePhone(phone);
     setSelectedPhone(normalizedPhone);
+    setMessages([]); // Clear previous messages immediately
+    setMessagesLoading(true); // Show loader
     const conversation = conversations.find(
       (c) => getPhoneSuffix(c.phone_number) === getPhoneSuffix(normalizedPhone)
     );
@@ -653,8 +825,8 @@ export default function WhatsAppAdminPage() {
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="p-4 border-b">
+    <div className="h-[calc(100vh-120px)] flex flex-col -m-6">
+      <div className="p-4 border-b flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <MessageCircle className="h-6 w-6 text-green-600" />
@@ -717,7 +889,7 @@ export default function WhatsAppAdminPage() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-hidden">
         {!status?.connected ? (
           // QR Code / Connection View
           <div className="h-full flex items-center justify-center p-8">
@@ -768,14 +940,17 @@ export default function WhatsAppAdminPage() {
           </div>
         ) : (
           // Main Interface
-          <Tabs defaultValue="conversations" className="h-full flex flex-col">
-            <div className="px-4 pt-2 border-b">
+          <Tabs defaultValue="conversations" className="h-full flex flex-col overflow-hidden">
+            <div className="px-4 pt-2 border-b flex-shrink-0">
               <TabsList>
                 <TabsTrigger
                   value="conversations"
                   className="gap-2"
                   onClick={() => {
-                    if (conversations.length === 0) fetchConversations();
+                    fetchConversations();
+                    if (selectedPhone) {
+                      fetchMessages(selectedPhone, false);
+                    }
                   }}
                 >
                   <MessageCircle className="h-4 w-4" />
@@ -805,7 +980,7 @@ export default function WhatsAppAdminPage() {
             >
               <div className="h-full flex">
                 {/* Chat List Sidebar */}
-                <div className="w-[350px] lg:w-[400px] h-full flex-shrink-0">
+                <div className="w-[350px] lg:w-[400px] h-full flex-shrink-0 overflow-hidden">
                   <ChatList
                     conversations={conversations}
                     selectedPhone={selectedPhone}
@@ -817,14 +992,16 @@ export default function WhatsAppAdminPage() {
                 </div>
 
                 {/* Chat View */}
-                <div className="flex-1 h-full relative">
+                <div className="flex-1 h-full relative overflow-hidden">
                   {selectedPhone ? (
                     <ChatView
                       phoneNumber={selectedPhone}
                       customerName={selectedCustomerName}
                       messages={messages}
                       loading={messagesLoading}
+                      initialLoading={messagesLoading && messages.length === 0}
                       onSendMessage={sendMessage}
+                      onSendMedia={sendMediaMessage}
                       onBack={() => setSelectedPhone(null)}
                       showBackButton={true}
                     />
@@ -923,6 +1100,132 @@ export default function WhatsAppAdminPage() {
                       </p>
                     </div>
 
+                    {/* Media Attachment */}
+                    <div>
+                      <label className="text-sm font-medium">
+                        Attach Media (optional)
+                      </label>
+                      <div className="mt-2">
+                        {bulkMedia ? (
+                          <div className="relative border rounded-lg p-3 bg-muted/50">
+                            <div className="flex items-center gap-3">
+                              {bulkMediaType === "image" ? (
+                                <img
+                                  src={bulkMedia}
+                                  alt="Preview"
+                                  className="h-16 w-16 object-cover rounded"
+                                />
+                              ) : bulkMediaType === "video" ? (
+                                <div className="h-16 w-16 bg-muted rounded flex items-center justify-center">
+                                  <FileText className="h-8 w-8 text-muted-foreground" />
+                                </div>
+                              ) : (
+                                <div className="h-16 w-16 bg-muted rounded flex items-center justify-center">
+                                  <FileText className="h-8 w-8 text-muted-foreground" />
+                                </div>
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium truncate">{bulkMediaName}</p>
+                                <p className="text-sm text-muted-foreground capitalize">
+                                  {bulkMediaType}
+                                </p>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="text-destructive hover:text-destructive"
+                                onClick={() => {
+                                  setBulkMedia(null);
+                                  setBulkMediaType(null);
+                                  setBulkMediaName("");
+                                }}
+                              >
+                                <XCircle className="h-5 w-5" />
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const input = document.createElement("input");
+                                input.type = "file";
+                                input.accept = "image/*";
+                                input.onchange = (e) => {
+                                  const file = (e.target as HTMLInputElement).files?.[0];
+                                  if (file) {
+                                    const reader = new FileReader();
+                                    reader.onload = () => {
+                                      setBulkMedia(reader.result as string);
+                                      setBulkMediaType("image");
+                                      setBulkMediaName(file.name);
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                };
+                                input.click();
+                              }}
+                            >
+                              <ImageIcon className="h-4 w-4 mr-2" />
+                              Image
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const input = document.createElement("input");
+                                input.type = "file";
+                                input.accept = "video/*";
+                                input.onchange = (e) => {
+                                  const file = (e.target as HTMLInputElement).files?.[0];
+                                  if (file) {
+                                    const reader = new FileReader();
+                                    reader.onload = () => {
+                                      setBulkMedia(reader.result as string);
+                                      setBulkMediaType("video");
+                                      setBulkMediaName(file.name);
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                };
+                                input.click();
+                              }}
+                            >
+                              <Video className="h-4 w-4 mr-2" />
+                              Video
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const input = document.createElement("input");
+                                input.type = "file";
+                                input.accept = ".pdf,.doc,.docx,.xls,.xlsx,.txt";
+                                input.onchange = (e) => {
+                                  const file = (e.target as HTMLInputElement).files?.[0];
+                                  if (file) {
+                                    const reader = new FileReader();
+                                    reader.onload = () => {
+                                      setBulkMedia(reader.result as string);
+                                      setBulkMediaType("file");
+                                      setBulkMediaName(file.name);
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                };
+                                input.click();
+                              }}
+                            >
+                              <FileText className="h-4 w-4 mr-2" />
+                              Document
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
                     <div className="flex gap-2">
                       <Button
                         variant="outline"
@@ -941,7 +1244,7 @@ export default function WhatsAppAdminPage() {
 
                       <Button
                         onClick={() => setConfirmDialogOpen(true)}
-                        disabled={recipients.length === 0 || !message.trim()}
+                        disabled={recipients.length === 0 || (!message.trim() && !bulkMedia)}
                       >
                         <Send className="h-4 w-4 mr-2" />
                         Send to {recipients.length} Recipients
@@ -970,20 +1273,32 @@ export default function WhatsAppAdminPage() {
                           {recipients.map((r) => (
                             <div
                               key={r.customer_id}
-                              className="flex items-center justify-between p-2 rounded border"
+                              className="flex items-center justify-between p-2 rounded border group hover:border-destructive/50 transition-colors"
                             >
-                              <div>
-                                <p className="font-medium">{r.customer_name}</p>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium truncate">{r.customer_name}</p>
                                 <p className="text-sm text-muted-foreground flex items-center gap-1">
                                   <Phone className="h-3 w-3" />
                                   {r.phone}
                                 </p>
                               </div>
-                              {r.lead_status && (
-                                <Badge variant="secondary">
-                                  {r.lead_status}
-                                </Badge>
-                              )}
+                              <div className="flex items-center gap-2">
+                                {r.lead_status && (
+                                  <Badge variant="secondary">
+                                    {r.lead_status}
+                                  </Badge>
+                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  onClick={() => {
+                                    setRecipients(prev => prev.filter(rec => rec.customer_id !== r.customer_id));
+                                  }}
+                                >
+                                  <XCircle className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1090,11 +1405,37 @@ export default function WhatsAppAdminPage() {
               This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <p className="text-sm font-medium mb-2">Message Preview:</p>
-            <div className="p-3 bg-muted rounded-lg text-sm whitespace-pre-wrap">
-              {message}
-            </div>
+          <div className="py-4 space-y-3">
+            {bulkMedia && (
+              <div>
+                <p className="text-sm font-medium mb-2">Media Attachment:</p>
+                <div className="p-3 bg-muted rounded-lg flex items-center gap-3">
+                  {bulkMediaType === "image" ? (
+                    <img
+                      src={bulkMedia}
+                      alt="Preview"
+                      className="h-16 w-16 object-cover rounded"
+                    />
+                  ) : (
+                    <div className="h-12 w-12 bg-background rounded flex items-center justify-center">
+                      <FileText className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                  )}
+                  <div>
+                    <p className="font-medium text-sm">{bulkMediaName}</p>
+                    <p className="text-xs text-muted-foreground capitalize">{bulkMediaType}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {message && (
+              <div>
+                <p className="text-sm font-medium mb-2">Message Preview:</p>
+                <div className="p-3 bg-muted rounded-lg text-sm whitespace-pre-wrap">
+                  {message}
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button

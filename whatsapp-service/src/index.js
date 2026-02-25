@@ -14,7 +14,8 @@ const PYTHON_WEBHOOK_URL = process.env.PYTHON_WEBHOOK_URL || 'http://localhost:8
 const PYTHON_STATUS_WEBHOOK_URL = process.env.PYTHON_STATUS_WEBHOOK_URL || 'http://localhost:8000/api/v1/whatsapp-baileys/webhook/status';
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -25,10 +26,12 @@ wss.on('connection', (ws) => {
     console.log('WebSocket client connected');
     wsClients.add(ws);
 
-    ws.send(JSON.stringify({
-        type: 'status',
-        data: client.getStatus(),
-    }));
+    client.getStatus().then(status => {
+        ws.send(JSON.stringify({
+            type: 'status',
+            data: status,
+        }));
+    });
 
     ws.on('close', () => {
         console.log('WebSocket client disconnected');
@@ -53,29 +56,32 @@ function broadcastToClients(message) {
 client.onStatusChange(async (status, data) => {
     console.log('Status changed:', status, data);
     
-    // Handle message_status separately with its own type
     if (status === 'message_status') {
         broadcastToClients({
             type: 'message_status',
             data: data,
         });
         
-        // Also POST to Python backend to persist status (with retry)
         const statusSuccess = await sendWebhookWithRetry(PYTHON_STATUS_WEBHOOK_URL, {
             messageId: data.messageId,
             status: data.status,
             remoteJid: data.remoteJid,
-        }, 2); // 2 retries for status updates
+            phone: data.phone,
+        }, 2);
         
         if (statusSuccess) {
-            console.log(`Status update sent to Python: ${data.messageId} -> ${data.status}`);
+            console.log(`Status update sent to Python: ${data.messageId} -> ${data.status} (phone: ${data.phone})`);
         } else {
             console.error('Failed to send status update to Python after retries');
         }
     } else if (status === 'presence') {
-        // Broadcast presence updates (online/offline/typing)
         broadcastToClients({
             type: 'presence',
+            data: data,
+        });
+    } else if (status === 'incoming_call') {
+        broadcastToClients({
+            type: 'incoming_call',
             data: data,
         });
     } else {
@@ -96,7 +102,7 @@ async function sendWebhookWithRetry(url, data, maxRetries = 3) {
             const isLastAttempt = attempt === maxRetries;
             console.error(`Webhook attempt ${attempt}/${maxRetries} failed:`, err.message);
             if (!isLastAttempt) {
-                const delay = attempt * 1000; // 1s, 2s, 3s backoff
+                const delay = attempt * 1000;
                 console.log(`Retrying in ${delay}ms...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
@@ -108,33 +114,48 @@ async function sendWebhookWithRetry(url, data, maxRetries = 3) {
 client.onMessage(async (message) => {
     console.log('Incoming message:', message);
     
-    // Skip @lid messages - these are internal WhatsApp IDs without real phone numbers
-    // Only process messages from @s.whatsapp.net (regular users)
-    if (message.remoteJid?.includes('@lid') || message.remoteJid?.includes('@g.us')) {
-        console.log(`Skipping message from ${message.remoteJid} - not a regular user JID`);
+    if (message.remoteJid?.includes('@g.us')) {
+        console.log(`Skipping group message from ${message.remoteJid}`);
         return;
     }
     
-    // Validate we have a real phone number (at least 10 digits)
     const digitsOnly = message.phone?.replace(/\D/g, '');
     if (!digitsOnly || digitsOnly.length < 10) {
         console.log(`Skipping message with invalid phone: ${message.phone}`);
         return;
     }
     
+    const normalizedPhone = digitsOnly.length > 12 ? digitsOnly.slice(-12) : digitsOnly;
+    
+    // Handle reactions differently
+    if (message.isReaction) {
+        broadcastToClients({
+            type: 'reaction',
+            data: {
+                phone: normalizedPhone,
+                messageId: message.reactionToMsgId,
+                emoji: message.reactionEmoji,
+                fromMe: false,
+            },
+        });
+        console.log(`Reaction ${message.reactionEmoji} received for message ${message.reactionToMsgId}`);
+        return;
+    }
+    
     broadcastToClients({
         type: 'message',
-        data: message,
+        data: { ...message, phone: normalizedPhone },
     });
 
     const success = await sendWebhookWithRetry(PYTHON_WEBHOOK_URL, {
-        from: digitsOnly, // Send normalized phone
+        from: normalizedPhone,
         body: message.content,
         id: message.id,
         mediaUrl: message.mediaUrl,
         mediaType: message.mediaType,
         pushName: message.pushName,
         timestamp: message.timestamp,
+        quotedMsgId: message.quotedMsgId,
     });
     
     if (success) {
@@ -148,8 +169,8 @@ app.use('/qr', qrRoutes);
 app.use('/send', sendRoutes);
 app.use('/messages', messagesRoutes);
 
-app.get('/status', (req, res) => {
-    res.json(client.getStatus());
+app.get('/status', async (req, res) => {
+    res.json(await client.getStatus());
 });
 
 app.get('/health', (req, res) => {
@@ -201,12 +222,18 @@ server.listen(PORT, async () => {
     console.log(`WhatsApp service running on port ${PORT}`);
     console.log(`WebSocket available at ws://localhost:${PORT}/ws`);
     
-    console.log('Starting WhatsApp connection...');
+    console.log('Starting WhatsApp connection with Baileys...');
     await client.connect();
 });
 
 process.on('SIGINT', async () => {
     console.log('Shutting down (session preserved)...');
+    await client.disconnect();
+    process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+    console.log('Received SIGTERM, shutting down...');
     await client.disconnect();
     process.exit(0);
 });

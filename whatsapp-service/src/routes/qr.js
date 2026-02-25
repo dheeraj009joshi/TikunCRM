@@ -1,5 +1,4 @@
 import express from 'express';
-import QRCode from 'qrcode';
 import client from '../baileys-client.js';
 
 const router = express.Router();
@@ -8,7 +7,7 @@ router.get('/', async (req, res) => {
     const qrCodeBase64 = client.getQrCode();
     
     if (!qrCodeBase64) {
-        const status = client.getStatus();
+        const status = await client.getStatus();
         if (status.connected) {
             return res.json({
                 success: true,
@@ -34,7 +33,7 @@ router.get('/image', async (req, res) => {
     const qrCodeBase64 = client.getQrCode();
     
     if (!qrCodeBase64) {
-        const status = client.getStatus();
+        const status = await client.getStatus();
         if (status.connected) {
             return res.status(200).send('Already connected');
         }
@@ -54,12 +53,13 @@ router.get('/base64', async (req, res) => {
     const qrCodeBase64 = client.getQrCode();
     
     if (!qrCodeBase64) {
-        const status = client.getStatus();
+        const status = await client.getStatus();
         if (status.connected) {
             return res.json({
                 success: true,
                 connected: true,
                 message: 'Already connected',
+                phoneNumber: status.phoneNumber,
             });
         }
         return res.json({

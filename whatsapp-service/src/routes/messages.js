@@ -7,7 +7,7 @@ router.get('/:phone', async (req, res) => {
     const { phone } = req.params;
     const { limit = 50 } = req.query;
 
-    if (!client.isConnected || !client.socket) {
+    if (!client.isConnected) {
         return res.status(503).json({
             success: false,
             error: 'WhatsApp not connected',
@@ -18,31 +18,32 @@ router.get('/:phone', async (req, res) => {
         const formattedPhone = phone.replace(/[^0-9]/g, '');
         const jid = `${formattedPhone}@s.whatsapp.net`;
 
-        const messages = client.store.messages[jid];
+        const messages = [];
+        const limitNum = parseInt(limit);
         
-        if (!messages) {
-            return res.json({
-                success: true,
-                phone: formattedPhone,
-                messages: [],
-            });
+        for (const [id, msg] of client.messageStore.entries()) {
+            if (msg.key?.remoteJid === jid) {
+                const parsed = client.parseMessage(msg);
+                if (parsed) {
+                    messages.push({
+                        id: msg.key.id,
+                        fromMe: msg.key.fromMe,
+                        content: parsed.content || '',
+                        timestamp: msg.messageTimestamp,
+                        type: parsed.mediaType || 'text',
+                        hasMedia: !!parsed.mediaType,
+                    });
+                }
+            }
+            if (messages.length >= limitNum) break;
         }
 
-        const messageArray = messages.array.slice(-parseInt(limit)).map(msg => ({
-            id: msg.key.id,
-            fromMe: msg.key.fromMe,
-            content: msg.message?.conversation || 
-                     msg.message?.extendedTextMessage?.text || 
-                     msg.message?.imageMessage?.caption ||
-                     '',
-            timestamp: msg.messageTimestamp,
-            status: msg.status,
-        }));
+        messages.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
         res.json({
             success: true,
             phone: formattedPhone,
-            messages: messageArray,
+            messages: messages.slice(0, limitNum),
         });
     } catch (err) {
         res.status(500).json({
@@ -53,7 +54,7 @@ router.get('/:phone', async (req, res) => {
 });
 
 router.get('/', async (req, res) => {
-    if (!client.isConnected || !client.socket) {
+    if (!client.isConnected) {
         return res.status(503).json({
             success: false,
             error: 'WhatsApp not connected',
@@ -61,28 +62,33 @@ router.get('/', async (req, res) => {
     }
 
     try {
-        const chats = Object.keys(client.store.messages || {});
-        const conversations = chats
-            .filter(jid => jid.endsWith('@s.whatsapp.net'))
-            .map(jid => {
-                const messages = client.store.messages[jid];
-                const lastMessage = messages?.array?.slice(-1)[0];
-                const phone = jid.replace('@s.whatsapp.net', '');
-                
-                return {
+        const chatMap = new Map();
+        
+        for (const [id, msg] of client.messageStore.entries()) {
+            const jid = msg.key?.remoteJid;
+            if (!jid || !jid.endsWith('@s.whatsapp.net')) continue;
+            
+            const phone = jid.replace('@s.whatsapp.net', '');
+            const existing = chatMap.get(phone);
+            const timestamp = msg.messageTimestamp;
+            
+            if (!existing || (timestamp && timestamp > (existing.lastMessage?.timestamp || 0))) {
+                const parsed = client.parseMessage(msg);
+                chatMap.set(phone, {
                     phone,
                     jid,
-                    lastMessage: lastMessage ? {
-                        content: lastMessage.message?.conversation ||
-                                lastMessage.message?.extendedTextMessage?.text ||
-                                '',
-                        timestamp: lastMessage.messageTimestamp,
-                        fromMe: lastMessage.key.fromMe,
-                    } : null,
-                    messageCount: messages?.array?.length || 0,
-                };
-            })
-            .filter(c => c.messageCount > 0)
+                    name: msg.pushName || phone,
+                    lastMessage: {
+                        content: parsed?.content || '',
+                        timestamp: timestamp,
+                        fromMe: msg.key.fromMe,
+                    },
+                    unreadCount: 0,
+                });
+            }
+        }
+        
+        const conversations = Array.from(chatMap.values())
             .sort((a, b) => {
                 const aTime = a.lastMessage?.timestamp || 0;
                 const bTime = b.lastMessage?.timestamp || 0;
@@ -93,6 +99,75 @@ router.get('/', async (req, res) => {
             success: true,
             conversations,
         });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            error: err.message,
+        });
+    }
+});
+
+router.get('/message/:messageId', async (req, res) => {
+    const { messageId } = req.params;
+
+    if (!client.isConnected) {
+        return res.status(503).json({
+            success: false,
+            error: 'WhatsApp not connected',
+        });
+    }
+
+    try {
+        const message = await client.getMessageById(messageId);
+        
+        if (!message) {
+            return res.status(404).json({
+                success: false,
+                error: 'Message not found',
+            });
+        }
+
+        const parsed = client.parseMessage(message);
+
+        res.json({
+            success: true,
+            message: {
+                id: message.key?.id || messageId,
+                fromMe: message.key?.fromMe || false,
+                content: parsed?.content || '',
+                timestamp: message.messageTimestamp,
+                type: parsed?.mediaType || 'text',
+                hasMedia: !!parsed?.mediaType,
+            },
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            error: err.message,
+        });
+    }
+});
+
+router.post('/read', async (req, res) => {
+    const { phone, messageIds } = req.body;
+
+    if (!client.isConnected) {
+        return res.status(503).json({
+            success: false,
+            error: 'WhatsApp not connected',
+        });
+    }
+
+    if (!phone) {
+        return res.status(400).json({
+            success: false,
+            error: 'Phone number is required',
+        });
+    }
+
+    try {
+        const result = await client.markAsRead(phone, messageIds || []);
+        res.json(result);
     } catch (err) {
         res.status(500).json({
             success: false,

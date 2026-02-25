@@ -143,7 +143,7 @@ class WhatsAppMessage(Base):
         index=True
     )
     body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    media_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    media_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Changed to Text for base64 data URLs
     media_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     
     # Status

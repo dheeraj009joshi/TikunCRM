@@ -49,6 +49,63 @@ class SendMessageRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4096)
     customer_id: Optional[UUID] = None
     lead_id: Optional[UUID] = None
+    quoted_msg_id: Optional[str] = Field(None, description="Message ID to reply to")
+
+
+class SendImageRequest(BaseModel):
+    """Send image message request"""
+    phone: str = Field(..., description="Phone number with country code")
+    image: str = Field(..., description="Base64 encoded image or URL")
+    filename: Optional[str] = Field("image.jpg", description="Image filename")
+    caption: Optional[str] = Field(None, max_length=4096, description="Image caption")
+    customer_id: Optional[UUID] = None
+    lead_id: Optional[UUID] = None
+
+
+class SendFileRequest(BaseModel):
+    """Send file/document message request"""
+    phone: str = Field(..., description="Phone number with country code")
+    file: str = Field(..., description="Base64 encoded file or URL")
+    filename: str = Field(..., description="Filename with extension")
+    caption: Optional[str] = Field(None, max_length=4096, description="File caption")
+    customer_id: Optional[UUID] = None
+    lead_id: Optional[UUID] = None
+
+
+class SendAudioRequest(BaseModel):
+    """Send audio/voice message request"""
+    phone: str = Field(..., description="Phone number with country code")
+    audio: str = Field(..., description="Base64 encoded audio or URL")
+    is_ptt: bool = Field(True, description="Send as voice message (PTT)")
+    customer_id: Optional[UUID] = None
+    lead_id: Optional[UUID] = None
+
+
+class SendVideoRequest(BaseModel):
+    """Send video message request"""
+    phone: str = Field(..., description="Phone number with country code")
+    video: str = Field(..., description="Base64 encoded video or URL")
+    filename: Optional[str] = Field("video.mp4", description="Video filename")
+    caption: Optional[str] = Field(None, max_length=4096, description="Video caption")
+    customer_id: Optional[UUID] = None
+    lead_id: Optional[UUID] = None
+
+
+class SendLocationRequest(BaseModel):
+    """Send location message request"""
+    phone: str = Field(..., description="Phone number with country code")
+    latitude: float = Field(..., description="Location latitude")
+    longitude: float = Field(..., description="Location longitude")
+    title: Optional[str] = Field(None, description="Location title")
+    address: Optional[str] = Field(None, description="Location address")
+    customer_id: Optional[UUID] = None
+    lead_id: Optional[UUID] = None
+
+
+class SendReactionRequest(BaseModel):
+    """Send reaction to message request"""
+    message_id: str = Field(..., description="Message ID to react to")
+    emoji: str = Field(..., description="Emoji reaction")
 
 
 class SendMessageResponse(BaseModel):
@@ -61,13 +118,16 @@ class SendMessageResponse(BaseModel):
 
 class BulkSendRequest(BaseModel):
     """Bulk send request with filters"""
-    message: str = Field(..., min_length=1, max_length=4096)
+    message: Optional[str] = Field(None, max_length=4096)
     lead_statuses: Optional[List[str]] = Field(None, description="Filter by lead statuses")
     dealership_id: Optional[UUID] = None
     customer_ids: Optional[List[UUID]] = Field(None, description="Specific customer IDs")
     name: Optional[str] = Field(None, description="Campaign name")
     min_delay: int = Field(5, ge=3, le=60, description="Min delay between messages (seconds)")
     max_delay: int = Field(30, ge=5, le=120, description="Max delay between messages (seconds)")
+    media: Optional[str] = Field(None, description="Base64 media data")
+    media_type: Optional[str] = Field(None, description="Media type: image, file, video")
+    media_filename: Optional[str] = Field(None, description="Media filename")
 
 
 class BulkSendResponse(BaseModel):
@@ -77,6 +137,19 @@ class BulkSendResponse(BaseModel):
     total: int = 0
     sent: int = 0
     failed: int = 0
+    error: Optional[str] = None
+
+
+class MarkAsReadRequest(BaseModel):
+    """Mark messages as read request"""
+    phone: str = Field(..., description="Phone number of the conversation")
+    message_ids: Optional[List[str]] = Field(None, description="List of message IDs to mark as read")
+
+
+class MarkAsReadResponse(BaseModel):
+    """Mark as read response"""
+    success: bool
+    count: int = 0
     error: Optional[str] = None
 
 
@@ -283,13 +356,45 @@ async def send_whatsapp_message(
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Send a single WhatsApp message via Baileys"""
+    """Send a single WhatsApp text message"""
     require_admin(current_user)
     
     service = WhatsAppService(db)
     result = await service.send_message(
         phone=request.phone,
         message=request.message,
+        user_id=current_user.id,
+        customer_id=request.customer_id,
+        lead_id=request.lead_id,
+        dealership_id=current_user.dealership_id,
+        quoted_msg_id=request.quoted_msg_id,
+    )
+    
+    await db.commit()
+    
+    return SendMessageResponse(
+        success=result.get("success", False),
+        message_id=result.get("message_id"),
+        wa_message_id=result.get("wa_message_id"),
+        error=result.get("error"),
+    )
+
+
+@router.post("/send/image", response_model=SendMessageResponse)
+async def send_whatsapp_image(
+    request: SendImageRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send an image message via WhatsApp"""
+    require_admin(current_user)
+    
+    service = WhatsAppService(db)
+    result = await service.send_image(
+        phone=request.phone,
+        image=request.image,
+        filename=request.filename,
+        caption=request.caption,
         user_id=current_user.id,
         customer_id=request.customer_id,
         lead_id=request.lead_id,
@@ -302,6 +407,152 @@ async def send_whatsapp_message(
         success=result.get("success", False),
         message_id=result.get("message_id"),
         wa_message_id=result.get("wa_message_id"),
+        error=result.get("error"),
+    )
+
+
+@router.post("/send/file", response_model=SendMessageResponse)
+async def send_whatsapp_file(
+    request: SendFileRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a file/document via WhatsApp"""
+    require_admin(current_user)
+    
+    service = WhatsAppService(db)
+    result = await service.send_file(
+        phone=request.phone,
+        file=request.file,
+        filename=request.filename,
+        caption=request.caption,
+        user_id=current_user.id,
+        customer_id=request.customer_id,
+        lead_id=request.lead_id,
+        dealership_id=current_user.dealership_id,
+    )
+    
+    await db.commit()
+    
+    return SendMessageResponse(
+        success=result.get("success", False),
+        message_id=result.get("message_id"),
+        wa_message_id=result.get("wa_message_id"),
+        error=result.get("error"),
+    )
+
+
+@router.post("/send/audio", response_model=SendMessageResponse)
+async def send_whatsapp_audio(
+    request: SendAudioRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send an audio/voice message via WhatsApp"""
+    require_admin(current_user)
+    
+    service = WhatsAppService(db)
+    result = await service.send_audio(
+        phone=request.phone,
+        audio=request.audio,
+        is_ptt=request.is_ptt,
+        user_id=current_user.id,
+        customer_id=request.customer_id,
+        lead_id=request.lead_id,
+        dealership_id=current_user.dealership_id,
+    )
+    
+    await db.commit()
+    
+    return SendMessageResponse(
+        success=result.get("success", False),
+        message_id=result.get("message_id"),
+        wa_message_id=result.get("wa_message_id"),
+        error=result.get("error"),
+    )
+
+
+@router.post("/send/video", response_model=SendMessageResponse)
+async def send_whatsapp_video(
+    request: SendVideoRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a video message via WhatsApp"""
+    require_admin(current_user)
+    
+    service = WhatsAppService(db)
+    result = await service.send_video(
+        phone=request.phone,
+        video=request.video,
+        filename=request.filename,
+        caption=request.caption,
+        user_id=current_user.id,
+        customer_id=request.customer_id,
+        lead_id=request.lead_id,
+        dealership_id=current_user.dealership_id,
+    )
+    
+    await db.commit()
+    
+    return SendMessageResponse(
+        success=result.get("success", False),
+        message_id=result.get("message_id"),
+        wa_message_id=result.get("wa_message_id"),
+        error=result.get("error"),
+    )
+
+
+@router.post("/send/location", response_model=SendMessageResponse)
+async def send_whatsapp_location(
+    request: SendLocationRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a location message via WhatsApp"""
+    require_admin(current_user)
+    
+    service = WhatsAppService(db)
+    result = await service.send_location(
+        phone=request.phone,
+        latitude=request.latitude,
+        longitude=request.longitude,
+        title=request.title,
+        address=request.address,
+        user_id=current_user.id,
+        customer_id=request.customer_id,
+        lead_id=request.lead_id,
+        dealership_id=current_user.dealership_id,
+    )
+    
+    await db.commit()
+    
+    return SendMessageResponse(
+        success=result.get("success", False),
+        message_id=result.get("message_id"),
+        wa_message_id=result.get("wa_message_id"),
+        error=result.get("error"),
+    )
+
+
+@router.post("/send/reaction", response_model=SendMessageResponse)
+async def send_whatsapp_reaction(
+    request: SendReactionRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a reaction to a message"""
+    require_admin(current_user)
+    
+    service = WhatsAppService(db)
+    result = await service.send_reaction(
+        message_id=request.message_id,
+        emoji=request.emoji,
+    )
+    
+    return SendMessageResponse(
+        success=result.get("success", False),
+        wa_message_id=request.message_id,
         error=result.get("error"),
     )
 
@@ -434,11 +685,19 @@ async def send_bulk_whatsapp(
             total=0,
         )
     
+    # Validate that either message or media is provided
+    if not request.message and not request.media:
+        return BulkSendResponse(
+            success=False,
+            error="Either message or media is required",
+            total=0,
+        )
+    
     # Send via service
     service = WhatsAppService(db)
     result = await service.send_bulk_messages(
         recipients=recipients,
-        message=request.message,
+        message=request.message or "",
         user_id=current_user.id,
         dealership_id=dealership_id,
         name=request.name,
@@ -448,6 +707,9 @@ async def send_bulk_whatsapp(
         },
         min_delay=request.min_delay,
         max_delay=request.max_delay,
+        media=request.media,
+        media_type=request.media_type,
+        media_filename=request.media_filename,
     )
     
     await db.commit()
@@ -525,6 +787,24 @@ async def get_conversation_messages(
         customer_name=customer_name,
         messages=[MessageItem(**m) for m in messages],
     )
+
+
+@router.post("/messages/read", response_model=MarkAsReadResponse)
+async def mark_messages_as_read(
+    request: MarkAsReadRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark messages as read in WhatsApp (sends read receipts)"""
+    require_admin(current_user)
+    
+    service = WhatsAppService(db)
+    result = await service.mark_messages_as_read(
+        phone=request.phone,
+        message_ids=request.message_ids,
+    )
+    
+    return MarkAsReadResponse(**result)
 
 
 @router.get("/bulk-sends", response_model=BulkSendHistoryResponse)

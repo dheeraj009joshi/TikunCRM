@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MessageItem } from "@/services/whatsapp-baileys-service";
 import { ChatHeader } from "./ChatHeader";
-import { ChatInput } from "./ChatInput";
+import { ChatInput, MediaAttachment } from "./ChatInput";
 import { MessageBubble } from "./MessageBubble";
 import { DateSeparator } from "./DateSeparator";
 
@@ -17,6 +17,7 @@ interface ChatViewProps {
   loading: boolean;
   initialLoading?: boolean;
   onSendMessage: (message: string) => Promise<void>;
+  onSendMedia?: (attachment: MediaAttachment, caption: string) => Promise<void>;
   onBack?: () => void;
   showBackButton?: boolean;
 }
@@ -33,6 +34,7 @@ export function ChatView({
   loading,
   initialLoading,
   onSendMessage,
+  onSendMedia,
   onBack,
   showBackButton = false,
 }: ChatViewProps) {
@@ -90,6 +92,17 @@ export function ChatView({
     }
   };
 
+  const handleSendMedia = async (attachment: MediaAttachment, caption: string) => {
+    if (!onSendMedia) return;
+    setSending(true);
+    try {
+      await onSendMedia(attachment, caption);
+      scrollToBottom(true);
+    } finally {
+      setSending(false);
+    }
+  };
+
   const groupMessagesByDate = (msgs: MessageItem[]): MessageGroup[] => {
     const groups: MessageGroup[] = [];
     let currentDate = "";
@@ -116,28 +129,30 @@ export function ChatView({
   const messageGroups = groupMessagesByDate(messages);
 
   return (
-    <div className="flex flex-col h-full bg-[#efeae2] dark:bg-[#0b141a]">
+    <div className="flex flex-col h-full overflow-hidden bg-[#efeae2] dark:bg-[#0b141a] relative">
       {/* WhatsApp background pattern */}
       <div
-        className="absolute inset-0 opacity-[0.06] dark:opacity-[0.06] pointer-events-none"
+        className="absolute inset-0 opacity-[0.06] dark:opacity-[0.06] pointer-events-none z-0"
         style={{
           backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3Cpattern id='a' patternUnits='userSpaceOnUse' width='60' height='60'%3E%3Cpath d='M30 5.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7zm0 45a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7zM10 25a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7zm40 0a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7z' fill='%23111b21'/%3E%3C/pattern%3E%3C/defs%3E%3Crect fill='url(%23a)' width='100%25' height='100%25'/%3E%3C/svg%3E")`,
         }}
       />
 
       {/* Header */}
-      <ChatHeader
-        name={customerName || ""}
-        phone={phoneNumber}
-        onBack={onBack}
-        showBackButton={showBackButton}
-      />
+      <div className="flex-shrink-0 relative z-10">
+        <ChatHeader
+          name={customerName || ""}
+          phone={phoneNumber}
+          onBack={onBack}
+          showBackButton={showBackButton}
+        />
+      </div>
 
       {/* Messages Area */}
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-2 relative z-10"
+        className="flex-1 overflow-y-auto px-4 py-2 relative z-10 min-h-0"
       >
         {showLoadingSpinner ? (
           <div className="flex items-center justify-center h-full">
@@ -164,6 +179,8 @@ export function ChatView({
                     status={msg.status}
                     timestamp={msg.created_at || msg.sent_at || msg.received_at}
                     isRead={msg.is_read}
+                    mediaUrl={msg.media_url}
+                    mediaType={msg.media_type}
                   />
                 ))}
               </div>
@@ -190,11 +207,14 @@ export function ChatView({
       </div>
 
       {/* Input Area */}
-      <ChatInput
-        onSend={handleSend}
-        disabled={sending}
-        placeholder="Type a message"
-      />
+      <div className="flex-shrink-0 relative z-10">
+        <ChatInput
+          onSend={handleSend}
+          onSendMedia={onSendMedia ? handleSendMedia : undefined}
+          disabled={sending}
+          placeholder="Type a message"
+        />
+      </div>
     </div>
   );
 }

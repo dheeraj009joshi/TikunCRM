@@ -1,13 +1,14 @@
 """
 WhatsApp Baileys Service - Communicates with Node.js Baileys service
 """
+import re
 import uuid
 import httpx
 from typing import Optional
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -73,13 +74,14 @@ class WhatsAppBaileysService:
         """Get QR code for authentication."""
         result = await self._make_request("GET", "/qr/base64")
         
-        # Extract base64 from data URL if present
-        if result.get("qrImage"):
-            qr_image = result["qrImage"]
-            if qr_image.startswith("data:image/png;base64,"):
-                result["qr"] = qr_image.replace("data:image/png;base64,", "")
+        # Handle both old 'qrImage' field and new 'qr' field from WPPConnect
+        qr_value = result.get("qr") or result.get("qrImage")
+        if qr_value:
+            # Extract base64 from data URL if present
+            if qr_value.startswith("data:image/png;base64,"):
+                result["qr"] = qr_value.replace("data:image/png;base64,", "")
             else:
-                result["qr"] = qr_image
+                result["qr"] = qr_value
         
         return result
 
@@ -104,21 +106,16 @@ class WhatsAppBaileysService:
         digits = self._normalize_phone(phone)
         return digits[-length:] if len(digits) >= length else digits
 
-    async def send_message(
+    async def _lookup_customer_lead(
         self,
         phone: str,
-        message: str,
-        user_id: Optional[UUID] = None,
         customer_id: Optional[UUID] = None,
         lead_id: Optional[UUID] = None,
         dealership_id: Optional[UUID] = None,
-        bulk_send_id: Optional[UUID] = None,
-    ) -> dict:
-        """Send a single WhatsApp message."""
-        # Normalize phone for consistent storage
+    ) -> tuple[Optional[UUID], Optional[UUID], Optional[UUID]]:
+        """Auto-lookup customer and lead if not provided."""
         normalized_phone = self._normalize_phone(phone)
         
-        # Auto-lookup customer/lead if not provided
         if not customer_id:
             customer_query = select(Customer).where(
                 or_(
@@ -132,7 +129,6 @@ class WhatsAppBaileysService:
             
             if customer:
                 customer_id = customer.id
-                # Also try to find the latest lead for this customer
                 if not lead_id:
                     lead_query = select(Lead).where(
                         Lead.customer_id == customer.id
@@ -143,10 +139,30 @@ class WhatsAppBaileysService:
                         lead_id = lead.id
                         dealership_id = dealership_id or lead.dealership_id
         
-        result = await self._make_request("POST", "/send", {
-            "phone": phone,
-            "message": message
-        })
+        return customer_id, lead_id, dealership_id
+
+    async def send_message(
+        self,
+        phone: str,
+        message: str,
+        user_id: Optional[UUID] = None,
+        customer_id: Optional[UUID] = None,
+        lead_id: Optional[UUID] = None,
+        dealership_id: Optional[UUID] = None,
+        bulk_send_id: Optional[UUID] = None,
+        quoted_msg_id: Optional[str] = None,
+    ) -> dict:
+        """Send a single WhatsApp text message."""
+        normalized_phone = self._normalize_phone(phone)
+        customer_id, lead_id, dealership_id = await self._lookup_customer_lead(
+            phone, customer_id, lead_id, dealership_id
+        )
+        
+        payload = {"phone": phone, "message": message}
+        if quoted_msg_id:
+            payload["quotedMsgId"] = quoted_msg_id
+        
+        result = await self._make_request("POST", "/send", payload)
 
         wa_message = WhatsAppMessage(
             id=uuid.uuid4(),
@@ -178,6 +194,342 @@ class WhatsAppBaileysService:
             "error": result.get("error"),
         }
 
+    async def send_image(
+        self,
+        phone: str,
+        image: str,
+        filename: Optional[str] = "image.jpg",
+        caption: Optional[str] = None,
+        user_id: Optional[UUID] = None,
+        customer_id: Optional[UUID] = None,
+        lead_id: Optional[UUID] = None,
+        dealership_id: Optional[UUID] = None,
+    ) -> dict:
+        """Send an image message via WhatsApp."""
+        normalized_phone = self._normalize_phone(phone)
+        customer_id, lead_id, dealership_id = await self._lookup_customer_lead(
+            phone, customer_id, lead_id, dealership_id
+        )
+        
+        result = await self._make_request("POST", "/send/image", {
+            "phone": phone,
+            "image": image,
+            "filename": filename,
+            "caption": caption or "",
+        }, timeout=60.0)
+
+        # Create data URL for storage
+        media_url = f"data:image/jpeg;base64,{image}" if image and not image.startswith("data:") else image
+
+        wa_message = WhatsAppMessage(
+            id=uuid.uuid4(),
+            customer_id=customer_id,
+            lead_id=lead_id,
+            user_id=user_id,
+            dealership_id=dealership_id,
+            wa_message_id=result.get("messageId"),
+            channel=WhatsAppChannel.BAILEYS,
+            phone_number=normalized_phone,
+            to_number=normalized_phone,
+            direction=WhatsAppDirection.OUTBOUND,
+            body=caption,
+            media_url=media_url,
+            media_type="image",
+            status=WhatsAppStatus.SENT if result.get("success") else WhatsAppStatus.FAILED,
+            error_message=result.get("error"),
+            sent_at=utc_now() if result.get("success") else None,
+            meta_data={"filename": filename},
+            created_at=utc_now(),
+        )
+        self.session.add(wa_message)
+        await self.session.flush()
+
+        return {
+            "success": result.get("success", False),
+            "message_id": str(wa_message.id),
+            "wa_message_id": result.get("messageId"),
+            "error": result.get("error"),
+        }
+
+    async def send_file(
+        self,
+        phone: str,
+        file: str,
+        filename: str,
+        caption: Optional[str] = None,
+        user_id: Optional[UUID] = None,
+        customer_id: Optional[UUID] = None,
+        lead_id: Optional[UUID] = None,
+        dealership_id: Optional[UUID] = None,
+    ) -> dict:
+        """Send a file/document via WhatsApp."""
+        normalized_phone = self._normalize_phone(phone)
+        customer_id, lead_id, dealership_id = await self._lookup_customer_lead(
+            phone, customer_id, lead_id, dealership_id
+        )
+        
+        result = await self._make_request("POST", "/send/file", {
+            "phone": phone,
+            "file": file,
+            "filename": filename,
+            "caption": caption or "",
+        }, timeout=120.0)
+
+        # Determine mime type from filename
+        ext = filename.lower().split(".")[-1] if "." in filename else ""
+        mime_types = {
+            "pdf": "application/pdf",
+            "doc": "application/msword",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xls": "application/vnd.ms-excel",
+            "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "txt": "text/plain",
+            "zip": "application/zip",
+        }
+        mime_type = mime_types.get(ext, "application/octet-stream")
+        media_url = f"data:{mime_type};base64,{file}" if file and not file.startswith("data:") else file
+
+        wa_message = WhatsAppMessage(
+            id=uuid.uuid4(),
+            customer_id=customer_id,
+            lead_id=lead_id,
+            user_id=user_id,
+            dealership_id=dealership_id,
+            wa_message_id=result.get("messageId"),
+            channel=WhatsAppChannel.BAILEYS,
+            phone_number=normalized_phone,
+            to_number=normalized_phone,
+            direction=WhatsAppDirection.OUTBOUND,
+            body=caption or filename,
+            media_url=media_url,
+            media_type="document",
+            status=WhatsAppStatus.SENT if result.get("success") else WhatsAppStatus.FAILED,
+            error_message=result.get("error"),
+            sent_at=utc_now() if result.get("success") else None,
+            meta_data={"filename": filename},
+            created_at=utc_now(),
+        )
+        self.session.add(wa_message)
+        await self.session.flush()
+
+        return {
+            "success": result.get("success", False),
+            "message_id": str(wa_message.id),
+            "wa_message_id": result.get("messageId"),
+            "error": result.get("error"),
+        }
+
+    async def send_audio(
+        self,
+        phone: str,
+        audio: str,
+        is_ptt: bool = True,
+        user_id: Optional[UUID] = None,
+        customer_id: Optional[UUID] = None,
+        lead_id: Optional[UUID] = None,
+        dealership_id: Optional[UUID] = None,
+    ) -> dict:
+        """Send an audio/voice message via WhatsApp."""
+        normalized_phone = self._normalize_phone(phone)
+        customer_id, lead_id, dealership_id = await self._lookup_customer_lead(
+            phone, customer_id, lead_id, dealership_id
+        )
+
+        result = await self._make_request("POST", "/send/audio", {
+            "phone": phone,
+            "audio": audio,
+            "isPtt": is_ptt,
+        }, timeout=60.0)
+
+        # Create data URL for storage
+        media_url = f"data:audio/ogg;base64,{audio}" if audio and not audio.startswith("data:") else audio
+
+        wa_message = WhatsAppMessage(
+            id=uuid.uuid4(),
+            customer_id=customer_id,
+            lead_id=lead_id,
+            user_id=user_id,
+            dealership_id=dealership_id,
+            wa_message_id=result.get("messageId"),
+            channel=WhatsAppChannel.BAILEYS,
+            phone_number=normalized_phone,
+            to_number=normalized_phone,
+            direction=WhatsAppDirection.OUTBOUND,
+            media_url=media_url,
+            media_type="audio",
+            status=WhatsAppStatus.SENT if result.get("success") else WhatsAppStatus.FAILED,
+            error_message=result.get("error"),
+            sent_at=utc_now() if result.get("success") else None,
+            meta_data={"is_ptt": is_ptt},
+            created_at=utc_now(),
+        )
+        self.session.add(wa_message)
+        await self.session.flush()
+
+        return {
+            "success": result.get("success", False),
+            "message_id": str(wa_message.id),
+            "wa_message_id": result.get("messageId"),
+            "error": result.get("error"),
+        }
+
+    async def send_video(
+        self,
+        phone: str,
+        video: str,
+        filename: Optional[str] = "video.mp4",
+        caption: Optional[str] = None,
+        user_id: Optional[UUID] = None,
+        customer_id: Optional[UUID] = None,
+        lead_id: Optional[UUID] = None,
+        dealership_id: Optional[UUID] = None,
+    ) -> dict:
+        """Send a video message via WhatsApp."""
+        normalized_phone = self._normalize_phone(phone)
+        customer_id, lead_id, dealership_id = await self._lookup_customer_lead(
+            phone, customer_id, lead_id, dealership_id
+        )
+
+        result = await self._make_request("POST", "/send/video", {
+            "phone": phone,
+            "video": video,
+            "filename": filename,
+            "caption": caption or "",
+        }, timeout=120.0)
+
+        # Create data URL for storage
+        media_url = f"data:video/mp4;base64,{video}" if video and not video.startswith("data:") else video
+
+        wa_message = WhatsAppMessage(
+            id=uuid.uuid4(),
+            customer_id=customer_id,
+            lead_id=lead_id,
+            user_id=user_id,
+            dealership_id=dealership_id,
+            wa_message_id=result.get("messageId"),
+            channel=WhatsAppChannel.BAILEYS,
+            phone_number=normalized_phone,
+            to_number=normalized_phone,
+            direction=WhatsAppDirection.OUTBOUND,
+            body=caption,
+            media_url=media_url,
+            media_type="video",
+            status=WhatsAppStatus.SENT if result.get("success") else WhatsAppStatus.FAILED,
+            error_message=result.get("error"),
+            sent_at=utc_now() if result.get("success") else None,
+            meta_data={"filename": filename},
+            created_at=utc_now(),
+        )
+        self.session.add(wa_message)
+        await self.session.flush()
+
+        return {
+            "success": result.get("success", False),
+            "message_id": str(wa_message.id),
+            "wa_message_id": result.get("messageId"),
+            "error": result.get("error"),
+        }
+
+    async def send_location(
+        self,
+        phone: str,
+        latitude: float,
+        longitude: float,
+        title: Optional[str] = None,
+        address: Optional[str] = None,
+        user_id: Optional[UUID] = None,
+        customer_id: Optional[UUID] = None,
+        lead_id: Optional[UUID] = None,
+        dealership_id: Optional[UUID] = None,
+    ) -> dict:
+        """Send a location message via WhatsApp."""
+        normalized_phone = self._normalize_phone(phone)
+        customer_id, lead_id, dealership_id = await self._lookup_customer_lead(
+            phone, customer_id, lead_id, dealership_id
+        )
+        
+        result = await self._make_request("POST", "/send/location", {
+            "phone": phone,
+            "latitude": latitude,
+            "longitude": longitude,
+            "title": title or "",
+            "address": address or "",
+        })
+
+        body = f"Location: {latitude}, {longitude}"
+        if title:
+            body = f"{title} - {body}"
+
+        wa_message = WhatsAppMessage(
+            id=uuid.uuid4(),
+            customer_id=customer_id,
+            lead_id=lead_id,
+            user_id=user_id,
+            dealership_id=dealership_id,
+            wa_message_id=result.get("messageId"),
+            channel=WhatsAppChannel.BAILEYS,
+            phone_number=normalized_phone,
+            to_number=normalized_phone,
+            direction=WhatsAppDirection.OUTBOUND,
+            body=body,
+            media_type="location",
+            status=WhatsAppStatus.SENT if result.get("success") else WhatsAppStatus.FAILED,
+            error_message=result.get("error"),
+            sent_at=utc_now() if result.get("success") else None,
+            meta_data={**result, "latitude": latitude, "longitude": longitude, "title": title, "address": address},
+            created_at=utc_now(),
+        )
+        self.session.add(wa_message)
+        await self.session.flush()
+
+        return {
+            "success": result.get("success", False),
+            "message_id": str(wa_message.id),
+            "wa_message_id": result.get("messageId"),
+            "error": result.get("error"),
+        }
+
+    async def send_reaction(
+        self,
+        message_id: str,
+        emoji: str,
+    ) -> dict:
+        """Send a reaction to a message."""
+        result = await self._make_request("POST", "/send/reaction", {
+            "messageId": message_id,
+            "emoji": emoji,
+        })
+
+        return {
+            "success": result.get("success", False),
+            "error": result.get("error"),
+        }
+
+    async def mark_messages_as_read(
+        self,
+        phone: str,
+        message_ids: list[str] = None,
+    ) -> dict:
+        """Mark messages as read in WhatsApp (send read receipts)."""
+        result = await self._make_request("POST", "/messages/read", {
+            "phone": phone,
+            "messageIds": message_ids or [],
+        })
+
+        if result.get("success") and message_ids:
+            await self.session.execute(
+                update(WhatsAppMessage)
+                .where(WhatsAppMessage.wa_message_id.in_(message_ids))
+                .values(is_read=True)
+            )
+            await self.session.flush()
+
+        return {
+            "success": result.get("success", False),
+            "count": result.get("count", 0),
+            "error": result.get("error"),
+        }
+
     async def send_bulk_messages(
         self,
         recipients: list[dict],
@@ -188,14 +540,17 @@ class WhatsAppBaileysService:
         filter_criteria: Optional[dict] = None,
         min_delay: int = 5,
         max_delay: int = 30,
+        media: Optional[str] = None,
+        media_type: Optional[str] = None,
+        media_filename: Optional[str] = None,
     ) -> dict:
-        """Send bulk WhatsApp messages."""
+        """Send bulk WhatsApp messages with optional media."""
         bulk_send = WhatsAppBulkSend(
             id=uuid.uuid4(),
             user_id=user_id,
             dealership_id=dealership_id,
             name=name or f"Bulk Send {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            message_template=message,
+            message_template=message or f"[{media_type or 'media'}]",
             filter_criteria=filter_criteria or {},
             total_recipients=len(recipients),
             status="in_progress",
@@ -207,26 +562,54 @@ class WhatsAppBaileysService:
 
         phones = [r["phone"] for r in recipients]
         
+        # Build request payload
+        payload = {
+            "recipients": phones,
+            "message": message or "",
+            "minDelay": min_delay,
+            "maxDelay": max_delay,
+        }
+        
+        # Add media if provided
+        if media:
+            payload["media"] = media
+            payload["mediaType"] = media_type
+            payload["mediaFilename"] = media_filename
+        
         result = await self._make_request(
             "POST",
             "/send/bulk",
-            {
-                "recipients": phones,
-                "message": message,
-                "minDelay": min_delay,
-                "maxDelay": max_delay,
-            },
+            payload,
             timeout=len(phones) * max_delay + 60
         )
 
         sent_count = 0
         failed_count = 0
-        results_map = {r.get("phone"): r for r in result.get("results", [])}
+        
+        # Build results map with multiple phone formats for flexible matching
+        results_list = result.get("results", [])
+        results_map = {}
+        for r in results_list:
+            result_phone = r.get("phone", "")
+            # Store with various normalizations for flexible lookup
+            results_map[result_phone] = r
+            normalized = re.sub(r'[^0-9]', '', result_phone)
+            results_map[normalized] = r
+            if len(normalized) >= 10:
+                results_map[normalized[-10:]] = r  # Last 10 digits
 
         for recipient in recipients:
             phone = recipient["phone"]
             normalized_phone = self._normalize_phone(phone)
-            send_result = results_map.get(phone, {})
+            phone_suffix = self._get_phone_suffix(normalized_phone)
+            
+            # Try multiple formats to find the result
+            send_result = (
+                results_map.get(phone) or 
+                results_map.get(normalized_phone) or 
+                results_map.get(phone_suffix) or 
+                {}
+            )
             success = send_result.get("success", False)
 
             wa_message = WhatsAppMessage(
@@ -240,12 +623,14 @@ class WhatsAppBaileysService:
                 phone_number=normalized_phone,
                 to_number=normalized_phone,
                 direction=WhatsAppDirection.OUTBOUND,
-                body=message,
+                body=message or "",
+                media_url=media if media else None,
+                media_type=media_type if media else None,
                 status=WhatsAppStatus.SENT if success else WhatsAppStatus.FAILED,
                 error_message=send_result.get("error"),
                 bulk_send_id=bulk_send.id,
                 sent_at=utc_now() if success else None,
-                meta_data=send_result,
+                meta_data={**send_result, "filename": media_filename} if media_filename else send_result,
                 created_at=utc_now(),
             )
             self.session.add(wa_message)

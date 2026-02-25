@@ -23,6 +23,24 @@ export interface SendMessageRequest {
   lead_id?: string;
 }
 
+export interface SendImageRequest {
+  phone: string;
+  image: string; // base64 or URL
+  filename?: string;
+  caption?: string;
+  customer_id?: string;
+  lead_id?: string;
+}
+
+export interface SendFileRequest {
+  phone: string;
+  file: string; // base64 or URL
+  filename: string;
+  caption?: string;
+  customer_id?: string;
+  lead_id?: string;
+}
+
 export interface SendMessageResponse {
   success: boolean;
   message_id?: string;
@@ -31,13 +49,16 @@ export interface SendMessageResponse {
 }
 
 export interface BulkSendRequest {
-  message: string;
+  message?: string;
   lead_statuses?: string[];
   dealership_id?: string;
   customer_ids?: string[];
   name?: string;
   min_delay?: number;
   max_delay?: number;
+  media?: string;
+  media_type?: "image" | "file" | "video";
+  media_filename?: string;
 }
 
 export interface BulkSendResponse {
@@ -163,6 +184,22 @@ class WhatsAppBaileysService {
     return response.data;
   }
 
+  async sendImage(request: SendImageRequest): Promise<SendMessageResponse> {
+    const response = await apiClient.post<SendMessageResponse>(
+      `${this.basePath}/send/image`,
+      request
+    );
+    return response.data;
+  }
+
+  async sendFile(request: SendFileRequest): Promise<SendMessageResponse> {
+    const response = await apiClient.post<SendMessageResponse>(
+      `${this.basePath}/send/file`,
+      request
+    );
+    return response.data;
+  }
+
   async previewRecipients(request: BulkSendRequest): Promise<RecipientPreviewResponse> {
     const response = await apiClient.post<RecipientPreviewResponse>(
       `${this.basePath}/bulk-send/preview`,
@@ -230,6 +267,17 @@ class WhatsAppBaileysService {
     message: string;
   }> {
     const response = await apiClient.delete(`${this.basePath}/messages/all`);
+    return response.data;
+  }
+
+  async markAsRead(
+    phone: string,
+    messageIds?: string[]
+  ): Promise<{ success: boolean; count: number; error?: string }> {
+    const response = await apiClient.post(`${this.basePath}/messages/read`, {
+      phone,
+      message_ids: messageIds,
+    });
     return response.data;
   }
 }

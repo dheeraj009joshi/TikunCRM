@@ -26,6 +26,7 @@ export interface MessageStatusUpdate {
   messageId: string;
   status: "sent" | "delivered" | "read" | "failed";
   remoteJid: string;
+  phone?: string;
 }
 
 export interface PresenceUpdate {
@@ -183,6 +184,7 @@ export function useWhatsAppSocket({
                 messageId: data.data?.messageId || data.messageId,
                 status: data.data?.status || data.status,
                 remoteJid: data.data?.remoteJid || data.remoteJid,
+                phone: data.data?.phone || data.phone,
               };
               setLastStatusUpdate(statusUpdate);
               onMessageStatusRef.current?.(statusUpdate);
