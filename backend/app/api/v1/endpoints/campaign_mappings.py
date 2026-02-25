@@ -5,11 +5,11 @@ Allows Dealership Admin/Owner to view and edit display names for
 campaign mappings assigned to their dealership.
 """
 import logging
-from typing import Any, List
+from typing import Any, Dict, List, Set
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,6 +17,7 @@ from app.api import deps
 from app.core.permissions import UserRole
 from app.db.database import get_db
 from app.models.campaign_mapping import CampaignMapping
+from app.models.lead import Lead
 from app.models.lead_sync_source import LeadSyncSource
 from app.models.dealership import Dealership
 from app.models.user import User
@@ -28,6 +29,28 @@ from app.schemas.campaign_mapping import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def get_lead_counts_by_mapping(
+    db: AsyncSession, mapping_ids: Set[UUID]
+) -> Dict[UUID, int]:
+    """
+    Get actual lead counts for campaign mappings by counting leads in the database.
+    This replaces the stored counter which can drift from reality.
+    """
+    if not mapping_ids:
+        return {}
+    
+    count_query = (
+        select(Lead.campaign_mapping_id, func.count(Lead.id).label("lead_count"))
+        .where(Lead.campaign_mapping_id.in_(mapping_ids))
+        .group_by(Lead.campaign_mapping_id)
+    )
+    
+    result = await db.execute(count_query)
+    rows = result.fetchall()
+    
+    return {row[0]: row[1] for row in rows}
 
 
 def get_dealership_admin_or_higher():
@@ -75,6 +98,10 @@ async def list_my_campaign_mappings(
         result = await db.execute(query)
         mappings = result.scalars().all()
         
+        # Get actual lead counts dynamically
+        mapping_ids = {m.id for m in mappings}
+        lead_counts = await get_lead_counts_by_mapping(db, mapping_ids)
+        
         items = []
         for m in mappings:
             items.append(CampaignMappingForDealership(
@@ -85,7 +112,7 @@ async def list_my_campaign_mappings(
                 match_type=m.match_type,
                 display_name=m.display_name,
                 is_active=m.is_active,
-                leads_matched=m.leads_matched,
+                leads_matched=lead_counts.get(m.id, 0),
                 updated_at=m.updated_at,
             ))
         
@@ -134,6 +161,10 @@ async def list_my_campaign_mappings(
     result = await db.execute(query)
     mappings = result.scalars().all()
     
+    # Get actual lead counts dynamically
+    mapping_ids = {m.id for m in mappings}
+    lead_counts = await get_lead_counts_by_mapping(db, mapping_ids)
+    
     items = []
     for m in mappings:
         items.append(CampaignMappingForDealership(
@@ -144,7 +175,7 @@ async def list_my_campaign_mappings(
             match_type=m.match_type,
             display_name=m.display_name,
             is_active=m.is_active,
-            leads_matched=m.leads_matched,
+            leads_matched=lead_counts.get(m.id, 0),
             updated_at=m.updated_at,
         ))
     
@@ -218,6 +249,9 @@ async def update_campaign_display_name(
         f"by {current_user.email} (role: {current_user.role})"
     )
     
+    # Get actual lead count dynamically
+    lead_counts = await get_lead_counts_by_mapping(db, {mapping.id})
+    
     return CampaignMappingForDealership(
         id=mapping.id,
         sync_source_id=mapping.sync_source_id,
@@ -226,7 +260,7 @@ async def update_campaign_display_name(
         match_type=mapping.match_type,
         display_name=mapping.display_name,
         is_active=mapping.is_active,
-        leads_matched=mapping.leads_matched,
+        leads_matched=lead_counts.get(mapping.id, 0),
         updated_at=mapping.updated_at,
     )
 
@@ -277,6 +311,9 @@ async def get_campaign_mapping(
                 detail="You can only view mappings assigned to your dealership"
             )
     
+    # Get actual lead count dynamically
+    lead_counts = await get_lead_counts_by_mapping(db, {mapping.id})
+    
     return CampaignMappingForDealership(
         id=mapping.id,
         sync_source_id=mapping.sync_source_id,
@@ -285,6 +322,6 @@ async def get_campaign_mapping(
         match_type=mapping.match_type,
         display_name=mapping.display_name,
         is_active=mapping.is_active,
-        leads_matched=mapping.leads_matched,
+        leads_matched=lead_counts.get(mapping.id, 0),
         updated_at=mapping.updated_at,
     )

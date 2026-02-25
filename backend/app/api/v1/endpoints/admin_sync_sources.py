@@ -4,7 +4,7 @@ Admin Lead Sync Sources Endpoints (Super Admin only)
 Manages lead sync sources (Google Sheets) and campaign mappings.
 """
 import logging
-from typing import Any, List
+from typing import Any, Dict, List, Set
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -32,6 +32,9 @@ from app.schemas.lead_sync_source import (
     SheetPreviewByUrlRequest,
     SheetPreviewByUrlResponse,
     SyncSourceWithMappingsCreate,
+    CampaignMappingBrief,
+    DealershipBrief,
+    UserBrief,
 )
 from app.schemas.campaign_mapping import (
     CampaignMappingCreate,
@@ -42,6 +45,84 @@ from app.schemas.campaign_mapping import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def get_lead_counts_by_mapping(
+    db: AsyncSession, mapping_ids: Set[UUID]
+) -> Dict[UUID, int]:
+    """
+    Get actual lead counts for campaign mappings by counting leads in the database.
+    This replaces the stored counter which can drift from reality.
+    """
+    if not mapping_ids:
+        return {}
+    
+    count_query = (
+        select(Lead.campaign_mapping_id, func.count(Lead.id).label("lead_count"))
+        .where(Lead.campaign_mapping_id.in_(mapping_ids))
+        .group_by(Lead.campaign_mapping_id)
+    )
+    
+    result = await db.execute(count_query)
+    rows = result.fetchall()
+    
+    return {row[0]: row[1] for row in rows}
+
+
+def build_source_with_mappings_response(
+    source: LeadSyncSource,
+    lead_counts: Dict[UUID, int]
+) -> LeadSyncSourceWithMappings:
+    """
+    Build a LeadSyncSourceWithMappings response with dynamic lead counts.
+    """
+    campaign_mappings_brief = []
+    for m in (source.campaign_mappings or []):
+        campaign_mappings_brief.append(CampaignMappingBrief(
+            id=m.id,
+            match_pattern=m.match_pattern,
+            match_type=m.match_type,
+            display_name=m.display_name,
+            dealership_id=m.dealership_id,
+            dealership=DealershipBrief(id=m.dealership.id, name=m.dealership.name) if m.dealership else None,
+            priority=m.priority,
+            is_active=m.is_active,
+            leads_matched=lead_counts.get(m.id, 0),
+        ))
+    
+    return LeadSyncSourceWithMappings(
+        id=source.id,
+        name=source.name,
+        display_name=source.display_name,
+        description=source.description,
+        source_type=source.source_type,
+        sheet_id=source.sheet_id,
+        sheet_gid=source.sheet_gid,
+        default_dealership_id=source.default_dealership_id,
+        default_campaign_display=source.default_campaign_display,
+        sync_interval_minutes=source.sync_interval_minutes,
+        is_active=source.is_active,
+        last_synced_at=source.last_synced_at,
+        last_sync_lead_count=source.last_sync_lead_count,
+        total_leads_synced=source.total_leads_synced,
+        last_sync_error=source.last_sync_error,
+        created_by=source.created_by,
+        created_at=source.created_at,
+        updated_at=source.updated_at,
+        sheet_url=source.sheet_url,
+        export_url=source.export_url,
+        default_dealership=DealershipBrief(
+            id=source.default_dealership.id,
+            name=source.default_dealership.name
+        ) if source.default_dealership else None,
+        creator=UserBrief(
+            id=source.creator.id,
+            email=source.creator.email,
+            first_name=source.creator.first_name,
+            last_name=source.creator.last_name
+        ) if source.creator else None,
+        campaign_mappings=campaign_mappings_brief,
+    )
 
 
 def require_super_admin():
@@ -79,6 +160,18 @@ async def list_sync_sources(
     result = await db.execute(query)
     sources = result.scalars().all()
     
+    # Collect all mapping IDs to get lead counts
+    all_mapping_ids: Set[UUID] = set()
+    for source in sources:
+        for mapping in (source.campaign_mappings or []):
+            all_mapping_ids.add(mapping.id)
+    
+    # Get actual lead counts dynamically
+    lead_counts = await get_lead_counts_by_mapping(db, all_mapping_ids)
+    
+    # Build response with dynamic counts
+    items = [build_source_with_mappings_response(source, lead_counts) for source in sources]
+    
     # Get total count
     count_query = select(func.count(LeadSyncSource.id))
     if not include_inactive:
@@ -86,7 +179,7 @@ async def list_sync_sources(
     count_result = await db.execute(count_query)
     total = count_result.scalar() or 0
     
-    return LeadSyncSourceList(items=sources, total=total)
+    return LeadSyncSourceList(items=items, total=total)
 
 
 # ============================================================================
@@ -227,7 +320,11 @@ async def create_sync_source_with_mappings(
         
         logger.info(f"Sync source created with {len(mappings_data)} mappings: {source.name} by {current_user.email}")
         
-        return source
+        # New mappings have 0 leads, but use dynamic counts for consistency
+        mapping_ids = {m.id for m in (source.campaign_mappings or [])}
+        lead_counts = await get_lead_counts_by_mapping(db, mapping_ids)
+        
+        return build_source_with_mappings_response(source, lead_counts)
         
     except Exception as e:
         await db.rollback()
@@ -262,7 +359,11 @@ async def get_sync_source(
             detail="Sync source not found"
         )
     
-    return source
+    # Get actual lead counts dynamically
+    mapping_ids = {m.id for m in (source.campaign_mappings or [])}
+    lead_counts = await get_lead_counts_by_mapping(db, mapping_ids)
+    
+    return build_source_with_mappings_response(source, lead_counts)
 
 
 @router.post("/", response_model=LeadSyncSourceResponse, status_code=status.HTTP_201_CREATED)
@@ -500,6 +601,7 @@ async def list_campaign_mappings(
         selectinload(CampaignMapping.dealership),
         selectinload(CampaignMapping.creator),
         selectinload(CampaignMapping.updater),
+        selectinload(CampaignMapping.sync_source),
     )
     
     if not include_inactive:
@@ -510,7 +612,36 @@ async def list_campaign_mappings(
     result = await db.execute(query)
     mappings = result.scalars().all()
     
-    return CampaignMappingList(items=mappings, total=len(mappings))
+    # Get actual lead counts dynamically
+    mapping_ids = {m.id for m in mappings}
+    lead_counts = await get_lead_counts_by_mapping(db, mapping_ids)
+    
+    # Build response with dynamic counts
+    from app.schemas.campaign_mapping import CampaignMappingResponse, DealershipBrief as CMDealershipBrief, UserBrief as CMUserBrief, SyncSourceBrief
+    
+    items = []
+    for m in mappings:
+        items.append(CampaignMappingResponse(
+            id=m.id,
+            sync_source_id=m.sync_source_id,
+            match_pattern=m.match_pattern,
+            match_type=m.match_type,
+            display_name=m.display_name,
+            dealership_id=m.dealership_id,
+            priority=m.priority,
+            is_active=m.is_active,
+            leads_matched=lead_counts.get(m.id, 0),
+            created_by=m.created_by,
+            updated_by=m.updated_by,
+            created_at=m.created_at,
+            updated_at=m.updated_at,
+            dealership=CMDealershipBrief(id=m.dealership.id, name=m.dealership.name) if m.dealership else None,
+            creator=CMUserBrief(id=m.creator.id, email=m.creator.email, first_name=m.creator.first_name, last_name=m.creator.last_name) if m.creator else None,
+            updater=CMUserBrief(id=m.updater.id, email=m.updater.email, first_name=m.updater.first_name, last_name=m.updater.last_name) if m.updater else None,
+            sync_source=SyncSourceBrief(id=m.sync_source.id, name=m.sync_source.name, display_name=m.sync_source.display_name) if m.sync_source else None,
+        ))
+    
+    return CampaignMappingList(items=items, total=len(items))
 
 
 @router.post("/{source_id}/campaigns", response_model=CampaignMappingResponse, status_code=status.HTTP_201_CREATED)
@@ -570,9 +701,33 @@ async def create_campaign_mapping(
     await db.commit()
     await db.refresh(mapping)
     
+    # Load relationships for response
+    await db.refresh(mapping, ['dealership', 'creator', 'sync_source'])
+    
     logger.info(f"Campaign mapping created: '{mapping.match_pattern}' -> '{mapping.display_name}' by {current_user.email}")
     
-    return mapping
+    # New mapping has 0 leads
+    from app.schemas.campaign_mapping import CampaignMappingResponse, DealershipBrief as CMDealershipBrief, UserBrief as CMUserBrief, SyncSourceBrief
+    
+    return CampaignMappingResponse(
+        id=mapping.id,
+        sync_source_id=mapping.sync_source_id,
+        match_pattern=mapping.match_pattern,
+        match_type=mapping.match_type,
+        display_name=mapping.display_name,
+        dealership_id=mapping.dealership_id,
+        priority=mapping.priority,
+        is_active=mapping.is_active,
+        leads_matched=0,
+        created_by=mapping.created_by,
+        updated_by=mapping.updated_by,
+        created_at=mapping.created_at,
+        updated_at=mapping.updated_at,
+        dealership=CMDealershipBrief(id=mapping.dealership.id, name=mapping.dealership.name) if mapping.dealership else None,
+        creator=CMUserBrief(id=mapping.creator.id, email=mapping.creator.email, first_name=mapping.creator.first_name, last_name=mapping.creator.last_name) if mapping.creator else None,
+        updater=None,
+        sync_source=SyncSourceBrief(id=mapping.sync_source.id, name=mapping.sync_source.name, display_name=mapping.sync_source.display_name) if mapping.sync_source else None,
+    )
 
 
 @router.put("/{source_id}/campaigns/{mapping_id}", response_model=CampaignMappingResponse)
@@ -639,9 +794,35 @@ async def update_campaign_mapping(
     await db.commit()
     await db.refresh(mapping)
     
+    # Load relationships for response
+    await db.refresh(mapping, ['dealership', 'creator', 'updater', 'sync_source'])
+    
     logger.info(f"Campaign mapping updated: '{mapping.match_pattern}' by {current_user.email}")
     
-    return mapping
+    # Get actual lead count dynamically
+    lead_counts = await get_lead_counts_by_mapping(db, {mapping.id})
+    
+    from app.schemas.campaign_mapping import CampaignMappingResponse, DealershipBrief as CMDealershipBrief, UserBrief as CMUserBrief, SyncSourceBrief
+    
+    return CampaignMappingResponse(
+        id=mapping.id,
+        sync_source_id=mapping.sync_source_id,
+        match_pattern=mapping.match_pattern,
+        match_type=mapping.match_type,
+        display_name=mapping.display_name,
+        dealership_id=mapping.dealership_id,
+        priority=mapping.priority,
+        is_active=mapping.is_active,
+        leads_matched=lead_counts.get(mapping.id, 0),
+        created_by=mapping.created_by,
+        updated_by=mapping.updated_by,
+        created_at=mapping.created_at,
+        updated_at=mapping.updated_at,
+        dealership=CMDealershipBrief(id=mapping.dealership.id, name=mapping.dealership.name) if mapping.dealership else None,
+        creator=CMUserBrief(id=mapping.creator.id, email=mapping.creator.email, first_name=mapping.creator.first_name, last_name=mapping.creator.last_name) if mapping.creator else None,
+        updater=CMUserBrief(id=mapping.updater.id, email=mapping.updater.email, first_name=mapping.updater.first_name, last_name=mapping.updater.last_name) if mapping.updater else None,
+        sync_source=SyncSourceBrief(id=mapping.sync_source.id, name=mapping.sync_source.name, display_name=mapping.sync_source.display_name) if mapping.sync_source else None,
+    )
 
 
 @router.delete("/{source_id}/campaigns/{mapping_id}", status_code=status.HTTP_204_NO_CONTENT)
