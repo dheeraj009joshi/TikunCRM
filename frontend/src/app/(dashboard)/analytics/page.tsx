@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { startOfDay, endOfDay, parseISO } from "date-fns"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
     Table,
@@ -102,15 +103,15 @@ function buildFilters(
     const params: AnalyticsFilters = {}
     
     // Helper to convert local date string to UTC ISO string
+    // Uses date-fns parseISO + startOfDay/endOfDay to correctly handle local timezone
     const toLocalStartOfDay = (dateStr: string): string => {
-        const d = new Date(dateStr)
-        d.setHours(0, 0, 0, 0)
-        return d.toISOString()
+        // parseISO interprets the string as local date when no timezone specified
+        const d = parseISO(dateStr)
+        return startOfDay(d).toISOString()
     }
     const toLocalEndOfDay = (dateStr: string): string => {
-        const d = new Date(dateStr)
-        d.setHours(23, 59, 59, 999)
-        return d.toISOString()
+        const d = parseISO(dateStr)
+        return endOfDay(d).toISOString()
     }
     
     if (dateMode === "single" && singleDate) {

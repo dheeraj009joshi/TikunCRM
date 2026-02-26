@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { format, subDays, startOfWeek, endOfWeek } from "date-fns"
+import { format, subDays, startOfWeek, endOfWeek, startOfDay, endOfDay } from "date-fns"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -679,8 +679,8 @@ export default function TeamActivityPage() {
     const [salespersons, setSalespersons] = React.useState<UserBrief[]>([])
     const [loadingDropdowns, setLoadingDropdowns] = React.useState(true)
     
-    // Calculate date range from preset
-    const getDateRange = React.useCallback((): { from: string; to: string } => {
+    // Calculate date range from preset - returns Date objects to preserve local timezone
+    const getDateRange = React.useCallback((): { from: Date; to: Date } => {
         const today = new Date()
         let from: Date
         let to: Date
@@ -711,11 +711,17 @@ export default function TeamActivityPage() {
                 to = today
         }
         
+        return { from, to }
+    }, [datePreset, customDateFrom, customDateTo])
+    
+    // Format date range as strings for display
+    const getDateRangeStrings = React.useCallback((): { from: string; to: string } => {
+        const { from, to } = getDateRange()
         return {
             from: format(from, "yyyy-MM-dd"),
             to: format(to, "yyyy-MM-dd"),
         }
-    }, [datePreset, customDateFrom, customDateTo])
+    }, [getDateRange])
     
     // Load dropdowns
     React.useEffect(() => {
@@ -755,11 +761,10 @@ export default function TeamActivityPage() {
         try {
             const { from, to } = getDateRange()
             
-            // Convert local dates to UTC properly
-            const fromDate = new Date(from)
-            fromDate.setHours(0, 0, 0, 0)
-            const toDate = new Date(to)
-            toDate.setHours(23, 59, 59, 999)
+            // Use startOfDay/endOfDay to get local timezone midnight/end-of-day
+            // This ensures "Today" in Atlanta means Feb 25 00:00 - 23:59 Atlanta time
+            const fromDate = startOfDay(from)
+            const toDate = endOfDay(to)
             
             const filters: DailyActivityFilters = {
                 date_from: fromDate.toISOString(),
@@ -815,7 +820,7 @@ export default function TeamActivityPage() {
         const url = URL.createObjectURL(blob)
         const a = document.createElement("a")
         a.href = url
-        const { from, to } = getDateRange()
+        const { from, to } = getDateRangeStrings()
         a.download = `team-activity-${from}-to-${to}.csv`
         a.click()
         URL.revokeObjectURL(url)
@@ -829,7 +834,7 @@ export default function TeamActivityPage() {
         const margin = 14
         let y = margin
         
-        const { from, to } = getDateRange()
+        const { from, to } = getDateRangeStrings()
         doc.setFontSize(18)
         doc.setFont("helvetica", "bold")
         doc.text("Team Activity Report", margin, y)
@@ -879,10 +884,13 @@ export default function TeamActivityPage() {
     
     const dateRangeLabel = React.useMemo(() => {
         const { from, to } = getDateRange()
-        if (from === to) {
-            return format(new Date(from), "EEEE, MMMM d, yyyy")
+        // Compare dates by their date string to check if same day
+        const fromStr = format(from, "yyyy-MM-dd")
+        const toStr = format(to, "yyyy-MM-dd")
+        if (fromStr === toStr) {
+            return format(from, "EEEE, MMMM d, yyyy")
         }
-        return `${format(new Date(from), "MMM d")} - ${format(new Date(to), "MMM d, yyyy")}`
+        return `${format(from, "MMM d")} - ${format(to, "MMM d, yyyy")}`
     }, [getDateRange])
     
     // Access control
