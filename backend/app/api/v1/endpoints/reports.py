@@ -2237,6 +2237,23 @@ async def get_sold_cars_report(
         for u in users_result.scalars().all():
             user_lookup[u.id] = u
 
+    # Get status change activities to "converted" for sold date fallback
+    # This captures the date when the lead was marked as converted
+    status_change_result = await db.execute(
+        select(Activity.lead_id, Activity.created_at)
+        .where(
+            Activity.lead_id.in_(lead_ids),
+            Activity.type == ActivityType.STATUS_CHANGED,
+            Activity.meta_data["new_status"].astext == "converted"
+        )
+        .order_by(Activity.lead_id, Activity.created_at.desc())
+    )
+    # Build lookup: lead_id -> most recent status change date to "converted"
+    status_change_dates = {}
+    for row in status_change_result.fetchall():
+        if row[0] not in status_change_dates:
+            status_change_dates[row[0]] = row[1]
+
     # Count activities per lead
     # Notes: ActivityType.NOTE_ADDED
     notes_count_result = await db.execute(
@@ -2284,12 +2301,15 @@ async def get_sold_cars_report(
         # Get campaign display from source_campaign_raw or meta_data
         campaign_display = lead.source_campaign_raw or (lead.meta_data or {}).get("campaign_name") or (lead.meta_data or {}).get("campaign_display")
 
+        # Sold date priority: converted_at > closed_at > status change activity date
+        sold_date = lead.converted_at or lead.closed_at or status_change_dates.get(lead.id)
+
         items.append(SoldCarItem(
             lead_id=str(lead.id),
             lead_name=lead_name,
             phone=customer.phone if customer else None,
             email=customer.email if customer else None,
-            sold_date=lead.converted_at or lead.closed_at,
+            sold_date=sold_date,
             salesperson_id=str(lead.assigned_to) if lead.assigned_to else None,
             salesperson_name=salesperson.full_name if salesperson else None,
             source=lead.source.value if lead.source else None,
