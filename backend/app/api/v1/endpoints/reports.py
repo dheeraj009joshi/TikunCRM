@@ -289,7 +289,7 @@ class SoldCarItem(BaseModel):
     lead_name: str
     phone: Optional[str]
     email: Optional[str]
-    sold_date: datetime
+    sold_date: Optional[datetime]
     salesperson_id: Optional[str]
     salesperson_name: Optional[str]
     source: Optional[str]
@@ -2149,25 +2149,60 @@ async def get_sold_cars_report(
         except ValueError:
             pass
 
-    # Build lead query for converted leads
+    # Get the "converted" stage - check dealership-specific first, then global
+    converted_stage_result = await db.execute(
+        select(LeadStage).where(
+            LeadStage.name == "converted",
+            or_(
+                LeadStage.dealership_id == resolved_dealership_id,
+                LeadStage.dealership_id.is_(None)
+            )
+        ).order_by(LeadStage.dealership_id.desc().nullslast())
+    )
+    converted_stage = converted_stage_result.scalars().first()
+
+    if not converted_stage:
+        return SoldCarsResponse(
+            date_from=date_from_dt.isoformat() if date_from_dt else None,
+            date_to=date_to_dt.isoformat() if date_to_dt else None,
+            dealership_id=str(resolved_dealership_id) if resolved_dealership_id else None,
+            total_sold=0,
+            items=[],
+        )
+
+    # Build lead query for converted/sold leads
+    # Filter by stage_id = converted stage and is_active = False (matching leads page logic)
     lead_filters = [
-        Lead.outcome == "converted",
-        Lead.converted_at.isnot(None),
+        Lead.stage_id == converted_stage.id,
+        Lead.is_active == False,
     ]
     if resolved_dealership_id:
         lead_filters.append(Lead.dealership_id == resolved_dealership_id)
     if assigned_to:
         lead_filters.append(Lead.assigned_to == assigned_to)
+    
+    # Date filtering uses converted_at with fallback to closed_at
     if date_from_dt:
-        lead_filters.append(Lead.converted_at >= date_from_dt)
+        lead_filters.append(
+            or_(
+                Lead.converted_at >= date_from_dt,
+                and_(Lead.converted_at.is_(None), Lead.closed_at >= date_from_dt)
+            )
+        )
     if date_to_dt:
-        lead_filters.append(Lead.converted_at <= date_to_dt)
+        lead_filters.append(
+            or_(
+                Lead.converted_at <= date_to_dt,
+                and_(Lead.converted_at.is_(None), Lead.closed_at <= date_to_dt)
+            )
+        )
 
     # Fetch converted leads with customer data
+    # Order by converted_at, falling back to closed_at
     leads_result = await db.execute(
         select(Lead)
         .where(and_(*lead_filters))
-        .order_by(Lead.converted_at.desc())
+        .order_by(func.coalesce(Lead.converted_at, Lead.closed_at).desc())
     )
     leads = leads_result.scalars().all()
 
@@ -2254,7 +2289,7 @@ async def get_sold_cars_report(
             lead_name=lead_name,
             phone=customer.phone if customer else None,
             email=customer.email if customer else None,
-            sold_date=lead.converted_at,
+            sold_date=lead.converted_at or lead.closed_at,
             salesperson_id=str(lead.assigned_to) if lead.assigned_to else None,
             salesperson_name=salesperson.full_name if salesperson else None,
             source=lead.source.value if lead.source else None,
