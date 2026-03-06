@@ -116,6 +116,10 @@ export interface LeadListParams {
     fresh_only?: boolean;
     /** Filter by salesperson (admin/owner only) */
     assigned_to?: string;
+    /** Filter leads created on or after this date (ISO format) */
+    date_from?: string;
+    /** Filter leads created on or before this date (ISO format) */
+    date_to?: string;
 }
 
 export const LeadService = {

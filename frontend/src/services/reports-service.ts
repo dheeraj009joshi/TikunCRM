@@ -240,6 +240,38 @@ export interface DailyActivityFilters {
     activity_types?: string;
 }
 
+// Sold Cars Report Types
+export interface SoldCarItem {
+    lead_id: string;
+    lead_name: string;
+    phone?: string;
+    email?: string;
+    sold_date: string;
+    salesperson_id?: string;
+    salesperson_name?: string;
+    source?: string;
+    campaign_display?: string;
+    notes_count: number;
+    follow_ups_count: number;
+    appointments_count: number;
+    total_activities: number;
+}
+
+export interface SoldCarsResponse {
+    date_from?: string;
+    date_to?: string;
+    dealership_id?: string;
+    total_sold: number;
+    items: SoldCarItem[];
+}
+
+export interface SoldCarsFilters {
+    date_from?: string;
+    date_to?: string;
+    dealership_id?: string;
+    assigned_to?: string;
+}
+
 export const ReportsService = {
     /**
      * Get pending tasks for a salesperson
@@ -319,6 +351,15 @@ export const ReportsService = {
      */
     async getDailyActivities(filters?: DailyActivityFilters): Promise<DailyActivityResponse> {
         const response = await apiClient.get("/reports/daily-activities", { params: filters });
+        return response.data;
+    },
+
+    /**
+     * Get sold cars (converted leads) report with activity counts.
+     * Returns leads that have been marked as converted/sold.
+     */
+    async getSoldCars(filters?: SoldCarsFilters): Promise<SoldCarsResponse> {
+        const response = await apiClient.get("/reports/sold-cars", { params: filters });
         return response.data;
     },
 };

@@ -282,6 +282,39 @@ class DailyActivityResponse(BaseModel):
         from_attributes = True
 
 
+# Sold Cars Report Schemas
+class SoldCarItem(BaseModel):
+    """Individual sold car/converted lead item."""
+    lead_id: str
+    lead_name: str
+    phone: Optional[str]
+    email: Optional[str]
+    sold_date: datetime
+    salesperson_id: Optional[str]
+    salesperson_name: Optional[str]
+    source: Optional[str]
+    campaign_display: Optional[str]
+    notes_count: int
+    follow_ups_count: int
+    appointments_count: int
+    total_activities: int
+
+    class Config:
+        from_attributes = True
+
+
+class SoldCarsResponse(BaseModel):
+    """Response for sold cars report endpoint."""
+    date_from: Optional[str]
+    date_to: Optional[str]
+    dealership_id: Optional[str]
+    total_sold: int
+    items: List[SoldCarItem]
+
+    class Config:
+        from_attributes = True
+
+
 # Helper function to check admin/owner permissions
 def require_admin_or_owner(current_user: User = Depends(deps.get_current_active_user)) -> User:
     """Require user to be dealership admin, owner, or super admin."""
@@ -2076,4 +2109,166 @@ async def get_daily_activities(
         total_follow_ups_completed=total_fu_completed,
         total_appointments=total_appointments,
         salespersons=salesperson_summaries,
+    )
+
+
+@router.get("/sold-cars", response_model=SoldCarsResponse)
+async def get_sold_cars_report(
+    date_from: Optional[str] = Query(None, description="ISO date for sold date range start (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="ISO date for sold date range end (YYYY-MM-DD)"),
+    dealership_id: Optional[UUID] = Query(None, description="Dealership to scope (super_admin only)"),
+    assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_owner),
+) -> Any:
+    """
+    Get sold cars (converted leads) report with activity counts.
+    Returns leads that have been marked as converted/sold within the date range.
+    """
+    # Resolve dealership
+    if current_user.role == UserRole.SUPER_ADMIN and dealership_id is not None:
+        resolved_dealership_id = dealership_id
+    else:
+        resolved_dealership_id = current_user.dealership_id
+
+    # Parse dates
+    date_from_dt = None
+    date_to_dt = None
+    if date_from:
+        try:
+            date_from_dt = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+            if date_from_dt.tzinfo is None:
+                date_from_dt = date_from_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            date_to_dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            if date_to_dt.tzinfo is None:
+                date_to_dt = date_to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        except ValueError:
+            pass
+
+    # Build lead query for converted leads
+    lead_filters = [
+        Lead.outcome == "converted",
+        Lead.converted_at.isnot(None),
+    ]
+    if resolved_dealership_id:
+        lead_filters.append(Lead.dealership_id == resolved_dealership_id)
+    if assigned_to:
+        lead_filters.append(Lead.assigned_to == assigned_to)
+    if date_from_dt:
+        lead_filters.append(Lead.converted_at >= date_from_dt)
+    if date_to_dt:
+        lead_filters.append(Lead.converted_at <= date_to_dt)
+
+    # Fetch converted leads with customer data
+    leads_result = await db.execute(
+        select(Lead)
+        .where(and_(*lead_filters))
+        .order_by(Lead.converted_at.desc())
+    )
+    leads = leads_result.scalars().all()
+
+    if not leads:
+        return SoldCarsResponse(
+            date_from=date_from_dt.isoformat() if date_from_dt else None,
+            date_to=date_to_dt.isoformat() if date_to_dt else None,
+            dealership_id=str(resolved_dealership_id) if resolved_dealership_id else None,
+            total_sold=0,
+            items=[],
+        )
+
+    lead_ids = [lead.id for lead in leads]
+    user_ids = list(set(lead.assigned_to for lead in leads if lead.assigned_to))
+    customer_ids = list(set(lead.customer_id for lead in leads if lead.customer_id))
+
+    # Fetch customers for contact info
+    customer_lookup = {}
+    if customer_ids:
+        customers_result = await db.execute(
+            select(Customer).where(Customer.id.in_(customer_ids))
+        )
+        for c in customers_result.scalars().all():
+            customer_lookup[c.id] = c
+
+    # Fetch salesperson names
+    user_lookup = {}
+    if user_ids:
+        users_result = await db.execute(
+            select(User).where(User.id.in_(user_ids))
+        )
+        for u in users_result.scalars().all():
+            user_lookup[u.id] = u
+
+    # Count activities per lead
+    # Notes: ActivityType.NOTE_ADDED
+    notes_count_result = await db.execute(
+        select(Activity.lead_id, func.count(Activity.id))
+        .where(
+            Activity.lead_id.in_(lead_ids),
+            Activity.type == ActivityType.NOTE_ADDED
+        )
+        .group_by(Activity.lead_id)
+    )
+    notes_by_lead = {row[0]: row[1] for row in notes_count_result.fetchall()}
+
+    # Follow-ups count
+    follow_ups_result = await db.execute(
+        select(FollowUp.lead_id, func.count(FollowUp.id))
+        .where(FollowUp.lead_id.in_(lead_ids))
+        .group_by(FollowUp.lead_id)
+    )
+    follow_ups_by_lead = {row[0]: row[1] for row in follow_ups_result.fetchall()}
+
+    # Appointments count
+    appointments_result = await db.execute(
+        select(Appointment.lead_id, func.count(Appointment.id))
+        .where(Appointment.lead_id.in_(lead_ids))
+        .group_by(Appointment.lead_id)
+    )
+    appointments_by_lead = {row[0]: row[1] for row in appointments_result.fetchall()}
+
+    # Build response items
+    items = []
+    for lead in leads:
+        customer = customer_lookup.get(lead.customer_id)
+        salesperson = user_lookup.get(lead.assigned_to) if lead.assigned_to else None
+        
+        lead_name = ""
+        if customer:
+            lead_name = f"{customer.first_name or ''} {customer.last_name or ''}".strip()
+        if not lead_name:
+            lead_name = "Unknown"
+
+        notes_count = notes_by_lead.get(lead.id, 0)
+        follow_ups_count = follow_ups_by_lead.get(lead.id, 0)
+        appointments_count = appointments_by_lead.get(lead.id, 0)
+
+        # Get campaign display from source_campaign_raw or meta_data
+        campaign_display = lead.source_campaign_raw or (lead.meta_data or {}).get("campaign_name") or (lead.meta_data or {}).get("campaign_display")
+
+        items.append(SoldCarItem(
+            lead_id=str(lead.id),
+            lead_name=lead_name,
+            phone=customer.phone if customer else None,
+            email=customer.email if customer else None,
+            sold_date=lead.converted_at,
+            salesperson_id=str(lead.assigned_to) if lead.assigned_to else None,
+            salesperson_name=salesperson.full_name if salesperson else None,
+            source=lead.source.value if lead.source else None,
+            campaign_display=campaign_display,
+            notes_count=notes_count,
+            follow_ups_count=follow_ups_count,
+            appointments_count=appointments_count,
+            total_activities=notes_count + follow_ups_count + appointments_count,
+        ))
+
+    return SoldCarsResponse(
+        date_from=date_from_dt.isoformat() if date_from_dt else None,
+        date_to=date_to_dt.isoformat() if date_to_dt else None,
+        dealership_id=str(resolved_dealership_id) if resolved_dealership_id else None,
+        total_sold=len(items),
+        items=items,
     )

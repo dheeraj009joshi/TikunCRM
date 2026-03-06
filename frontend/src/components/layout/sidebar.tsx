@@ -30,7 +30,8 @@ import {
     MessagesSquare,
     Store,
     Contact,
-    Activity
+    Activity,
+    Car
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -148,6 +149,12 @@ const allSidebarItems: SidebarItem[] = [
         name: "Team Activity", 
         icon: Activity, 
         href: "/team-activity",
+        roles: ["super_admin", "dealership_admin", "dealership_owner"]
+    },
+    { 
+        name: "Sold Cars", 
+        icon: Car, 
+        href: "/sold-cars",
         roles: ["super_admin", "dealership_admin", "dealership_owner"]
     },
     { 

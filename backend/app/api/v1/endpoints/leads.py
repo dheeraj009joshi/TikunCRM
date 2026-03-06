@@ -438,7 +438,9 @@ async def list_leads(
     is_active: Optional[bool] = None,
     pool: Optional[str] = None,  # "unassigned" | "mine" | None (all)
     fresh_only: Optional[bool] = Query(None, description="Only leads with no activity except creation (untouched/fresh)"),
-    assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson (admin/owner only). Show only leads assigned to this user.")
+    assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson (admin/owner only). Show only leads assigned to this user."),
+    date_from: Optional[datetime] = Query(None, description="Filter leads created on or after this date (ISO format)"),
+    date_to: Optional[datetime] = Query(None, description="Filter leads created on or before this date (ISO format)"),
 ) -> Any:
     """
     List leads with filtering and pagination.
@@ -520,6 +522,12 @@ async def list_leads(
             Customer.phone.ilike(f"%{search}%"),
         )
         query = query.where(search_filter)
+
+    # Date range filters
+    if date_from:
+        query = query.where(Lead.created_at >= date_from)
+    if date_to:
+        query = query.where(Lead.created_at <= date_to)
 
     # Fresh/untouched leads only: exactly one activity (creation) AND not assigned to anyone
     if fresh_only:

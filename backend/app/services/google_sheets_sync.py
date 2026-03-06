@@ -236,8 +236,9 @@ def parse_sheet_row(
         if vehicle_price:
             meta_data['vehicle_price'] = vehicle_price
         
+        # Parse created_time for all leads (not just FB/IG) to preserve actual lead date
         created_at = None
-        if platform.lower() in ('fb', 'ig'):
+        if created_time:
             parsed = _parse_created_time(created_time)
             if parsed:
                 created_at = parsed

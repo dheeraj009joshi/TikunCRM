@@ -3,6 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useSearchParams, useRouter } from "next/navigation"
+import { format, startOfDay, endOfDay } from "date-fns"
 import {
     Inbox,
     Search,
@@ -12,6 +13,7 @@ import {
     Phone,
     Mail,
     Calendar,
+    CalendarIcon,
     Loader2,
     UserPlus,
     Eye,
@@ -73,6 +75,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Calendar as CalendarPicker } from "@/components/ui/calendar"
 import { LeadService, Lead, LeadListResponse, type LeadListParams, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead } from "@/services/lead-service"
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
@@ -137,6 +140,12 @@ export default function LeadsPage() {
     const [assignedTo, setAssignedTo] = React.useState(assignedToParam || "all")
     const [teamMembers, setTeamMembers] = React.useState<{ id: string; first_name: string; last_name: string }[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
+    
+    // Date filter state
+    const [dateMode, setDateMode] = React.useState<"all" | "single" | "range">("all")
+    const [dateFrom, setDateFrom] = React.useState<Date | undefined>(undefined)
+    const [dateTo, setDateTo] = React.useState<Date | undefined>(undefined)
+    const [specificDate, setSpecificDate] = React.useState<Date | undefined>(undefined)
     const [stages, setStages] = React.useState<LeadStage[]>([])
     const [leadsByStage, setLeadsByStage] = React.useState<Record<string, Lead[]>>({})
     const [isLoadingPipeline, setIsLoadingPipeline] = React.useState(false)
@@ -272,6 +281,15 @@ export default function LeadsPage() {
             if (viewMode !== "converted" && viewMode !== "fresh" && viewMode !== "manager_review" && isValidStageId) params.stage_id = status
             if (assignedTo && assignedTo !== "all") params.assigned_to = assignedTo
 
+            // Date range filters
+            if (dateMode === "single" && specificDate) {
+                params.date_from = startOfDay(specificDate).toISOString()
+                params.date_to = endOfDay(specificDate).toISOString()
+            } else if (dateMode === "range") {
+                if (dateFrom) params.date_from = startOfDay(dateFrom).toISOString()
+                if (dateTo) params.date_to = endOfDay(dateTo).toISOString()
+            }
+
             const data = await LeadService.listLeads(params as LeadListParams)
             setLeads(data.items)
             setTotal(data.total)
@@ -280,7 +298,7 @@ export default function LeadsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [page, search, status, source, viewMode, stages, assignedTo])
+    }, [page, search, status, source, viewMode, stages, assignedTo, dateMode, specificDate, dateFrom, dateTo])
 
     const fetchLeadsForPipeline = React.useCallback(async () => {
         if (stages.length === 0) return
@@ -292,6 +310,15 @@ export default function LeadsPage() {
             if (search) baseParams.search = search
             if (source && source !== "all") baseParams.source = source
             if (assignedTo && assignedTo !== "all") baseParams.assigned_to = assignedTo
+
+            // Date range filters
+            if (dateMode === "single" && specificDate) {
+                baseParams.date_from = startOfDay(specificDate).toISOString()
+                baseParams.date_to = endOfDay(specificDate).toISOString()
+            } else if (dateMode === "range") {
+                if (dateFrom) baseParams.date_from = startOfDay(dateFrom).toISOString()
+                if (dateTo) baseParams.date_to = endOfDay(dateTo).toISOString()
+            }
 
             if (viewMode === "unassigned") {
                 baseParams.pool = "unassigned"
@@ -346,7 +373,7 @@ export default function LeadsPage() {
         } finally {
             setIsLoadingPipeline(false)
         }
-    }, [viewMode, search, source, selectedStageIds, stages, assignedTo])
+    }, [viewMode, search, source, selectedStageIds, stages, assignedTo, dateMode, specificDate, dateFrom, dateTo])
 
     const loadMoreForStage = React.useCallback(
         async (stageId: string) => {
@@ -797,6 +824,114 @@ export default function LeadsPage() {
                                     </SelectContent>
                                 </Select>
                             )}
+                            {/* Date Filter */}
+                            <Popover>
+                                <PopoverTrigger asChild>
+                                    <Button variant="outline" className="w-auto min-w-[140px] justify-start">
+                                        <CalendarIcon className="h-4 w-4 mr-2" />
+                                        {dateMode === "all" ? (
+                                            "All Time"
+                                        ) : dateMode === "single" && specificDate ? (
+                                            format(specificDate, "MMM d, yyyy")
+                                        ) : dateMode === "range" ? (
+                                            dateFrom && dateTo ? (
+                                                `${format(dateFrom, "MMM d")} - ${format(dateTo, "MMM d")}`
+                                            ) : dateFrom ? (
+                                                `From ${format(dateFrom, "MMM d")}`
+                                            ) : dateTo ? (
+                                                `Until ${format(dateTo, "MMM d")}`
+                                            ) : (
+                                                "Date Range"
+                                            )
+                                        ) : (
+                                            "All Time"
+                                        )}
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-[min(95vw,720px)] max-h-[80vh] overflow-y-auto p-3" align="start">
+                                    <div className="space-y-3">
+                                        <div className="flex gap-1">
+                                            <Button
+                                                variant={dateMode === "all" ? "default" : "outline"}
+                                                size="sm"
+                                                onClick={() => {
+                                                    setDateMode("all")
+                                                    setSpecificDate(undefined)
+                                                    setDateFrom(undefined)
+                                                    setDateTo(undefined)
+                                                }}
+                                            >
+                                                All Time
+                                            </Button>
+                                            <Button
+                                                variant={dateMode === "single" ? "default" : "outline"}
+                                                size="sm"
+                                                onClick={() => setDateMode("single")}
+                                            >
+                                                Single Day
+                                            </Button>
+                                            <Button
+                                                variant={dateMode === "range" ? "default" : "outline"}
+                                                size="sm"
+                                                onClick={() => setDateMode("range")}
+                                            >
+                                                Range
+                                            </Button>
+                                        </div>
+                                        {dateMode === "single" && (
+                                            <CalendarPicker
+                                                mode="single"
+                                                selected={specificDate}
+                                                onSelect={setSpecificDate}
+                                                initialFocus
+                                            />
+                                        )}
+                                        {dateMode === "range" && (
+                                            <div className="space-y-2 rounded-lg border bg-muted/20 p-2">
+                                                <CalendarPicker
+                                                    mode="range"
+                                                    selected={{ from: dateFrom, to: dateTo }}
+                                                    onSelect={(range) => {
+                                                        setDateFrom(range?.from)
+                                                        setDateTo(range?.to)
+                                                    }}
+                                                    numberOfMonths={1}
+                                                    className="p-0"
+                                                />
+                                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                                    <div className="rounded-md border bg-background px-2 py-1.5">
+                                                        <p className="text-muted-foreground">From</p>
+                                                        <p className="font-medium">
+                                                            {dateFrom ? format(dateFrom, "MMM d, yyyy") : "Not set"}
+                                                        </p>
+                                                    </div>
+                                                    <div className="rounded-md border bg-background px-2 py-1.5">
+                                                        <p className="text-muted-foreground">To</p>
+                                                        <p className="font-medium">
+                                                            {dateTo ? format(dateTo, "MMM d, yyyy") : "Not set"}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                        {(dateMode === "single" || dateMode === "range") && (
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="w-full"
+                                                onClick={() => {
+                                                    setDateMode("all")
+                                                    setSpecificDate(undefined)
+                                                    setDateFrom(undefined)
+                                                    setDateTo(undefined)
+                                                }}
+                                            >
+                                                Clear dates
+                                            </Button>
+                                        )}
+                                    </div>
+                                </PopoverContent>
+                            </Popover>
                         </div>
                         <div className="flex items-center gap-2">
                             <div className="h-4 w-px bg-border" />
