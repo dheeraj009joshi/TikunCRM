@@ -2181,19 +2181,42 @@ async def get_sold_cars_report(
     if assigned_to:
         lead_filters.append(Lead.assigned_to == assigned_to)
     
-    # Date filtering uses converted_at with fallback to closed_at
+    # Date filtering uses converted_at, closed_at, OR status change activity date
+    # Create subqueries for leads with status change activities in the date range
     if date_from_dt:
+        # Subquery: leads with status change to "converted" on or after date_from
+        status_change_from_subq = (
+            select(Activity.lead_id)
+            .where(
+                Activity.type == ActivityType.STATUS_CHANGED,
+                Activity.meta_data["new_status"].astext == "converted",
+                Activity.created_at >= date_from_dt
+            )
+            .distinct()
+        )
         lead_filters.append(
             or_(
                 Lead.converted_at >= date_from_dt,
-                and_(Lead.converted_at.is_(None), Lead.closed_at >= date_from_dt)
+                and_(Lead.converted_at.is_(None), Lead.closed_at >= date_from_dt),
+                and_(Lead.converted_at.is_(None), Lead.closed_at.is_(None), Lead.id.in_(status_change_from_subq))
             )
         )
     if date_to_dt:
+        # Subquery: leads with status change to "converted" on or before date_to
+        status_change_to_subq = (
+            select(Activity.lead_id)
+            .where(
+                Activity.type == ActivityType.STATUS_CHANGED,
+                Activity.meta_data["new_status"].astext == "converted",
+                Activity.created_at <= date_to_dt
+            )
+            .distinct()
+        )
         lead_filters.append(
             or_(
                 Lead.converted_at <= date_to_dt,
-                and_(Lead.converted_at.is_(None), Lead.closed_at <= date_to_dt)
+                and_(Lead.converted_at.is_(None), Lead.closed_at <= date_to_dt),
+                and_(Lead.converted_at.is_(None), Lead.closed_at.is_(None), Lead.id.in_(status_change_to_subq))
             )
         )
 
