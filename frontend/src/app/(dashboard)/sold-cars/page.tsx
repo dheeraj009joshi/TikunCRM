@@ -50,7 +50,6 @@ import {
 } from "@/services/reports-service"
 import { TeamService, type UserBrief } from "@/services/team-service"
 import { DealershipService, type Dealership } from "@/services/dealership-service"
-import { LocalTime } from "@/components/ui/local-time"
 import { cn } from "@/lib/utils"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -609,7 +608,7 @@ export default function SoldCarsPage() {
                                                 )}
                                             </TableCell>
                                             <TableCell>
-                                                <LocalTime date={item.sold_date} format="MMM d, yyyy" />
+                                                {item.sold_date ? format(new Date(item.sold_date), "MMM d, yyyy") : "—"}
                                             </TableCell>
                                             <TableCell>
                                                 {item.salesperson_name || (
