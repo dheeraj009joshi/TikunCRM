@@ -249,9 +249,15 @@ async def auto_assign_lead_on_activity(
     except Exception:
         pass  # Don't fail auto-assign if WebSocket fails
 
-    # Schedule outbound-call follow-ups (day 1–3, every 3 days, every Friday)
+    # Schedule outbound-call follow-ups (day 0-2 at 7PM, then Fridays)
     try:
-        await schedule_outbound_call_follow_ups(db, lead.id, user.id)
+        user_timezone = "UTC"
+        if user.dealership_id:
+            dealership_result = await db.execute(select(Dealership).where(Dealership.id == user.dealership_id))
+            dealership = dealership_result.scalar_one_or_none()
+            if dealership and dealership.timezone:
+                user_timezone = dealership.timezone
+        await schedule_outbound_call_follow_ups(db, lead.id, user.id, user_timezone=user_timezone)
     except Exception as e:
         logger.warning("Failed to schedule outbound call follow-ups for lead %s: %s", lead.id, e)
 
@@ -1362,11 +1368,15 @@ async def update_lead_stage(
             lead.outcome = "lost"
         else:
             lead.outcome = new_stage.name
-        # Cancel all pending follow-ups when lead is closed
+
+    # Cancel all pending follow-ups when lead is closed (terminal) or moved to specific stages
+    # Stages that should cancel follow-ups: manager_review, sold, not_qualified, lost, or any terminal stage
+    cancel_followup_stages = {"manager_review", "sold", "not_qualified", "lost"}
+    if new_stage.is_terminal or new_stage.name.lower() in cancel_followup_stages:
         try:
             await cancel_pending_follow_ups_for_lead(db, lead.id)
         except Exception as e:
-            logger.warning("Failed to cancel follow-ups for closed lead %s: %s", lead.id, e)
+            logger.warning("Failed to cancel follow-ups for lead %s (stage: %s): %s", lead.id, new_stage.name, e)
 
     performer_name = f"{current_user.first_name} {current_user.last_name}"
     await ActivityService.log_lead_status_change(
@@ -1564,23 +1574,27 @@ async def assign_lead(
     
     await db.flush()
 
+    # Fetch dealership for timezone and WebSocket data
+    dealership_data = None
+    user_timezone = "UTC"
+    if lead.dealership_id:
+        dealership_result = await db.execute(select(Dealership).where(Dealership.id == lead.dealership_id))
+        dealership = dealership_result.scalar_one_or_none()
+        if dealership:
+            dealership_data = {"id": str(dealership.id), "name": dealership.name}
+            if dealership.timezone:
+                user_timezone = dealership.timezone
+
     # On first assignment (not reassignment), schedule outbound-call follow-ups
     if old_assigned_to_id is None:
         try:
-            await schedule_outbound_call_follow_ups(db, lead.id, assign_in.assigned_to)
+            await schedule_outbound_call_follow_ups(db, lead.id, assign_in.assigned_to, user_timezone=user_timezone)
         except Exception as e:
             logger.warning("Failed to schedule outbound call follow-ups for lead %s: %s", lead.id, e)
 
     # Emit real-time WebSocket event with updated lead data
     try:
         from app.services.notification_service import emit_lead_updated
-        # Fetch dealership name if assigned
-        dealership_data = None
-        if lead.dealership_id:
-            dealership_result = await db.execute(select(Dealership).where(Dealership.id == lead.dealership_id))
-            dealership = dealership_result.scalar_one_or_none()
-            if dealership:
-                dealership_data = {"id": str(dealership.id), "name": dealership.name}
         
         await emit_lead_updated(
             str(lead.id),

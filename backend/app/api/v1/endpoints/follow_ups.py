@@ -1,13 +1,14 @@
 """
 Follow-Up Endpoints
 """
+import math
 from datetime import datetime
 from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func, and_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -20,7 +21,7 @@ from app.models.user import User
 from app.models.follow_up import FollowUp, FollowUpStatus
 from app.models.lead import Lead
 from app.models.activity import ActivityType
-from app.schemas.follow_up import FollowUpResponse, FollowUpCreate, FollowUpUpdate
+from app.schemas.follow_up import FollowUpResponse, FollowUpCreate, FollowUpUpdate, FollowUpListResponse
 from app.schemas.lead import LeadBrief
 from app.schemas.customer import CustomerBrief
 from app.schemas.user import UserBrief
@@ -32,31 +33,34 @@ from app.utils.skate_helper import check_skate_condition
 router = APIRouter()
 
 
-@router.get("/", response_model=List[FollowUpResponse])
+@router.get("/", response_model=FollowUpListResponse)
 async def list_follow_ups(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     lead_id: Optional[UUID] = Query(None, description="Filter by lead"),
     assigned_to: Optional[UUID] = Query(None, description="Filter by assigned user (admin/owner only)"),
     status: Optional[FollowUpStatus] = None,
-    overdue: bool = False
+    overdue: bool = False,
+    date_from: Optional[datetime] = Query(None, description="Filter by scheduled_at >= date_from"),
+    date_to: Optional[datetime] = Query(None, description="Filter by scheduled_at <= date_to"),
 ) -> Any:
     """
-    List follow-ups for the current user or dealership.
+    List follow-ups for the current user or dealership with pagination.
     Optionally filter by lead_id (e.g. for lead detail page) or assigned_to (e.g. for salesperson report).
     When lead_id is provided, returns all follow-ups for that lead (including past/completed) for users who can view the lead.
     """
-    query = select(FollowUp).options(
-        selectinload(FollowUp.lead),
-        selectinload(FollowUp.assigned_to_user)
-    )
+    # Base query for building filters
+    base_filters = []
+    user_join_needed = False
     
-    # When filtering by lead: verify lead access, then return ALL follow-ups for that lead (including completed)
+    # When filtering by lead: verify lead access
     if lead_id is not None:
         lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
         lead = lead_result.scalar_one_or_none()
         if not lead:
-            return []
+            return FollowUpListResponse(items=[], total=0, page=page, page_size=page_size, total_pages=0, stats={"total": 0, "pending": 0, "overdue": 0, "completed": 0})
         is_unassigned_pool = lead.dealership_id is None
         if is_unassigned_pool:
             has_access = current_user.role == UserRole.SUPER_ADMIN or current_user.dealership_id is not None
@@ -67,30 +71,155 @@ async def list_follow_ups(
                 or (current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and lead.dealership_id == current_user.dealership_id)
             )
         if not has_access:
-            return []
-        query = query.where(FollowUp.lead_id == lead_id)
+            return FollowUpListResponse(items=[], total=0, page=page, page_size=page_size, total_pages=0, stats={"total": 0, "pending": 0, "overdue": 0, "completed": 0})
+        base_filters.append(FollowUp.lead_id == lead_id)
     else:
         # RBAC Isolation (when not filtering by specific lead)
         if current_user.role == UserRole.SALESPERSON:
-            query = query.where(FollowUp.assigned_to == current_user.id)
+            base_filters.append(FollowUp.assigned_to == current_user.id)
         elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-            query = query.join(User, FollowUp.assigned_to == User.id).where(
-                User.dealership_id == current_user.dealership_id
-            )
+            user_join_needed = True
     
     if assigned_to is not None:
-        query = query.where(FollowUp.assigned_to == assigned_to)
+        base_filters.append(FollowUp.assigned_to == assigned_to)
+    
+    # Date range filters
+    if date_from:
+        base_filters.append(FollowUp.scheduled_at >= date_from)
+    if date_to:
+        base_filters.append(FollowUp.scheduled_at <= date_to)
         
     if status:
-        query = query.where(FollowUp.status == status)
+        base_filters.append(FollowUp.status == status)
     
     if overdue:
-        query = query.where(
-            FollowUp.scheduled_at < utc_now(),
-            FollowUp.status == FollowUpStatus.PENDING
+        base_filters.append(FollowUp.scheduled_at < utc_now())
+        base_filters.append(FollowUp.status == FollowUpStatus.PENDING)
+    
+    # Build count query for stats (without status/overdue filters to get all counts)
+    stats_filters = [f for f in base_filters if not (
+        (hasattr(f, 'left') and hasattr(f.left, 'key') and f.left.key == 'status') or
+        (status and f == (FollowUp.status == status)) or
+        (overdue and f == (FollowUp.scheduled_at < utc_now()))
+    )]
+    # Remove status and overdue filters for stats calculation
+    stats_base_filters = []
+    for f in base_filters:
+        # Skip status filter
+        try:
+            if hasattr(f, 'right') and f.right == status:
+                continue
+        except:
+            pass
+        # Skip overdue filters
+        if overdue:
+            try:
+                if hasattr(f, 'right') and f.right == FollowUpStatus.PENDING:
+                    continue
+            except:
+                pass
+        stats_base_filters.append(f)
+    
+    # Calculate stats using separate queries for accuracy
+    stats_query_base = select(FollowUp)
+    if user_join_needed:
+        stats_query_base = stats_query_base.join(User, FollowUp.assigned_to == User.id).where(
+            User.dealership_id == current_user.dealership_id
         )
-        
-    query = query.order_by(FollowUp.scheduled_at.asc())
+    
+    # Apply only RBAC and date filters for stats (not status/overdue)
+    rbac_date_filters = []
+    if lead_id is not None:
+        rbac_date_filters.append(FollowUp.lead_id == lead_id)
+    elif current_user.role == UserRole.SALESPERSON:
+        rbac_date_filters.append(FollowUp.assigned_to == current_user.id)
+    if assigned_to is not None:
+        rbac_date_filters.append(FollowUp.assigned_to == assigned_to)
+    if date_from:
+        rbac_date_filters.append(FollowUp.scheduled_at >= date_from)
+    if date_to:
+        rbac_date_filters.append(FollowUp.scheduled_at <= date_to)
+    
+    # Total count
+    total_count_query = select(func.count(FollowUp.id))
+    if user_join_needed:
+        total_count_query = total_count_query.join(User, FollowUp.assigned_to == User.id).where(
+            User.dealership_id == current_user.dealership_id
+        )
+    if rbac_date_filters:
+        total_count_query = total_count_query.where(and_(*rbac_date_filters))
+    total_result = await db.execute(total_count_query)
+    stats_total = total_result.scalar() or 0
+    
+    # Pending count
+    pending_filters = rbac_date_filters + [FollowUp.status == FollowUpStatus.PENDING]
+    pending_count_query = select(func.count(FollowUp.id))
+    if user_join_needed:
+        pending_count_query = pending_count_query.join(User, FollowUp.assigned_to == User.id).where(
+            User.dealership_id == current_user.dealership_id
+        )
+    pending_count_query = pending_count_query.where(and_(*pending_filters))
+    pending_result = await db.execute(pending_count_query)
+    stats_pending = pending_result.scalar() or 0
+    
+    # Overdue count
+    overdue_filters = rbac_date_filters + [FollowUp.status == FollowUpStatus.PENDING, FollowUp.scheduled_at < utc_now()]
+    overdue_count_query = select(func.count(FollowUp.id))
+    if user_join_needed:
+        overdue_count_query = overdue_count_query.join(User, FollowUp.assigned_to == User.id).where(
+            User.dealership_id == current_user.dealership_id
+        )
+    overdue_count_query = overdue_count_query.where(and_(*overdue_filters))
+    overdue_result = await db.execute(overdue_count_query)
+    stats_overdue = overdue_result.scalar() or 0
+    
+    # Completed count
+    completed_filters = rbac_date_filters + [FollowUp.status == FollowUpStatus.COMPLETED]
+    completed_count_query = select(func.count(FollowUp.id))
+    if user_join_needed:
+        completed_count_query = completed_count_query.join(User, FollowUp.assigned_to == User.id).where(
+            User.dealership_id == current_user.dealership_id
+        )
+    completed_count_query = completed_count_query.where(and_(*completed_filters))
+    completed_result = await db.execute(completed_count_query)
+    stats_completed = completed_result.scalar() or 0
+    
+    stats = {
+        "total": stats_total,
+        "pending": stats_pending,
+        "overdue": stats_overdue,
+        "completed": stats_completed
+    }
+    
+    # Build main query with all filters for pagination
+    query = select(FollowUp).options(
+        selectinload(FollowUp.lead),
+        selectinload(FollowUp.assigned_to_user)
+    )
+    
+    if user_join_needed:
+        query = query.join(User, FollowUp.assigned_to == User.id).where(
+            User.dealership_id == current_user.dealership_id
+        )
+    
+    if base_filters:
+        query = query.where(and_(*base_filters))
+    
+    # Get total count for current filter set (for pagination)
+    count_query = select(func.count(FollowUp.id))
+    if user_join_needed:
+        count_query = count_query.join(User, FollowUp.assigned_to == User.id).where(
+            User.dealership_id == current_user.dealership_id
+        )
+    if base_filters:
+        count_query = count_query.where(and_(*base_filters))
+    count_result = await db.execute(count_query)
+    total = count_result.scalar() or 0
+    total_pages = math.ceil(total / page_size) if total > 0 else 0
+    
+    # Apply ordering and pagination
+    offset = (page - 1) * page_size
+    query = query.order_by(FollowUp.scheduled_at.asc()).offset(offset).limit(page_size)
     
     result = await db.execute(query)
     follow_ups = result.scalars().all()
@@ -126,7 +255,14 @@ async def list_follow_ups(
         }
         enriched.append(FollowUpResponse(**follow_up_dict))
     
-    return enriched
+    return FollowUpListResponse(
+        items=enriched,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        stats=stats
+    )
 
 
 @router.post("/{lead_id}", response_model=FollowUpResponse)

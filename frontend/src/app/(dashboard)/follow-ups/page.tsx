@@ -17,8 +17,11 @@ import {
     Plus,
     MoreVertical,
     Trash2,
+    ChevronLeft,
+    ChevronRight,
 } from "lucide-react"
 import Link from "next/link"
+import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays } from "date-fns"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -61,10 +64,17 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover"
+import { Calendar as CalendarComponent } from "@/components/ui/calendar"
+import {
     FollowUpService,
     FollowUp,
     FollowUpStatus,
     FOLLOW_UP_STATUS_INFO,
+    FollowUpStats,
 } from "@/services/follow-up-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone, formatRelativeTimeInTimezone } from "@/utils/timezone"
@@ -72,9 +82,20 @@ import { UserAvatar } from "@/components/ui/avatar"
 import { getRoleDisplayName } from "@/hooks/use-role"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
 import { filterStorage } from "@/lib/filter-storage"
+import { cn } from "@/lib/utils"
 
 const FOLLOWUP_VALID_FILTERS = ["all", "pending", "overdue", "completed"] as const
 type FollowUpFilterType = (typeof FOLLOWUP_VALID_FILTERS)[number]
+
+type DateRangePreset = "today" | "this_week" | "this_month" | "custom" | "all_time"
+
+const DATE_RANGE_PRESETS: { value: DateRangePreset; label: string }[] = [
+    { value: "today", label: "Today" },
+    { value: "this_week", label: "This Week" },
+    { value: "this_month", label: "This Month" },
+    { value: "custom", label: "Custom" },
+    { value: "all_time", label: "All Time" },
+]
 
 export default function FollowUpsPage() {
     const router = useRouter()
@@ -83,16 +104,63 @@ export default function FollowUpsPage() {
 
     const [followUps, setFollowUps] = React.useState<FollowUp[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
+    const [stats, setStats] = React.useState<FollowUpStats>({ total: 0, pending: 0, overdue: 0, completed: 0 })
+
+    // Pagination state
+    const [page, setPage] = React.useState(1)
+    const [totalPages, setTotalPages] = React.useState(0)
+    const [total, setTotal] = React.useState(0)
+    const pageSize = 20
 
     // Filters - sync from URL / localStorage
     const [filter, setFilterState] = React.useState<FollowUpFilterType>("all")
     const [statusFilter, setStatusFilterState] = React.useState<FollowUpStatus | "all">("all")
+    
+    // Date range filter
+    const [dateRangePreset, setDateRangePreset] = React.useState<DateRangePreset>("all_time")
+    const [customDateFrom, setCustomDateFrom] = React.useState<Date | undefined>()
+    const [customDateTo, setCustomDateTo] = React.useState<Date | undefined>()
+
+    // Calculate date range based on preset
+    const getDateRange = React.useCallback(() => {
+        const now = new Date()
+        switch (dateRangePreset) {
+            case "today":
+                return {
+                    date_from: startOfDay(now).toISOString(),
+                    date_to: endOfDay(now).toISOString()
+                }
+            case "this_week":
+                return {
+                    date_from: startOfWeek(now, { weekStartsOn: 0 }).toISOString(),
+                    date_to: endOfWeek(now, { weekStartsOn: 0 }).toISOString()
+                }
+            case "this_month":
+                return {
+                    date_from: startOfMonth(now).toISOString(),
+                    date_to: endOfMonth(now).toISOString()
+                }
+            case "custom":
+                return {
+                    date_from: customDateFrom ? startOfDay(customDateFrom).toISOString() : undefined,
+                    date_to: customDateTo ? endOfDay(customDateTo).toISOString() : undefined
+                }
+            case "all_time":
+            default:
+                return { date_from: undefined, date_to: undefined }
+        }
+    }, [dateRangePreset, customDateFrom, customDateTo])
 
     React.useEffect(() => {
         const urlFilter = searchParams.get("filter") as FollowUpFilterType | null
         const urlStatus = searchParams.get("status") as FollowUpStatus | "all" | null
+        const urlPage = searchParams.get("page")
+        const urlDatePreset = searchParams.get("date_preset") as DateRangePreset | null
+        
         if (urlFilter && FOLLOWUP_VALID_FILTERS.includes(urlFilter)) setFilterState(urlFilter)
         if (urlStatus) setStatusFilterState(urlStatus === "all" ? "all" : urlStatus)
+        if (urlPage) setPage(parseInt(urlPage) || 1)
+        if (urlDatePreset) setDateRangePreset(urlDatePreset)
     }, [searchParams])
 
     React.useEffect(() => {
@@ -105,33 +173,55 @@ export default function FollowUpsPage() {
         if (params.toString()) router.replace(`/follow-ups?${params.toString()}`)
     }, [router, searchParams])
 
+    const updateUrlParams = React.useCallback((updates: Record<string, string | undefined>) => {
+        const params = new URLSearchParams(searchParams.toString())
+        Object.entries(updates).forEach(([key, value]) => {
+            if (value !== undefined && value !== "all" && value !== "1" && value !== "all_time") {
+                params.set(key, value)
+            } else {
+                params.delete(key)
+            }
+        })
+        router.replace(`/follow-ups?${params.toString()}`)
+    }, [router, searchParams])
+
     const setFilter = React.useCallback(
         (v: FollowUpFilterType) => {
             setFilterState(v)
-            const params = new URLSearchParams(searchParams.toString())
-            params.set("filter", v)
-            if (statusFilter !== "all") params.set("status", statusFilter)
-            else params.delete("status")
-            router.replace(`/follow-ups?${params.toString()}`)
+            setPage(1)
+            updateUrlParams({ filter: v, page: "1" })
             filterStorage.setFollowUps({ filter: v, status: statusFilter === "all" ? undefined : statusFilter })
         },
-        [router, searchParams, statusFilter]
+        [updateUrlParams, statusFilter]
     )
+
     const setStatusFilter = React.useCallback(
         (v: FollowUpStatus | "all") => {
             setStatusFilterState(v)
-            const params = new URLSearchParams(searchParams.toString())
-            if (v !== "all") params.set("status", v)
-            else params.delete("status")
-            if (searchParams.get("filter")) params.set("filter", searchParams.get("filter")!)
-            router.replace(`/follow-ups?${params.toString()}`)
+            setPage(1)
+            updateUrlParams({ status: v === "all" ? undefined : v, page: "1" })
             filterStorage.setFollowUps({
-                filter: (searchParams.get("filter") as FollowUpFilterType) || "all",
+                filter: filter,
                 status: v === "all" ? undefined : v,
             })
         },
-        [router, searchParams]
+        [updateUrlParams, filter]
     )
+
+    const handleDatePresetChange = React.useCallback((preset: DateRangePreset) => {
+        setDateRangePreset(preset)
+        setPage(1)
+        if (preset !== "custom") {
+            setCustomDateFrom(undefined)
+            setCustomDateTo(undefined)
+        }
+        updateUrlParams({ date_preset: preset, page: "1" })
+    }, [updateUrlParams])
+
+    const handlePageChange = React.useCallback((newPage: number) => {
+        setPage(newPage)
+        updateUrlParams({ page: newPage.toString() })
+    }, [updateUrlParams])
     
     // Complete dialog
     const [completeDialogOpen, setCompleteDialogOpen] = React.useState(false)
@@ -150,7 +240,13 @@ export default function FollowUpsPage() {
     const fetchFollowUps = React.useCallback(async () => {
         setIsLoading(true)
         try {
-            const params: any = {}
+            const dateRange = getDateRange()
+            const params: any = {
+                page,
+                page_size: pageSize,
+                ...dateRange
+            }
+            
             if (filter === "overdue") {
                 params.overdue = true
             } else if (filter === "pending") {
@@ -163,31 +259,23 @@ export default function FollowUpsPage() {
                 params.status = statusFilter
             }
             
-            const data = await FollowUpService.listFollowUps(params)
-            setFollowUps(data)
+            const response = await FollowUpService.listFollowUps(params)
+            setFollowUps(response.items)
+            setTotal(response.total)
+            setTotalPages(response.total_pages)
+            if (response.stats) {
+                setStats(response.stats)
+            }
         } catch (error) {
             console.error("Failed to fetch follow-ups:", error)
         } finally {
             setIsLoading(false)
         }
-    }, [filter, statusFilter])
+    }, [filter, statusFilter, page, getDateRange])
     
     React.useEffect(() => {
         fetchFollowUps()
     }, [fetchFollowUps])
-    
-    // Calculate stats
-    const stats = React.useMemo(() => {
-        const total = followUps.length
-        const pending = followUps.filter(f => f.status === "pending").length
-        const overdue = followUps.filter(f => {
-            if (f.status !== "pending") return false
-            return new Date(f.scheduled_at) < new Date()
-        }).length
-        const completed = followUps.filter(f => f.status === "completed").length
-        
-        return { total, pending, overdue, completed }
-    }, [followUps])
     
     // Handle complete
     const handleCompleteClick = (followUp: FollowUp) => {
@@ -239,31 +327,20 @@ export default function FollowUpsPage() {
     const handleLeadClick = (leadId: string) => {
         router.push(`/leads/${leadId}`)
     }
-    
-    // Filter follow-ups based on current filter
-    const filteredFollowUps = React.useMemo(() => {
-        let filtered = followUps
-        
-        if (filter === "overdue") {
-            filtered = filtered.filter(f => {
-                if (f.status !== "pending") return false
-                return new Date(f.scheduled_at) < new Date()
-            })
-        } else if (filter === "pending") {
-            filtered = filtered.filter(f => f.status === "pending")
-        } else if (filter === "completed") {
-            filtered = filtered.filter(f => f.status === "completed")
-        }
-        
-        if (statusFilter !== "all") {
-            filtered = filtered.filter(f => f.status === statusFilter)
-        }
-        
-        return filtered.sort((a, b) => {
-            // Sort by scheduled_at ascending (earliest first)
-            return new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
-        })
-    }, [followUps, filter, statusFilter])
+
+    // Clear all filters
+    const clearFilters = React.useCallback(() => {
+        setFilterState("all")
+        setStatusFilterState("all")
+        setDateRangePreset("all_time")
+        setCustomDateFrom(undefined)
+        setCustomDateTo(undefined)
+        setPage(1)
+        router.replace("/follow-ups")
+        filterStorage.setFollowUps({ filter: "all", status: undefined })
+    }, [router])
+
+    const hasActiveFilters = filter !== "all" || statusFilter !== "all" || dateRangePreset !== "all_time"
     
     return (
         <div className="space-y-6">
@@ -332,7 +409,7 @@ export default function FollowUpsPage() {
             {/* Filters */}
             <Card>
                 <CardContent className="p-4">
-                    <div className="flex items-center gap-4">
+                    <div className="flex flex-wrap items-center gap-4">
                         <Tabs value={filter} onValueChange={(v) => setFilter(v as FollowUpFilterType)}>
                             <TabsList>
                                 <TabsTrigger value="all">All</TabsTrigger>
@@ -357,7 +434,7 @@ export default function FollowUpsPage() {
                         </Tabs>
                         
                         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as FollowUpStatus | "all")}>
-                            <SelectTrigger className="w-[200px]">
+                            <SelectTrigger className="w-[160px]">
                                 <SelectValue placeholder="Filter by status" />
                             </SelectTrigger>
                             <SelectContent>
@@ -368,15 +445,70 @@ export default function FollowUpsPage() {
                                 <SelectItem value="cancelled">Cancelled</SelectItem>
                             </SelectContent>
                         </Select>
+
+                        {/* Date Range Filter */}
+                        <Select value={dateRangePreset} onValueChange={(v) => handleDatePresetChange(v as DateRangePreset)}>
+                            <SelectTrigger className="w-[160px]">
+                                <Calendar className="mr-2 h-4 w-4" />
+                                <SelectValue placeholder="Date Range" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {DATE_RANGE_PRESETS.map((preset) => (
+                                    <SelectItem key={preset.value} value={preset.value}>
+                                        {preset.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+
+                        {/* Custom Date Pickers */}
+                        {dateRangePreset === "custom" && (
+                            <div className="flex items-center gap-2">
+                                <Popover>
+                                    <PopoverTrigger asChild>
+                                        <Button variant="outline" size="sm" className={cn(!customDateFrom && "text-muted-foreground")}>
+                                            {customDateFrom ? format(customDateFrom, "MMM d, yyyy") : "From"}
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-auto p-0" align="start">
+                                        <CalendarComponent
+                                            mode="single"
+                                            selected={customDateFrom}
+                                            onSelect={(date) => {
+                                                setCustomDateFrom(date)
+                                                setPage(1)
+                                            }}
+                                            initialFocus
+                                        />
+                                    </PopoverContent>
+                                </Popover>
+                                <span className="text-muted-foreground">to</span>
+                                <Popover>
+                                    <PopoverTrigger asChild>
+                                        <Button variant="outline" size="sm" className={cn(!customDateTo && "text-muted-foreground")}>
+                                            {customDateTo ? format(customDateTo, "MMM d, yyyy") : "To"}
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-auto p-0" align="start">
+                                        <CalendarComponent
+                                            mode="single"
+                                            selected={customDateTo}
+                                            onSelect={(date) => {
+                                                setCustomDateTo(date)
+                                                setPage(1)
+                                            }}
+                                            initialFocus
+                                        />
+                                    </PopoverContent>
+                                </Popover>
+                            </div>
+                        )}
                         
-                        {(filter !== "all" || statusFilter !== "all") && (
+                        {hasActiveFilters && (
                             <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => {
-                                    setFilter("all")
-                                    setStatusFilter("all")
-                                }}
+                                onClick={clearFilters}
                             >
                                 <X className="h-4 w-4 mr-1" />
                                 Clear Filters
@@ -389,24 +521,33 @@ export default function FollowUpsPage() {
             {/* Follow-ups List */}
             <Card>
                 <CardHeader>
-                    <CardTitle>
-                        {filter === "overdue" ? "Overdue Follow-ups" : 
-                         filter === "pending" ? "Pending Follow-ups" :
-                         filter === "completed" ? "Completed Follow-ups" :
-                         "All Follow-ups"}
-                        {filteredFollowUps.length > 0 && (
-                            <span className="ml-2 text-sm font-normal text-muted-foreground">
-                                ({filteredFollowUps.length} {filteredFollowUps.length === 1 ? "follow-up" : "follow-ups"})
-                            </span>
+                    <div className="flex items-center justify-between">
+                        <CardTitle>
+                            {filter === "overdue" ? "Overdue Follow-ups" : 
+                             filter === "pending" ? "Pending Follow-ups" :
+                             filter === "completed" ? "Completed Follow-ups" :
+                             "All Follow-ups"}
+                            {total > 0 && (
+                                <span className="ml-2 text-sm font-normal text-muted-foreground">
+                                    ({total} {total === 1 ? "follow-up" : "follow-ups"})
+                                </span>
+                            )}
+                        </CardTitle>
+                        {totalPages > 1 && (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <span>
+                                    Page {page} of {totalPages}
+                                </span>
+                            </div>
                         )}
-                    </CardTitle>
+                    </div>
                 </CardHeader>
                 <CardContent className="p-0">
                     {isLoading ? (
                         <div className="flex items-center justify-center py-12">
                             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                         </div>
-                    ) : filteredFollowUps.length === 0 ? (
+                    ) : followUps.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-12 text-center">
                             <Calendar className="h-12 w-12 text-muted-foreground/20 mb-4" />
                             <p className="text-lg font-medium">No follow-ups</p>
@@ -417,7 +558,7 @@ export default function FollowUpsPage() {
                                     ? "No pending follow-ups scheduled."
                                     : "You don't have any follow-ups yet."}
                             </p>
-                            {filter === "all" && (
+                            {filter === "all" && !hasActiveFilters && (
                                 <Button
                                     onClick={() => setScheduleModalOpen(true)}
                                     className="mt-4"
@@ -429,7 +570,7 @@ export default function FollowUpsPage() {
                         </div>
                     ) : (
                         <div className="divide-y">
-                            {filteredFollowUps.map((followUp) => {
+                            {followUps.map((followUp) => {
                                 const statusInfo = FOLLOW_UP_STATUS_INFO[followUp.status]
                                 const isOverdue = followUp.status === "pending" && new Date(followUp.scheduled_at) < new Date()
                                 const leadName = followUp.lead
@@ -564,6 +705,35 @@ export default function FollowUpsPage() {
                                     </div>
                                 )
                             })}
+                        </div>
+                    )}
+
+                    {/* Pagination */}
+                    {totalPages > 1 && (
+                        <div className="flex items-center justify-between px-4 py-3 border-t">
+                            <div className="text-sm text-muted-foreground">
+                                Showing {((page - 1) * pageSize) + 1}-{Math.min(page * pageSize, total)} of {total}
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handlePageChange(page - 1)}
+                                    disabled={page <= 1}
+                                >
+                                    <ChevronLeft className="h-4 w-4" />
+                                    Previous
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handlePageChange(page + 1)}
+                                    disabled={page >= totalPages}
+                                >
+                                    Next
+                                    <ChevronRight className="h-4 w-4" />
+                                </Button>
+                            </div>
                         </div>
                     )}
                 </CardContent>

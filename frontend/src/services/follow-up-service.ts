@@ -58,10 +58,30 @@ export interface FollowUpUpdate {
 }
 
 export interface FollowUpListParams {
+    page?: number;
+    page_size?: number;
     lead_id?: string;
     assigned_to?: string;
     status?: FollowUpStatus;
     overdue?: boolean;
+    date_from?: string;
+    date_to?: string;
+}
+
+export interface FollowUpStats {
+    total: number;
+    pending: number;
+    overdue: number;
+    completed: number;
+}
+
+export interface FollowUpListResponse {
+    items: FollowUp[];
+    total: number;
+    page: number;
+    page_size: number;
+    total_pages: number;
+    stats: FollowUpStats | null;
 }
 
 // Status display info
@@ -75,12 +95,11 @@ export const FOLLOW_UP_STATUS_INFO: Record<FollowUpStatus, { label: string; colo
 // Service methods
 export const FollowUpService = {
     /**
-     * Get list of follow-ups
+     * Get list of follow-ups with pagination
      */
-    async listFollowUps(params: FollowUpListParams = {}): Promise<FollowUp[]> {
-        const response = await apiClient.get<FollowUp[]>("/follow-ups/", { params });
-        const data = response.data;
-        return Array.isArray(data) ? data : (data ? [data] : []);
+    async listFollowUps(params: FollowUpListParams = {}): Promise<FollowUpListResponse> {
+        const response = await apiClient.get<FollowUpListResponse>("/follow-ups/", { params });
+        return response.data;
     },
 
     /**

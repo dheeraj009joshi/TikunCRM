@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useSearchParams, useRouter } from "next/navigation"
-import { format } from "date-fns"
+import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from "date-fns"
 import { 
     CalendarClock, 
     Plus, 
@@ -777,6 +777,15 @@ function RescheduleAppointmentModal({
 const VALID_FILTERS = ["all", "today", "upcoming", "overdue", "completed"] as const
 type FilterType = (typeof VALID_FILTERS)[number]
 
+type DateRangePreset = "today" | "this_week" | "this_month" | "custom" | "all_time"
+const DATE_RANGE_PRESETS: { value: DateRangePreset; label: string }[] = [
+    { value: "today", label: "Today" },
+    { value: "this_week", label: "This Week" },
+    { value: "this_month", label: "This Month" },
+    { value: "custom", label: "Custom" },
+    { value: "all_time", label: "All Time" },
+]
+
 export default function AppointmentsPage() {
     const { user } = useAuthStore()
     const { timezone } = useBrowserTimezone()
@@ -843,6 +852,8 @@ export default function AppointmentsPage() {
         },
         [router, searchParams]
     )
+    // Date range filter with presets
+    const [dateRangePreset, setDateRangePreset] = React.useState<DateRangePreset>("all_time")
     const [dateMode, setDateMode] = React.useState<"range" | "specific">("range")
     const [dateFrom, setDateFrom] = React.useState<Date | undefined>(undefined)
     const [dateTo, setDateTo] = React.useState<Date | undefined>(undefined)
@@ -850,6 +861,47 @@ export default function AppointmentsPage() {
     const [dateFromOpen, setDateFromOpen] = React.useState(false)
     const [dateToOpen, setDateToOpen] = React.useState(false)
     const [specificDateOpen, setSpecificDateOpen] = React.useState(false)
+
+    // Calculate date range based on preset
+    const getDateRangeFromPreset = React.useCallback((preset: DateRangePreset) => {
+        const now = new Date()
+        switch (preset) {
+            case "today":
+                return {
+                    date_from: startOfDay(now),
+                    date_to: endOfDay(now)
+                }
+            case "this_week":
+                return {
+                    date_from: startOfWeek(now, { weekStartsOn: 0 }),
+                    date_to: endOfWeek(now, { weekStartsOn: 0 })
+                }
+            case "this_month":
+                return {
+                    date_from: startOfMonth(now),
+                    date_to: endOfMonth(now)
+                }
+            case "custom":
+            case "all_time":
+            default:
+                return { date_from: undefined, date_to: undefined }
+        }
+    }, [])
+
+    const handleDatePresetChange = React.useCallback((preset: DateRangePreset) => {
+        setDateRangePreset(preset)
+        setPage(1)
+        if (preset !== "custom") {
+            setDateMode("range")
+            const { date_from, date_to } = getDateRangeFromPreset(preset)
+            setDateFrom(date_from)
+            setDateTo(date_to)
+            setSpecificDate(undefined)
+        } else {
+            setDateFrom(undefined)
+            setDateTo(undefined)
+        }
+    }, [getDateRangeFromPreset])
     
     // Modals
     const [showCreateModal, setShowCreateModal] = React.useState(false)
@@ -861,31 +913,49 @@ export default function AppointmentsPage() {
     const loadData = React.useCallback(async () => {
         setLoading(true)
         try {
+            // Calculate date range for specific date mode without mutating state
+            let effectiveDateFrom = dateFrom?.toISOString()
+            let effectiveDateTo = dateTo?.toISOString()
+            
+            if (dateMode === "specific" && specificDate) {
+                const specificStart = new Date(specificDate)
+                specificStart.setHours(0, 0, 0, 0)
+                const specificEnd = new Date(specificDate)
+                specificEnd.setHours(23, 59, 59, 999)
+                effectiveDateFrom = specificStart.toISOString()
+                effectiveDateTo = specificEnd.toISOString()
+            }
+
+            // Map filter to API params - use status filter for "completed" instead of client-side filtering
+            const apiParams: any = {
+                page,
+                page_size: 20,
+                date_from: effectiveDateFrom,
+                date_to: effectiveDateTo
+            }
+
+            // Add status filter
+            if (statusFilter) {
+                apiParams.status = statusFilter
+            } else if (filter === "completed") {
+                apiParams.status = "completed"
+            }
+
+            // Add filter-specific params
+            if (filter === "today") {
+                apiParams.today_only = true
+            } else if (filter === "upcoming") {
+                apiParams.upcoming_only = true
+            } else if (filter === "overdue") {
+                apiParams.overdue_only = true
+            }
+
             const [appointmentsRes, statsRes] = await Promise.all([
-                AppointmentService.list({
-                    page,
-                    page_size: 20,
-                    status: statusFilter || undefined,
-                    today_only: filter === "today",
-                    upcoming_only: filter === "upcoming",
-                    overdue_only: filter === "overdue",
-                    date_from: dateMode === "specific" && specificDate 
-                        ? new Date(specificDate.setHours(0, 0, 0, 0)).toISOString()
-                        : dateFrom?.toISOString(),
-                    date_to: dateMode === "specific" && specificDate 
-                        ? new Date(specificDate.setHours(23, 59, 59, 999)).toISOString()
-                        : dateTo?.toISOString()
-                }),
+                AppointmentService.list(apiParams),
                 AppointmentService.getStats()
             ])
             
-            // Filter completed locally if needed
-            let items = appointmentsRes.items
-            if (filter === "completed") {
-                items = items.filter(a => a.status === "completed")
-            }
-            
-            setAppointments(items)
+            setAppointments(appointmentsRes.items)
             setTotalPages(appointmentsRes.total_pages)
             setStats(statsRes)
         } catch (err) {
@@ -1198,133 +1268,156 @@ export default function AppointmentsPage() {
                     </SelectContent>
                 </Select>
                 
-                {/* Date Filter Mode Toggle */}
-                <div className="flex items-center gap-1 border rounded-md p-0.5">
-                    <Button
-                        variant={dateMode === "range" ? "default" : "ghost"}
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        onClick={() => { 
-                            setDateMode("range"); 
-                            setSpecificDate(undefined); 
-                            setPage(1);
-                        }}
-                    >
-                        Range
-                    </Button>
-                    <Button
-                        variant={dateMode === "specific" ? "default" : "ghost"}
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        onClick={() => { 
-                            setDateMode("specific"); 
-                            setDateFrom(undefined);
-                            setDateTo(undefined);
-                            setPage(1);
-                        }}
-                    >
-                        Specific Day
-                    </Button>
-                </div>
+                {/* Date Range Preset Dropdown */}
+                <Select value={dateRangePreset} onValueChange={(v) => handleDatePresetChange(v as DateRangePreset)}>
+                    <SelectTrigger className="w-[140px]">
+                        <Calendar className="mr-2 h-4 w-4" />
+                        <SelectValue placeholder="Date Range" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {DATE_RANGE_PRESETS.map((preset) => (
+                            <SelectItem key={preset.value} value={preset.value}>
+                                {preset.label}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
                 
-                {/* Date Range Filter (when dateMode is "range") */}
-                {dateMode === "range" && (
+                {/* Custom Date Range (when preset is "custom") */}
+                {dateRangePreset === "custom" && (
                     <>
-                        <div className="flex items-center gap-2">
-                            <span className="text-sm text-muted-foreground">From:</span>
-                            <Popover open={dateFromOpen} onOpenChange={setDateFromOpen}>
+                        {/* Date Filter Mode Toggle */}
+                        <div className="flex items-center gap-1 border rounded-md p-0.5">
+                            <Button
+                                variant={dateMode === "range" ? "default" : "ghost"}
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => { 
+                                    setDateMode("range"); 
+                                    setSpecificDate(undefined); 
+                                    setPage(1);
+                                }}
+                            >
+                                Range
+                            </Button>
+                            <Button
+                                variant={dateMode === "specific" ? "default" : "ghost"}
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => { 
+                                    setDateMode("specific"); 
+                                    setDateFrom(undefined);
+                                    setDateTo(undefined);
+                                    setPage(1);
+                                }}
+                            >
+                                Specific Day
+                            </Button>
+                        </div>
+                        
+                        {/* Date Range Filter (when dateMode is "range") */}
+                        {dateMode === "range" && (
+                            <>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm text-muted-foreground">From:</span>
+                                    <Popover open={dateFromOpen} onOpenChange={setDateFromOpen}>
+                                        <PopoverTrigger asChild>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className={cn(
+                                                    "w-[140px] justify-start text-left font-normal",
+                                                    !dateFrom && "text-muted-foreground"
+                                                )}
+                                            >
+                                                <Calendar className="mr-2 h-4 w-4" />
+                                                {dateFrom ? format(dateFrom, "MMM d, yyyy") : "Start date"}
+                                            </Button>
+                                        </PopoverTrigger>
+                                        <PopoverContent className="w-auto p-0" align="start">
+                                            <CalendarPicker
+                                                mode="single"
+                                                selected={dateFrom}
+                                                onSelect={(d) => { setDateFrom(d); setDateFromOpen(false); setPage(1) }}
+                                                initialFocus
+                                            />
+                                        </PopoverContent>
+                                    </Popover>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm text-muted-foreground">To:</span>
+                                    <Popover open={dateToOpen} onOpenChange={setDateToOpen}>
+                                        <PopoverTrigger asChild>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className={cn(
+                                                    "w-[140px] justify-start text-left font-normal",
+                                                    !dateTo && "text-muted-foreground"
+                                                )}
+                                            >
+                                                <Calendar className="mr-2 h-4 w-4" />
+                                                {dateTo ? format(dateTo, "MMM d, yyyy") : "End date"}
+                                            </Button>
+                                        </PopoverTrigger>
+                                        <PopoverContent className="w-auto p-0" align="start">
+                                            <CalendarPicker
+                                                mode="single"
+                                                selected={dateTo}
+                                                onSelect={(d) => { setDateTo(d); setDateToOpen(false); setPage(1) }}
+                                                disabled={(date) => dateFrom ? date < dateFrom : false}
+                                                initialFocus
+                                            />
+                                        </PopoverContent>
+                                    </Popover>
+                                </div>
+                            </>
+                        )}
+                        
+                        {/* Specific Date Filter (when dateMode is "specific") */}
+                        {dateMode === "specific" && (
+                            <Popover open={specificDateOpen} onOpenChange={setSpecificDateOpen}>
                                 <PopoverTrigger asChild>
                                     <Button
                                         variant="outline"
                                         size="sm"
                                         className={cn(
-                                            "w-[140px] justify-start text-left font-normal",
-                                            !dateFrom && "text-muted-foreground"
+                                            "w-[180px] justify-start text-left font-normal",
+                                            !specificDate && "text-muted-foreground"
                                         )}
                                     >
                                         <Calendar className="mr-2 h-4 w-4" />
-                                        {dateFrom ? format(dateFrom, "MMM d, yyyy") : "Start date"}
+                                        {specificDate ? format(specificDate, "EEEE, MMM d, yyyy") : "Select date"}
                                     </Button>
                                 </PopoverTrigger>
                                 <PopoverContent className="w-auto p-0" align="start">
                                     <CalendarPicker
                                         mode="single"
-                                        selected={dateFrom}
-                                        onSelect={(d) => { setDateFrom(d); setDateFromOpen(false); setPage(1) }}
+                                        selected={specificDate}
+                                        onSelect={(d) => { setSpecificDate(d); setSpecificDateOpen(false); setPage(1) }}
                                         initialFocus
                                     />
                                 </PopoverContent>
                             </Popover>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <span className="text-sm text-muted-foreground">To:</span>
-                            <Popover open={dateToOpen} onOpenChange={setDateToOpen}>
-                                <PopoverTrigger asChild>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className={cn(
-                                            "w-[140px] justify-start text-left font-normal",
-                                            !dateTo && "text-muted-foreground"
-                                        )}
-                                    >
-                                        <Calendar className="mr-2 h-4 w-4" />
-                                        {dateTo ? format(dateTo, "MMM d, yyyy") : "End date"}
-                                    </Button>
-                                </PopoverTrigger>
-                                <PopoverContent className="w-auto p-0" align="start">
-                                    <CalendarPicker
-                                        mode="single"
-                                        selected={dateTo}
-                                        onSelect={(d) => { setDateTo(d); setDateToOpen(false); setPage(1) }}
-                                        disabled={(date) => dateFrom ? date < dateFrom : false}
-                                        initialFocus
-                                    />
-                                </PopoverContent>
-                            </Popover>
-                        </div>
+                        )}
                     </>
                 )}
                 
-                {/* Specific Date Filter (when dateMode is "specific") */}
-                {dateMode === "specific" && (
-                    <Popover open={specificDateOpen} onOpenChange={setSpecificDateOpen}>
-                        <PopoverTrigger asChild>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className={cn(
-                                    "w-[180px] justify-start text-left font-normal",
-                                    !specificDate && "text-muted-foreground"
-                                )}
-                            >
-                                <Calendar className="mr-2 h-4 w-4" />
-                                {specificDate ? format(specificDate, "EEEE, MMM d, yyyy") : "Select date"}
-                            </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                            <CalendarPicker
-                                mode="single"
-                                selected={specificDate}
-                                onSelect={(d) => { setSpecificDate(d); setSpecificDateOpen(false); setPage(1) }}
-                                initialFocus
-                            />
-                        </PopoverContent>
-                    </Popover>
-                )}
-                
                 {/* Clear Filters */}
-                {(dateFrom || dateTo || specificDate || filter !== "all" || statusFilter) && (
+                {(dateRangePreset !== "all_time" || filter !== "all" || statusFilter) && (
                     <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => {
+                            setDateRangePreset("all_time")
                             setDateFrom(undefined)
                             setSpecificDate(undefined)
                             setDateTo(undefined)
-                            setFilter("all")
-                            setStatusFilter("")
+                            setFilterState("all")
+                            setStatusFilterState("")
                             setPage(1)
+                            router.replace("/appointments")
+                            filterStorage.setAppointments({ filter: "all", status: undefined })
                         }}
                     >
                         <X className="h-4 w-4 mr-1" />

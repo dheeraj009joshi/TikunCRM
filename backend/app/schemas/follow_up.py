@@ -52,6 +52,17 @@ class FollowUpResponse(FollowUpBase):
         from_attributes = True
 
 
+class FollowUpListResponse(BaseModel):
+    """Paginated list of follow-ups"""
+    items: List[FollowUpResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    # Stats for display
+    stats: Optional[dict] = None
+
+
 # Schedule Schemas
 class ScheduleBase(BaseModel):
     """Base schedule schema"""

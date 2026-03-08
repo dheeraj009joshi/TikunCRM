@@ -197,28 +197,6 @@ export function DealershipAdminDashboard() {
             {/* Follow-up Alerts */}
             {stats && (stats.pending_follow_ups > 0 || stats.overdue_follow_ups > 0) && (
                 <div className="flex gap-4">
-                    {stats.overdue_follow_ups > 0 && (
-                        <Card className="flex-1 border-rose-200 bg-rose-50 dark:border-rose-900 dark:bg-rose-950">
-                            <CardContent className="flex items-center gap-4 p-4">
-                                <div className="rounded-full bg-rose-100 p-2 dark:bg-rose-900">
-                                    <AlertTriangle className="h-5 w-5 text-rose-600" />
-                                </div>
-                                <div>
-                                    <p className="font-semibold text-rose-700 dark:text-rose-300">
-                                        {stats.overdue_follow_ups} Overdue Follow-ups
-                                    </p>
-                                    <p className="text-sm text-rose-600 dark:text-rose-400">
-                                        Requires immediate attention
-                                    </p>
-                                </div>
-                                <Link href="/follow-ups?filter=overdue" className="ml-auto">
-                                    <Button variant="outline" size="sm" className="border-rose-300 text-rose-700">
-                                        View All
-                                    </Button>
-                                </Link>
-                            </CardContent>
-                        </Card>
-                    )}
                     {stats.pending_follow_ups > 0 && (
                         <Card className="flex-1 border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950">
                             <CardContent className="flex items-center gap-4 p-4">
@@ -235,6 +213,28 @@ export function DealershipAdminDashboard() {
                                 </div>
                                 <Link href="/follow-ups?filter=today" className="ml-auto">
                                     <Button variant="outline" size="sm" className="border-amber-300 text-amber-700">
+                                        View All
+                                    </Button>
+                                </Link>
+                            </CardContent>
+                        </Card>
+                    )}
+                    {stats.overdue_follow_ups > 0 && (
+                        <Card className="flex-1 border-rose-200 bg-rose-50 dark:border-rose-900 dark:bg-rose-950">
+                            <CardContent className="flex items-center gap-4 p-4">
+                                <div className="rounded-full bg-rose-100 p-2 dark:bg-rose-900">
+                                    <AlertTriangle className="h-5 w-5 text-rose-600" />
+                                </div>
+                                <div>
+                                    <p className="font-semibold text-rose-700 dark:text-rose-300">
+                                        {stats.overdue_follow_ups} Overdue Follow-ups
+                                    </p>
+                                    <p className="text-sm text-rose-600 dark:text-rose-400">
+                                        Requires immediate attention
+                                    </p>
+                                </div>
+                                <Link href="/follow-ups?filter=overdue" className="ml-auto">
+                                    <Button variant="outline" size="sm" className="border-rose-300 text-rose-700">
                                         View All
                                     </Button>
                                 </Link>

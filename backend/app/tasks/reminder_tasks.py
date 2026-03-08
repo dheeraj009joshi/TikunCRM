@@ -2,7 +2,7 @@
 Reminder and notification background tasks
 
 Handles:
-- Appointment reminders (1 hour before)
+- Appointment reminders (2 hours before)
 - Follow-up reminders (1 hour before)
 - Missed appointment detection
 """
@@ -44,7 +44,7 @@ def get_reminder_session_maker():
 
 async def send_appointment_reminders():
     """
-    Check for appointments in the next hour and send reminders.
+    Check for appointments in the next 2 hours and send reminders.
     Runs every 5 minutes.
     """
     logger.info("Starting appointment reminder task...")
@@ -54,17 +54,17 @@ async def send_appointment_reminders():
         
         async with session_maker() as session:
             # Get appointments that:
-            # 1. Are scheduled in the next hour
+            # 1. Are scheduled in the next 2 hours
             # 2. Status is SCHEDULED or CONFIRMED
             # 3. Haven't had reminder sent yet
             now = utc_now()
-            one_hour_from_now = now + timedelta(hours=1)
+            two_hours_from_now = now + timedelta(hours=2)
             
             result = await session.execute(
                 select(Appointment)
                 .where(
                     Appointment.scheduled_at >= now,
-                    Appointment.scheduled_at <= one_hour_from_now,
+                    Appointment.scheduled_at <= two_hours_from_now,
                     Appointment.status.in_([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED]),
                     Appointment.reminder_sent == False
                 )
@@ -108,7 +108,7 @@ async def send_appointment_reminders():
                     if lead.phone and sms_service.is_configured:
                         time_str = appointment.scheduled_at.strftime("%I:%M %p")
                         location_str = f" at {appointment.location}" if appointment.location else ""
-                        sms_message = f"Reminder: You have an appointment in 1 hour at {time_str}{location_str}. See you soon!"
+                        sms_message = f"Reminder: You have an appointment in 2 hours at {time_str}{location_str}. See you soon!"
                         
                         try:
                             await sms_service.send_sms(lead.phone, sms_message)
@@ -133,94 +133,11 @@ async def send_appointment_reminders():
 
 async def send_followup_reminders():
     """
-    Check for follow-ups in the next hour and send reminders.
-    Runs every 15 minutes.
+    DISABLED: Follow-up reminder notifications are disabled per notification ruleset.
+    This task is kept as a no-op for backward compatibility.
     """
-    logger.info("Starting follow-up reminder task...")
-    
-    try:
-        session_maker = get_reminder_session_maker()
-        
-        async with session_maker() as session:
-            # Get follow-ups that:
-            # 1. Are scheduled in the next hour
-            # 2. Status is PENDING
-            # 3. Haven't had reminder sent yet
-            now = utc_now()
-            one_hour_from_now = now + timedelta(hours=1)
-            
-            result = await session.execute(
-                select(FollowUp)
-                .where(
-                    FollowUp.scheduled_at >= now,
-                    FollowUp.scheduled_at <= one_hour_from_now,
-                    FollowUp.status == FollowUpStatus.PENDING,
-                    FollowUp.reminder_sent == False
-                )
-            )
-            follow_ups = result.scalars().all()
-            
-            if not follow_ups:
-                logger.info("No follow-ups need reminders")
-                return
-            
-            logger.info(f"Found {len(follow_ups)} follow-ups needing reminders")
-            notification_service = NotificationService(session)
-            
-            for follow_up in follow_ups:
-                try:
-                    # Get lead info
-                    lead_result = await session.execute(
-                        select(Lead).where(Lead.id == follow_up.lead_id)
-                    )
-                    lead = lead_result.scalar_one_or_none()
-                    
-                    if not lead:
-                        logger.warning(f"Lead not found for follow-up {follow_up.id}")
-                        continue
-                    
-                    lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
-                    
-                    # Send notification to assigned user (push + email + SMS)
-                    if follow_up.assigned_to:
-                        await notification_service.notify_follow_up_due(
-                            user_id=follow_up.assigned_to,
-                            lead_name=lead_name,
-                            lead_id=lead.id,
-                            follow_up_id=follow_up.id,
-                            due_time=follow_up.scheduled_at
-                        )
-                        
-                        # Also send SMS for follow-ups
-                        user_result = await session.execute(
-                            select(User).where(User.id == follow_up.assigned_to)
-                        )
-                        user = user_result.scalar_one_or_none()
-                        
-                        if user and user.phone and sms_service.is_configured:
-                            time_str = follow_up.scheduled_at.strftime("%I:%M %p")
-                            sms_message = f"Reminder: Follow-up with {lead_name} due in 1 hour at {time_str}"
-                            
-                            try:
-                                await sms_service.send_sms(user.phone, sms_message)
-                                logger.info(f"Sent SMS reminder for follow-up {follow_up.id}")
-                            except Exception as e:
-                                logger.error(f"Failed to send SMS for follow-up {follow_up.id}: {e}")
-                        
-                        logger.info(f"Sent reminder for follow-up {follow_up.id}")
-                    
-                    # Mark reminder as sent
-                    follow_up.reminder_sent = True
-                    
-                except Exception as e:
-                    logger.error(f"Error processing follow-up {follow_up.id}: {e}")
-                    continue
-            
-            await session.commit()
-            logger.info(f"Follow-up reminder task completed: {len(follow_ups)} reminders sent")
-            
-    except Exception as e:
-        logger.error(f"Follow-up reminder task failed: {e}")
+    logger.info("Follow-up reminder task is DISABLED per notification ruleset")
+    return
 
 
 async def detect_missed_appointments():
@@ -292,45 +209,9 @@ async def detect_missed_appointments():
                     )
                     session.add(activity)
                     
-                    # Send notification to assigned user
-                    if appointment.assigned_to:
-                        await notification_service.notify_appointment_missed(
-                            user_id=appointment.assigned_to,
-                            lead_name=lead_name,
-                            lead_id=lead.id,
-                            appointment_id=appointment.id
-                        )
-                        logger.info(f"Notified user {appointment.assigned_to} about missed appointment {appointment.id}")
-                    
-                    # Optionally notify dealership admin/owner
-                    if lead.dealership_id:
-                        # Get dealership admins/owners
-                        from app.models.user import UserRole
-                        admins_result = await session.execute(
-                            select(User).where(
-                                User.dealership_id == lead.dealership_id,
-                                User.role.in_([UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]),
-                                User.is_active == True
-                            )
-                        )
-                        admins = admins_result.scalars().all()
-                        
-                        for admin in admins:
-                            try:
-                                await notification_service.create_notification(
-                                    user_id=admin.id,
-                                    notification_type=NotificationType.APPOINTMENT_MISSED,
-                                    title=f"Missed Appointment: {lead_name}",
-                                    message=f"Salesperson missed appointment scheduled for {appointment.scheduled_at.strftime('%I:%M %p')}",
-                                    link=f"/leads/{lead.id}",
-                                    related_id=appointment.id,
-                                    related_type="appointment",
-                                    send_push=True,
-                                    send_email=True,
-                                    send_sms=True,
-                                )
-                            except Exception as e:
-                                logger.error(f"Failed to notify admin {admin.id}: {e}")
+                    # DISABLED: Missed appointment notifications are disabled per notification ruleset
+                    # Status will still be updated to NO_SHOW but no notifications sent
+                    logger.info(f"Marked appointment {appointment.id} as missed (notifications disabled)")
                     
                     logger.info(f"Marked appointment {appointment.id} as missed")
                     

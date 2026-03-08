@@ -21,6 +21,7 @@ from app.core.permissions import UserRole
 from app.models.lead import Lead
 from app.models.activity import Activity, ActivityType
 from app.models.user import User
+from app.models.dealership import Dealership
 from app.models.notification import Notification, NotificationType
 from app.services.notification_service import NotificationService
 from app.services.follow_up_schedule_service import schedule_outbound_call_follow_ups
@@ -255,9 +256,17 @@ async def auto_assign_leads_from_activity():
                     {"type": "badges:refresh", "payload": {}}
                 )
 
-                # Schedule outbound-call follow-ups (day 1–3, every 3 days, every Friday)
+                # Schedule outbound-call follow-ups (day 0-2 at 7PM, then Fridays)
                 try:
-                    await schedule_outbound_call_follow_ups(session, lead.id, first_activity.user_id)
+                    user_timezone = "UTC"
+                    if activity_user.dealership_id:
+                        dealership_result = await session.execute(
+                            select(Dealership).where(Dealership.id == activity_user.dealership_id)
+                        )
+                        dealership = dealership_result.scalar_one_or_none()
+                        if dealership and dealership.timezone:
+                            user_timezone = dealership.timezone
+                    await schedule_outbound_call_follow_ups(session, lead.id, first_activity.user_id, user_timezone=user_timezone)
                 except Exception as e:
                     logger.warning("Failed to schedule outbound call follow-ups for lead %s: %s", lead.id, e)
 

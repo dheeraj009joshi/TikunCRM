@@ -171,6 +171,7 @@ class NotificationService:
     ) -> Notification:
         """
         Create notification for a received email reply.
+        DISABLED: Only creates in-app notification (no push/email/SMS).
         
         Args:
             user_id: User who should receive the notification
@@ -186,6 +187,9 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=lead_id,
             related_type="lead",
+            send_push=False,
+            send_email=False,
+            send_sms=False,
         )
     
     async def notify_lead_assigned(
@@ -197,6 +201,7 @@ class NotificationService:
     ) -> Notification:
         """
         Create notification for lead assignment.
+        DISABLED: Only creates in-app notification (no push/email/SMS).
         
         Args:
             user_id: User who the lead was assigned to
@@ -215,9 +220,9 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=lead_id,
             related_type="lead",
-            send_push=True,
-            send_email=True,
-            send_sms=True,
+            send_push=False,
+            send_email=False,
+            send_sms=False,
         )
     
     async def notify_follow_up_due(
@@ -230,6 +235,7 @@ class NotificationService:
     ) -> Notification:
         """
         Create notification for upcoming follow-up.
+        DISABLED: Only creates in-app notification (no push/email/SMS).
         
         Args:
             user_id: User who has the follow-up
@@ -246,9 +252,9 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=follow_up_id,
             related_type="follow_up",
-            send_push=True,
-            send_email=True,
-            send_sms=True,
+            send_push=False,
+            send_email=False,
+            send_sms=False,
         )
     
     async def notify_follow_up_overdue(
@@ -260,6 +266,7 @@ class NotificationService:
     ) -> Notification:
         """
         Create notification for overdue follow-up.
+        DISABLED: Only creates in-app notification (no push/email/SMS).
         """
         return await self.create_notification(
             user_id=user_id,
@@ -269,9 +276,9 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=follow_up_id,
             related_type="follow_up",
-            send_push=True,
-            send_email=True,
-            send_sms=True,
+            send_push=False,
+            send_email=False,
+            send_sms=False,
         )
     
     async def create_system_notification(
@@ -283,6 +290,7 @@ class NotificationService:
     ) -> Notification:
         """
         Create a system notification.
+        DISABLED: Only creates in-app notification (no push/email/SMS).
         """
         return await self.create_notification(
             user_id=user_id,
@@ -290,9 +298,9 @@ class NotificationService:
             title=title,
             message=message,
             link=link,
-            send_push=True,
-            send_email=True,
-            send_sms=True,
+            send_push=False,
+            send_email=False,
+            send_sms=False,
         )
     
     async def notify_appointment_reminder(
@@ -316,7 +324,7 @@ class NotificationService:
             scheduled_time: When the appointment is scheduled
             location: Optional appointment location
         """
-        message = f"Appointment with {lead_name} in 1 hour"
+        message = f"Appointment with {lead_name} in 2 hours"
         if location:
             message += f" at {location}"
         
@@ -342,7 +350,7 @@ class NotificationService:
     ) -> Notification:
         """
         Create notification for missed appointment.
-        Sends via push + email.
+        DISABLED: Only creates in-app notification (no push/email/SMS).
         
         Args:
             user_id: User who missed the appointment
@@ -358,9 +366,9 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=appointment_id,
             related_type="appointment",
-            send_push=True,
-            send_email=True,
-            send_sms=True,
+            send_push=False,
+            send_email=False,
+            send_sms=False,
         )
     
     async def notify_new_lead_to_dealership(
@@ -478,7 +486,7 @@ class NotificationService:
     ) -> Notification:
         """
         Admin/Owner sends notification to salesperson about pending tasks.
-        Sends via all channels (push + email + SMS).
+        DISABLED: Only creates in-app notification (no push/email/SMS).
         
         Args:
             user_id: Salesperson user ID
@@ -514,9 +522,9 @@ class NotificationService:
             message=message,
             link="/follow-ups",  # Link to follow-ups page
             meta_data=pending_tasks,
-            send_push=True,
-            send_email=True,
-            send_sms=True,
+            send_push=False,
+            send_email=False,
+            send_sms=False,
         )
     
     async def get_unread_count(self, user_id: UUID) -> int:
