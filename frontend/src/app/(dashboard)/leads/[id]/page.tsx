@@ -544,12 +544,12 @@ export default function LeadDetailsPage() {
         if (!leadId) return
         setLoadingAppointmentsFollowUps(true)
         try {
-            const [appointmentsRes, followUpsList] = await Promise.all([
+            const [appointmentsRes, followUpsRes] = await Promise.all([
                 AppointmentService.list({ lead_id: leadId, page_size: 100 }),
-                FollowUpService.listFollowUps({ lead_id: leadId }).catch(() => []),
+                FollowUpService.listFollowUps({ lead_id: leadId }).catch(() => ({ items: [], total: 0, page: 1, page_size: 100, total_pages: 0, stats: null })),
             ])
             setLeadAppointments(appointmentsRes.items)
-            setLeadFollowUps(followUpsList)
+            setLeadFollowUps(followUpsRes.items)
         } catch (error) {
             console.error("Failed to fetch appointments/follow-ups:", error)
         } finally {

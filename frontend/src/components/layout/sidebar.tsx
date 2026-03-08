@@ -221,8 +221,8 @@ export function Sidebar() {
                 // Fetch overdue follow-ups count
                 let overdueFollowUps = 0
                 try {
-                    const followUps = await FollowUpService.listFollowUps({ overdue: true })
-                    overdueFollowUps = followUps.length
+                    const followUpsRes = await FollowUpService.listFollowUps({ overdue: true })
+                    overdueFollowUps = followUpsRes.total || followUpsRes.items.length
                 } catch {
                     overdueFollowUps = 0
                 }
@@ -308,7 +308,7 @@ export function Sidebar() {
         }
         if (which.followUps) {
             FollowUpService.listFollowUps({ overdue: true })
-                .then(list => setBadgeCounts(prev => ({ ...prev, followUps: list.length })))
+                .then(res => setBadgeCounts(prev => ({ ...prev, followUps: res.total || res.items.length })))
                 .catch(() => {})
         }
     }, [])

@@ -181,7 +181,7 @@ export default function SalespersonAnalyticsPage() {
                 else if (key === "notes") setNotes("items" in value && Array.isArray(value.items) ? (value.items as ActivityItem[]) : [])
                 else if (key === "activities") setActivities("items" in value && Array.isArray(value.items) ? (value.items as ActivityItem[]) : [])
                 else if (key === "appointments") setAppointments("items" in value && Array.isArray(value.items) ? (value.items as AppointmentItem[]) : [])
-                else if (key === "followUps") setFollowUps(Array.isArray(value) ? (value as FollowUp[]) : [])
+                else if (key === "followUps") setFollowUps("items" in value && Array.isArray(value.items) ? (value.items as FollowUp[]) : [])
             } else {
                 nextErrors[key] = getErrorMessage(result.reason)
             }
