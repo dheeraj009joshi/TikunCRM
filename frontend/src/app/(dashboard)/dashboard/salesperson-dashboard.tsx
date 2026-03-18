@@ -189,7 +189,7 @@ export function SalespersonDashboard() {
                                         Scheduled for today
                                     </p>
                                 </div>
-                                <Link href="/follow-ups?filter=today" className="ml-auto">
+                                <Link href="/follow-ups?filter=pending&date_preset=today" className="ml-auto">
                                     <Button variant="outline" size="sm" className="border-blue-300 text-blue-700">
                                         View Schedule
                                     </Button>

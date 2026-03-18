@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+
+// Check if we're running on the server (SSR)
+const isServer = typeof window === "undefined";
 
 export interface WhatsAppSocketMessage {
   id: string;
@@ -67,9 +70,15 @@ const RECONNECT_DELAY = 3000;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
 // Get WebSocket URL from environment or default to localhost
-const getDefaultWsUrl = () => {
-  if (typeof window !== "undefined") {
-    // In browser, check for environment variable or use dynamic URL based on current location
+// This should only be called on the client side
+const getDefaultWsUrl = (): string => {
+  // Safety check for SSR
+  if (isServer) {
+    return "";
+  }
+  
+  try {
+    // Check for environment variable first
     const envUrl = process.env.NEXT_PUBLIC_WHATSAPP_WS_URL;
     if (envUrl) return envUrl;
     
@@ -80,12 +89,16 @@ const getDefaultWsUrl = () => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       return `${protocol}//${window.location.hostname}:3001/ws`;
     }
+    
+    return "ws://localhost:3001/ws";
+  } catch (error) {
+    console.error("Error getting WebSocket URL:", error);
+    return "ws://localhost:3001/ws";
   }
-  return "ws://localhost:3001/ws";
 };
 
 export function useWhatsAppSocket({
-  url = getDefaultWsUrl(),
+  url,
   onMessage,
   onStatusChange,
   onMessageStatus,
@@ -93,6 +106,8 @@ export function useWhatsAppSocket({
   onMessageSent,
   enabled = true,
 }: UseWhatsAppSocketOptions = {}): UseWhatsAppSocketReturn {
+  // Compute URL inside the hook to ensure it runs only on client
+  const wsUrl = useMemo(() => url || getDefaultWsUrl(), [url]);
   const [isConnected, setIsConnected] = useState(false);
   const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppSocketStatus | null>(null);
   const [lastMessage, setLastMessage] = useState<WhatsAppSocketMessage | null>(null);
@@ -132,12 +147,20 @@ export function useWhatsAppSocket({
   }, [onMessageSent]);
 
   const connect = useCallback(() => {
-    if (!enabled) return;
+    // Don't attempt connection on server or if disabled
+    if (isServer || !enabled) return;
+    
+    // Don't connect if URL is empty
+    if (!wsUrl) {
+      console.warn("WhatsApp WebSocket URL is not configured");
+      return;
+    }
+    
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
     if (wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
     try {
-      const ws = new WebSocket(url);
+      const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         console.log("WhatsApp WebSocket connected");
@@ -245,7 +268,7 @@ export function useWhatsAppSocket({
     } catch (err) {
       console.error("Failed to create WebSocket connection:", err);
     }
-  }, [url, enabled]);
+  }, [wsUrl, enabled]);
 
   const reconnect = useCallback(() => {
     if (wsRef.current) {

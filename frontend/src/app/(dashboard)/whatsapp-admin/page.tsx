@@ -88,6 +88,9 @@ const deduplicateConversations = (convs: ConversationItem[]): ConversationItem[]
 export default function WhatsAppAdminPage() {
   const { toast } = useToast();
   const { user } = useAuthStore();
+  
+  // Mounted state to prevent hydration issues
+  const [mounted, setMounted] = useState(false);
 
   // Connection state
   const [status, setStatus] = useState<BaileysStatus | null>(null);
@@ -284,8 +287,16 @@ export default function WhatsAppAdminPage() {
     }
   }, []);
 
+  // Set mounted state on client to prevent hydration issues
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // Initial status fetch on mount and periodic refresh every 30s
   useEffect(() => {
+    // Only fetch after component is mounted
+    if (!mounted) return;
+    
     fetchStatus();
     
     // Periodic status check as fallback (every 30 seconds)
@@ -308,7 +319,7 @@ export default function WhatsAppAdminPage() {
     }, 30000);
     
     return () => clearInterval(interval);
-  }, [fetchStatus]);
+  }, [fetchStatus, mounted]);
 
   // Fetch conversations (deduplicated by last 10 digits of phone)
   const fetchConversations = useCallback(async () => {
@@ -847,6 +858,18 @@ export default function WhatsAppAdminPage() {
 
   // Get existing phone numbers for new chat dialog
   const existingPhones = new Set(conversations.map((c) => c.phone_number));
+
+  // Show loading state until mounted to prevent hydration mismatch
+  if (!mounted) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-200px)]">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">Loading WhatsApp Admin...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!isAdmin) {
     return (

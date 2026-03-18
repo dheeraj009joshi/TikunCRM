@@ -230,14 +230,16 @@ class AzureStorageService:
                 logger.error("Could not parse Azure Storage account info from connection string")
                 return ""
             
-            # Generate SAS token
+            # Generate SAS token with clock skew tolerance (start 5 min ago)
+            now = datetime.now(timezone.utc)
             sas_token = generate_blob_sas(
                 account_name=account_name,
                 container_name=settings.azure_storage_container,
                 blob_name=blob_name,
                 account_key=account_key,
                 permission=BlobSasPermissions(read=True),
-                expiry=datetime.now(timezone.utc) + timedelta(hours=expiry_hours)
+                start=now - timedelta(minutes=5),
+                expiry=now + timedelta(hours=expiry_hours)
             )
             
             # Build full URL
@@ -366,13 +368,16 @@ class AzureStorageService:
             account_key = connection_parts.get("AccountKey", "")
             if not account_name or not account_key:
                 return ""
+            # Generate SAS token with clock skew tolerance (start 5 min ago)
+            now = datetime.now(timezone.utc)
             sas_token = generate_blob_sas(
                 account_name=account_name,
                 container_name=settings.azure_storage_container_stips,
                 blob_name=blob_path,
                 account_key=account_key,
                 permission=BlobSasPermissions(read=True),
-                expiry=datetime.now(timezone.utc) + timedelta(hours=expiry_hours)
+                start=now - timedelta(minutes=5),
+                expiry=now + timedelta(hours=expiry_hours)
             )
             return f"https://{account_name}.blob.core.windows.net/{settings.azure_storage_container_stips}/{blob_path}?{sas_token}"
         except Exception as e:

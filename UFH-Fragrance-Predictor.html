@@ -1,0 +1,3104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fragrance Mixture Optimizer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg: #0e0d0b;
+    --surface: #161410;
+    --surface2: #1e1b16;
+    --border: #2a2620;
+    --gold: #c9a96e;
+    --gold-light: #e8c98a;
+    --amber: #34281b;
+    --text: #f0e8d8;
+    --text-muted: #8a7d6a;
+    --green: #4a9e6b;
+    --red: #c45a4a;
+    --blue: #5a8ec4;
+    --radius: 8px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+  }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--surface);
+    position: relative;
+    z-index: 1;
+  }
+
+  header h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    color: var(--gold-light);
+    letter-spacing: 0.02em;
+  }
+
+  header p {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+
+  .badge {
+    background: linear-gradient(135deg, #2a2218, #1e1a12);
+    border: 1px solid var(--gold);
+    color: var(--gold);
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 0;
+    height: calc(100vh - 65px);
+    overflow: hidden;
+  }
+
+  .sidebar {
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    overflow: hidden;
+  }
+  .sidebar-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .sidebar-tab {
+    flex: 1;
+    padding: 12px 0;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color 0.2s, background 0.2s;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    touch-action: manipulation;
+  }
+  .sidebar-tab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+  .sidebar-tab.active {
+    color: var(--gold);
+    border-bottom-color: var(--gold);
+  }
+  .sidebar-pane {
+    display: none;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+    -webkit-overflow-scrolling: touch;
+  }
+  .sidebar-pane.active { display: flex; }
+
+  .main {
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+
+  .card-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 13px;
+    color: var(--gold);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .card-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* Ingredient sliders */
+  .ingredient {
+    margin-bottom: 14px;
+  }
+
+  .ingredient-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+
+  .ingredient-name {
+    font-weight: 500;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .ingredient-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .ingredient-val {
+    font-weight: 600;
+    color: var(--gold-light);
+    font-size: 14px;
+    min-width: 40px;
+    text-align: right;
+  }
+
+  input[type=range] {
+    width: 100%;
+    height: 6px;
+    -webkit-appearance: none;
+    background: var(--border);
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--gold);
+    cursor: pointer;
+    border: 2px solid var(--bg);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  }
+
+  input[type=range]::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--gold);
+    cursor: pointer;
+    border: 2px solid var(--bg);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  }
+
+  .sum-indicator {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    margin-top: 4px;
+  }
+
+  .sum-indicator.valid { border-color: var(--green); color: var(--green); }
+  .sum-indicator.invalid { border-color: var(--red); color: var(--red); }
+
+  .sum-bar {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+
+  .sum-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.2s, background 0.2s;
+  }
+
+  /* Optimizer controls */
+  .optimizer-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .control-group label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .control-group input[type=number],
+  .control-group select {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 7px 10px;
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+    font-family: inherit;
+  }
+
+  .control-group input[type=number]:focus,
+  .control-group select:focus {
+    border-color: var(--gold);
+  }
+
+  /* Buttons */
+  .btn {
+    width: 100%;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    transition: all 0.15s;
+    touch-action: manipulation;
+  }
+
+  .btn-primary {
+    background: linear-gradient(135deg, var(--amber), var(--gold));
+    color: #1a1005;
+  }
+
+  .btn-primary:hover { filter: brightness(1.1); }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-secondary {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    margin-top: 8px;
+  }
+
+  .btn-secondary:hover { border-color: var(--gold); color: var(--gold); }
+
+  /* Progress */
+  .progress-wrap {
+    margin-top: 10px;
+  }
+
+  .progress-bar {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--amber), var(--gold));
+    border-radius: 3px;
+    transition: width 0.1s;
+  }
+
+  .progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  /* Results panel */
+  .results-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .results-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 18px;
+    color: var(--gold-light);
+  }
+
+  .results-count {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .results-count span { color: var(--gold); font-weight: 600; }
+
+  /* Formula card */
+  .formula-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+    touch-action: manipulation;
+  }
+
+  .formula-card:hover { border-color: var(--gold); }
+  .formula-card.selected { border-color: var(--gold); background: #201c14; }
+
+  .formula-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .formula-rank {
+    font-family: 'DM Serif Display', serif;
+    font-size: 20px;
+    color: var(--gold);
+  }
+
+  .formula-score {
+    text-align: right;
+  }
+
+  .formula-score .score-val {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--green);
+  }
+
+  .formula-score .score-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .formula-mix {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+
+  .mix-ingredient {
+    text-align: center;
+    padding: 8px 4px;
+    background: var(--surface);
+    border-radius: 5px;
+    border: 1px solid var(--border);
+  }
+
+  .mix-ingredient .ing-name {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .mix-ingredient .ing-val {
+    font-size: 16px;
+    font-weight: 600;
+    margin-top: 2px;
+  }
+
+  /* Detail panel */
+  /* ── PROFILE MODAL ── */
+  .profile-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(10,9,7,0.85);
+    backdrop-filter: blur(8px);
+    z-index: 9000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  .profile-modal-overlay.active {
+    opacity: 1;
+    pointer-events: all;
+  }
+  .profile-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    width: 90vw;
+    max-width: 900px;
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.7);
+  }
+  .profile-modal-header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .profile-modal-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 16px;
+    color: var(--gold-light);
+  }
+  .profile-modal-mix {
+    display: flex;
+    gap: 20px;
+    margin-top: 4px;
+    font-size: 12px;
+  }
+  .profile-modal-close {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    width: 32px;
+    height: 32px;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+  .profile-modal-close:hover { border-color: var(--red); color: var(--red); }
+  .profile-modal-score {
+    text-align: right;
+  }
+  .profile-modal-score-val {
+    font-family: 'DM Serif Display', serif;
+    font-size: 28px;
+    color: var(--green);
+  }
+  .profile-modal-score-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .profile-modal-body {
+    padding: 20px 24px;
+    overflow-y: auto;
+    flex: 1;
+    -webkit-overflow-scrolling: touch;
+  }
+  .dv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 10px;
+  }
+  .dv-item {
+    padding: 12px 14px;
+    background: var(--surface2);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .dv-item.out-of-range {
+    border-color: var(--red);
+    background: rgba(196,90,74,0.08);
+  }
+  .dv-name {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+  .dv-val {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  .dv-name {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+  }
+
+  .dv-val {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .dv-range {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  /* Scatter chart area */
+  .chart-area {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+
+  canvas { display: block; }
+
+  /* Manual predict section */
+  .predict-results {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 6px;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  /* Target goals */
+  .goal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 464px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    -webkit-overflow-scrolling: touch;
+  }
+  .goal-list::-webkit-scrollbar { width: 2px; }
+  .goal-list::-webkit-scrollbar-track { background: transparent; }
+  .goal-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .goal-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: border-color 0.15s;
+  }
+
+  .goal-item:hover { border-color: var(--gold); }
+
+  .goal-item-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .goal-item select {
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    outline: none;
+    cursor: pointer;
+    flex: 1;
+    padding: 0;
+  }
+
+  .goal-item select option { background: var(--surface2); }
+
+  .goal-intensity-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+  }
+
+  .intensity-btn {
+    padding: 5px 0;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.06em;
+    text-align: center;
+    transition: all 0.15s;
+  }
+
+  .intensity-btn:hover { border-color: var(--gold); color: var(--gold); }
+
+  .intensity-btn.active-low {
+    background: rgba(90,142,196,0.15);
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+
+  .intensity-btn.active-medium {
+    background: rgba(201,169,110,0.15);
+    border-color: var(--gold);
+    color: var(--gold);
+  }
+
+  .intensity-btn.active-high {
+    background: rgba(74,158,107,0.15);
+    border-color: var(--green);
+    color: var(--green);
+  }
+
+  .goal-item-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+    color: var(--text-muted);
+    padding-top: 2px;
+    border-top: 1px solid var(--border);
+  }
+
+  .goal-item-meta .target-val {
+    color: var(--gold);
+    font-weight: 700;
+    font-size: 11px;
+  }
+
+  .btn-icon {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 7px;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+
+  .btn-icon:hover { border-color: var(--red); color: var(--red); }
+
+  .btn-add {
+    background: none;
+    border: 1px dashed var(--border);
+    border-radius: 5px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 7px;
+    font-family: inherit;
+    font-size: 12px;
+    width: 100%;
+    transition: all 0.15s;
+  }
+
+  .btn-add:hover { border-color: var(--gold); color: var(--gold); }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+
+  .tab {
+    padding: 7px 14px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.15s;
+    touch-action: manipulation;
+  }
+
+  .tab.active {
+    background: var(--surface2);
+    border-color: var(--gold);
+    color: var(--gold);
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-muted);
+  }
+
+  .empty-state .icon { font-size: 36px; margin-bottom: 10px; }
+  .empty-state p { font-size: 13px; }
+
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: var(--surface); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .info-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+
+  .info-row:last-child { border: none; }
+  .info-row span:last-child { color: var(--text); font-weight: 500; }
+
+  .viable-badge {
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .viable-badge.yes { background: rgba(74,158,107,0.15); color: var(--green); border: 1px solid var(--green); }
+  .viable-badge.no { background: rgba(196,90,74,0.15); color: var(--red); border: 1px solid var(--red); }
+
+  /* ── VARIABLE PICKER ── */
+  .picker-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 500;
+    background: transparent;
+  }
+  .picker-panel {
+    position: absolute;
+    background: var(--surface2);
+    border: 1px solid var(--gold);
+    border-radius: 10px;
+    width: 260px;
+    max-height: 340px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    z-index: 501;
+  }
+  .picker-search {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .picker-search input {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 10px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+  }
+  .picker-search input:focus { border-color: var(--gold); }
+  .picker-search input::placeholder { color: var(--text-muted); }
+  .picker-list {
+    overflow-y: auto;
+    flex: 1;
+    padding: 6px;
+  }
+  .picker-item {
+    padding: 9px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: var(--text);
+    transition: all 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .picker-item:hover {
+    background: rgba(201,169,110,0.12);
+    color: var(--gold-light);
+  }
+  .picker-item-range {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+  .picker-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .loader-overlay {
+    position: fixed;
+    inset: 0;
+    background: #0e0d0b;
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .loader-overlay.active {
+    opacity: 1;
+    pointer-events: all;
+  }
+  .loader-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 32px;
+    width: 480px;
+  }
+  .loader-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 28px;
+    color: var(--gold-light);
+    letter-spacing: 0.04em;
+    text-align: center;
+  }
+  .loader-subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: center;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-top: -24px;
+  }
+
+  /* Orbital rings */
+  .orbital-wrap {
+    position: relative;
+    width: 160px;
+    height: 160px;
+  }
+  .orbital-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 1px solid transparent;
+  }
+  .orbital-ring-1 {
+    border-top-color: var(--gold);
+    border-right-color: var(--gold);
+    animation: spin 1.8s linear infinite;
+  }
+  .orbital-ring-2 {
+    inset: 14px;
+    border-top-color: var(--amber);
+    border-left-color: var(--amber);
+    animation: spin 1.2s linear infinite reverse;
+  }
+  .orbital-ring-3 {
+    inset: 28px;
+    border-bottom-color: var(--gold-light);
+    border-right-color: var(--gold-light);
+    animation: spin 2.4s linear infinite;
+  }
+  .orbital-core {
+    position: absolute;
+    inset: 44px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(201,169,110,0.3), rgba(201,169,110,0.05));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 0.8; }
+    50% { transform: scale(1.1); opacity: 1; }
+  }
+
+  /* Stats row */
+  .loader-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    width: 100%;
+  }
+  .loader-stat {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+  }
+  .loader-stat-val {
+    font-family: 'DM Serif Display', serif;
+    font-size: 20px;
+    color: var(--gold-light);
+    display: block;
+  }
+  .loader-stat-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 2px;
+    display: block;
+  }
+
+  /* Scanning bar */
+  .loader-bar-wrap {
+    width: 100%;
+  }
+  .loader-bar-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .loader-bar-track {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+  }
+  .loader-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--amber), var(--gold), var(--gold-light));
+    border-radius: 2px;
+    transition: width 0.15s ease;
+    position: relative;
+  }
+  .loader-bar-fill::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: -2px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--gold-light);
+    box-shadow: 0 0 8px var(--gold-light), 0 0 16px var(--gold);
+  }
+
+  /* Scanning combinations ticker */
+  .loader-combo-ticker {
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+    height: 16px;
+    overflow: hidden;
+    letter-spacing: 0.06em;
+  }
+
+  /* Stop button in loader */
+  .loader-stop {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    padding: 8px 24px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    letter-spacing: 0.06em;
+    transition: all 0.15s;
+  }
+  .loader-stop:hover { border-color: var(--red); color: var(--red); }
+
+  .btn-export {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--green);
+    background: rgba(74,158,107,0.12);
+    color: var(--green);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-export:hover { background: rgba(74,158,107,0.25); }
+  .btn-export:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  /* ============================================================
+     RESPONSIVE STYLES
+     ============================================================ */
+  
+  /* Tablet (768px - 1024px) */
+  @media (max-width: 1024px) {
+    .layout {
+      grid-template-columns: 280px 1fr;
+    }
+    
+    .formula-mix {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .dv-grid {
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    }
+    
+    .loader-inner {
+      width: 90%;
+      max-width: 400px;
+    }
+    
+    .loader-stats {
+      gap: 8px;
+    }
+    
+    .loader-stat {
+      padding: 10px 8px;
+    }
+    
+    .loader-stat-val {
+      font-size: 18px;
+    }
+  }
+
+  /* Mobile landscape and small tablets */
+  @media (max-width: 768px) {
+    html, body {
+      height: auto;
+      overflow: auto;
+    }
+    
+    header {
+      padding: 16px 16px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    
+    header h1 {
+      font-size: 18px;
+    }
+    
+    header p {
+      font-size: 11px;
+    }
+    
+    .badge {
+      font-size: 10px;
+      padding: 3px 8px;
+    }
+    
+    .layout {
+      display: flex;
+      flex-direction: column;
+      height: auto;
+      min-height: calc(100vh - 80px);
+    }
+    
+    .sidebar {
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+      max-height: none;
+      overflow: visible;
+    }
+    
+    .sidebar-pane {
+      padding: 16px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    
+    .main {
+      padding: 16px;
+      flex: 1;
+    }
+    
+    .tabs {
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    
+    .tab {
+      padding: 8px 12px;
+      font-size: 11px;
+      flex: 1;
+      min-width: 120px;
+      text-align: center;
+    }
+    
+    .results-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    
+    .results-title {
+      font-size: 16px;
+    }
+    
+    .results-header > div {
+      width: 100%;
+      justify-content: space-between;
+    }
+    
+    .formula-card {
+      padding: 14px;
+    }
+    
+    .formula-card-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    
+    .formula-card-header > div {
+      width: 100%;
+      justify-content: space-between;
+    }
+    
+    .formula-mix {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    
+    .mix-ingredient {
+      padding: 10px 6px;
+    }
+    
+    .mix-ingredient .ing-name {
+      font-size: 9px;
+    }
+    
+    .mix-ingredient .ing-val {
+      font-size: 14px;
+    }
+    
+    /* Profile Modal */
+    .profile-modal {
+      width: 95vw;
+      max-height: 90vh;
+      margin: 16px;
+    }
+    
+    .profile-modal-header {
+      padding: 14px 16px;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    
+    .profile-modal-header > div:last-child {
+      width: 100%;
+      justify-content: space-between;
+    }
+    
+    .profile-modal-title {
+      font-size: 14px;
+    }
+    
+    .profile-modal-mix {
+      flex-wrap: wrap;
+      gap: 10px;
+      font-size: 11px;
+    }
+    
+    .profile-modal-body {
+      padding: 16px;
+    }
+    
+    .dv-grid {
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 8px;
+    }
+    
+    .dv-item {
+      padding: 10px 12px;
+    }
+    
+    /* Loader */
+    .loader-inner {
+      width: 90%;
+      max-width: 340px;
+      gap: 24px;
+      padding: 0 16px;
+    }
+    
+    .loader-title {
+      font-size: 20px;
+    }
+    
+    .orbital-wrap {
+      width: 120px;
+      height: 120px;
+    }
+    
+    .orbital-ring-2 { inset: 10px; }
+    .orbital-ring-3 { inset: 20px; }
+    .orbital-core { inset: 32px; font-size: 20px; }
+    
+    .loader-stats {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+    
+    .loader-stat {
+      padding: 8px 6px;
+    }
+    
+    .loader-stat-val {
+      font-size: 16px;
+    }
+    
+    .loader-stat-label {
+      font-size: 9px;
+    }
+    
+    .loader-combo-ticker {
+      font-size: 10px;
+    }
+    
+    /* Goal list */
+    .goal-list {
+      max-height: 300px;
+    }
+    
+    .goal-item {
+      padding: 10px;
+    }
+    
+    .goal-intensity-row {
+      gap: 3px;
+    }
+    
+    .intensity-btn {
+      padding: 6px 0;
+      font-size: 10px;
+    }
+    
+    /* Picker */
+    .picker-panel {
+      width: calc(100vw - 32px);
+      max-width: 300px;
+      left: 16px !important;
+    }
+    
+    /* Predict results */
+    .predict-results {
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    }
+    
+    /* Optimizer grid */
+    .optimizer-grid {
+      grid-template-columns: 1fr;
+    }
+    
+    /* Sum indicator */
+    .sum-indicator {
+      padding: 8px;
+      font-size: 13px;
+    }
+    
+    .btn {
+      padding: 12px 16px;
+    }
+    
+    .btn-export {
+      padding: 10px 14px;
+      font-size: 11px;
+      width: 100%;
+      justify-content: center;
+    }
+  }
+
+  /* Mobile portrait (up to 480px) */
+  @media (max-width: 480px) {
+    header {
+      padding: 12px;
+    }
+    
+    header h1 {
+      font-size: 16px;
+    }
+    
+    header > div:first-child {
+      flex: 1;
+    }
+    
+    header > div:last-child {
+      width: 100%;
+      margin-left: 0;
+      margin-top: 8px;
+    }
+    
+    .badge {
+      font-size: 9px;
+    }
+    
+    .sidebar-tabs {
+      gap: 0;
+    }
+    
+    .sidebar-tab {
+      padding: 10px 8px;
+      font-size: 10px;
+    }
+    
+    .sidebar-pane {
+      padding: 12px;
+      gap: 12px;
+    }
+    
+    .main {
+      padding: 12px;
+      gap: 16px;
+    }
+    
+    .card {
+      padding: 12px;
+    }
+    
+    .card-title {
+      font-size: 11px;
+      margin-bottom: 12px;
+    }
+    
+    .tab {
+      padding: 8px 10px;
+      font-size: 10px;
+      min-width: 100px;
+    }
+    
+    .results-title {
+      font-size: 14px;
+    }
+    
+    .results-count {
+      font-size: 11px;
+      padding: 3px 10px;
+    }
+    
+    .formula-card {
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    
+    .formula-rank {
+      font-size: 16px;
+    }
+    
+    .formula-mix {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+    }
+    
+    .mix-ingredient {
+      padding: 8px 4px;
+    }
+    
+    .mix-ingredient .ing-name {
+      font-size: 8px;
+    }
+    
+    .mix-ingredient .ing-val {
+      font-size: 13px;
+    }
+    
+    /* Profile modal on small screens */
+    .profile-modal {
+      width: 100vw;
+      max-width: 100vw;
+      max-height: 100vh;
+      border-radius: 0;
+      margin: 0;
+    }
+    
+    .profile-modal-header {
+      padding: 12px;
+    }
+    
+    .profile-modal-close {
+      width: 28px;
+      height: 28px;
+    }
+    
+    .profile-modal-body {
+      padding: 12px;
+    }
+    
+    .dv-grid {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+    }
+    
+    .dv-item {
+      padding: 8px 10px;
+    }
+    
+    .dv-name {
+      font-size: 9px;
+    }
+    
+    /* Loader on small screens */
+    .loader-inner {
+      gap: 20px;
+      padding: 0 12px;
+    }
+    
+    .loader-title {
+      font-size: 18px;
+    }
+    
+    .loader-subtitle {
+      font-size: 10px;
+      margin-top: -16px;
+    }
+    
+    .orbital-wrap {
+      width: 100px;
+      height: 100px;
+    }
+    
+    .orbital-ring-2 { inset: 8px; }
+    .orbital-ring-3 { inset: 16px; }
+    .orbital-core { inset: 26px; font-size: 18px; }
+    
+    .loader-stats {
+      gap: 4px;
+    }
+    
+    .loader-stat {
+      padding: 6px 4px;
+    }
+    
+    .loader-stat-val {
+      font-size: 14px;
+    }
+    
+    .loader-stat-label {
+      font-size: 8px;
+    }
+    
+    .loader-bar-label {
+      font-size: 10px;
+    }
+    
+    .loader-combo-ticker {
+      font-size: 9px;
+    }
+    
+    .loader-stop {
+      padding: 8px 20px;
+      font-size: 11px;
+    }
+    
+    /* Ingredients */
+    .ingredient {
+      margin-bottom: 12px;
+    }
+    
+    .ingredient-name {
+      font-size: 12px;
+    }
+    
+    .ingredient-val {
+      font-size: 13px;
+    }
+    
+    input[type=range]::-webkit-slider-thumb {
+      width: 18px;
+      height: 18px;
+    }
+    
+    /* Goal items */
+    .goal-list {
+      max-height: 250px;
+      gap: 6px;
+    }
+    
+    .goal-item {
+      padding: 8px 10px;
+      gap: 6px;
+    }
+    
+    .goal-item select {
+      font-size: 12px;
+    }
+    
+    .intensity-btn {
+      padding: 5px 0;
+      font-size: 9px;
+    }
+    
+    .goal-item-meta {
+      font-size: 9px;
+    }
+    
+    .btn-add {
+      padding: 8px;
+      font-size: 11px;
+    }
+    
+    /* Controls */
+    .control-group label {
+      font-size: 10px;
+    }
+    
+    .control-group input[type=number],
+    .control-group select {
+      padding: 8px;
+      font-size: 12px;
+    }
+    
+    .btn {
+      padding: 11px 14px;
+      font-size: 12px;
+    }
+    
+    .btn-secondary {
+      margin-top: 6px;
+    }
+    
+    /* Predict results */
+    .predict-results {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+      max-height: 400px;
+    }
+    
+    /* Empty state */
+    .empty-state {
+      padding: 30px 16px;
+    }
+    
+    .empty-state .icon {
+      font-size: 28px;
+    }
+    
+    .empty-state p {
+      font-size: 12px;
+    }
+    
+    /* Picker panel */
+    .picker-panel {
+      width: calc(100vw - 24px);
+      left: 12px !important;
+      max-height: 300px;
+    }
+    
+    .picker-search {
+      padding: 8px 10px;
+    }
+    
+    .picker-search input {
+      padding: 8px;
+      font-size: 11px;
+    }
+    
+    .picker-item {
+      padding: 10px;
+      font-size: 11px;
+    }
+    
+    /* Progress */
+    .progress-label {
+      font-size: 10px;
+    }
+  }
+
+  /* Extra small screens (up to 360px) */
+  @media (max-width: 360px) {
+    header h1 {
+      font-size: 14px;
+    }
+    
+    .formula-mix {
+      grid-template-columns: 1fr 1fr;
+    }
+    
+    .dv-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+    
+    .predict-results {
+      grid-template-columns: 1fr 1fr;
+    }
+    
+    .loader-stats {
+      grid-template-columns: 1fr 1fr 1fr;
+    }
+    
+    .profile-modal-mix {
+      gap: 8px;
+      font-size: 10px;
+    }
+  }
+  /* ── LOGIN OVERLAY ── */
+  .login-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  
+  .login-overlay.hidden {
+    display: none;
+  }
+  
+  .login-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px;
+    width: 100%;
+    max-width: 400px;
+    text-align: center;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+  }
+  
+  .login-logo {
+    font-size: 48px;
+    margin-bottom: 16px;
+  }
+  
+  .login-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 24px;
+    color: var(--gold-light);
+    margin-bottom: 8px;
+  }
+  
+  .login-subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 32px;
+  }
+  
+  .login-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  
+  .login-input-group {
+    text-align: left;
+  }
+  
+  .login-input-group label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+  
+  .login-input-group input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  
+  .login-input-group input:focus {
+    border-color: var(--gold);
+  }
+  
+  .login-input-group input::placeholder {
+    color: var(--text-muted);
+  }
+  
+  .login-error {
+    background: rgba(196,90,74,0.15);
+    border: 1px solid var(--red);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--red);
+    display: none;
+  }
+  
+  .login-error.show {
+    display: block;
+  }
+  
+  .login-btn {
+    background: linear-gradient(135deg, var(--amber), var(--gold));
+    color: #1a1005;
+    border: none;
+    border-radius: 8px;
+    padding: 14px 24px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    transition: all 0.15s;
+    margin-top: 8px;
+  }
+  
+  .login-btn:hover {
+    filter: brightness(1.1);
+  }
+  
+  .login-footer {
+    margin-top: 24px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  
+  .app-content {
+    display: none;
+  }
+  
+  .app-content.visible {
+    display: block;
+  }
+  
+  @media (max-width: 480px) {
+    .login-box {
+      padding: 32px 24px;
+    }
+    
+    .login-logo {
+      font-size: 40px;
+    }
+    
+    .login-title {
+      font-size: 20px;
+    }
+    
+    .login-subtitle {
+      font-size: 12px;
+      margin-bottom: 24px;
+    }
+    
+    .login-input-group input {
+      padding: 11px 12px;
+      font-size: 13px;
+    }
+    
+    .login-btn {
+      padding: 12px 20px;
+      font-size: 13px;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- LOGIN OVERLAY -->
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <div class="login-logo">🧪</div>
+    <h2 class="login-title">Fragrance Optimizer</h2>
+    <p class="login-subtitle">Please enter your credentials to access the system</p>
+    
+    <form class="login-form" onsubmit="handleLogin(event)">
+      <div class="login-input-group">
+        <label for="loginUsername">Username</label>
+        <input type="text" id="loginUsername" placeholder="Enter username" autocomplete="username" required>
+      </div>
+      
+      <div class="login-input-group">
+        <label for="loginPassword">Password</label>
+        <input type="password" id="loginPassword" placeholder="Enter password" autocomplete="current-password" required>
+      </div>
+      
+      <div class="login-error" id="loginError">
+        Invalid username or password. Please try again.
+      </div>
+      
+      <button type="submit" class="login-btn">Sign In</button>
+    </form>
+    
+    <p class="login-footer">Howard System v1 · Secured Access</p>
+  </div>
+</div>
+
+<!-- APP CONTENT WRAPPER -->
+<div class="app-content" id="appContent">
+
+<header>
+  <div style="flex: 1; min-width: 200px;">
+    <h1>Fragrance Mixture Optimizer</h1>
+    <p>Scheffé Mixture Model · 62 Dependent Variables</p>
+  </div>
+  <div><span class="badge">Howard System v1</span></div>
+</header>
+
+<!-- VARIABLE PICKER -->
+<div class="picker-overlay" id="pickerOverlay" style="display:none;" onclick="closePicker()"></div>
+<div class="picker-panel" id="pickerPanel" style="display:none;">
+  <div class="picker-search">
+    <input type="text" id="pickerSearch" placeholder="Search variables..." oninput="renderPickerList()" autocomplete="off">
+  </div>
+  <div class="picker-list" id="pickerList"></div>
+</div>
+
+<!-- HI-FI LOADER OVERLAY -->
+<div class="loader-overlay" id="loaderOverlay">
+  <div class="loader-inner">
+    <div>
+      <div class="loader-title">Searching Mixture Space</div>
+    </div>
+
+    <div class="orbital-wrap">
+      <div class="orbital-ring orbital-ring-1"></div>
+      <div class="orbital-ring orbital-ring-2"></div>
+      <div class="orbital-ring orbital-ring-3"></div>
+      <div class="orbital-core">🧪</div>
+    </div>
+
+    <div class="loader-stats">
+      <div class="loader-stat">
+        <span class="loader-stat-val" id="loaderTested">0</span>
+        <span class="loader-stat-label">Tested</span>
+      </div>
+      <div class="loader-stat">
+        <span class="loader-stat-val" id="loaderViable">0</span>
+        <span class="loader-stat-label">Viable</span>
+      </div>
+      <div class="loader-stat">
+        <span class="loader-stat-val" id="loaderPct">0%</span>
+        <span class="loader-stat-label">Complete</span>
+      </div>
+    </div>
+
+    <div class="loader-bar-wrap">
+      <div class="loader-bar-label">
+        <span id="loaderStatusText">Initializing...</span>
+        <span id="loaderPctLabel">0%</span>
+      </div>
+      <div class="loader-bar-track">
+        <div class="loader-bar-fill" id="loaderBarFill" style="width:0%"></div>
+      </div>
+    </div>
+
+    <div class="loader-combo-ticker" id="loaderTicker">A:0% B:0% C:0% D:100%</div>
+
+    <button class="loader-stop" onclick="stopOptimizer()">Stop Search</button>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+
+    <!-- Sidebar Tabs -->
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" id="stab-blend" onclick="switchSidebarTab('blend')">Blend</button>
+      <button class="sidebar-tab" id="stab-optimizer" onclick="switchSidebarTab('optimizer')">Optimizer</button>
+    </div>
+
+    <!-- Blend Pane -->
+    <div class="sidebar-pane active" id="spane-blend">
+      <div class="card-title" style="margin:0;">Blend Formula</div>
+      <div id="ingredients"></div>
+      <div class="sum-indicator" id="sumIndicator">
+        <span>Total</span>
+        <span id="sumVal">0%</span>
+      </div>
+      <div class="sum-bar"><div class="sum-bar-fill" id="sumBarFill"></div></div>
+      <button class="btn btn-secondary" onclick="normalizeBlend()" style="margin-top:4px;">Normalize to 100%</button>
+      <button class="btn btn-primary" onclick="predictManual()" style="margin-top:8px;">Predict This Blend</button>
+    </div>
+
+    <!-- Optimizer Pane -->
+    <div class="sidebar-pane" id="spane-optimizer">
+      <div class="control-group" style="margin:0;">
+        <label>Top Results</label>
+        <input type="number" id="topN" value="10" min="1" max="50">
+      </div>
+
+      <div class="card-title" style="margin:0;">Target Goals <span style="font-size:10px;color:var(--text-muted);margin-left:4px;font-weight:400;">(optional)</span></div>
+      <div class="goal-list" id="goalList"></div>
+      <button class="btn-add" onclick="addGoal()" >+ Add Target Goal</button>
+
+      <button class="btn btn-primary" onclick="runOptimizer()" id="runBtn" style="margin-top:8px;">Run Optimizer</button>
+      <button class="btn btn-secondary" onclick="stopOptimizer()" id="stopBtn" style="display:none;">Stop</button>
+
+      <div class="progress-wrap" id="progressWrap" style="display:none;">
+        <div class="progress-label">
+          <span id="progressText">Running...</span>
+          <span id="progressPct">0%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+        <div class="progress-label" style="margin-top:4px;">
+          <span id="viableCount">0 viable</span>
+          <span id="testedCount">0 tested</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('optimizer')" id="tab-optimizer">Optimizer Results</button>
+      <button class="tab" onclick="switchTab('predict')" id="tab-predict">Manual Prediction</button>
+    </div>
+
+    <!-- OPTIMIZER TAB -->
+    <div id="pane-optimizer">
+      <div class="results-header">
+        <div class="results-title" style="font-family:'DM Serif Display',serif;">Top Viable Mixtures</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div class="results-count">Found <span id="viableTotal">—</span> viable</div>
+          <button class="btn-export" onclick="exportOptimizerResults()" id="exportOptimizerBtn" disabled>⬇ Export to Excel</button>
+        </div>
+      </div>
+
+      <div id="resultsContainer">
+        <div class="empty-state">
+          <div class="icon">🧪</div>
+          <p>Configure your target goals (optional) and click<br><strong>Run Optimizer</strong> to discover viable formulas.</p>
+        </div>
+      </div>
+
+<!-- PROFILE MODAL -->
+<div class="profile-modal-overlay" id="profileModalOverlay" onclick="closeProfileModal(event)">
+  <div class="profile-modal" id="profileModal">
+    <div class="profile-modal-header">
+      <div>
+        <div class="profile-modal-title" id="profileModalTitle">Formula Profile</div>
+        <div class="profile-modal-mix" id="profileModalMix"></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px;">
+        <div class="profile-modal-score">
+          <div class="profile-modal-score-val" id="profileModalScore">—</div>
+          <div class="profile-modal-score-label">Goal Match</div>
+        </div>
+        <button class="profile-modal-close" onclick="closeProfileModal()">×</button>
+      </div>
+    </div>
+    <div class="profile-modal-body">
+      <div class="dv-grid" id="dvGrid"></div>
+    </div>
+  </div>
+</div>
+    </div>
+
+    <!-- PREDICT TAB -->
+    <div id="pane-predict" style="display:none;">
+      <div class="card">
+        <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Prediction Results</span>
+          <button class="btn-export" onclick="exportManualPrediction()" id="exportManualBtn" disabled>⬇ Export to Excel</button>
+        </div>
+        <div id="manualViable" style="margin-bottom:12px;"></div>
+        <div class="predict-results" id="predictResults">
+          <div class="empty-state" style="grid-column:1/-1;">
+            <div class="icon">🌸</div>
+            <p>Set your blend on the left and click<br><strong>Predict This Blend</strong></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</div> <!-- End app-content -->
+
+<script>
+// ============================================================
+// DATA
+// ============================================================
+const DATA = {"dep_vars":["FRESH","WARM","LIGHT","CLEAN","SWEET","SHARP","SMOOTH","NATURAL","CALM","ENERIZED","COMFORTING","CONFIDENT","LUXURIOUS","PLAYFUL","SOPHISTICATED","FAMILIAR","PERSONWEAR","REFLECTPERS","APPGE","MODERN","TIMELESS","GENDERALIG","EVERYDAYISE","SPECOCC","DAYTIME","EVEING","PROFESSIONAL","LASTSLONG","HEAT","REPURCHASE","CALMCENTERED","COMFORTTRUST","CONFIDENTBOLD","ENERGISEDALIVE","CALMANDSETTLED","SECURE","LIGHTANDEASY","CLEANREFRESH","RINSERENEW","JUSTWASHED","NEATWELL","SIMPLENATURAL","FRAGSSOC1","FRAGRASS2","FRAGASS3","FRAGASS4","POWERDR","SPRAYS","SOAPGEL","BATHBODY","PRACTICAL","HIGHQULAITY","UNCOMPL","RELIABLE","MEDITATE","MORNG","SOLOMED","MORNIGEVE","PRESENT","ACTIVE","BEFGOOUT","DAILYROUTINE"],"coefficients_by_dv":{"FRESH":{"A":71.1,"B":52.3,"C":39.9,"D":48.5,"AB":62.7,"AC":-92.2,"AD":-97.8,"BC":88.9,"BD":-71.3,"CD":-21.7},"WARM":{"A":67.5,"B":36.2,"C":47.4,"D":67.3,"AB":-21.8,"AC":91.0,"AD":-115.3,"BC":-22.1,"BD":66.4,"CD":-73.8},"LIGHT":{"A":50.3,"B":37.9,"C":24.0,"D":71.9,"AB":-20.6,"AC":-3.1,"AD":-76.4,"BC":125.1,"BD":-89.0,"CD":-79.4},"CLEAN":{"A":49.0,"B":22.4,"C":70.6,"D":65.1,"AB":199.9,"AC":-38.1,"AD":-139.9,"BC":-76.9,"BD":-77.8,"CD":31.1},"SWEET":{"A":42.1,"B":48.0,"C":75.3,"D":24.8,"AB":34.2,"AC":-158.8,"AD":-67.8,"BC":-116.4,"BD":64.6,"CD":82.8},"SHARP":{"A":71.7,"B":65.0,"C":48.0,"D":44.6,"AB":-158.2,"AC":11.7,"AD":-88.3,"BC":48.3,"BD":-42.2,"CD":124.7},"SMOOTH":{"A":59.0,"B":74.2,"C":25.0,"D":75.1,"AB":-137.2,"AC":27.5,"AD":-88.2,"BC":-62.1,"BD":-100.6,"CD":-138.9},"NATURAL":{"A":42.8,"B":40.5,"C":73.9,"D":25.9,"AB":-44.5,"AC":-118.9,"AD":104.3,"BC":-66.3,"BD":57.5,"CD":-6.0},"CALM":{"A":52.0,"B":73.2,"C":29.4,"D":17.2,"AB":-8.2,"AC":68.2,"AD":29.2,"BC":-35.9,"BD":-68.6,"CD":128.0},"ENERIZED":{"A":45.4,"B":27.6,"C":35.9,"D":64.3,"AB":39.5,"AC":-44.9,"AD":98.9,"BC":60.0,"BD":-52.8,"CD":21.0},"COMFORTING":{"A":33.9,"B":27.3,"C":22.0,"D":38.4,"AB":64.6,"AC":-54.2,"AD":95.1,"BC":29.6,"BD":-54.5,"CD":174.9},"CONFIDENT":{"A":19.0,"B":74.8,"C":70.9,"D":34.0,"AB":-31.3,"AC":32.2,"AD":-5.7,"BC":26.3,"BD":-123.5,"CD":-71.2},"LUXURIOUS":{"A":19.1,"B":29.0,"C":59.8,"D":23.2,"AB":26.4,"AC":-99.9,"AD":155.5,"BC":-27.2,"BD":167.8,"CD":101.3},"PLAYFUL":{"A":15.4,"B":42.4,"C":24.5,"D":63.7,"AB":-68.2,"AC":13.1,"AD":65.0,"BC":47.8,"BD":36.5,"CD":-46.7},"SOPHISTICATED":{"A":30.1,"B":52.5,"C":7.2,"D":20.7,"AB":14.6,"AC":62.2,"AD":153.7,"BC":38.2,"BD":6.3,"CD":72.3},"FAMILIAR":{"A":11.4,"B":71.9,"C":14.6,"D":22.5,"AB":117.4,"AC":111.6,"AD":-5.4,"BC":115.5,"BD":-16.1,"CD":136.6},"PERSONWEAR":{"A":73.4,"B":49.1,"C":30.8,"D":51.2,"AB":-40.7,"AC":-140.0,"AD":3.0,"BC":23.8,"BD":36.9,"CD":-39.6},"REFLECTPERS":{"A":78.6,"B":56.5,"C":26.8,"D":16.0,"AB":-110.3,"AC":19.9,"AD":53.2,"BC":24.4,"BD":-83.2,"CD":83.9},"APPGE":{"A":28.8,"B":70.0,"C":84.1,"D":13.3,"AB":12.6,"AC":3.6,"AD":135.3,"BC":-169.9,"BD":-120.5,"CD":46.0},"MODERN":{"A":58.8,"B":74.2,"C":48.1,"D":15.5,"AB":-33.9,"AC":-5.0,"AD":120.4,"BC":-176.0,"BD":-48.9,"CD":37.9},"TIMELESS":{"A":76.8,"B":26.1,"C":62.6,"D":32.8,"AB":92.4,"AC":-151.0,"AD":-113.9,"BC":120.2,"BD":20.5,"CD":58.4},"GENDERALIG":{"A":59.7,"B":23.0,"C":27.1,"D":82.3,"AB":73.4,"AC":18.7,"AD":-37.9,"BC":98.1,"BD":-12.0,"CD":-76.3},"EVERYDAYISE":{"A":46.2,"B":27.0,"C":62.3,"D":12.5,"AB":-66.7,"AC":-36.8,"AD":91.4,"BC":-120.6,"BD":148.4,"CD":3.6},"SPECOCC":{"A":62.7,"B":14.8,"C":51.0,"D":13.4,"AB":-130.1,"AC":-88.7,"AD":26.3,"BC":123.1,"BD":63.5,"CD":42.8},"DAYTIME":{"A":75.0,"B":58.3,"C":47.7,"D":40.7,"AB":-48.2,"AC":-138.3,"AD":-13.9,"BC":41.1,"BD":-5.4,"CD":14.6},"EVEING":{"A":40.8,"B":40.5,"C":67.6,"D":48.3,"AB":-41.4,"AC":-139.4,"AD":-0.6,"BC":67.0,"BD":96.2,"CD":-92.7},"PROFESSIONAL":{"A":69.3,"B":67.6,"C":62.1,"D":6.8,"AB":-5.0,"AC":2.1,"AD":-54.0,"BC":-19.4,"BD":13.8,"CD":-68.4},"LASTSLONG":{"A":29.6,"B":64.9,"C":23.0,"D":41.4,"AB":-127.7,"AC":197.9,"AD":-3.2,"BC":-56.0,"BD":-106.2,"CD":31.0},"HEAT":{"A":40.1,"B":13.0,"C":72.6,"D":62.1,"AB":108.6,"AC":3.6,"AD":11.5,"BC":-119.6,"BD":116.1,"CD":-199.1},"REPURCHASE":{"A":60.2,"B":32.6,"C":48.0,"D":15.0,"AB":-6.2,"AC":-100.1,"AD":-117.7,"BC":113.2,"BD":158.5,"CD":73.5},"CALMCENTERED":{"A":33.0,"B":55.0,"C":70.7,"D":36.3,"AB":-51.6,"AC":-44.2,"AD":110.3,"BC":-39.8,"BD":-31.6,"CD":-13.2},"COMFORTTRUST":{"A":44.8,"B":16.4,"C":70.4,"D":67.5,"AB":1.4,"AC":-37.0,"AD":-77.4,"BC":88.2,"BD":110.1,"CD":-122.4},"CONFIDENTBOLD":{"A":47.7,"B":37.3,"C":48.7,"D":26.1,"AB":76.6,"AC":-23.5,"AD":26.1,"BC":2.5,"BD":71.4,"CD":-30.5},"ENERGISEDALIVE":{"A":63.7,"B":14.9,"C":16.4,"D":54.8,"AB":-69.1,"AC":-41.8,"AD":36.6,"BC":4.3,"BD":95.4,"CD":136.3},"CALMANDSETTLED":{"A":33.6,"B":58.3,"C":77.6,"D":18.4,"AB":-45.5,"AC":-47.1,"AD":29.8,"BC":-22.5,"BD":69.2,"CD":33.1},"SECURE":{"A":56.4,"B":24.7,"C":44.6,"D":80.0,"AB":106.3,"AC":59.4,"AD":-99.4,"BC":-37.8,"BD":46.8,"CD":26.8},"LIGHTANDEASY":{"A":75.5,"B":55.4,"C":43.0,"D":72.7,"AB":-107.8,"AC":-89.6,"AD":-166.2,"BC":-31.4,"BD":-151.7,"CD":46.4},"CLEANREFRESH":{"A":18.4,"B":64.5,"C":56.2,"D":46.3,"AB":73.2,"AC":-67.5,"AD":6.0,"BC":-5.1,"BD":39.9,"CD":-80.6},"RINSERENEW":{"A":36.8,"B":60.2,"C":27.5,"D":14.9,"AB":33.3,"AC":-5.1,"AD":154.4,"BC":20.5,"BD":28.2,"CD":152.4},"JUSTWASHED":{"A":22.3,"B":11.7,"C":63.0,"D":14.9,"AB":115.4,"AC":70.7,"AD":41.4,"BC":25.5,"BD":36.2,"CD":-71.1},"NEATWELL":{"A":63.2,"B":62.2,"C":32.1,"D":69.1,"AB":-111.4,"AC":-34.8,"AD":-9.8,"BC":-71.3,"BD":-153.4,"CD":-98.1},"SIMPLENATURAL":{"A":23.4,"B":46.9,"C":52.1,"D":17.1,"AB":-37.1,"AC":-48.3,"AD":142.0,"BC":120.5,"BD":-18.7,"CD":97.4},"FRAGSSOC1":{"A":23.0,"B":50.1,"C":18.4,"D":13.1,"AB":-102.4,"AC":-40.2,"AD":109.9,"BC":13.6,"BD":106.5,"CD":47.9},"FRAGRASS2":{"A":41.1,"B":69.0,"C":52.7,"D":45.0,"AB":98.2,"AC":45.8,"AD":9.7,"BC":-24.2,"BD":-132.7,"CD":49.3},"FRAGASS3":{"A":22.4,"B":45.2,"C":73.9,"D":38.7,"AB":84.7,"AC":37.4,"AD":43.3,"BC":-85.2,"BD":104.8,"CD":59.3},"FRAGASS4":{"A":34.5,"B":24.3,"C":49.9,"D":11.5,"AB":41.4,"AC":151.3,"AD":37.2,"BC":22.4,"BD":29.9,"CD":41.5},"POWERDR":{"A":32.2,"B":77.3,"C":28.8,"D":65.3,"AB":-103.9,"AC":41.0,"AD":-12.8,"BC":5.7,"BD":38.5,"CD":38.5},"SPRAYS":{"A":72.1,"B":47.1,"C":15.6,"D":16.4,"AB":37.5,"AC":112.4,"AD":77.5,"BC":-42.4,"BD":123.2,"CD":108.5},"SOAPGEL":{"A":22.5,"B":44.5,"C":19.0,"D":42.2,"AB":49.3,"AC":39.1,"AD":-62.0,"BC":122.7,"BD":99.2,"CD":-65.1},"BATHBODY":{"A":43.7,"B":37.9,"C":22.3,"D":78.1,"AB":91.8,"AC":131.7,"AD":-11.5,"BC":-70.6,"BD":22.2,"CD":-23.2},"PRACTICAL":{"A":49.3,"B":24.8,"C":41.6,"D":59.8,"AB":175.4,"AC":-21.2,"AD":5.2,"BC":141.6,"BD":-30.4,"CD":48.8},"HIGHQULAITY":{"A":33.5,"B":67.3,"C":73.6,"D":48.7,"AB":-48.3,"AC":-67.7,"AD":92.4,"BC":1.1,"BD":10.9,"CD":-95.0},"UNCOMPL":{"A":35.0,"B":39.0,"C":47.4,"D":64.4,"AB":50.3,"AC":-46.7,"AD":70.0,"BC":52.9,"BD":-97.9,"CD":-142.8},"RELIABLE":{"A":75.0,"B":52.7,"C":58.4,"D":23.3,"AB":-103.3,"AC":12.2,"AD":1.6,"BC":-175.5,"BD":-28.9,"CD":-7.3},"MEDITATE":{"A":49.5,"B":52.5,"C":54.1,"D":30.7,"AB":1.4,"AC":-12.3,"AD":56.7,"BC":-106.1,"BD":31.6,"CD":80.4},"MORNG":{"A":60.7,"B":74.8,"C":82.8,"D":53.2,"AB":-262.3,"AC":-54.7,"AD":-75.8,"BC":-92.9,"BD":-14.9,"CD":-124.9},"SOLOMED":{"A":16.9,"B":69.1,"C":33.6,"D":14.6,"AB":-139.8,"AC":74.8,"AD":59.9,"BC":37.4,"BD":14.4,"CD":132.0},"MORNIGEVE":{"A":38.0,"B":61.2,"C":39.8,"D":18.2,"AB":-6.3,"AC":-25.2,"AD":39.7,"BC":-58.3,"BD":12.2,"CD":34.3},"PRESENT":{"A":35.8,"B":77.4,"C":31.3,"D":36.4,"AB":22.7,"AC":-50.5,"AD":91.9,"BC":-75.1,"BD":-33.7,"CD":9.8},"ACTIVE":{"A":46.3,"B":28.9,"C":56.4,"D":75.2,"AB":110.0,"AC":-107.1,"AD":-176.9,"BC":-66.3,"BD":48.2,"CD":3.1},"BEFGOOUT":{"A":55.4,"B":55.4,"C":59.2,"D":14.2,"AB":-20.6,"AC":12.0,"AD":-2.4,"BC":-78.2,"BD":-3.0,"CD":37.4},"DAILYROUTINE":{"A":19.1,"B":82.7,"C":38.0,"D":59.2,"AB":-81.5,"AC":106.5,"AD":120.8,"BC":32.5,"BD":-124.4,"CD":-71.0}},"ranges":{"FRESH":{"low":17.268332,"high":79.258506,"avg":43.317},"WARM":{"low":12.775202,"high":74.487287,"avg":39.359},"LIGHT":{"low":12.557948,"high":79.311867,"avg":44.551},"CLEAN":{"low":19.372865,"high":76.001138,"avg":57.626},"SWEET":{"low":21.749213,"high":78.095519,"avg":50.034},"SHARP":{"low":16.278389,"high":72.332791,"avg":49.364},"SMOOTH":{"low":13.421652,"high":77.841333,"avg":45.243},"NATURAL":{"low":18.508826,"high":77.068923,"avg":47.296},"CALM":{"low":15.611663,"high":75.97362,"avg":39.083},"ENERIZED":{"low":13.563487,"high":76.350401,"avg":42.783},"COMFORTING":{"low":10.623137,"high":75.69569,"avg":46.546},"CONFIDENT":{"low":16.173901,"high":67.142455,"avg":43.330},"LUXURIOUS":{"low":12.479073,"high":78.04326,"avg":48.241},"PLAYFUL":{"low":13.981676,"high":75.911269,"avg":45.486},"SOPHISTICATED":{"low":12.959178,"high":78.419032,"avg":38.221},"FAMILIAR":{"low":12.741731,"high":73.427052,"avg":38.599},"PERSONWEAR":{"low":14.209406,"high":79.234788,"avg":44.551},"REFLECTPERS":{"low":10.531994,"high":72.41098,"avg":46.189},"APPGE":{"low":21.816818,"high":77.042153,"avg":43.564},"MODERN":{"low":12.817002,"high":79.495956,"avg":44.352},"TIMELESS":{"low":13.081497,"high":74.673822,"avg":42.918},"GENDERALIG":{"low":15.851689,"high":76.185145,"avg":43.559},"EVERYDAYISE":{"low":14.172003,"high":79.232092,"avg":46.100},"SPECOCC":{"low":21.184746,"high":78.41126,"avg":44.052},"DAYTIME":{"low":13.273966,"high":79.065588,"avg":42.313},"EVEING":{"low":12.448118,"high":67.336949,"avg":36.961},"PROFESSIONAL":{"low":17.426736,"high":77.89876,"avg":52.850},"LASTSLONG":{"low":12.741188,"high":70.538566,"avg":36.196},"HEAT":{"low":12.616201,"high":78.122932,"avg":47.914},"REPURCHASE":{"low":16.258019,"high":74.880066,"avg":46.042},"CALMCENTERED":{"low":12.032997,"high":74.882006,"avg":39.927},"COMFORTTRUST":{"low":14.692703,"high":63.894531,"avg":41.602},"CONFIDENTBOLD":{"low":10.892311,"high":78.102734,"avg":36.808},"ENERGISEDALIVE":{"low":14.638841,"high":63.084569,"avg":40.576},"CALMANDSETTLED":{"low":10.008922,"high":76.574429,"avg":45.925},"SECURE":{"low":14.939116,"high":76.407497,"avg":48.823},"LIGHTANDEASY":{"low":12.353594,"high":68.977283,"avg":41.263},"CLEANREFRESH":{"low":19.307021,"high":71.502373,"avg":46.691},"RINSERENEW":{"low":12.378886,"high":75.354834,"avg":45.051},"JUSTWASHED":{"low":14.336628,"high":77.462709,"avg":38.797},"NEATWELL":{"low":17.325405,"high":79.024093,"avg":49.935},"SIMPLENATURAL":{"low":14.200133,"high":79.119176,"avg":43.199},"FRAGSSOC1":{"low":13.516105,"high":79.380581,"avg":49.720},"FRAGRASS2":{"low":11.831056,"high":74.859716,"avg":43.543},"FRAGASS3":{"low":22.579218,"high":72.160946,"avg":48.571},"FRAGASS4":{"low":12.26208,"high":67.239258,"avg":40.465},"POWERDR":{"low":15.726085,"high":77.794345,"avg":52.984},"SPRAYS":{"low":11.76748,"high":76.673667,"avg":51.385},"SOAPGEL":{"low":10.41021,"high":78.546646,"avg":41.995},"BATHBODY":{"low":19.728026,"high":76.579094,"avg":47.807},"PRACTICAL":{"low":11.373164,"high":78.327192,"avg":52.913},"HIGHQULAITY":{"low":11.39154,"high":79.439649,"avg":47.205},"UNCOMPL":{"low":14.913693,"high":78.166029,"avg":40.224},"RELIABLE":{"low":22.807506,"high":75.786776,"avg":52.983},"MEDITATE":{"low":10.971949,"high":76.46616,"avg":38.196},"MORNG":{"low":12.377136,"high":77.331183,"avg":44.759},"SOLOMED":{"low":21.665815,"high":79.499645,"avg":52.064},"MORNIGEVE":{"low":11.398165,"high":69.08931,"avg":41.730},"PRESENT":{"low":16.899453,"high":68.014748,"avg":36.797},"ACTIVE":{"low":12.815078,"high":77.096403,"avg":46.324},"BEFGOOUT":{"low":10.439284,"high":76.264269,"avg":46.162},"DAILYROUTINE":{"low":14.896869,"high":78.891476,"avg":46.634}}};
+
+const INGREDIENT_COLORS = { A: '#c9a96e', B: '#5a8ec4', C: '#4a9e6b', D: '#c45a9e' };
+const INGREDIENT_NAMES = { A: 'Floral', B: 'Oud', C: 'Woody', D: 'Amber' };
+
+// State
+let blend = { A: 25, B: 25, C: 25, D: 25 };
+let optimizerRunning = false;
+let optimizerStop = false;
+let goals = [];
+let topResults = [];
+let selectedResult = null;
+
+// ============================================================
+// INIT
+// ============================================================
+function init() {
+  renderIngredients();
+  populateGoalSelects();
+  updateSumIndicator();
+}
+
+function renderIngredients() {
+  const el = document.getElementById('ingredients');
+  el.innerHTML = '';
+  for (const key of ['A','B','C','D']) {
+    el.innerHTML += `
+      <div class="ingredient">
+        <div class="ingredient-header">
+          <div class="ingredient-name">
+            <div class="ingredient-dot" style="background:${INGREDIENT_COLORS[key]}"></div>
+            ${INGREDIENT_NAMES[key]} (${key})
+          </div>
+          <div class="ingredient-val" id="val-${key}">${blend[key]}%</div>
+        </div>
+        <input type="range" min="0" max="100" value="${blend[key]}" 
+          oninput="updateBlend('${key}', this.value)" id="slider-${key}">
+      </div>
+    `;
+  }
+}
+
+function updateBlend(key, val) {
+  blend[key] = parseFloat(val);
+  document.getElementById('val-' + key).textContent = blend[key] + '%';
+  updateSumIndicator();
+}
+
+function updateSumIndicator() {
+  const sum = blend.A + blend.B + blend.C + blend.D;
+  const el = document.getElementById('sumIndicator');
+  document.getElementById('sumVal').textContent = sum + '%';
+  el.className = 'sum-indicator ' + (Math.abs(sum - 100) < 0.01 ? 'valid' : 'invalid');
+  const fill = document.getElementById('sumBarFill');
+  fill.style.width = Math.min(sum, 100) + '%';
+  fill.style.background = Math.abs(sum - 100) < 0.01 ? 'var(--green)' : sum > 100 ? 'var(--red)' : 'var(--gold)';
+}
+
+function normalizeBlend() {
+  const sum = blend.A + blend.B + blend.C + blend.D;
+  if (sum === 0) return;
+  for (const k of ['A','B','C','D']) {
+    blend[k] = Math.round(blend[k] / sum * 100 * 10) / 10;
+  }
+  // fix rounding
+  const newSum = blend.A + blend.B + blend.C + blend.D;
+  blend.A += (100 - newSum);
+  blend.A = Math.round(blend.A * 10) / 10;
+  for (const k of ['A','B','C','D']) {
+    document.getElementById('slider-' + k).value = blend[k];
+    document.getElementById('val-' + k).textContent = blend[k] + '%';
+  }
+  updateSumIndicator();
+}
+
+// ============================================================
+// MODEL
+// ============================================================
+function predict(a, b, c, d) {
+  // Convert to proportions
+  const A = a / 100, B = b / 100, C = c / 100, D = d / 100;
+  const terms = { A, B, C, D, AB: A*B, AC: A*C, AD: A*D, BC: B*C, BD: B*D, CD: C*D };
+  const results = {};
+  for (const dv of DATA.dep_vars) {
+    const coeffs = DATA.coefficients_by_dv[dv];
+    let val = 0;
+    for (const [t, v] of Object.entries(terms)) val += coeffs[t] * v;
+    results[dv] = val;
+  }
+  return results;
+}
+
+function checkViable(predictions) {
+  for (const dv of DATA.dep_vars) {
+    const r = DATA.ranges[dv];
+    const v = predictions[dv];
+    if (v < r.low || v > r.high) return false;
+  }
+  return true;
+}
+
+function checkGoals(predictions) {
+  if (goals.length === 0) return true;
+  for (const g of goals) {
+    const val = predictions[g.dv];
+    const rng = DATA.ranges[g.dv];
+    const width = rng.high - rng.low;
+    const third = width / 3;
+    let bandLow, bandHigh;
+    if (g.intensity === 'low')    { bandLow = rng.low;              bandHigh = rng.low + third; }
+    if (g.intensity === 'medium') { bandLow = rng.low + third;      bandHigh = rng.low + third * 2; }
+    if (g.intensity === 'high')   { bandLow = rng.low + third * 2;  bandHigh = rng.high; }
+    if (val < bandLow || val > bandHigh) return false;
+  }
+  return true;
+}
+
+const REG_STATS = {"R": {"FRESH": 1.0, "WARM": 1.0, "LIGHT": 1.0, "CLEAN": 1.0, "SWEET": 1.0, "SHARP": 1.0, "SMOOTH": 1.0, "NATURAL": 0.9, "CALM": 0.9, "ENERIZED": 1.0, "COMFORTING": 1.0, "CONFIDENT": 1.0, "LUXURIOUS": 1.0, "PLAYFUL": 1.0, "SOPHISTICATED": 1.0, "FAMILIAR": 1.0, "PERSONWEAR": 1.0, "REFLECTPERS": 0.9, "APPGE": 1.0, "MODERN": 1.0, "TIMELESS": 1.0, "GENDERALIG": 0.9, "EVERYDAYISE": 1.0, "SPECOCC": 1.0, "DAYTIME": 1.0, "EVEING": 1.0, "PROFESSIONAL": 1.0, "LASTSLONG": 1.0, "HEAT": 1.0, "REPURCHASE": 1.0, "CALMCENTERED": 0.9, "COMFORTTRUST": 1.0, "CONFIDENTBOLD": 1.0, "ENERGISEDALIVE": 1.0, "CALMANDSETTLED": 1.0, "SECURE": 1.0, "LIGHTANDEASY": 1.0, "CLEANREFRESH": 1.0, "RINSERENEW": 1.0, "JUSTWASHED": 1.0, "NEATWELL": 0.9, "SIMPLENATURAL": 1.0, "FRAGSSOC1": 1.0, "FRAGRASS2": 1.0, "FRAGASS3": 1.0, "FRAGASS4": 1.0, "POWERDR": 1.0, "SPRAYS": 1.0, "SOAPGEL": 1.0, "BATHBODY": 1.0, "PRACTICAL": 1.0, "HIGHQULAITY": 1.0, "UNCOMPL": 1.0, "RELIABLE": 1.0, "MEDITATE": 1.0, "MORNG": 1.0, "SOLOMED": 1.0, "MORNIGEVE": 0.9, "PRESENT": 1.0, "ACTIVE": 1.0, "BEFGOOUT": 1.0, "DAILYROUTINE": 1.0}, "adj_r2": {"FRESH": 0.9, "WARM": 0.7, "LIGHT": 0.9, "CLEAN": 1.0, "SWEET": 0.8, "SHARP": 1.0, "SMOOTH": 0.9, "NATURAL": 0.6, "CALM": 0.7, "ENERIZED": 0.9, "COMFORTING": 0.8, "CONFIDENT": 0.8, "LUXURIOUS": 0.9, "PLAYFUL": 0.9, "SOPHISTICATED": 0.8, "FAMILIAR": 0.9, "PERSONWEAR": 1.0, "REFLECTPERS": 0.7, "APPGE": 0.9, "MODERN": 0.9, "TIMELESS": 1.0, "GENDERALIG": 0.7, "EVERYDAYISE": 0.7, "SPECOCC": 0.9, "DAYTIME": 0.9, "EVEING": 0.9, "PROFESSIONAL": 0.8, "LASTSLONG": 0.8, "HEAT": 0.9, "REPURCHASE": 0.9, "CALMCENTERED": 0.7, "COMFORTTRUST": 0.9, "CONFIDENTBOLD": 0.9, "ENERGISEDALIVE": 0.8, "CALMANDSETTLED": 0.8, "SECURE": 0.9, "LIGHTANDEASY": 0.9, "CLEANREFRESH": 0.9, "RINSERENEW": 0.9, "JUSTWASHED": 0.7, "NEATWELL": 0.7, "SIMPLENATURAL": 0.9, "FRAGSSOC1": 0.8, "FRAGRASS2": 0.8, "FRAGASS3": 0.9, "FRAGASS4": 0.9, "POWERDR": 0.9, "SPRAYS": 0.9, "SOAPGEL": 0.9, "BATHBODY": 0.8, "PRACTICAL": 1.0, "HIGHQULAITY": 1.0, "UNCOMPL": 0.9, "RELIABLE": 0.9, "MEDITATE": 0.8, "MORNG": 0.8, "SOLOMED": 0.9, "MORNIGEVE": 0.7, "PRESENT": 0.8, "ACTIVE": 0.9, "BEFGOOUT": 0.7, "DAILYROUTINE": 0.9}};
+
+function buildRegressionSheet() {
+  const TERMS = ['A','B','C','D','AB','AC','AD','BC','BD','CD'];
+  const rows = [];
+
+  // Title
+  rows.push(['SCHEFFE MIXTURE REGRESSION OUTPUT']);
+  rows.push(['General Linear Model · N = 15 cases · 10 coefficients per equation']);
+  rows.push(['Adj R² = 1-(1-R²)*(N-1)/df, where N=15, df=5']);
+  rows.push(['Source: Systat GLM · Exported by Howard System V1']);
+  rows.push([]);
+
+  // Header row
+  rows.push([
+    'Dependent Variable', 'R (Multiple Corr.)', 'Adjusted R²', 'Fit Quality',
+    '', ...TERMS.map(t => `k_${t}`)
+  ]);
+
+  // One row per variable
+  for (const dv of DATA.dep_vars) {
+    const R = REG_STATS.R[dv];
+    const adjR2 = REG_STATS.adj_r2[dv];
+    const fit = adjR2 >= 0.9 ? 'Excellent' : adjR2 >= 0.8 ? 'Good' : adjR2 >= 0.7 ? 'Moderate' : 'Weak';
+    const coeffs = DATA.coefficients_by_dv[dv];
+    rows.push([
+      dv, R, adjR2, fit,
+      '', ...TERMS.map(t => coeffs[t])
+    ]);
+  }
+
+  return rows;
+}
+
+function scoreAgainstGoals(predictions) {
+  if (goals.length === 0) return { dist: 0, pct: 100 };
+
+  // Euclidean distance from target centers
+  let sumSq = 0;
+  for (const g of goals) {
+    const val = predictions[g.dv];
+    const center = getIntensityTarget(g.dv, g.intensity);
+    sumSq += Math.pow(val - center, 2);
+  }
+  const dist = Math.sqrt(sumSq);
+
+  // Worst possible distance = every goal lands at band edge
+  let worstSumSq = 0;
+  for (const g of goals) {
+    const rng = DATA.ranges[g.dv];
+    const halfWidth = (rng.high - rng.low) / 6; // third/2 = half of band
+    worstSumSq += Math.pow(halfWidth, 2);
+  }
+  const worstDist = Math.sqrt(worstSumSq);
+
+  const pct = worstDist === 0 ? 100 : Math.max(0, 100 - (dist / worstDist * 100));
+
+  return { dist, pct };
+}
+
+// ============================================================
+// OPTIMIZER — Systematic Grid Search (1% steps)
+// ============================================================
+async function runOptimizer() {
+  switchTab('optimizer');
+  const topN = parseInt(document.getElementById('topN').value) || 10;
+  const batchSize = 500;
+
+  optimizerStop = false;
+  optimizerRunning = true;
+
+  // Show loader overlay
+  document.getElementById('loaderOverlay').classList.add('active');
+  document.getElementById('runBtn').style.display = 'none';
+  document.getElementById('stopBtn').style.display = 'none';
+  document.getElementById('progressWrap').style.display = 'none';
+
+  let tested = 0, viable = 0;
+  let candidates = [];
+  let failedViability = [];
+  let failedGoals = [];
+  const maxFailsToStore = 500;
+
+  // Build all combinations where A+B+C+D = 100 at 1% steps
+  // A goes 0-100, B goes 0-100-A, C goes 0-100-A-B, D = 100-A-B-C
+  const allCombos = [];
+  for (let A = 0; A <= 100; A++) {
+    for (let B = 0; B <= 100 - A; B++) {
+      for (let C = 0; C <= 100 - A - B; C++) {
+        const D = 100 - A - B - C;
+        allCombos.push([A, B, C, D]);
+      }
+    }
+  }
+
+  const total = allCombos.length;
+  document.getElementById('progressText').textContent = `Searching ${total.toLocaleString()} combinations...`;
+
+  const run = () => new Promise(resolve => {
+    let idx = 0;
+    const iter = () => {
+      const end = Math.min(idx + batchSize, total);
+      for (; idx < end; idx++) {
+        if (optimizerStop) break;
+        const mix = allCombos[idx];
+        tested++;
+
+        const preds = predict(mix[0], mix[1], mix[2], mix[3]);
+
+        // Check 62 ranges
+        let rangeFailDv = null;
+        for (const dv of DATA.dep_vars) {
+          const r = DATA.ranges[dv];
+          if (preds[dv] < r.low || preds[dv] > r.high) { rangeFailDv = dv; break; }
+        }
+        if (rangeFailDv) {
+          if (failedViability.length < maxFailsToStore)
+            failedViability.push({ mix, preds, failedOn: rangeFailDv });
+          continue;
+        }
+
+        // Check goal bands
+        if (!checkGoals(preds)) {
+          let goalFailDv = null;
+          for (const g of goals) {
+            const val = preds[g.dv];
+            const rng = DATA.ranges[g.dv];
+            const width = rng.high - rng.low;
+            const third = width / 3;
+            let bandLow, bandHigh;
+            if (g.intensity === 'low')    { bandLow = rng.low;             bandHigh = rng.low + third; }
+            if (g.intensity === 'medium') { bandLow = rng.low + third;     bandHigh = rng.low + third * 2; }
+            if (g.intensity === 'high')   { bandLow = rng.low + third * 2; bandHigh = rng.high; }
+            if (val < bandLow || val > bandHigh) { goalFailDv = g.dv + ' (' + g.intensity + ')'; break; }
+          }
+          if (failedGoals.length < maxFailsToStore)
+            failedGoals.push({ mix, preds, failedOn: goalFailDv });
+          continue;
+        }
+
+        viable++;
+        const { dist, pct } = scoreAgainstGoals(preds);
+        candidates.push({ mix, preds, dist, pct });
+        candidates.sort((a, b) => a.dist - b.dist); // lower distance = better
+        if (candidates.length > topN * 5) candidates = candidates.slice(0, topN * 5);
+      }
+
+      // Update loader overlay
+      const pct = Math.round(idx / total * 100);
+      document.getElementById('loaderBarFill').style.width = pct + '%';
+      document.getElementById('loaderPct').textContent = pct + '%';
+      document.getElementById('loaderPctLabel').textContent = pct + '%';
+      document.getElementById('loaderTested').textContent = tested.toLocaleString();
+      document.getElementById('loaderViable').textContent = viable.toLocaleString();
+      document.getElementById('loaderStatusText').textContent = optimizerStop ? 'Stopped' : `Scanning ${total.toLocaleString()} combinations...`;
+      // Show current combo being tested
+      const cur = allCombos[Math.min(idx, total-1)];
+      if (cur) document.getElementById('loaderTicker').textContent =
+        `Floral:${cur[0]}%  Oud:${cur[1]}%  Woody:${cur[2]}%  Amber:${cur[3]}%`;
+
+      // Also update sidebar progress
+      document.getElementById('progressFill').style.width = pct + '%';
+      document.getElementById('progressPct').textContent = pct + '%';
+      document.getElementById('viableCount').textContent = viable.toLocaleString() + (goals.length > 0 ? ' match goals' : ' viable');
+      document.getElementById('testedCount').textContent = tested.toLocaleString() + ' tested';
+      document.getElementById('viableTotal').textContent = viable.toLocaleString();
+
+      if (idx < total && !optimizerStop) {
+        setTimeout(iter, 0);
+      } else {
+        resolve();
+      }
+    };
+    iter();
+  });
+
+  await run();
+
+  topResults = candidates.slice(0, topN);
+  topResults._failedViability = failedViability;
+  topResults._failedGoals = failedGoals;
+
+  // Hide loader with fade, then show results
+  const overlay = document.getElementById('loaderOverlay');
+  overlay.style.transition = 'opacity 0.5s ease';
+  overlay.style.opacity = '0';
+  setTimeout(() => {
+    overlay.classList.remove('active');
+    overlay.style.opacity = '';
+    renderResults(topResults);
+    document.getElementById('exportOptimizerBtn').disabled = topResults.length === 0;
+  }, 500);
+
+  document.getElementById('runBtn').style.display = 'block';
+  document.getElementById('stopBtn').style.display = 'none';
+  document.getElementById('progressWrap').style.display = 'block';
+  optimizerRunning = false;
+}
+
+function stopOptimizer() {
+  optimizerStop = true;
+}
+
+// ============================================================
+// RENDER RESULTS
+// ============================================================
+function renderResults(results) {
+  const container = document.getElementById('resultsContainer');
+  if (!results.length) {
+    container.innerHTML = `<div class="empty-state"><div class="icon">😶</div><p>No viable mixtures found across all 176,851 combinations.<br>Try removing or relaxing your target goals.</p></div>`;
+    return;
+  }
+
+  container.innerHTML = results.map((r, i) => `
+    <div class="formula-card ${selectedResult === i ? 'selected' : ''}" onclick="selectResult(${i})">
+      <div class="formula-card-header">
+        <div class="formula-rank">#${i+1}</div>
+        <div style="display:flex;gap:16px;align-items:flex-end;">
+          ${goals.length > 0 ? `
+            <div style="text-align:right;">
+              <div style="font-size:11px;color:var(--text-muted);letter-spacing:0.06em;text-transform:uppercase;margin-bottom:2px;">Euclidean Dist</div>
+              <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--gold-light);">d = ${r.dist.toFixed(3)}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:11px;color:var(--text-muted);letter-spacing:0.06em;text-transform:uppercase;margin-bottom:2px;">Proximity</div>
+              <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--green);">${r.pct.toFixed(1)}%</div>
+            </div>
+          ` : `
+            <div style="text-align:right;">
+              <div style="font-size:11px;color:var(--text-muted);letter-spacing:0.06em;text-transform:uppercase;margin-bottom:2px;">Viable</div>
+              <div style="font-family:'DM Serif Display',serif;font-size:18px;color:var(--green);">✓</div>
+            </div>
+          `}
+        </div>
+      </div>
+      <div class="formula-mix">
+        ${['A','B','C','D'].map((k, idx) => `
+          <div class="mix-ingredient">
+            <div class="ing-name" style="color:${INGREDIENT_COLORS[k]}">${INGREDIENT_NAMES[k]}</div>
+            <div class="ing-val" style="color:${INGREDIENT_COLORS[k]}">${r.mix[idx].toFixed(1)}%</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+}
+
+function selectResult(idx) {
+  selectedResult = idx;
+  renderResults(topResults);
+  showDetail(topResults[idx]);
+}
+
+function showDetail(r) {
+  // Populate header
+  document.getElementById('profileModalTitle').textContent = `Formula #${topResults.indexOf(r) + 1} — Full Profile`;
+  document.getElementById('profileModalScore').innerHTML =
+    goals.length > 0
+      ? `<div style="font-family:'DM Serif Display',serif;font-size:20px;color:var(--gold-light);">d = ${r.dist.toFixed(3)}</div>
+         <div style="font-family:'DM Serif Display',serif;font-size:20px;color:var(--green);">${r.pct.toFixed(1)}%</div>`
+      : `<div style="font-size:14px;color:var(--green);">✓ Viable</div>`;
+
+  const INGREDIENT_NAMES = { A: 'Floral', B: 'Oud', C: 'Woody', D: 'Amber' };
+  const INGREDIENT_COLORS = { A: '#c9a96e', B: '#5a8ec4', C: '#4a9e6b', D: '#c45a9e' };
+  document.getElementById('profileModalMix').innerHTML =
+    ['A','B','C','D'].map((k,i) =>
+      `<span style="color:${INGREDIENT_COLORS[k]};font-weight:600;">${INGREDIENT_NAMES[k]}: ${r.mix[i].toFixed(1)}%</span>`
+    ).join('');
+
+  // Populate grid
+  const grid = document.getElementById('dvGrid');
+  grid.innerHTML = DATA.dep_vars.map(dv => {
+    const val = r.preds[dv];
+    const range = DATA.ranges[dv];
+    const oor = val < range.low || val > range.high;
+    const pct = Math.max(0, Math.min(100, (val - range.low) / (range.high - range.low) * 100));
+
+    const width = range.high - range.low;
+    const third = width / 3;
+    let intensity, intensityColor;
+    if (val < range.low + third)       { intensity = 'Low';    intensityColor = 'var(--blue)'; }
+    else if (val < range.low + third*2){ intensity = 'Medium'; intensityColor = 'var(--gold)'; }
+    else                               { intensity = 'High';   intensityColor = 'var(--green)'; }
+    if (oor) { intensity = 'Out of Range'; intensityColor = 'var(--red)'; }
+
+    return `
+      <div class="dv-item ${oor ? 'out-of-range' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5px;">
+          <div class="dv-name" style="margin-bottom:0;">${dv}</div>
+          <div style="font-size:13px;font-weight:700;color:${oor?'var(--red)':intensityColor};font-family:'DM Serif Display',serif;flex-shrink:0;margin-left:4px;">${val.toFixed(1)}</div>
+        </div>
+        <div class="dv-val" style="color:${intensityColor};font-size:11px;font-weight:700;margin-bottom:5px;">${intensity}</div>
+        <div style="height:2px;background:var(--border);border-radius:1px;margin-bottom:5px;">
+          <div style="width:${pct}%;height:100%;background:${oor?'var(--red)':intensityColor};border-radius:1px;"></div>
+        </div>
+        <div style="font-size:9px;color:var(--text-muted);letter-spacing:0.03em;">${range.low.toFixed(1)} – ${range.high.toFixed(1)}</div>
+      </div>
+    `;
+  }).join('');
+
+  // Open modal
+  document.getElementById('profileModalOverlay').classList.add('active');
+}
+
+function closeProfileModal(e) {
+  if (e && e.target !== document.getElementById('profileModalOverlay')) return;
+  document.getElementById('profileModalOverlay').classList.remove('active');
+}
+
+// ============================================================
+// MANUAL PREDICT
+// ============================================================
+function predictManual() {
+  switchTab('predict');
+  switchTab('predict');
+  const sum = blend.A + blend.B + blend.C + blend.D;
+  if (Math.abs(sum - 100) > 0.5) {
+    document.getElementById('predictResults').innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><p style="color:var(--red)">Blend must sum to 100% (currently ${sum}%)</p></div>`;
+    return;
+  }
+  const preds = predict(blend.A, blend.B, blend.C, blend.D);
+  const isViable = checkViable(preds);
+  document.getElementById('exportManualBtn').disabled = false;
+
+  document.getElementById('manualViable').innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+      <span class="viable-badge ${isViable ? 'yes' : 'no'}">${isViable ? '✓ Viable Mixture' : '✗ Not Viable'}</span>
+      <span style="color:var(--text-muted);font-size:12px;">${isViable ? 'All 62 outputs within historical range.' : 'One or more outputs outside acceptable range.'}</span>
+    </div>
+    <div style="display:flex;gap:16px;font-size:12px;color:var(--text-muted);">
+      ${['A','B','C','D'].map((k,i) => `<span style="color:${INGREDIENT_COLORS[k]}">${INGREDIENT_NAMES[k]}: <strong>${blend[k]}%</strong></span>`).join('')}
+    </div>
+  `;
+
+  document.getElementById('predictResults').innerHTML = DATA.dep_vars.map(dv => {
+    const val = preds[dv];
+    const range = DATA.ranges[dv];
+    const oor = val < range.low || val > range.high;
+    const pct = Math.max(0, Math.min(100, (val - range.low) / (range.high - range.low) * 100));
+
+    // Determine intensity band
+    const width = range.high - range.low;
+    const third = width / 3;
+    let intensity, intensityColor;
+    if (val < range.low + third) {
+      intensity = 'Low'; intensityColor = 'var(--blue)';
+    } else if (val < range.low + third * 2) {
+      intensity = 'Medium'; intensityColor = 'var(--gold)';
+    } else {
+      intensity = 'High'; intensityColor = 'var(--green)';
+    }
+    if (oor) { intensity = 'Out of Range'; intensityColor = 'var(--red)'; }
+
+    return `
+      <div class="dv-item ${oor ? 'out-of-range' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5px;">
+          <div class="dv-name" style="margin-bottom:0;">${dv}</div>
+          <div style="font-size:13px;font-weight:700;color:${oor?'var(--red)':intensityColor};font-family:'DM Serif Display',serif;flex-shrink:0;margin-left:4px;">${val.toFixed(1)}</div>
+        </div>
+        <div class="dv-val" style="color:${intensityColor};font-size:11px;font-weight:700;margin-bottom:5px;">${intensity}</div>
+        <div style="height:2px;background:var(--border);border-radius:1px;margin-bottom:5px;">
+          <div style="width:${pct}%;height:100%;background:${oor?'var(--red)':intensityColor};border-radius:1px;"></div>
+        </div>
+        <div style="font-size:9px;color:var(--text-muted);letter-spacing:0.03em;">${range.low.toFixed(1)} – ${range.high.toFixed(1)}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ============================================================
+// GOALS
+// ============================================================
+function populateGoalSelects() {}
+
+function addGoal() {
+  openPicker();
+}
+
+function openPicker() {
+  const usedDvs = goals.map(g => g.dv);
+  if (usedDvs.length >= DATA.dep_vars.length) return;
+
+  // Position picker below the add button, flip up if not enough space below
+  const btn = document.querySelector('.btn-add');
+  const rect = btn.getBoundingClientRect();
+  const panel = document.getElementById('pickerPanel');
+  const panelH = 340;
+  const spaceBelow = window.innerHeight - rect.bottom;
+  if (spaceBelow >= panelH) {
+    panel.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+  } else {
+    panel.style.top = (rect.top + window.scrollY - panelH - 4) + 'px';
+  }
+  panel.style.left = rect.left + 'px';
+
+  document.getElementById('pickerOverlay').style.display = 'block';
+  document.getElementById('pickerPanel').style.display = 'flex';
+  document.getElementById('pickerSearch').value = '';
+  document.getElementById('pickerSearch').focus();
+  renderPickerList();
+}
+
+function closePicker() {
+  document.getElementById('pickerOverlay').style.display = 'none';
+  document.getElementById('pickerPanel').style.display = 'none';
+}
+
+function renderPickerList() {
+  const usedDvs = goals.map(g => g.dv);
+  const query = document.getElementById('pickerSearch').value.toLowerCase();
+  const available = DATA.dep_vars.filter(dv =>
+    !usedDvs.includes(dv) && dv.toLowerCase().includes(query)
+  );
+
+  const list = document.getElementById('pickerList');
+  if (available.length === 0) {
+    list.innerHTML = `<div class="picker-empty">No variables available</div>`;
+    return;
+  }
+
+  list.innerHTML = available.map(dv => {
+    const rng = DATA.ranges[dv];
+    return `
+      <div class="picker-item" onclick="selectPickerDv('${dv}')">
+        <span>${dv}</span>
+        <span class="picker-item-range">${rng.low.toFixed(1)}–${rng.high.toFixed(1)}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+function selectPickerDv(dv) {
+  goals.push({ dv, intensity: 'medium', target: getIntensityTarget(dv, 'medium') });
+  closePicker();
+  renderGoals();
+  document.querySelector('.btn-add').style.display =
+    goals.length >= DATA.dep_vars.length ? 'none' : 'block';
+}
+
+function getIntensityTarget(dv, intensity) {
+  const rng = DATA.ranges[dv];
+  const width = rng.high - rng.low;
+  const third = width / 3;
+  // Target = center of the band
+  if (intensity === 'low')    return rng.low + third * 0.5;  // center of bottom third
+  if (intensity === 'medium') return rng.low + third * 1.5;  // center of middle third
+  if (intensity === 'high')   return rng.low + third * 2.5;  // center of top third
+  return rng.low + third * 1.5;
+}
+
+function getIntensityLabel(dv, intensity) {
+  const rng = DATA.ranges[dv];
+  const width = rng.high - rng.low;
+  const third = width / 3;
+  const labels = {
+    low:    `${rng.low.toFixed(1)} – ${(rng.low + third).toFixed(1)}`,
+    medium: `${(rng.low + third).toFixed(1)} – ${(rng.low + third*2).toFixed(1)}`,
+    high:   `${(rng.low + third*2).toFixed(1)} – ${rng.high.toFixed(1)}`
+  };
+  return labels[intensity] || labels.medium;
+}
+
+function renderGoals() {
+  const el = document.getElementById('goalList');
+  const usedDvs = goals.map(g => g.dv);
+
+  el.innerHTML = goals.map((g, i) => {
+    const target = getIntensityTarget(g.dv, g.intensity);
+    const rangeLabel = getIntensityLabel(g.dv, g.intensity);
+    return `
+    <div class="goal-item">
+      <div class="goal-item-top">
+        <select onchange="updateGoalDv(${i}, this.value)">
+          ${DATA.dep_vars.map(dv => {
+            // Always show this goal's own current dv, hide others already used
+            const isCurrentDv = dv === g.dv;
+            const isUsedElsewhere = usedDvs.includes(dv) && !isCurrentDv;
+            if (isUsedElsewhere) return '';
+            return `<option value="${dv}" ${isCurrentDv ? 'selected' : ''}>${dv}</option>`;
+          }).join('')}
+        </select>
+        <button class="btn-icon" onclick="removeGoal(${i})">×</button>
+      </div>
+      <div class="goal-intensity-row">
+        <button class="intensity-btn ${g.intensity === 'low' ? 'active-low' : ''}"
+          onclick="updateGoalIntensity(${i}, 'low')">Low</button>
+        <button class="intensity-btn ${g.intensity === 'medium' ? 'active-medium' : ''}"
+          onclick="updateGoalIntensity(${i}, 'medium')">Medium</button>
+        <button class="intensity-btn ${g.intensity === 'high' ? 'active-high' : ''}"
+          onclick="updateGoalIntensity(${i}, 'high')">High</button>
+      </div>
+      <div class="goal-item-meta">
+        <span>Band: ${rangeLabel}</span>
+        <span class="target-val">→ ${target.toFixed(1)}</span>
+      </div>
+    </div>
+  `}).join('');
+}
+
+function updateGoalDv(i, dv) {
+  goals[i].dv = dv;
+  goals[i].target = getIntensityTarget(dv, goals[i].intensity);
+  renderGoals();
+}
+
+function updateGoalIntensity(i, intensity) {
+  goals[i].intensity = intensity;
+  goals[i].target = getIntensityTarget(goals[i].dv, intensity);
+  renderGoals();
+}
+
+function removeGoal(i) {
+  goals.splice(i, 1);
+  renderGoals();
+  document.querySelector('.btn-add').style.display = 'block';
+}
+
+// ============================================================
+// TABS
+// ============================================================
+function switchSidebarTab(tab) {
+  ['blend','optimizer'].forEach(t => {
+    document.getElementById('stab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('spane-' + t).classList.toggle('active', t === tab);
+  });
+}
+
+function switchTab(name) {
+  document.getElementById('pane-optimizer').style.display = name === 'optimizer' ? 'flex' : 'none';
+  document.getElementById('pane-optimizer').style.flexDirection = 'column';
+  document.getElementById('pane-predict').style.display = name === 'predict' ? 'block' : 'none';
+  document.getElementById('tab-optimizer').className = 'tab ' + (name === 'optimizer' ? 'active' : '');
+  document.getElementById('tab-predict').className = 'tab ' + (name === 'predict' ? 'active' : '');
+  // Sync sidebar tab
+  if (name === 'predict') switchSidebarTab('blend');
+  if (name === 'optimizer') switchSidebarTab('optimizer');
+}
+
+// ============================================================
+// EXPORT TO EXCEL
+// ============================================================
+
+function exportOptimizerResults() {
+  if (!topResults.length) return;
+
+  const wb = XLSX.utils.book_new();
+  const goalRows = [];
+  goalRows.push(['TARGET GOALS USED IN THIS RUN']);
+  goalRows.push([]);
+  if (goals.length === 0) {
+    goalRows.push(['No goals set — optimizer found all viable mixtures equally scored.']);
+  } else {
+    goalRows.push(['Variable', 'Intensity', 'Target Value Used', 'Range Low', 'Range High', 'Intensity Band']);
+    goals.forEach(g => {
+      goalRows.push([
+        g.dv,
+        g.intensity.charAt(0).toUpperCase() + g.intensity.slice(1),
+        parseFloat(g.target.toFixed(3)),
+        parseFloat(DATA.ranges[g.dv].low.toFixed(3)),
+        parseFloat(DATA.ranges[g.dv].high.toFixed(3)),
+        getIntensityLabel(g.dv, g.intensity)
+      ]);
+    });
+  }
+
+  const wsGoals = XLSX.utils.aoa_to_sheet(goalRows);
+  wsGoals['!cols'] = [18, 14, 12, 12].map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, wsGoals, '1. Goals');
+
+
+  // ── Sheet 1: Summary of top results ──
+  const summaryRows = [];
+  summaryRows.push(['FRAGRANCE OPTIMIZER — TOP VIABLE MIXTURES']);
+  summaryRows.push([`Exported: ${new Date().toLocaleString()}`]);
+  summaryRows.push([`Search Method: Systematic Grid Search (1% steps) · 176,851 combinations tested`, '', `Viable Found: ${document.getElementById('viableTotal').textContent}`]);
+  summaryRows.push([]);
+  summaryRows.push(['Rank', 'Euclidean Distance (d)', 'Proximity (%)', 'Floral (A) %', 'Oud (B) %', 'Woody (C) %', 'Amber (D) %', 'Sum Check', 'Viable?']);
+
+  topResults.forEach((r, i) => {
+    const sum = r.mix.reduce((a, b) => a + b, 0);
+    summaryRows.push([
+      i + 1,
+      parseFloat(r.dist.toFixed(4)),
+      parseFloat(r.pct.toFixed(2)),
+      parseFloat(r.mix[0].toFixed(2)),
+      parseFloat(r.mix[1].toFixed(2)),
+      parseFloat(r.mix[2].toFixed(2)),
+      parseFloat(r.mix[3].toFixed(2)),
+      parseFloat(sum.toFixed(2)),
+      'YES'
+    ]);
+  });
+
+  const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+  wsSummary['!cols'] = [8, 14, 14, 12, 12, 12, 12, 10].map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, wsSummary, '2. Summary');
+
+  // ── Sheet 2: Full 62 predictions per result ──
+  const detailRows = [];
+  detailRows.push(['FULL PREDICTIONS — All 62 Dependent Variables per Mixture']);
+  detailRows.push([]);
+
+  // Header row: Rank columns
+  const headerRow = ['Variable', 'Low', 'High', 'Avg'];
+  topResults.forEach((r, i) => {
+    headerRow.push(`#${i+1} Floral${r.mix[0].toFixed(1)}% Oud${r.mix[1].toFixed(1)}% Woody${r.mix[2].toFixed(1)}% Amber${r.mix[3].toFixed(1)}%`);
+  });
+  headerRow.push(''); // spacer
+  topResults.forEach((r, i) => headerRow.push(`#${i+1} In Range?`));
+  detailRows.push(headerRow);
+
+  DATA.dep_vars.forEach(dv => {
+    const rng = DATA.ranges[dv];
+    const row = [dv, parseFloat(rng.low.toFixed(3)), parseFloat(rng.high.toFixed(3)), parseFloat(rng.avg.toFixed(3))];
+    topResults.forEach(r => row.push(parseFloat(r.preds[dv].toFixed(2))));
+    row.push('');
+    topResults.forEach(r => {
+      const v = r.preds[dv];
+      row.push(v >= rng.low && v <= rng.high ? '✓' : '✗ OUT');
+    });
+    detailRows.push(row);
+  });
+
+  const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
+  const detailCols = [18, 10, 10, 10];
+  topResults.forEach(() => { detailCols.push(22); });
+  detailCols.push(4);
+  topResults.forEach(() => { detailCols.push(12); });
+  wsDetail['!cols'] = detailCols.map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, wsDetail, '3. Full Predictions');
+
+  // ── Sheet 3: Mixture Terms (showing the math) ──
+  const mathRows = [];
+  mathRows.push(['MIXTURE TERMS — How Each Prediction Was Calculated']);
+  mathRows.push(['Shows A, B, C, D proportions and all 6 interaction terms used in the equations']);
+  mathRows.push([]);
+  mathRows.push(['Rank', 'Floral(A)', 'Oud(B)', 'Woody(C)', 'Amber(D)', 'A×B', 'A×C', 'A×D', 'B×C', 'B×D', 'C×D', 'Sum A+B+C+D']);
+
+  topResults.forEach((r, i) => {
+    const A = r.mix[0]/100, B = r.mix[1]/100, C = r.mix[2]/100, D = r.mix[3]/100;
+    mathRows.push([
+      i + 1,
+      parseFloat(A.toFixed(6)), parseFloat(B.toFixed(6)),
+      parseFloat(C.toFixed(6)), parseFloat(D.toFixed(6)),
+      parseFloat((A*B).toFixed(6)), parseFloat((A*C).toFixed(6)),
+      parseFloat((A*D).toFixed(6)), parseFloat((B*C).toFixed(6)),
+      parseFloat((B*D).toFixed(6)), parseFloat((C*D).toFixed(6)),
+      parseFloat((A+B+C+D).toFixed(6))
+    ]);
+  });
+
+  const wsMath = XLSX.utils.aoa_to_sheet(mathRows);
+  wsMath['!cols'] = [6,12,10,10,10,12,12,12,12,12,12,14].map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, wsMath, '4. Mixture Terms');
+
+  // ── Sheet 4: Goals used ──
+
+
+  // ── Sheet 5: Failed Viability (failed 62 range check) ──
+  const failViabRows = [];
+  failViabRows.push(['FAILED — RANGE CHECK (62 Dependent Variable Bounds)']);
+  failViabRows.push([`Showing up to 500 samples. These mixtures were rejected because at least one of the 62 predicted values fell outside its historical min/max range.`]);
+  failViabRows.push([]);
+
+  const failViabData = topResults._failedViability || [];
+  if (failViabData.length === 0) {
+    failViabRows.push(['No range failures recorded.']);
+  } else {
+    failViabRows.push([
+      '#', 'Floral (A)%', 'Oud (B)%', 'Woody (C)%', 'Amber (D)%',
+      'First Failed Variable', 'Predicted Value', 'Allowed Low', 'Allowed High', 'Over/Under'
+    ]);
+    failViabData.forEach((r, i) => {
+      const dv = r.failedOn;
+      const val = r.preds[dv];
+      const rng = DATA.ranges[dv];
+      failViabRows.push([
+        i + 1,
+        parseFloat(r.mix[0].toFixed(2)),
+        parseFloat(r.mix[1].toFixed(2)),
+        parseFloat(r.mix[2].toFixed(2)),
+        parseFloat(r.mix[3].toFixed(2)),
+        dv,
+        parseFloat(val.toFixed(3)),
+        parseFloat(rng.low.toFixed(3)),
+        parseFloat(rng.high.toFixed(3)),
+        val < rng.low ? 'UNDER' : 'OVER'
+      ]);
+    });
+    // Summary: which variables caused the most failures
+    failViabRows.push([]);
+    failViabRows.push(['FAILURE SUMMARY — Which variable caused the most rejections:']);
+    failViabRows.push(['Variable', 'Times it caused rejection']);
+    const failCounts = {};
+    failViabData.forEach(r => { failCounts[r.failedOn] = (failCounts[r.failedOn] || 0) + 1; });
+    Object.entries(failCounts).sort((a,b) => b[1]-a[1]).forEach(([dv, count]) => {
+      failViabRows.push([dv, count]);
+    });
+  }
+
+  const regRows = buildRegressionSheet();
+  const wsReg = XLSX.utils.aoa_to_sheet(regRows);
+  wsReg['!cols'] = [{wch:18},{wch:20},{wch:14},{wch:12},{wch:2},...Array(10).fill({wch:10})];
+  XLSX.utils.book_append_sheet(wb, wsReg, '5. Regression Output');
+
+  const wsFailViab = XLSX.utils.aoa_to_sheet(failViabRows);
+  wsFailViab['!cols'] = [5,12,10,10,10,20,14,12,12,10].map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, wsFailViab, '6. Failed — Range Check');
+
+  // ── Sheet 6: Failed Goals (passed ranges but failed goal bands) ──
+  const failGoalRows = [];
+  failGoalRows.push(['FAILED — GOAL BANDS']);
+  failGoalRows.push([`Showing up to 500 samples. These mixtures passed all 62 range checks but did not land in the required Low/Medium/High band for at least one goal.`]);
+  failGoalRows.push([]);
+
+  const failGoalData = topResults._failedGoals || [];
+  if (failGoalData.length === 0) {
+    failGoalRows.push(['No goal failures recorded (either no goals were set, or all viable mixtures matched goals).']);
+  } else {
+    // Header: mix columns + one column per goal showing predicted vs band
+    const goalHeaders = ['#', 'Floral (A)%', 'Oud (B)%', 'Woody (C)%', 'Amber (D)%', 'First Failed Goal'];
+    goals.forEach(g => {
+      goalHeaders.push(`${g.dv} predicted`);
+      goalHeaders.push(`${g.dv} band (${g.intensity})`);
+      goalHeaders.push(`${g.dv} pass?`);
+    });
+    failGoalRows.push(goalHeaders);
+
+    failGoalData.forEach((r, i) => {
+      const row = [
+        i + 1,
+        parseFloat(r.mix[0].toFixed(2)),
+        parseFloat(r.mix[1].toFixed(2)),
+        parseFloat(r.mix[2].toFixed(2)),
+        parseFloat(r.mix[3].toFixed(2)),
+        r.failedOn
+      ];
+      goals.forEach(g => {
+        const val = r.preds[g.dv];
+        const rng = DATA.ranges[g.dv];
+        const width = rng.high - rng.low;
+        const third = width / 3;
+        let bandLow, bandHigh;
+        if (g.intensity === 'low')    { bandLow = rng.low;             bandHigh = rng.low + third; }
+        if (g.intensity === 'medium') { bandLow = rng.low + third;     bandHigh = rng.low + third * 2; }
+        if (g.intensity === 'high')   { bandLow = rng.low + third * 2; bandHigh = rng.high; }
+        const pass = val >= bandLow && val <= bandHigh;
+        row.push(parseFloat(val.toFixed(3)));
+        row.push(`${bandLow.toFixed(1)} – ${bandHigh.toFixed(1)}`);
+        row.push(pass ? '✓' : '✗ FAIL');
+      });
+      failGoalRows.push(row);
+    });
+
+    // Summary
+    failGoalRows.push([]);
+    failGoalRows.push(['FAILURE SUMMARY — Which goal caused the most rejections:']);
+    failGoalRows.push(['Goal (Variable + Intensity)', 'Times it caused rejection']);
+    const goalFailCounts = {};
+    failGoalData.forEach(r => { goalFailCounts[r.failedOn] = (goalFailCounts[r.failedOn] || 0) + 1; });
+    Object.entries(goalFailCounts).sort((a,b) => b[1]-a[1]).forEach(([g, count]) => {
+      failGoalRows.push([g, count]);
+    });
+  }
+
+  const wsFailGoal = XLSX.utils.aoa_to_sheet(failGoalRows);
+  wsFailGoal['!cols'] = [5,12,10,10,10,24].concat(goals.flatMap(() => [14,18,10])).map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, wsFailGoal, '7. Failed — Goal Bands');
+
+  XLSX.writeFile(wb, `Fragrance_Optimizer_Results_${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+
+function exportManualPrediction() {
+  const sum = blend.A + blend.B + blend.C + blend.D;
+  if (Math.abs(sum - 100) > 0.5) return;
+
+  const preds = predict(blend.A, blend.B, blend.C, blend.D);
+  const isViable = checkViable(preds);
+  const A = blend.A/100, B = blend.B/100, C = blend.C/100, D = blend.D/100;
+
+  const wb = XLSX.utils.book_new();
+  const goalRows = [];
+  goalRows.push(['TARGET GOALS USED IN THIS RUN']);
+  goalRows.push([]);
+  if (goals.length === 0) {
+    goalRows.push(['No goals set — optimizer found all viable mixtures equally scored.']);
+  } else {
+    goalRows.push(['Variable', 'Intensity', 'Target Value Used', 'Range Low', 'Range High', 'Intensity Band']);
+    goals.forEach(g => {
+      goalRows.push([
+        g.dv,
+        g.intensity.charAt(0).toUpperCase() + g.intensity.slice(1),
+        parseFloat(g.target.toFixed(3)),
+        parseFloat(DATA.ranges[g.dv].low.toFixed(3)),
+        parseFloat(DATA.ranges[g.dv].high.toFixed(3)),
+        getIntensityLabel(g.dv, g.intensity)
+      ]);
+    });
+  }
+
+  // ── Sheet 1: Prediction results ──
+  const rows = [];
+  rows.push(['MANUAL BLEND PREDICTION REPORT']);
+  rows.push([`Exported: ${new Date().toLocaleString()}`]);
+  rows.push([]);
+  rows.push(['BLEND FORMULA']);
+  rows.push(['Floral (A)', 'Oud (B)', 'Woody (C)', 'Amber (D)', 'Sum']);
+  rows.push([blend.A, blend.B, blend.C, blend.D, blend.A+blend.B+blend.C+blend.D]);
+  rows.push([]);
+  rows.push(['MIXTURE TERMS (proportions)']);
+  rows.push(['A', 'B', 'C', 'D', 'AB', 'AC', 'AD', 'BC', 'BD', 'CD']);
+  rows.push([
+    parseFloat(A.toFixed(6)), parseFloat(B.toFixed(6)),
+    parseFloat(C.toFixed(6)), parseFloat(D.toFixed(6)),
+    parseFloat((A*B).toFixed(6)), parseFloat((A*C).toFixed(6)),
+    parseFloat((A*D).toFixed(6)), parseFloat((B*C).toFixed(6)),
+    parseFloat((B*D).toFixed(6)), parseFloat((C*D).toFixed(6))
+  ]);
+  rows.push([]);
+  rows.push(['VIABILITY', isViable ? '✅ VIABLE — All 62 outputs within range' : '❌ NOT VIABLE — One or more outputs out of range']);
+  rows.push([]);
+  rows.push(['FULL PREDICTIONS']);
+  rows.push(['#', 'Variable', 'Predicted Value', 'Low', 'High', 'Average', 'In Range?', '% of Range', 'Calculation Formula']);
+
+  DATA.dep_vars.forEach((dv, idx) => {
+    const val = preds[dv];
+    const rng = DATA.ranges[dv];
+    const oor = val < rng.low || val > rng.high;
+    const pct = ((val - rng.low) / (rng.high - rng.low) * 100);
+    const coeffs = DATA.coefficients_by_dv[dv];
+
+    // Build readable formula string
+    const formulaParts = [];
+    [['A',A],['B',B],['C',C],['D',D],
+     ['AB',A*B],['AC',A*C],['AD',A*D],['BC',B*C],['BD',B*D],['CD',C*D]
+    ].forEach(([term, termVal]) => {
+      const k = coeffs[term];
+      if (k !== 0) formulaParts.push(`${k >= 0 && formulaParts.length > 0 ? '+' : ''}${k}×${termVal.toFixed(4)}`);
+    });
+
+    rows.push([
+      idx + 1,
+      dv,
+      parseFloat(val.toFixed(3)),
+      parseFloat(rng.low.toFixed(3)),
+      parseFloat(rng.high.toFixed(3)),
+      parseFloat(rng.avg.toFixed(3)),
+      oor ? '✗ OUT OF RANGE' : '✓ In Range',
+      parseFloat(pct.toFixed(1)),
+      formulaParts.join(' ')
+    ]);
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [5, 18, 15, 12, 12, 12, 16, 12, 80].map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, ws, '1. Predictions');
+
+  // Regression output sheet
+  const regRows = buildRegressionSheet();
+  const wsReg = XLSX.utils.aoa_to_sheet(regRows);
+  wsReg['!cols'] = [{wch:18},{wch:20},{wch:14},{wch:12},{wch:2},...Array(10).fill({wch:10})];
+  XLSX.utils.book_append_sheet(wb, wsReg, '2. Regression Output');
+
+  XLSX.writeFile(wb, `Fragrance_Manual_Prediction_${blend.A}F_${blend.B}O_${blend.C}W_${blend.D}A_${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+
+// ============================================================
+// AUTHENTICATION
+// ============================================================
+const AUTH_CREDENTIALS = {
+  username: 'UFH',
+  password: 'UFH2026'
+};
+
+const SESSION_KEY = 'ufh_fragrance_auth';
+
+function checkAuth() {
+  const session = sessionStorage.getItem(SESSION_KEY);
+  if (session === 'authenticated') {
+    showApp();
+    return true;
+  }
+  return false;
+}
+
+function handleLogin(event) {
+  event.preventDefault();
+  
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errorEl = document.getElementById('loginError');
+  
+  if (username === AUTH_CREDENTIALS.username && password === AUTH_CREDENTIALS.password) {
+    sessionStorage.setItem(SESSION_KEY, 'authenticated');
+    errorEl.classList.remove('show');
+    showApp();
+  } else {
+    errorEl.classList.add('show');
+    document.getElementById('loginPassword').value = '';
+    document.getElementById('loginPassword').focus();
+  }
+}
+
+function showApp() {
+  document.getElementById('loginOverlay').classList.add('hidden');
+  document.getElementById('appContent').classList.add('visible');
+}
+
+function logout() {
+  sessionStorage.removeItem(SESSION_KEY);
+  location.reload();
+}
+
+// ============================================================
+// START
+// ============================================================
+if (checkAuth()) {
+  init();
+} else {
+  document.getElementById('loginUsername').focus();
+  document.getElementById('appContent').addEventListener('transitionend', function() {
+    init();
+  }, { once: true });
+  
+  // Also init when app becomes visible
+  const observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(mutation) {
+      if (mutation.target.classList.contains('visible')) {
+        init();
+        observer.disconnect();
+      }
+    });
+  });
+  observer.observe(document.getElementById('appContent'), { attributes: true, attributeFilter: ['class'] });
+}
+</script>
+</body>
+</html>
