@@ -154,11 +154,17 @@ async def list_documents_for_lead(
     lead_id: uuid.UUID,
     lead: Lead,
     category_id: Optional[uuid.UUID] = None,
+    customer_id: Optional[uuid.UUID] = None,
 ) -> List[dict]:
     """
     List all stips documents visible on this lead.
     For customer-scoped categories: docs from customer_stip_documents for lead.customer_id (and secondary).
     For lead-scoped: docs from lead_stip_documents for lead_id.
+    
+    Args:
+        customer_id: If provided, only return documents for this specific customer (primary or secondary).
+                    If None, returns documents for all associated customers.
+    
     Returns list of StipDocumentResponse-like dicts.
     """
     # Get categories (we need name and scope)
@@ -171,9 +177,16 @@ async def list_documents_for_lead(
         return []
 
     out: List[dict] = []
-    customer_ids = [lead.customer_id]
-    if lead.secondary_customer_id:
-        customer_ids.append(lead.secondary_customer_id)
+    
+    # Determine which customer IDs to query
+    if customer_id is not None:
+        # Filter to specific customer only
+        customer_ids = [customer_id]
+    else:
+        # Query all associated customers
+        customer_ids = [lead.customer_id]
+        if lead.secondary_customer_id:
+            customer_ids.append(lead.secondary_customer_id)
 
     for cat in categories:
         if category_id is not None and cat.id != category_id:
@@ -312,9 +325,14 @@ async def upload_document_for_lead(
     data: bytes,
     content_type: str,
     uploaded_by: uuid.UUID,
+    target_customer: str = "primary",
 ) -> dict:
     """
     Upload a file to the correct table (customer or lead) and Azure. Returns StipDocumentResponse-like dict.
+    
+    Args:
+        target_customer: For customer-scoped categories, which customer to associate the document with.
+                        "primary" (default) = lead.customer_id, "secondary" = lead.secondary_customer_id.
     """
     category = await StipsCategoryService.get_category(db, category_id)
     if not category:
@@ -330,13 +348,24 @@ async def upload_document_for_lead(
     file_size = len(data)
 
     if category.scope == "customer":
-        if not lead.customer_id:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=400, detail="Lead has no customer")
-        blob_path = f"customers/{lead.customer_id}/{category_id}/{unique}_{safe_name}"
+        # Determine which customer to associate the document with
+        if target_customer == "secondary":
+            if not lead.secondary_customer_id:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=400, detail="Lead has no secondary customer")
+            target_customer_id = lead.secondary_customer_id
+            customer_scope_label = "secondary"
+        else:
+            if not lead.customer_id:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=400, detail="Lead has no customer")
+            target_customer_id = lead.customer_id
+            customer_scope_label = "primary"
+        
+        blob_path = f"customers/{target_customer_id}/{category_id}/{unique}_{safe_name}"
         await azure_storage_service.upload_stip_document(blob_path, data, content_type)
         doc = CustomerStipDocument(
-            customer_id=lead.customer_id,
+            customer_id=target_customer_id,
             stips_category_id=category_id,
             file_name=file_name,
             blob_path=blob_path,
@@ -360,7 +389,7 @@ async def upload_document_for_lead(
             "file_size": doc.file_size,
             "uploaded_at": doc.uploaded_at,
             "uploaded_by_name": uploaded_by_name,
-            "customer_scope": "primary",
+            "customer_scope": customer_scope_label,
         }
     else:
         blob_path = f"leads/{lead.id}/{category_id}/{unique}_{safe_name}"

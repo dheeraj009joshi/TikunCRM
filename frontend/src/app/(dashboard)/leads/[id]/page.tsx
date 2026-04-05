@@ -425,6 +425,8 @@ export default function LeadDetailsPage() {
     const [stipsUploadTotalFiles, setStipsUploadTotalFiles] = React.useState<number>(0)
     const [stipsUploadCompletedCount, setStipsUploadCompletedCount] = React.useState<number>(0)
     const [stipsViewDoc, setStipsViewDoc] = React.useState<{ url: string; fileName: string; contentType: string } | null>(null)
+    // Customer toggle for Stips (primary/secondary)
+    const [stipsTargetCustomer, setStipsTargetCustomer] = React.useState<"primary" | "secondary">("primary")
     const [exportLoading, setExportLoading] = React.useState(false)
     const [exportProgress, setExportProgress] = React.useState(0)
     const [exportStatus, setExportStatus] = React.useState("")
@@ -829,17 +831,24 @@ export default function LeadDetailsPage() {
     }, [leadId])
 
     const fetchStipsDocuments = React.useCallback(async () => {
-        if (!leadId) return
+        if (!leadId || !lead) return
         setStipsLoading(true)
         try {
-            const list = await StipsService.listDocuments(leadId, activeStipsCategoryId ?? undefined)
+            // Determine which customer ID to filter by based on target customer selection
+            let customerId: string | undefined = undefined
+            if (stipsTargetCustomer === "secondary" && lead.secondary_customer?.id) {
+                customerId = lead.secondary_customer.id
+            } else if (stipsTargetCustomer === "primary" && lead.customer?.id) {
+                customerId = lead.customer.id
+            }
+            const list = await StipsService.listDocuments(leadId, activeStipsCategoryId ?? undefined, customerId)
             setStipsDocuments(list)
         } catch {
             setStipsDocuments([])
         } finally {
             setStipsLoading(false)
         }
-    }, [leadId, activeStipsCategoryId])
+    }, [leadId, activeStipsCategoryId, stipsTargetCustomer, lead])
 
     React.useEffect(() => {
         if (leadId && activeActivityTab === "stips") {
@@ -967,19 +976,42 @@ export default function LeadDetailsPage() {
             setExportProgress(40)
             setExportStatus("Loading document list…")
 
+            // Fetch all documents for both customers (no customer filter)
             const allDocs = await StipsService.listDocuments(leadId)
             setExportProgress(45)
-            const byCategory = allDocs.reduce((acc, doc) => {
-                const cat = doc.category_name || "Documents"
-                const safe = cat.replace(/[<>:"/\\|?*]/g, "_").trim() || "Documents"
-                if (!acc[safe]) acc[safe] = []
-                acc[safe].push(doc)
-                return acc
-            }, {} as Record<string, StipDocument[]>)
-
+            
+            // Build folder paths including customer scope
+            const primaryName = lead?.customer ? getCustomerFullName(lead.customer) : "Primary"
+            const secondaryName = lead?.secondary_customer ? getCustomerFullName(lead.secondary_customer) : "Secondary"
+            
             type DocTask = { folderName: string; doc: StipDocument; fileName: string }
             const tasks: DocTask[] = []
-            for (const [folderName, docs] of Object.entries(byCategory)) {
+            
+            // Group documents by customer and category
+            const docsByCustomerAndCategory: Record<string, StipDocument[]> = {}
+            
+            for (const doc of allDocs) {
+                let folderPath: string
+                if (doc.scope === "customer" && doc.customer_scope) {
+                    const customerName = doc.customer_scope === "primary" ? primaryName : secondaryName
+                    const categoryName = doc.category_name || "Documents"
+                    const safeCategory = categoryName.replace(/[<>:"/\\|?*]/g, "_").trim() || "Documents"
+                    folderPath = `${doc.customer_scope === "primary" ? "Primary" : "Secondary"} Customer - ${customerName}/${safeCategory}`
+                } else {
+                    // Lead-scoped documents
+                    const categoryName = doc.category_name || "Documents"
+                    const safeCategory = categoryName.replace(/[<>:"/\\|?*]/g, "_").trim() || "Documents"
+                    folderPath = `Lead Documents/${safeCategory}`
+                }
+                
+                if (!docsByCustomerAndCategory[folderPath]) {
+                    docsByCustomerAndCategory[folderPath] = []
+                }
+                docsByCustomerAndCategory[folderPath].push(doc)
+            }
+            
+            // Create tasks with deduplicated filenames per folder
+            for (const [folderName, docs] of Object.entries(docsByCustomerAndCategory)) {
                 const usedNames = new Set<string>()
                 for (const doc of docs) {
                     let fileName = doc.file_name || "document"
@@ -1381,48 +1413,72 @@ export default function LeadDetailsPage() {
             y += sectionGap
 
             drawSectionHeader("Documents", 3)
-            const byCategory = docsWithUrls.reduce((acc, d) => {
+            
+            // Group documents by customer, then by category
+            const primaryCustomerName = lead?.customer ? getCustomerFullName(lead.customer) : "Primary Customer"
+            const secondaryCustomerName = lead?.secondary_customer ? getCustomerFullName(lead.secondary_customer) : "Secondary Customer"
+            
+            const byCustomerAndCategory = docsWithUrls.reduce((acc, d) => {
+                let customerLabel: string
+                if (d.scope === "customer" && d.customer_scope) {
+                    customerLabel = d.customer_scope === "primary" 
+                        ? `Primary Customer - ${primaryCustomerName}` 
+                        : `Secondary Customer - ${secondaryCustomerName}`
+                } else {
+                    customerLabel = "Lead Documents"
+                }
                 const cat = d.category_name || "Documents"
-                if (!acc[cat]) acc[cat] = []
-                acc[cat].push(d)
+                if (!acc[customerLabel]) acc[customerLabel] = {}
+                if (!acc[customerLabel][cat]) acc[customerLabel][cat] = []
+                acc[customerLabel][cat].push(d)
                 return acc
-            }, {} as Record<string, DocWithUrl[]>)
+            }, {} as Record<string, Record<string, DocWithUrl[]>>)
 
-            for (const [categoryName, docs] of Object.entries(byCategory)) {
-                ensureSpace(40)
-                drawSubsectionHeader(categoryName)
-                doc.setTextColor(...bodyText)
-                const tableBody = docs.map((d, i) => [
-                    i + 1,
-                    d.file_name || "document",
-                    d.uploaded_by_name ?? "—",
-                    "Open document",
-                ])
-                const linkColumnIndex = 3
-                autoTable(doc, {
-                    startY: y,
-                    head: [["S. No.", "Document name", "Uploaded by", "Open document"]],
-                    body: tableBody,
-                    margin: { left: margin },
-                    styles: { fontSize: smallSize, cellPadding: 4 },
-                    headStyles: { fillColor: primaryBlue, textColor: white },
-                    alternateRowStyles: { fillColor: mutedBg },
-                    columnStyles: {
-                        0: { cellWidth: 16 },
-                        3: { cellWidth: 28 },
-                    },
-                    didDrawCell: (data) => {
-                        if (data.section === "body" && data.column.index === linkColumnIndex) {
-                            const rowIndex = data.row.index
-                            const viewUrl = docs[rowIndex]?.viewUrl
-                            if (viewUrl && typeof viewUrl === "string") {
-                                doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { url: viewUrl })
+            // Render documents grouped by customer
+            for (const [customerLabel, categories] of Object.entries(byCustomerAndCategory)) {
+                ensureSpace(30)
+                drawSubsectionHeader(customerLabel)
+                
+                for (const [categoryName, docs] of Object.entries(categories)) {
+                    ensureSpace(40)
+                    doc.setFontSize(bodySize)
+                    doc.setTextColor(...mutedText)
+                    doc.text(`Category: ${categoryName}`, margin + 4, y)
+                    y += lineH + 2
+                    doc.setTextColor(...bodyText)
+                    const tableBody = docs.map((d, i) => [
+                        i + 1,
+                        d.file_name || "document",
+                        d.uploaded_by_name ?? "—",
+                        "Open document",
+                    ])
+                    const linkColumnIndex = 3
+                    autoTable(doc, {
+                        startY: y,
+                        head: [["S. No.", "Document name", "Uploaded by", "Open document"]],
+                        body: tableBody,
+                        margin: { left: margin + 4 },
+                        styles: { fontSize: smallSize, cellPadding: 4 },
+                        headStyles: { fillColor: primaryBlue, textColor: white },
+                        alternateRowStyles: { fillColor: mutedBg },
+                        columnStyles: {
+                            0: { cellWidth: 16 },
+                            3: { cellWidth: 28 },
+                        },
+                        didDrawCell: (data) => {
+                            if (data.section === "body" && data.column.index === linkColumnIndex) {
+                                const rowIndex = data.row.index
+                                const viewUrl = docs[rowIndex]?.viewUrl
+                                if (viewUrl && typeof viewUrl === "string") {
+                                    doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { url: viewUrl })
+                                }
                             }
-                        }
-                    },
-                })
-                const lastTable = (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable
-                y = (lastTable?.finalY ?? y) + 10
+                        },
+                    })
+                    const lastTable = (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable
+                    y = (lastTable?.finalY ?? y) + 8
+                }
+                y += sectionGap
             }
 
             drawFooter()
@@ -4036,6 +4092,40 @@ export default function LeadDetailsPage() {
                                     <p className="text-sm text-muted-foreground">No Stips categories yet. Add categories in Settings → Stips Categories.</p>
                                 ) : (
                                     <>
+                                        {/* Customer Toggle for Stips Documents */}
+                                        <div className="mb-4 p-3 rounded-lg border bg-muted/20">
+                                            <p className="text-xs font-medium text-muted-foreground mb-2">Documents for:</p>
+                                            <div className="flex gap-2 flex-wrap">
+                                                <Button
+                                                    variant={stipsTargetCustomer === "primary" ? "default" : "outline"}
+                                                    size="sm"
+                                                    onClick={() => setStipsTargetCustomer("primary")}
+                                                    className="text-xs"
+                                                >
+                                                    <User className="h-3 w-3 mr-1.5" />
+                                                    Primary: {lead?.customer ? getCustomerFullName(lead.customer) : "Unknown"}
+                                                </Button>
+                                                <Button
+                                                    variant={stipsTargetCustomer === "secondary" ? "default" : "outline"}
+                                                    size="sm"
+                                                    onClick={() => {
+                                                        if (lead?.secondary_customer) {
+                                                            setStipsTargetCustomer("secondary")
+                                                        }
+                                                    }}
+                                                    disabled={!lead?.secondary_customer}
+                                                    className="text-xs"
+                                                    title={!lead?.secondary_customer ? "No secondary customer assigned" : undefined}
+                                                >
+                                                    <User className="h-3 w-3 mr-1.5" />
+                                                    {lead?.secondary_customer ? (
+                                                        <>Secondary: {getCustomerFullName(lead.secondary_customer)}</>
+                                                    ) : (
+                                                        <>No secondary customer</>
+                                                    )}
+                                                </Button>
+                                            </div>
+                                        </div>
                                         <Tabs value={activeStipsCategoryId ?? ""} onValueChange={setActiveStipsCategoryId} className="flex-1 flex flex-col min-h-0">
                                             <TabsList className="w-full justify-start flex-wrap h-auto gap-1 p-1 mb-4">
                                                 {stipsCategories.map((cat) => (
@@ -4064,7 +4154,7 @@ export default function LeadDetailsPage() {
                                                                 const total = files.length
                                                                 const UPLOAD_CONCURRENCY = 6
                                                                 const runUpload = (file: File) =>
-                                                                    StipsService.uploadDocument(leadId, categoryId, file).then(() => {
+                                                                    StipsService.uploadDocument(leadId, categoryId, file, undefined, stipsTargetCustomer).then(() => {
                                                                         setStipsUploadCompletedCount((c) => {
                                                                             const next = c + 1
                                                                             setStipsUploadProgress(total > 0 ? Math.round((next / total) * 100) : 0)
@@ -4072,7 +4162,7 @@ export default function LeadDetailsPage() {
                                                                         })
                                                                     })
                                                                 if (total === 1) {
-                                                                    StipsService.uploadDocument(leadId, categoryId, files[0], (p) => setStipsUploadProgress(p))
+                                                                    StipsService.uploadDocument(leadId, categoryId, files[0], (p) => setStipsUploadProgress(p), stipsTargetCustomer)
                                                                         .then(() => fetchStipsDocuments())
                                                                         .catch((err) => alert(err?.response?.data?.detail ?? "Upload failed"))
                                                                         .finally(() => { setStipsUploadingCategoryId(null); setStipsUploadProgress(0); setStipsUploadTotalFiles(0); setStipsUploadCompletedCount(0) })
@@ -4108,7 +4198,7 @@ export default function LeadDetailsPage() {
                                                                     const total = files.length
                                                                     const UPLOAD_CONCURRENCY = 6
                                                                     const runUpload = (file: File) =>
-                                                                        StipsService.uploadDocument(leadId, categoryId, file).then(() => {
+                                                                        StipsService.uploadDocument(leadId, categoryId, file, undefined, stipsTargetCustomer).then(() => {
                                                                             setStipsUploadCompletedCount((c) => {
                                                                                 const next = c + 1
                                                                                 setStipsUploadProgress(total > 0 ? Math.round((next / total) * 100) : 0)
@@ -4116,7 +4206,7 @@ export default function LeadDetailsPage() {
                                                                             })
                                                                         })
                                                                     if (total === 1) {
-                                                                        StipsService.uploadDocument(leadId, categoryId, files[0], (p) => setStipsUploadProgress(p))
+                                                                        StipsService.uploadDocument(leadId, categoryId, files[0], (p) => setStipsUploadProgress(p), stipsTargetCustomer)
                                                                             .then(() => fetchStipsDocuments())
                                                                             .catch((err) => alert(err?.response?.data?.detail ?? "Upload failed"))
                                                                             .finally(() => { setStipsUploadingCategoryId(null); setStipsUploadProgress(0); setStipsUploadTotalFiles(0); setStipsUploadCompletedCount(0) })

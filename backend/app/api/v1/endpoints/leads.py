@@ -2261,12 +2261,16 @@ async def add_lead_note(
 async def list_lead_stips_documents(
     lead_id: UUID,
     category_id: Optional[UUID] = Query(None),
+    customer_id: Optional[UUID] = Query(None, description="Filter to specific customer (primary or secondary)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """List Stips documents for this lead (customer- and lead-scoped by category)."""
+    """List Stips documents for this lead (customer- and lead-scoped by category).
+    
+    Use customer_id query parameter to filter to a specific customer's documents only.
+    """
     lead = await _lead_access(db, lead_id, current_user)
-    items = await list_documents_for_lead(db, lead_id, lead, category_id=category_id)
+    items = await list_documents_for_lead(db, lead_id, lead, category_id=category_id, customer_id=customer_id)
     return items
 
 
@@ -2275,10 +2279,14 @@ async def upload_lead_stip_document(
     lead_id: UUID,
     file: UploadFile = File(...),
     stips_category_id: UUID = Query(..., alias="stips_category_id"),
+    target_customer: str = Query("primary", alias="target_customer", description="Target customer for upload: 'primary' or 'secondary'"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """Upload a Stips document for this lead (category determines customer vs lead scope)."""
+    """Upload a Stips document for this lead (category determines customer vs lead scope).
+    
+    For customer-scoped categories, use target_customer to specify primary or secondary customer.
+    """
     lead = await _lead_access(db, lead_id, current_user)
     if not app_settings.is_azure_stips_configured:
         raise HTTPException(status_code=503, detail="Stips storage is not configured")
@@ -2291,6 +2299,7 @@ async def upload_lead_stip_document(
         data=data,
         content_type=file.content_type or "application/octet-stream",
         uploaded_by=current_user.id,
+        target_customer=target_customer,
     )
     performer_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or current_user.email or "Someone"
     await ActivityService.log_activity(

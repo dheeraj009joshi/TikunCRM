@@ -66,8 +66,10 @@ export const StipsService = {
         await apiClient.post(`${CATEGORIES_PREFIX}/reorder`, { ordered_ids: orderedIds });
     },
 
-    async listDocuments(leadId: string, categoryId?: string): Promise<StipDocument[]> {
-        const params = categoryId ? { category_id: categoryId } : {};
+    async listDocuments(leadId: string, categoryId?: string, customerId?: string): Promise<StipDocument[]> {
+        const params: Record<string, string> = {};
+        if (categoryId) params.category_id = categoryId;
+        if (customerId) params.customer_id = customerId;
         const response = await apiClient.get(`/leads/${leadId}/stips/documents`, { params });
         return response.data;
     },
@@ -76,12 +78,14 @@ export const StipsService = {
         leadId: string,
         stipsCategoryId: string,
         file: File,
-        onUploadProgress?: (percent: number) => void
+        onUploadProgress?: (percent: number) => void,
+        targetCustomer?: "primary" | "secondary"
     ): Promise<StipDocument> {
         const form = new FormData();
         form.append("file", file);
+        const targetCustomerParam = targetCustomer ? `&target_customer=${targetCustomer}` : "";
         const response = await apiClient.post(
-            `/leads/${leadId}/stips/documents?stips_category_id=${stipsCategoryId}`,
+            `/leads/${leadId}/stips/documents?stips_category_id=${stipsCategoryId}${targetCustomerParam}`,
             form,
             {
                 headers: { "Content-Type": "multipart/form-data" },

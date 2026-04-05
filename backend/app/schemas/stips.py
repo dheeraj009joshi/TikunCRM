@@ -61,3 +61,8 @@ class StipDocumentResponse(BaseModel):
 class StipDocumentViewUrl(BaseModel):
     """Response for view endpoint - URL to open in new tab."""
     url: str
+
+
+class StipDocumentUploadRequest(BaseModel):
+    """Request body for uploading a document - specifies target customer."""
+    target_customer: Literal["primary", "secondary"] = "primary"
