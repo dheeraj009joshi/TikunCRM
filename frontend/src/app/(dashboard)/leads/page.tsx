@@ -1057,7 +1057,14 @@ export default function LeadsPage() {
                                                 <p className="font-semibold group-hover:text-primary transition-colors flex items-center gap-2">
                                                     {getLeadFullName(lead)}
                                                     {lead.is_starred && (
-                                                        <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" title="Multi-campaign lead" />
+                                                        <span
+                                                            className="inline-flex"
+                                                            title="Multi-campaign lead"
+                                                            role="img"
+                                                            aria-label="Multi-campaign lead"
+                                                        >
+                                                            <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" aria-hidden />
+                                                        </span>
                                                     )}
                                                     {isFreshLead(lead) && (
                                                         <Badge variant="secondary" className="text-[10px] font-normal bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border-0">

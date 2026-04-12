@@ -1985,7 +1985,14 @@ export default function LeadDetailsPage() {
                                 <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
                                     {getLeadFullName(lead)}
                                     {lead.is_starred && (
-                                        <Star className="h-5 w-5 fill-yellow-400 text-yellow-400" title="Multi-campaign lead" />
+                                        <span
+                                            className="inline-flex"
+                                            title="Multi-campaign lead"
+                                            role="img"
+                                            aria-label="Multi-campaign lead"
+                                        >
+                                            <Star className="h-5 w-5 fill-yellow-400 text-yellow-400" aria-hidden />
+                                        </span>
                                     )}
                                 </h1>
                                 
