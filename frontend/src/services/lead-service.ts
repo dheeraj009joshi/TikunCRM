@@ -34,6 +34,22 @@ export interface LeadCampaign {
     display_name?: string | null;
 }
 
+/** One row per campaign (mapping id or raw name); keeps earliest added_at. */
+export function dedupeLeadCampaigns(campaigns: LeadCampaign[] | undefined): LeadCampaign[] {
+    if (!campaigns?.length) return [];
+    const map = new Map<string, LeadCampaign>();
+    for (const c of campaigns) {
+        const key = c.campaign_mapping_id ?? `raw:${c.campaign_name}`;
+        const prev = map.get(key);
+        if (!prev || new Date(c.added_at) < new Date(prev.added_at)) {
+            map.set(key, c);
+        }
+    }
+    return Array.from(map.values()).sort(
+        (a, b) => new Date(b.added_at).getTime() - new Date(a.added_at).getTime()
+    );
+}
+
 export interface Lead {
     id: string;
     // Customer (embedded)

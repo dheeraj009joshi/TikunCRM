@@ -13,7 +13,8 @@ export type NotificationType =
     | "appointment_missed"
     | "new_lead"
     | "admin_reminder"
-    | "skate_alert";
+    | "skate_alert"
+    | "lead_multi_campaign";
 
 export interface Notification {
     id: string;
@@ -62,11 +63,48 @@ export const NOTIFICATION_TYPE_INFO: Record<string, { label: string; color: stri
     new_lead: { label: "New Lead", color: "emerald", icon: "user-plus" },
     admin_reminder: { label: "Admin Reminder", color: "indigo", icon: "bell" },
     skate_alert: { label: "SKATE Alert", color: "amber", icon: "alert-triangle" },
+    lead_multi_campaign: { label: "Duplicate lead", color: "yellow", icon: "layers" },
 };
 
 /** Normalize API notification type (may be uppercase) for display lookup */
 export function normalizeNotificationType(type: string | null | undefined): string {
     return (type || "").toLowerCase();
+}
+
+/** Legacy DB/API body for duplicate-lead (multi-campaign) notifications */
+const LEGACY_DUPLICATE_BODY = /^([\s\S]+?)\s+also appeared in campaign:\s*([\s\S]+)$/i;
+
+function duplicateLeadMessage(campaign: string): string {
+    return `A new lead came in from "${campaign}", but this contact is already in your CRM (duplicate). Open the lead to see campaign history before contacting them again.`;
+}
+
+/**
+ * Rewrite old duplicate-lead copy to current wording (matches backend notification_display).
+ * Safe to call for every render — already-new rows pass through unchanged.
+ */
+export function normalizeDuplicateLeadNotificationDisplay(
+    type: string | null | undefined,
+    title: string,
+    message: string | null | undefined
+): { title: string; message: string | null } {
+    if (normalizeNotificationType(type) !== "lead_multi_campaign") {
+        return { title, message: message ?? null };
+    }
+    if (title.trim().toLowerCase().startsWith("duplicate lead:")) {
+        return { title, message: message ?? null };
+    }
+    if (message) {
+        const m = message.match(LEGACY_DUPLICATE_BODY);
+        if (m) {
+            const leadName = m[1].trim();
+            const campaign = m[2].trim();
+            return {
+                title: `Duplicate lead: ${leadName}`,
+                message: duplicateLeadMessage(campaign),
+            };
+        }
+    }
+    return { title, message: message ?? null };
 }
 
 // Service methods

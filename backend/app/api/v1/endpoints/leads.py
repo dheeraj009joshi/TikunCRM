@@ -1084,6 +1084,17 @@ async def credit_app_abandon(
     return {"ok": True}
 
 
+def _dedupe_lead_campaign_rows(campaigns: List[LeadCampaign]) -> List[LeadCampaign]:
+    """One entry per logical campaign; keep earliest added_at (first seen)."""
+    by_key: dict[str, LeadCampaign] = {}
+    for c in campaigns:
+        key = str(c.campaign_mapping_id) if c.campaign_mapping_id else f"raw:{c.campaign_name}"
+        existing = by_key.get(key)
+        if existing is None or c.added_at < existing.added_at:
+            by_key[key] = c
+    return sorted(by_key.values(), key=lambda x: x.added_at, reverse=True)
+
+
 @router.get("/{lead_id}", response_model=LeadDetail)
 async def get_lead(
     lead_id: UUID,
@@ -1291,7 +1302,7 @@ async def get_lead(
             .where(LeadCampaign.lead_id == lead.id)
             .order_by(LeadCampaign.added_at.desc())
         )
-        campaigns = campaigns_result.scalars().all()
+        campaigns = _dedupe_lead_campaign_rows(list(campaigns_result.scalars().all()))
         response_data["campaigns"] = [
             {
                 "id": campaign.id,

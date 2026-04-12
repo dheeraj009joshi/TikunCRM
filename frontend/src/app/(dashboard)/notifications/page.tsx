@@ -18,6 +18,7 @@ import {
     Trash2,
     Filter,
     X,
+    Layers,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 
@@ -42,6 +43,7 @@ import {
     NotificationType,
     NotificationStats,
     normalizeNotificationType,
+    normalizeDuplicateLeadNotificationDisplay,
 } from "@/services/notification-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatRelativeTimeInTimezone } from "@/utils/timezone"
@@ -71,6 +73,7 @@ const typeIcons: Record<NotificationType, React.ComponentType<{ className?: stri
     new_lead: UserPlus,
     admin_reminder: Bell,
     skate_alert: AlertTriangle,
+    lead_multi_campaign: Layers,
 }
 
 // Color mapping for notification types
@@ -87,6 +90,7 @@ const typeColors: Record<NotificationType, string> = {
     new_lead: "text-emerald-500 bg-emerald-100 dark:bg-emerald-900/30",
     admin_reminder: "text-indigo-500 bg-indigo-100 dark:bg-indigo-900/30",
     skate_alert: "text-amber-500 bg-amber-100 dark:bg-amber-900/30",
+    lead_multi_campaign: "text-yellow-600 bg-yellow-100 dark:bg-yellow-900/30",
 }
 
 // Type labels
@@ -103,6 +107,7 @@ const typeLabels: Record<NotificationType, string> = {
     new_lead: "New Lead",
     admin_reminder: "Admin Reminder",
     skate_alert: "SKATE Alert",
+    lead_multi_campaign: "Duplicate lead",
 }
 
 export default function NotificationsPage() {
@@ -397,6 +402,7 @@ export default function NotificationsPage() {
                                 <SelectItem value="follow_up_overdue">Overdue</SelectItem>
                                 <SelectItem value="system">System</SelectItem>
                                 <SelectItem value="mention">Mention</SelectItem>
+                                <SelectItem value="lead_multi_campaign">Duplicate lead</SelectItem>
                             </SelectContent>
                         </Select>
                         
@@ -451,7 +457,13 @@ export default function NotificationsPage() {
                                 const Icon = typeIcons[typeKey] || Info
                                 const colorClass = typeColors[typeKey] || "text-gray-500 bg-gray-100 dark:bg-gray-900/30"
                                 const label = typeLabels[typeKey] || notification.type
-                                
+                                const { title: displayTitle, message: displayMessage } =
+                                    normalizeDuplicateLeadNotificationDisplay(
+                                        notification.type,
+                                        notification.title,
+                                        notification.message
+                                    )
+
                                 return (
                                     <div
                                         key={notification.id}
@@ -472,7 +484,7 @@ export default function NotificationsPage() {
                                                     <div className="flex-1 min-w-0">
                                                         <div className="flex items-center gap-2 mb-1">
                                                             <p className={`font-medium ${!notification.is_read ? "" : "text-muted-foreground"}`}>
-                                                                {notification.title}
+                                                                {displayTitle}
                                                             </p>
                                                             {!notification.is_read && (
                                                                 <div className="h-2 w-2 rounded-full bg-primary" />
@@ -481,9 +493,9 @@ export default function NotificationsPage() {
                                                                 {label}
                                                             </Badge>
                                                         </div>
-                                                        {notification.message && (
-                                                            <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
-                                                                {notification.message}
+                                                        {displayMessage && (
+                                                            <p className="text-sm text-muted-foreground line-clamp-3 mt-1">
+                                                                {displayMessage}
                                                             </p>
                                                         )}
                                                         <p className="text-xs text-muted-foreground mt-2">

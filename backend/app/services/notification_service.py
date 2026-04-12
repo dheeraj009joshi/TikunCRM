@@ -567,8 +567,12 @@ class NotificationService:
         from app.core.permissions import UserRole
         
         notifications = []
-        title = "Lead in New Campaign"
-        message = f"{lead_name} also appeared in campaign: {new_campaign_name}"
+        # Explicit "duplicate lead" wording: a new import arrived, but the contact already exists.
+        title = f"Duplicate lead: {lead_name}"
+        message = (
+            f'A new lead came in from "{new_campaign_name}", but this contact is already in your CRM '
+            f"(duplicate). Open the lead to see campaign history before contacting them again."
+        )
         link = f"/leads/{lead_id}"
         
         if not dealership_id:

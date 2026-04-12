@@ -33,6 +33,25 @@ from app.db.database import get_engine_url_and_connect_args
 
 logger = logging.getLogger(__name__)
 
+
+async def _lead_campaign_association_exists(
+    session: AsyncSession,
+    lead_id: UUID,
+    matched_mapping: Optional[CampaignMapping],
+    campaign_name: str,
+) -> bool:
+    """True if this lead is already linked to this campaign (one row per campaign)."""
+    q = select(LeadCampaign.id).where(LeadCampaign.lead_id == lead_id)
+    if matched_mapping is not None:
+        q = q.where(LeadCampaign.campaign_mapping_id == matched_mapping.id)
+    else:
+        q = q.where(
+            LeadCampaign.campaign_mapping_id.is_(None),
+            LeadCampaign.campaign_name == campaign_name,
+        )
+    r = await session.execute(q.limit(1))
+    return r.scalar_one_or_none() is not None
+
 # Legacy hardcoded configuration (for backward compatibility)
 LEGACY_GOOGLE_SHEET_ID = "1_7Qdzgjj9Ye5V7ZW0_gYblqU8V9pkbjDjkahTl8O4kI"
 LEGACY_GOOGLE_SHEET_GID = "0"
@@ -507,30 +526,35 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                         if existing_lead:
                             campaign_name = lead_data.get("campaign_name_raw") or "Unknown Campaign"
                             matched_mapping = lead_data.get("matched_mapping")
-                            
-                            # Create LeadCampaign entry
-                            lead_campaign = LeadCampaign(
-                                lead_id=existing_lead.id,
-                                campaign_mapping_id=matched_mapping.id if matched_mapping else None,
-                                campaign_name=campaign_name,
-                                sync_source_id=source.id,
+
+                            already_linked = await _lead_campaign_association_exists(
+                                session,
+                                existing_lead.id,
+                                matched_mapping,
+                                campaign_name,
                             )
-                            session.add(lead_campaign)
-                            
-                            # Mark lead as starred (multi-campaign)
-                            existing_lead.is_starred = True
-                            
-                            # Update mapping stats
-                            if matched_mapping:
-                                matched_mapping.leads_matched += 1
-                            
-                            # Track for notification
-                            multi_campaign_leads.append((existing_lead, lead_data))
-                            
-                            logger.info(
-                                f"Multi-campaign lead: {existing_lead.id} now also in campaign '{campaign_name}'"
-                            )
-                        
+                            if not already_linked:
+                                lead_campaign = LeadCampaign(
+                                    lead_id=existing_lead.id,
+                                    campaign_mapping_id=matched_mapping.id if matched_mapping else None,
+                                    campaign_name=campaign_name,
+                                    sync_source_id=source.id,
+                                )
+                                session.add(lead_campaign)
+
+                                existing_lead.is_starred = True
+
+                                if matched_mapping:
+                                    matched_mapping.leads_matched += 1
+
+                                multi_campaign_leads.append((existing_lead, lead_data))
+
+                                logger.info(
+                                    f"Multi-campaign lead: {existing_lead.id} now also in campaign '{campaign_name}'"
+                                )
+                            else:
+                                existing_lead.is_starred = True
+
                         duplicate_count += 1
                     else:
                         new_leads_data.append(lead_data)

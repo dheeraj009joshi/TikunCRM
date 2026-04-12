@@ -81,7 +81,15 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
+import {
+    LeadService,
+    Lead,
+    getLeadFullName,
+    getLeadPhone,
+    getLeadEmail,
+    dedupeLeadCampaigns,
+    type LeadCampaign,
+} from "@/services/lead-service"
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { ActivityService, Activity, ACTIVITY_TYPE_INFO, ActivityType } from "@/services/activity-service"
 import { ShowroomService, ShowroomVisit, ShowroomOutcome, getOutcomeLabel } from "@/services/showroom-service"
@@ -323,6 +331,46 @@ function LeadAppointmentRescheduleForm({
     )
 }
 
+function LeadCampaignHistoryPanel({ lead, campaigns }: { lead: Lead; campaigns: LeadCampaign[] }) {
+    const fromSource = String(lead.source ?? "").replace(/_/g, " ").trim()
+    const originalLabel = lead.source_display?.trim() || fromSource || "—"
+    const originalDate =
+        lead.created_at != null && lead.created_at !== ""
+            ? new Date(lead.created_at).toLocaleDateString()
+            : "—"
+    return (
+        <div className="rounded-lg bg-yellow-50 dark:bg-yellow-950/20 p-3 text-sm border border-yellow-200 dark:border-yellow-800">
+            <p className="text-xs text-muted-foreground mb-2">
+                This lead has appeared in multiple campaigns:
+            </p>
+            <div className="space-y-1.5">
+                <div className="flex items-start justify-between gap-2">
+                    <span className="font-medium text-primary text-left break-words min-w-0">{originalLabel}</span>
+                    <div className="flex flex-col items-end gap-0.5 shrink-0 text-right">
+                        <span className="text-[10px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                            Original
+                        </span>
+                        <span className="text-xs text-muted-foreground tabular-nums">{originalDate}</span>
+                    </div>
+                </div>
+                {campaigns.map((campaign) => (
+                    <div
+                        key={campaign.campaign_mapping_id ?? `raw-${campaign.campaign_name}`}
+                        className="flex items-start justify-between gap-2"
+                    >
+                        <span className="font-medium text-left break-words min-w-0">
+                            {campaign.display_name ?? campaign.campaign_name}
+                        </span>
+                        <span className="text-xs text-muted-foreground shrink-0">
+                            {new Date(campaign.added_at).toLocaleDateString()}
+                        </span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    )
+}
+
 export default function LeadDetailsPage() {
     const params = useParams()
     const searchParams = useSearchParams()
@@ -434,7 +482,26 @@ export default function LeadDetailsPage() {
 
     // Pipeline stages (for status dropdown with correct colors)
     const [stages, setStages] = React.useState<LeadStage[]>([])
-    
+
+    const dedupedCampaigns = React.useMemo(
+        () => dedupeLeadCampaigns(lead?.campaigns),
+        [lead?.campaigns]
+    )
+
+    const [campaignPanelOpen, setCampaignPanelOpen] = React.useState(false)
+    const campaignCloseTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+    const cancelCampaignPanelClose = React.useCallback(() => {
+        if (campaignCloseTimerRef.current) {
+            clearTimeout(campaignCloseTimerRef.current)
+            campaignCloseTimerRef.current = null
+        }
+    }, [])
+    const scheduleCampaignPanelClose = React.useCallback(() => {
+        cancelCampaignPanelClose()
+        campaignCloseTimerRef.current = setTimeout(() => setCampaignPanelOpen(false), 200)
+    }, [cancelCampaignPanelClose])
+    React.useEffect(() => () => cancelCampaignPanelClose(), [cancelCampaignPanelClose])
+
     // Lead details editing
     const [isEditingDetails, setIsEditingDetails] = React.useState(false)
     const [isSavingDetails, setIsSavingDetails] = React.useState(false)
@@ -1996,11 +2063,39 @@ export default function LeadDetailsPage() {
                                     )}
                                 </h1>
                                 
-                                {/* Multi-campaign info */}
-                                {lead.is_starred && lead.campaigns && lead.campaigns.length > 0 && (
-                                    <div className="mt-2 text-sm text-muted-foreground">
-                                        <span className="font-medium">Appears in {lead.campaigns.length + 1} campaigns</span>
-                                    </div>
+                                {/* Multi-campaign summary — full list in popover (hover or click) */}
+                                {lead.is_starred && dedupedCampaigns.length > 0 && (
+                                    <Popover modal={false} open={campaignPanelOpen} onOpenChange={setCampaignPanelOpen}>
+                                        <PopoverTrigger asChild>
+                                            <button
+                                                type="button"
+                                                className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground underline-offset-4 hover:underline decoration-dotted cursor-pointer max-w-full text-center bg-transparent border-0 p-0"
+                                                aria-expanded={campaignPanelOpen}
+                                                aria-haspopup="dialog"
+                                                onMouseEnter={() => {
+                                                    cancelCampaignPanelClose()
+                                                    setCampaignPanelOpen(true)
+                                                }}
+                                                onMouseLeave={scheduleCampaignPanelClose}
+                                            >
+                                                <span>
+                                                    Appears in {dedupedCampaigns.length + 1} campaigns
+                                                </span>
+                                                <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" aria-hidden />
+                                            </button>
+                                        </PopoverTrigger>
+                                        <PopoverContent
+                                            align="center"
+                                            side="bottom"
+                                            sideOffset={8}
+                                            className="w-[min(100vw-2rem,22rem)] p-3"
+                                            onOpenAutoFocus={(e) => e.preventDefault()}
+                                            onMouseEnter={cancelCampaignPanelClose}
+                                            onMouseLeave={scheduleCampaignPanelClose}
+                                        >
+                                            <LeadCampaignHistoryPanel lead={lead} campaigns={dedupedCampaigns} />
+                                        </PopoverContent>
+                                    </Popover>
                                 )}
                                 
                                 {/* Status Selector - hidden for mention-only access */}
@@ -2434,39 +2529,6 @@ export default function LeadDetailsPage() {
                                         )}
                                 </div>
                             </div>
-                            )}
-                            
-                            {/* Multi-campaign info */}
-                            {lead.is_starred && lead.campaigns && lead.campaigns.length > 0 && (
-                                <div>
-                                    <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1">
-                                        <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
-                                        Campaign History
-                                    </p>
-                                    <div className="rounded-lg bg-yellow-50 dark:bg-yellow-950/20 p-3 mt-1 text-sm border border-yellow-200 dark:border-yellow-800">
-                                        <p className="text-xs text-muted-foreground mb-2">
-                                            This lead has appeared in multiple campaigns:
-                                        </p>
-                                        <div className="space-y-1.5">
-                                            <div className="flex items-center justify-between">
-                                                <span className="font-medium text-primary">
-                                                    {lead.source_display ?? lead.source?.replace(/_/g, ' ')}
-                                                </span>
-                                                <span className="text-xs text-muted-foreground">Original</span>
-                                            </div>
-                                            {lead.campaigns.map((campaign) => (
-                                                <div key={campaign.id} className="flex items-center justify-between">
-                                                    <span className="font-medium">
-                                                        {campaign.display_name ?? campaign.campaign_name}
-                                                    </span>
-                                                    <span className="text-xs text-muted-foreground">
-                                                        {new Date(campaign.added_at).toLocaleDateString()}
-                                                    </span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </div>
                             )}
 
                             {lead.notes && !isEditingDetails && (

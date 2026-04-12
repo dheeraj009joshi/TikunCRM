@@ -15,6 +15,7 @@ import {
     Check,
     CheckCheck,
     Loader2,
+    Layers,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
@@ -33,6 +34,7 @@ import {
     Notification,
     NotificationType,
     normalizeNotificationType,
+    normalizeDuplicateLeadNotificationDisplay,
 } from "@/services/notification-service"
 
 // Icon mapping for notification types
@@ -49,6 +51,7 @@ const typeIcons: Record<NotificationType, React.ComponentType<{ className?: stri
     new_lead: UserPlus,
     admin_reminder: Bell,
     skate_alert: AlertTriangle,
+    lead_multi_campaign: Layers,
 }
 
 // Color mapping for notification types
@@ -65,6 +68,7 @@ const typeColors: Record<NotificationType, string> = {
     new_lead: "text-emerald-500 bg-emerald-100",
     admin_reminder: "text-indigo-500 bg-indigo-100",
     skate_alert: "text-amber-500 bg-amber-100",
+    lead_multi_campaign: "text-yellow-600 bg-yellow-100",
 }
 
 export function NotificationBell() {
@@ -113,15 +117,28 @@ export function NotificationBell() {
             if (prev.some(n => n.id === notification.id)) {
                 return prev
             }
-            return [{
+            const raw = {
                 id: notification.id,
+                user_id: "",
                 type: notification.notification_type,
                 title: notification.title,
                 message: notification.message,
-                link: notification.link,
+                link: notification.link ?? null,
+                related_id: notification.related_id ?? null,
+                related_type: notification.related_type ?? null,
                 is_read: false,
+                read_at: null,
                 created_at: notification.created_at,
-            } as Notification, ...prev].slice(0, 10) // Keep only 10 most recent
+            } as Notification
+            const disp = normalizeDuplicateLeadNotificationDisplay(
+                raw.type,
+                raw.title,
+                raw.message
+            )
+            return [
+                { ...raw, title: disp.title, message: disp.message },
+                ...prev,
+            ].slice(0, 10) // Keep only 10 most recent
         })
         // Increment unread count
         setUnreadCount(prev => prev + 1)
@@ -235,7 +252,13 @@ export function NotificationBell() {
                                 const typeKey = normalizeNotificationType(notification.type) as NotificationType
                                 const Icon = typeIcons[typeKey] || Info
                                 const colorClass = typeColors[typeKey] || "text-gray-500 bg-gray-100"
-                                
+                                const { title: displayTitle, message: displayMessage } =
+                                    normalizeDuplicateLeadNotificationDisplay(
+                                        notification.type,
+                                        notification.title,
+                                        notification.message
+                                    )
+
                                 return (
                                     <div
                                         key={notification.id}
@@ -249,11 +272,11 @@ export function NotificationBell() {
                                         </div>
                                         <div className="flex-1 min-w-0">
                                             <p className={`text-sm ${!notification.is_read ? "font-medium" : ""}`}>
-                                                {notification.title}
+                                                {displayTitle}
                                             </p>
-                                            {notification.message && (
-                                                <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
-                                                    {notification.message}
+                                            {displayMessage && (
+                                                <p className="text-xs text-muted-foreground line-clamp-3 mt-0.5">
+                                                    {displayMessage}
                                                 </p>
                                             )}
                                             <p className="text-xs text-muted-foreground mt-1">

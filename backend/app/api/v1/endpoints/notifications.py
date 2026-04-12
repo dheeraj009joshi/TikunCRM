@@ -19,6 +19,7 @@ from app.schemas.notification import (
     NotificationMarkReadRequest,
     NotificationStats,
 )
+from app.services.notification_display import notification_to_response
 
 router = APIRouter()
 
@@ -72,11 +73,11 @@ async def list_notifications(
     
     result = await db.execute(query)
     notifications = result.scalars().all()
-    
+
     return NotificationListResponse(
-        items=notifications,
+        items=[notification_to_response(n) for n in notifications],
         total=total,
-        unread_count=unread_count
+        unread_count=unread_count,
     )
 
 
@@ -149,8 +150,8 @@ async def get_notification(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Notification not found"
         )
-    
-    return notification
+
+    return notification_to_response(notification)
 
 
 @router.patch("/{notification_id}/read", response_model=NotificationResponse)
@@ -181,8 +182,8 @@ async def mark_notification_read(
         notification.read_at = utc_now()
         await db.commit()
         await db.refresh(notification)
-    
-    return notification
+
+    return notification_to_response(notification)
 
 
 @router.post("/mark-read", status_code=status.HTTP_200_OK)
