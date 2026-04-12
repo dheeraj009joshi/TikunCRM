@@ -18,12 +18,24 @@ import {
 import { cn } from "@/lib/utils"
 import { DealershipService } from "@/services/dealership-service"
 import { CreateDealershipModal } from "@/components/dealerships/create-dealership-modal"
+import { TwilioConfigModal } from "@/components/dealerships/twilio-config-modal"
+import { useRole } from "@/hooks/use-role"
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 
 export default function DealershipsPage() {
+    const { isSuperAdmin } = useRole()
     const [dealerships, setDealerships] = React.useState<any[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const [search, setSearch] = React.useState("")
     const [createModalOpen, setCreateModalOpen] = React.useState(false)
+    const [twilioModalOpen, setTwilioModalOpen] = React.useState(false)
+    const [twilioDealershipId, setTwilioDealershipId] = React.useState<string | null>(null)
+    const [twilioDealershipName, setTwilioDealershipName] = React.useState("")
 
     const fetchDealerships = React.useCallback(async () => {
         setIsLoading(true)
@@ -150,9 +162,34 @@ export default function DealershipsPage() {
                                         </div>
                                     </div>
                                 </div>
-                                <button className="rounded-md p-1 hover:bg-accent text-muted-foreground transition-colors">
-                                    <MoreVertical className="h-5 w-5" />
-                                </button>
+                                {isSuperAdmin ? (
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <button
+                                                type="button"
+                                                className="rounded-md p-1 hover:bg-accent text-muted-foreground transition-colors"
+                                                aria-label="Dealership actions"
+                                            >
+                                                <MoreVertical className="h-5 w-5" />
+                                            </button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                            <DropdownMenuItem
+                                                onClick={() => {
+                                                    setTwilioDealershipId(dealer.id)
+                                                    setTwilioDealershipName(dealer.name)
+                                                    setTwilioModalOpen(true)
+                                                }}
+                                            >
+                                                Twilio configuration
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                ) : (
+                                    <button type="button" className="rounded-md p-1 text-muted-foreground/30 cursor-default">
+                                        <MoreVertical className="h-5 w-5" />
+                                    </button>
+                                )}
                             </div>
 
                             <div className="mt-8 grid grid-cols-2 gap-4">
@@ -203,6 +240,14 @@ export default function DealershipsPage() {
                 isOpen={createModalOpen}
                 onClose={() => setCreateModalOpen(false)}
                 onSuccess={fetchDealerships}
+            />
+
+            <TwilioConfigModal
+                open={twilioModalOpen}
+                onOpenChange={setTwilioModalOpen}
+                dealershipId={twilioDealershipId}
+                dealershipName={twilioDealershipName}
+                onSaved={fetchDealerships}
             />
         </div>
     )

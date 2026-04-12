@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api import deps
-from app.core.config import settings
+from app.services.dealership_twilio_config_service import get_effective_twilio_config
 from app.core.permissions import UserRole
 from app.db.database import get_db
 from app.models.user import User
@@ -100,12 +100,14 @@ class UnreadCountResponse(BaseModel):
 
 @router.get("/config", response_model=SMSConfigResponse)
 async def get_sms_config(
-    current_user: User = Depends(deps.get_current_active_user)
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get SMS configuration status"""
+    effective = await get_effective_twilio_config(db, current_user.dealership_id)
     return SMSConfigResponse(
-        sms_enabled=settings.is_twilio_configured,
-        phone_number=settings.twilio_phone_number if settings.is_twilio_configured else None
+        sms_enabled=effective.is_sms_ready(),
+        phone_number=effective.sms_from_number if effective.is_sms_ready() else None,
     )
 
 
@@ -116,12 +118,13 @@ async def send_sms(
     db: AsyncSession = Depends(get_db)
 ):
     """Send an SMS message"""
-    if not settings.is_twilio_configured:
+    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+    if not effective.is_sms_ready():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SMS is not configured"
         )
-    
+
     service = get_sms_conversation_service(db)
     
     success, sms_log, error = await service.send_sms(

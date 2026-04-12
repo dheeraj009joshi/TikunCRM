@@ -52,12 +52,12 @@ const integrations = [
     },
     {
         id: "whatsapp",
-        name: "WhatsApp Business",
-        description: "Send automated alerts and chat with leads via WhatsApp.",
+        name: "WhatsApp (Twilio)",
+        description: "Send and receive WhatsApp messages via Twilio WhatsApp Business API (configure in backend).",
         icon: Smartphone,
         color: "text-green-500",
         bg: "bg-green-500/10",
-        status: "Coming Soon",
+        status: "Available",
         lastSync: "N/A",
         type: "Communication"
     }
@@ -105,10 +105,10 @@ export default function IntegrationsPage() {
                             <div className="flex flex-col items-end gap-2">
                                 <div className={cn(
                                     "flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded-full",
-                                    integration.status === 'Connected' ? "bg-emerald-500/10 text-emerald-500" :
+                                    integration.status === 'Connected' || integration.status === 'Available' ? "bg-emerald-500/10 text-emerald-500" :
                                         integration.status === 'Coming Soon' ? "bg-muted text-muted-foreground" : "bg-amber-500/10 text-amber-500"
                                 )}>
-                                    {integration.status === 'Connected' ? <CheckCircle2 className="h-3 w-3" /> : integration.status === 'Disconnected' ? <AlertTriangle className="h-3 w-3" /> : null}
+                                    {integration.status === 'Connected' || integration.status === 'Available' ? <CheckCircle2 className="h-3 w-3" /> : integration.status === 'Disconnected' ? <AlertTriangle className="h-3 w-3" /> : null}
                                     {integration.status}
                                 </div>
                             </div>
@@ -120,7 +120,11 @@ export default function IntegrationsPage() {
                                 Last synced: {integration.lastSync}
                             </div>
                             <div className="flex gap-2">
-                                {integration.status === 'Connected' ? (
+                                {integration.status === 'Available' ? (
+                                    <span className="text-xs text-muted-foreground max-w-[220px] text-right leading-snug">
+                                        Enable <code className="text-[10px] bg-muted px-1 rounded">WHATSAPP_ENABLED</code> and Twilio WhatsApp number in the API environment.
+                                    </span>
+                                ) : integration.status === 'Connected' ? (
                                     <>
                                         <button
                                             onClick={() => handleSync(integration.id)}

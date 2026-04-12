@@ -24,6 +24,16 @@ export interface DealershipBrief {
     name: string;
 }
 
+/** Campaign association for multi-campaign leads */
+export interface LeadCampaign {
+    id: string;
+    campaign_name: string;
+    campaign_mapping_id?: string | null;
+    sync_source_id?: string | null;
+    added_at: string;
+    display_name?: string | null;
+}
+
 export interface Lead {
     id: string;
     // Customer (embedded)
@@ -49,6 +59,10 @@ export interface Lead {
     external_id?: string;
     interested_in?: string;
     budget_range?: string;
+    /** Indicates this lead appeared in multiple campaigns */
+    is_starred?: boolean;
+    /** Campaign associations (for multi-campaign leads) */
+    campaigns?: LeadCampaign[];
     first_contacted_at?: string;
     last_contacted_at?: string;
     converted_at?: string;

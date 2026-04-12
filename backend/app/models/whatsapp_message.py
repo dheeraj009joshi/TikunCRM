@@ -1,5 +1,5 @@
 """
-WhatsApp Message Models - Baileys WhatsApp Integration
+WhatsApp message tables (legacy Baileys + channel enum; Twilio traffic uses WhatsAppLog).
 """
 import uuid
 from datetime import datetime
@@ -80,8 +80,7 @@ class _WhatsAppStatusEnumType(TypeDecorator):
 
 class WhatsAppMessage(Base):
     """
-    WhatsApp message model for Baileys integration.
-    Stores all inbound and outbound messages via Baileys.
+    WhatsApp messages stored for provider-specific flows (historical Baileys rows may remain).
     """
     __tablename__ = "whatsapp_messages"
 
@@ -115,7 +114,7 @@ class WhatsAppMessage(Base):
         index=True
     )
     
-    # Baileys-specific
+    # Provider message id (e.g. legacy Baileys); Twilio uses WhatsAppLog.twilio_message_sid
     wa_message_id: Mapped[Optional[str]] = mapped_column(
         String(128),
         nullable=True,
@@ -124,7 +123,7 @@ class WhatsAppMessage(Base):
     channel: Mapped[WhatsAppChannel] = mapped_column(
         _WhatsAppChannelEnumType(),
         nullable=False,
-        default=WhatsAppChannel.BAILEYS
+        default=WhatsAppChannel.TWILIO
     )
     
     # Phone numbers
@@ -294,7 +293,7 @@ class WhatsAppBulkSend(Base):
 
 class WhatsAppConnection(Base):
     """
-    Tracks WhatsApp connection state for Baileys.
+    Legacy connection/session tracking (unused with Twilio WhatsApp).
     """
     __tablename__ = "whatsapp_connections"
 

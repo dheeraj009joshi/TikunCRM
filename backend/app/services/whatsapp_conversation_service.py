@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.timezone import utc_now
+from app.services.dealership_twilio_config_service import get_effective_twilio_config
 from app.models.whatsapp_log import WhatsAppLog, WhatsAppDirection, WhatsAppStatus
 from app.models.lead import Lead
 from app.models.customer import Customer
@@ -89,6 +90,10 @@ class WhatsAppConversationService:
                 if customer:
                     customer_id = customer.id
 
+        effective = await get_effective_twilio_config(self.db, dealership_id)
+        if not effective.is_whatsapp_ready():
+            return False, None, "WhatsApp not configured for this dealership"
+
         wa_log = WhatsAppLog(
             customer_id=customer_id,
             lead_id=lead_id,
@@ -96,7 +101,7 @@ class WhatsAppConversationService:
             dealership_id=dealership_id,
             twilio_message_sid=f"pending_{uuid_module.uuid4().hex}",
             direction=WhatsAppDirection.OUTBOUND,
-            from_number=settings.twilio_whatsapp_number,
+            from_number=effective.whatsapp_from_number,
             to_number=formatted,
             body=body,
             status=WhatsAppStatus.QUEUED,
@@ -106,7 +111,12 @@ class WhatsAppConversationService:
         await self.db.flush()
 
         status_callback_url = f"{settings.backend_url.rstrip('/')}/api/v1/webhooks/twilio/whatsapp/status"
-        result = await whatsapp_service.send_whatsapp(formatted, body, status_callback=status_callback_url)
+        result = await whatsapp_service.send_whatsapp(
+            formatted,
+            body,
+            effective,
+            status_callback=status_callback_url,
+        )
         if result.get("success"):
             wa_log.twilio_message_sid = result["message_sid"]
             wa_log.status = WhatsAppStatus.SENT
@@ -156,6 +166,10 @@ class WhatsAppConversationService:
                 if customer:
                     customer_id = customer.id
 
+        effective = await get_effective_twilio_config(self.db, dealership_id)
+        if not effective.is_whatsapp_ready():
+            return False, None, "WhatsApp not configured for this dealership"
+
         body_display = f"[Template {content_sid[:12]}...]" if len(content_sid) > 12 else f"[Template {content_sid}]"
         wa_log = WhatsAppLog(
             customer_id=customer_id,
@@ -164,7 +178,7 @@ class WhatsAppConversationService:
             dealership_id=dealership_id,
             twilio_message_sid=f"pending_{uuid_module.uuid4().hex}",
             direction=WhatsAppDirection.OUTBOUND,
-            from_number=settings.twilio_whatsapp_number,
+            from_number=effective.whatsapp_from_number,
             to_number=formatted,
             body=body_display,
             status=WhatsAppStatus.QUEUED,
@@ -177,7 +191,8 @@ class WhatsAppConversationService:
         result = await whatsapp_service.send_whatsapp_template(
             formatted,
             content_sid,
-            content_variables,
+            effective,
+            content_variables=content_variables,
             status_callback=status_callback_url,
         )
         if result.get("success"):
@@ -202,7 +217,8 @@ class WhatsAppConversationService:
         from_number: str,
         to_number: str,
         body: str,
-        media_urls: Optional[List[str]] = None
+        media_urls: Optional[List[str]] = None,
+        resolved_dealership_id: Optional[UUID] = None,
     ) -> WhatsAppLog:
         """Process incoming WhatsApp webhook."""
         customer = await self.find_customer_by_phone(from_number)
@@ -210,6 +226,8 @@ class WhatsAppConversationService:
         customer_id = customer.id if customer else None
         lead_id = lead.id if lead else None
         dealership_id = lead.dealership_id if lead else None
+        if resolved_dealership_id:
+            dealership_id = dealership_id or resolved_dealership_id
         user_id = lead.assigned_to if lead else None
 
         wa_log = WhatsAppLog(

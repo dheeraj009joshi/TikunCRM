@@ -28,6 +28,7 @@ from app.models.customer import Customer
 from app.models.lead_stage import LeadStage
 from app.models.activity import Activity, ActivityType
 from app.models.dealership import Dealership
+from app.models.lead_campaign import LeadCampaign
 from app.schemas.lead import (
     LeadResponse, LeadCreate, LeadUpdate, LeadDetail,
     LeadStageChangeRequest, LeadStatusUpdateCompat, LeadAssignment, LeadListResponse,
@@ -401,6 +402,8 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "external_id": lead.external_id,
             "interested_in": lead.interested_in,
             "budget_range": lead.budget_range,
+            "is_starred": getattr(lead, 'is_starred', False),
+            "campaigns": [],  # Not fetched in list view for performance
             "first_contacted_at": lead.first_contacted_at.isoformat() if lead.first_contacted_at else None,
             "last_contacted_at": lead.last_contacted_at.isoformat() if lead.last_contacted_at else None,
             "converted_at": lead.converted_at.isoformat() if lead.converted_at else None,
@@ -1211,6 +1214,8 @@ async def get_lead(
         "external_id": lead.external_id,
         "interested_in": lead.interested_in,
         "budget_range": lead.budget_range,
+        "is_starred": lead.is_starred,
+        "campaigns": [],  # Will be populated below
         "first_contacted_at": lead.first_contacted_at,
         "last_contacted_at": lead.last_contacted_at,
         "converted_at": lead.converted_at,
@@ -1278,6 +1283,26 @@ async def get_lead(
                 "id": dealership.id,
                 "name": dealership.name
             }
+    
+    # Fetch campaigns for multi-campaign tracking
+    if lead.is_starred:
+        campaigns_result = await db.execute(
+            select(LeadCampaign)
+            .where(LeadCampaign.lead_id == lead.id)
+            .order_by(LeadCampaign.added_at.desc())
+        )
+        campaigns = campaigns_result.scalars().all()
+        response_data["campaigns"] = [
+            {
+                "id": campaign.id,
+                "campaign_name": campaign.campaign_name,
+                "campaign_mapping_id": campaign.campaign_mapping_id,
+                "sync_source_id": campaign.sync_source_id,
+                "added_at": campaign.added_at,
+                "display_name": campaign.campaign_mapping.display_name if campaign.campaign_mapping else None,
+            }
+            for campaign in campaigns
+        ]
         
     return response_data
 

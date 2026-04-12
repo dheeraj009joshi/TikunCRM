@@ -187,19 +187,18 @@ async def create_appointment(
         
         if lead and lead.phone:
             from app.services.sms_service import sms_service
-            
-            if sms_service.is_configured:
-                try:
-                    # Format datetime for SMS
+            from app.services.dealership_twilio_config_service import get_effective_twilio_config
+
+            try:
+                effective = await get_effective_twilio_config(db, lead.dealership_id)
+                if effective.is_sms_ready():
                     scheduled_time = appointment.scheduled_at.strftime("%B %d at %I:%M %p")
                     location_text = f" at {appointment.location}" if appointment.location else ""
-                    
                     sms_message = f"Appointment confirmed for {scheduled_time}{location_text}. We'll see you then!"
-                    
-                    await sms_service.send_sms(lead.phone, sms_message)
+                    await sms_service.send_sms(lead.phone, sms_message, effective)
                     logger.info(f"Sent appointment confirmation SMS to lead {lead.id}")
-                except Exception as e:
-                    logger.error(f"Failed to send appointment confirmation SMS: {e}")
+            except Exception as e:
+                logger.error(f"Failed to send appointment confirmation SMS: {e}")
     
     # Re-fetch with relationships
     result = await db.execute(

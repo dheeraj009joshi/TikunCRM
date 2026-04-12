@@ -9,6 +9,7 @@ import csv
 import io
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Set, Tuple
+from uuid import UUID
 
 from dateutil import parser as dateutil_parser
 import httpx
@@ -19,6 +20,7 @@ from sqlalchemy import select, text
 
 from app.models.lead import Lead, LeadSource
 from app.models.customer import Customer
+from app.models.lead_campaign import LeadCampaign
 from app.services.customer_service import CustomerService
 from app.services.lead_stage_service import LeadStageService
 from app.models.dealership import Dealership
@@ -350,6 +352,34 @@ async def get_existing_phones(session: AsyncSession) -> Set[str]:
     return {row[0] for row in result.fetchall()}
 
 
+async def get_lead_by_phone(session: AsyncSession, phone: str) -> Optional[Lead]:
+    """Get the first lead associated with a phone number."""
+    result = await session.execute(
+        select(Lead)
+        .join(Customer, Lead.customer_id == Customer.id)
+        .where(Customer.phone == phone)
+        .order_by(Lead.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_phone_to_lead_map(session: AsyncSession, phones: Set[str]) -> Dict[str, Lead]:
+    """Get a mapping of phone numbers to their leads."""
+    if not phones:
+        return {}
+    result = await session.execute(
+        select(Lead, Customer.phone)
+        .join(Customer, Lead.customer_id == Customer.id)
+        .where(Customer.phone.in_(phones))
+    )
+    phone_to_lead: Dict[str, Lead] = {}
+    for lead, phone in result.all():
+        if phone not in phone_to_lead:
+            phone_to_lead[phone] = lead
+    return phone_to_lead
+
+
 def _empty_sync_result(error: Optional[str] = None) -> Dict[str, Any]:
     return {
         "sheet_total_rows": 0,
@@ -432,12 +462,20 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                 existing_leads_map = await get_existing_leads_by_external_id(session, sheet_external_ids)
                 existing_phones = await get_existing_phones(session)
                 
+                # Get phone-to-lead mapping for multi-campaign tracking
+                phones_for_multicampaign = {
+                    ld.get("phone") for ld in parsed_leads 
+                    if ld.get("phone") and ld.get("phone") in existing_phones
+                }
+                phone_to_lead_map = await get_phone_to_lead_map(session, phones_for_multicampaign)
+                
                 tracked_external_ids: Set[str] = set()
                 tracked_phones: Set[str] = set()
                 
                 new_leads_data: List[Dict[str, Any]] = []
                 updated_count = 0
                 duplicate_count = 0
+                multi_campaign_leads: List[Tuple[Lead, Dict[str, Any]]] = []  # Track leads for notification
                 
                 for lead_data in parsed_leads:
                     ext_id = lead_data["external_id"]
@@ -464,6 +502,35 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                     elif ext_id in tracked_external_ids or (phone and phone in tracked_phones):
                         duplicate_count += 1
                     elif phone and phone in existing_phones:
+                        # Multi-campaign scenario: lead exists from different campaign
+                        existing_lead = phone_to_lead_map.get(phone)
+                        if existing_lead:
+                            campaign_name = lead_data.get("campaign_name_raw") or "Unknown Campaign"
+                            matched_mapping = lead_data.get("matched_mapping")
+                            
+                            # Create LeadCampaign entry
+                            lead_campaign = LeadCampaign(
+                                lead_id=existing_lead.id,
+                                campaign_mapping_id=matched_mapping.id if matched_mapping else None,
+                                campaign_name=campaign_name,
+                                sync_source_id=source.id,
+                            )
+                            session.add(lead_campaign)
+                            
+                            # Mark lead as starred (multi-campaign)
+                            existing_lead.is_starred = True
+                            
+                            # Update mapping stats
+                            if matched_mapping:
+                                matched_mapping.leads_matched += 1
+                            
+                            # Track for notification
+                            multi_campaign_leads.append((existing_lead, lead_data))
+                            
+                            logger.info(
+                                f"Multi-campaign lead: {existing_lead.id} now also in campaign '{campaign_name}'"
+                            )
+                        
                         duplicate_count += 1
                     else:
                         new_leads_data.append(lead_data)
@@ -581,6 +648,25 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                     except Exception as e:
                         logger.warning(f"Failed to emit badges refresh: {e}")
                 
+                # Send notifications for multi-campaign leads
+                if multi_campaign_leads:
+                    try:
+                        from app.services.notification_service import notify_lead_multi_campaign_background
+                        for existing_lead, lead_data in multi_campaign_leads:
+                            campaign_name = lead_data.get("campaign_name_raw") or "Unknown Campaign"
+                            matched_mapping = lead_data.get("matched_mapping")
+                            source_display = matched_mapping.display_name if matched_mapping else campaign_name
+                            
+                            await notify_lead_multi_campaign_background(
+                                lead_id=existing_lead.id,
+                                lead_name=existing_lead.full_name,
+                                new_campaign_name=source_display,
+                                dealership_id=existing_lead.dealership_id,
+                                assigned_to=existing_lead.assigned_to,
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to send multi-campaign notifications: {e}")
+                
                 result = {
                     "sheet_total_rows": sheet_total_rows,
                     "sheet_valid_leads": sheet_valid_leads,
@@ -591,6 +677,7 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                     "duplicates_skipped": duplicate_count,
                     "skipped_leads": duplicate_count,
                     "skipped_invalid": skipped_invalid,
+                    "multi_campaign_linked": len(multi_campaign_leads),
                     "error": None,
                     "errors": [],
                 }
@@ -598,6 +685,7 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                 logger.info(
                     f"Sync complete for {source.name}: "
                     f"{len(created_leads)} new, {updated_count} updated, "
+                    f"{len(multi_campaign_leads)} multi-campaign, "
                     f"{duplicate_count} duplicates, {skipped_invalid} invalid"
                 )
                 

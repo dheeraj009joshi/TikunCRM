@@ -32,6 +32,7 @@ class NotificationType(str, Enum):
     NEW_LEAD = "NEW_LEAD"                  # New lead in dealership
     ADMIN_REMINDER = "ADMIN_REMINDER"      # Admin reminder to salesperson
     SKATE_ALERT = "SKATE_ALERT"            # Another salesperson tried to act on assigned lead
+    LEAD_MULTI_CAMPAIGN = "LEAD_MULTI_CAMPAIGN"  # Lead found in another campaign
 
 
 class Notification(Base):

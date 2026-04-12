@@ -23,7 +23,8 @@ import {
     FileSpreadsheet,
     CheckCircle2,
     List,
-    LayoutGrid
+    LayoutGrid,
+    Star
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -1055,6 +1056,9 @@ export default function LeadsPage() {
                                             <div>
                                                 <p className="font-semibold group-hover:text-primary transition-colors flex items-center gap-2">
                                                     {getLeadFullName(lead)}
+                                                    {lead.is_starred && (
+                                                        <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" title="Multi-campaign lead" />
+                                                    )}
                                                     {isFreshLead(lead) && (
                                                         <Badge variant="secondary" className="text-[10px] font-normal bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border-0">
                                                             Fresh

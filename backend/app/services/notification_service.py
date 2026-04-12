@@ -124,16 +124,16 @@ class NotificationService:
         if send_sms and user and user.phone:
             try:
                 from app.services.sms_service import sms_service
-                
-                if sms_service.is_configured:
-                    # Format SMS message: title + message (limited to 160 chars)
+                from app.services.dealership_twilio_config_service import get_effective_twilio_config
+
+                effective = await get_effective_twilio_config(self.db, user.dealership_id)
+                if effective.is_sms_ready():
                     sms_text = f"{title}"
                     if message:
                         sms_text = f"{title}: {message}"
-                    # Truncate to 160 characters for standard SMS
                     sms_text = sms_text[:160]
-                    
-                    await sms_service.send_sms(user.phone, sms_text)
+
+                    await sms_service.send_sms(user.phone, sms_text, effective)
             except Exception as e:
                 logger.warning(f"Failed to send SMS notification: {e}")
         
@@ -539,6 +539,106 @@ class NotificationService:
         )
         return result.scalar() or 0
 
+    async def notify_lead_multi_campaign(
+        self,
+        lead_id: UUID,
+        lead_name: str,
+        new_campaign_name: str,
+        dealership_id: Optional[UUID],
+        assigned_to: Optional[UUID] = None,
+    ) -> List[Notification]:
+        """
+        Notify users when an existing lead appears in a new campaign.
+        
+        Notification targeting:
+        - If lead is assigned: notify assigned salesperson + dealership admins
+        - If lead is unassigned: notify all salespeople + admins in the dealership
+        
+        Args:
+            lead_id: ID of the lead
+            lead_name: Name of the lead
+            new_campaign_name: Name of the new campaign the lead appeared in
+            dealership_id: Dealership the lead belongs to
+            assigned_to: User ID the lead is assigned to (if any)
+            
+        Returns:
+            List of created notifications
+        """
+        from app.core.permissions import UserRole
+        
+        notifications = []
+        title = "Lead in New Campaign"
+        message = f"{lead_name} also appeared in campaign: {new_campaign_name}"
+        link = f"/leads/{lead_id}"
+        
+        if not dealership_id:
+            logger.warning(f"Cannot send multi-campaign notification for lead {lead_id} - no dealership_id")
+            return notifications
+        
+        # Get users to notify based on assignment status
+        if assigned_to:
+            # Lead is assigned - notify assigned salesperson + dealership admins/owners
+            users_to_notify = []
+            
+            # Get the assigned salesperson
+            assigned_user_result = await self.db.execute(
+                select(User).where(User.id == assigned_to, User.is_active == True)
+            )
+            assigned_user = assigned_user_result.scalar_one_or_none()
+            if assigned_user:
+                users_to_notify.append(assigned_user)
+            
+            # Get dealership admins and owners
+            admins_result = await self.db.execute(
+                select(User).where(
+                    User.dealership_id == dealership_id,
+                    User.is_active == True,
+                    User.role.in_([UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER])
+                )
+            )
+            admins = admins_result.scalars().all()
+            for admin in admins:
+                if admin.id != assigned_to:  # Don't duplicate if assigned user is also admin
+                    users_to_notify.append(admin)
+        else:
+            # Lead is unassigned - notify all users in dealership
+            users_result = await self.db.execute(
+                select(User).where(
+                    User.dealership_id == dealership_id,
+                    User.is_active == True
+                )
+            )
+            users_to_notify = list(users_result.scalars().all())
+        
+        # Send notifications
+        for user in users_to_notify:
+            try:
+                notification = await self.create_notification(
+                    user_id=user.id,
+                    notification_type=NotificationType.LEAD_MULTI_CAMPAIGN,
+                    title=title,
+                    message=message,
+                    link=link,
+                    related_id=lead_id,
+                    related_type="lead",
+                    meta_data={
+                        "lead_id": str(lead_id),
+                        "lead_name": lead_name,
+                        "new_campaign": new_campaign_name,
+                    },
+                    send_push=True,
+                    send_email=True,
+                    send_sms=False,  # Don't spam SMS for multi-campaign
+                )
+                notifications.append(notification)
+            except Exception as e:
+                logger.error(f"Failed to notify user {user.id} about multi-campaign lead: {e}")
+        
+        logger.info(
+            f"Sent multi-campaign notifications to {len(notifications)} users for lead {lead_id}"
+        )
+        return notifications
+
     async def send_skate_alert(
         self,
         lead_id: UUID,
@@ -686,6 +786,47 @@ async def notify_lead_assigned_to_dealership_background(
         except Exception as e:
             await db.rollback()
             logger.warning("notify_lead_assigned_to_dealership_background failed: %s\n%s", e, traceback.format_exc())
+
+
+async def notify_lead_multi_campaign_background(
+    lead_id: UUID,
+    lead_name: str,
+    new_campaign_name: str,
+    dealership_id: Optional[UUID],
+    assigned_to: Optional[UUID] = None,
+) -> None:
+    """
+    Notify users about a lead appearing in a new campaign.
+    Runs in a background task with its own DB session.
+    
+    Notification targeting:
+    - If lead is assigned: notify assigned salesperson + dealership admins
+    - If lead is unassigned: notify all salespeople + admins in the dealership
+    """
+    import traceback
+    from app.db.database import async_session_maker
+    
+    logger.info(
+        "notify_lead_multi_campaign_background started: lead_id=%s campaign=%s dealership_id=%s assigned_to=%s",
+        lead_id, new_campaign_name, dealership_id, assigned_to
+    )
+    
+    async with async_session_maker() as db:
+        try:
+            service = NotificationService(db)
+            await service.notify_lead_multi_campaign(
+                lead_id=lead_id,
+                lead_name=lead_name,
+                new_campaign_name=new_campaign_name,
+                dealership_id=dealership_id,
+                assigned_to=assigned_to,
+            )
+            await db.commit()
+            logger.info("notify_lead_multi_campaign_background completed: lead_id=%s", lead_id)
+            await emit_badges_refresh(notifications=True)
+        except Exception as e:
+            await db.rollback()
+            logger.warning("notify_lead_multi_campaign_background failed: %s\n%s", e, traceback.format_exc())
 
 
 # Standalone WebSocket event helpers (can be used without NotificationService instance)

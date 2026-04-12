@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.services.dealership_twilio_config_service import EffectiveTwilioConfig
 from app.models.user import User
 from app.models.lead import Lead
 from app.models.dealership import Dealership
@@ -16,36 +17,21 @@ from app.models.dealership import Dealership
 logger = logging.getLogger(__name__)
 
 
+def _twilio_client(account_sid: str, auth_token: str):
+    from twilio.rest import Client
+    return Client(account_sid, auth_token)
+
+
 class SMSService:
     """
     Service for sending SMS notifications via Twilio.
-    
-    Usage:
-        sms = SMSService()
-        result = await sms.send_sms("+1234567890", "Hello!")
+    Pass EffectiveTwilioConfig from get_effective_twilio_config(db, dealership_id).
     """
-    
-    def __init__(self):
-        self._client = None
-    
+
     @property
     def is_configured(self) -> bool:
-        """Check if SMS is properly configured"""
+        """Global SMS configured (legacy check for code paths without dealership)."""
         return settings.is_twilio_configured
-    
-    def _get_client(self):
-        """Get or create Twilio client"""
-        if self._client is None:
-            try:
-                from twilio.rest import Client
-                self._client = Client(
-                    settings.twilio_account_sid,
-                    settings.twilio_auth_token
-                )
-            except ImportError:
-                logger.error("Twilio package not installed. Run: pip install twilio")
-                raise
-        return self._client
     
     def format_phone_number(self, phone: str) -> Optional[str]:
         """
@@ -87,44 +73,36 @@ class SMSService:
         self,
         to_phone: str,
         message: str,
-        from_phone: Optional[str] = None
+        effective: EffectiveTwilioConfig,
+        from_phone: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send an SMS message.
-        
-        Args:
-            to_phone: Recipient phone number
-            message: Message content (max 1600 chars for concatenated SMS)
-            from_phone: Sender phone number (uses default if not provided)
-            
-        Returns:
-            Dict with success status and message SID or error
         """
-        if not self.is_configured:
-            logger.warning("SMS not configured - skipping send")
+        if not effective.is_sms_ready():
+            logger.warning("SMS not configured for dealership - skipping send")
             return {
                 "success": False,
-                "error": "SMS notifications not configured"
+                "error": "SMS notifications not configured",
             }
-        
+
         # Format the recipient number
         formatted_to = self.format_phone_number(to_phone)
         if not formatted_to:
             return {
                 "success": False,
-                "error": f"Invalid phone number: {to_phone}"
+                "error": f"Invalid phone number: {to_phone}",
             }
-        
-        from_phone = from_phone or settings.twilio_phone_number
-        
+
+        from_num = from_phone or effective.sms_from_number
+
         try:
-            client = self._get_client()
-            
-            # Send the message
+            client = _twilio_client(effective.account_sid, effective.auth_token)
+
             sms = client.messages.create(
-                body=message[:1600],  # Twilio limit
-                from_=from_phone,
-                to=formatted_to
+                body=message[:1600],
+                from_=from_num,
+                to=formatted_to,
             )
             
             logger.info(f"SMS sent successfully: SID={sms.sid}, to={formatted_to}")
@@ -146,27 +124,26 @@ class SMSService:
     async def send_bulk_sms(
         self,
         phone_numbers: List[str],
-        message: str
+        message: str,
+        effective: EffectiveTwilioConfig,
     ) -> Dict[str, Any]:
         """
         Send SMS to multiple recipients.
-        
-        Returns dict with success count and failures.
         """
-        if not self.is_configured:
+        if not effective.is_sms_ready():
             return {
                 "success": False,
                 "error": "SMS notifications not configured",
                 "sent": 0,
-                "failed": len(phone_numbers)
+                "failed": len(phone_numbers),
             }
-        
+
         sent = 0
         failed = 0
         errors = []
-        
+
         for phone in phone_numbers:
-            result = await self.send_sms(phone, message)
+            result = await self.send_sms(phone, message, effective)
             if result.get("success"):
                 sent += 1
             else:
@@ -187,17 +164,15 @@ class SMSService:
         self,
         db: AsyncSession,
         lead: Lead,
-        dealership_id: Optional[UUID] = None
+        dealership_id: Optional[UUID] = None,
     ) -> Dict[str, Any]:
         """
         Send SMS notifications to all team members about a new lead.
-        
-        Args:
-            db: Database session
-            lead: The new lead
-            dealership_id: Dealership to notify (if None, notifies all with phones)
         """
-        if not self.is_configured:
+        from app.services.dealership_twilio_config_service import get_effective_twilio_config
+
+        effective = await get_effective_twilio_config(db, dealership_id or lead.dealership_id)
+        if not effective.is_sms_ready():
             logger.debug("SMS not configured - skipping new lead notification")
             return {"success": False, "error": "SMS not configured", "sent": 0}
         
@@ -232,8 +207,7 @@ class SMSService:
         # Extract phone numbers
         phone_numbers = [u.phone for u in users if u.phone]
         
-        # Send bulk SMS
-        return await self.send_bulk_sms(phone_numbers, message)
+        return await self.send_bulk_sms(phone_numbers, message, effective)
     
     async def send_appointment_reminder(
         self,
@@ -241,61 +215,60 @@ class SMSService:
         user_id: UUID,
         appointment_title: str,
         scheduled_at: str,
-        lead_name: Optional[str] = None
+        lead_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send appointment reminder SMS to a user.
         """
-        if not self.is_configured:
-            return {"success": False, "error": "SMS not configured"}
-        
-        # Get user
-        result = await db.execute(
-            select(User).where(User.id == user_id)
-        )
+        from app.services.dealership_twilio_config_service import get_effective_twilio_config
+
+        result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
-        
+
         if not user or not user.phone:
             return {"success": False, "error": "User has no phone number"}
-        
-        # Build message
+
+        effective = await get_effective_twilio_config(db, user.dealership_id)
+        if not effective.is_sms_ready():
+            return {"success": False, "error": "SMS not configured"}
+
         message = f"📅 Reminder: {appointment_title}\n"
         if lead_name:
             message += f"With: {lead_name}\n"
         message += f"Time: {scheduled_at}"
-        
-        return await self.send_sms(user.phone, message)
+
+        return await self.send_sms(user.phone, message, effective)
     
     async def send_follow_up_reminder(
         self,
         db: AsyncSession,
         user_id: UUID,
         lead_name: str,
-        due_at: str
+        due_at: str,
     ) -> Dict[str, Any]:
         """
         Send follow-up reminder SMS to a user.
         """
-        if not self.is_configured:
-            return {"success": False, "error": "SMS not configured"}
-        
-        # Get user
-        result = await db.execute(
-            select(User).where(User.id == user_id)
-        )
+        from app.services.dealership_twilio_config_service import get_effective_twilio_config
+
+        result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
-        
+
         if not user or not user.phone:
             return {"success": False, "error": "User has no phone number"}
-        
+
+        effective = await get_effective_twilio_config(db, user.dealership_id)
+        if not effective.is_sms_ready():
+            return {"success": False, "error": "SMS not configured"}
+
         message = (
             f"⏰ Follow-up Reminder\n"
             f"Lead: {lead_name}\n"
             f"Due: {due_at}\n"
             f"Don't forget to follow up!"
         )
-        
-        return await self.send_sms(user.phone, message)
+
+        return await self.send_sms(user.phone, message, effective)
 
 
 # Singleton instance

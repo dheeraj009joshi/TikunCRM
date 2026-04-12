@@ -429,8 +429,9 @@ async def unassign_stale_leads():
                 # Optionally send SMS notifications about available leads
                 try:
                     from app.services.sms_service import sms_service
-                    if sms_service.is_configured and unassigned_count > 0:
-                        # Get all active users with phones and dealerships (potential claimers)
+                    from app.services.dealership_twilio_config_service import get_effective_twilio_config
+
+                    if unassigned_count > 0:
                         users_result = await session.execute(
                             select(User).where(
                                 User.is_active == True,
@@ -440,12 +441,14 @@ async def unassign_stale_leads():
                             )
                         )
                         users = users_result.scalars().all()
-                        
+
                         if users:
                             message = f"🔔 {unassigned_count} lead(s) now unassigned from salespersons!\nNo activity for {STALE_HOURS}h. First activity claims them!"
                             for user in users:
                                 if user.phone:
-                                    await sms_service.send_sms(user.phone, message)
+                                    effective = await get_effective_twilio_config(session, user.dealership_id)
+                                    if effective.is_sms_ready():
+                                        await sms_service.send_sms(user.phone, message, effective)
                 except Exception as sms_error:
                     logger.warning(f"Failed to send stale lead SMS notifications: {sms_error}")
                 

@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from app.models.whatsapp_log import WhatsAppLog
     from app.models.lead_sync_source import LeadSyncSource
     from app.models.campaign_mapping import CampaignMapping
+    from app.models.lead_campaign import LeadCampaign
 
 
 class LeadSource(str, Enum):
@@ -143,6 +144,12 @@ class Lead(Base):
         String(255), nullable=True,
         comment="Original campaign name from the sync source"
     )
+    
+    # --- Multi-campaign tracking ---
+    is_starred: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, index=True,
+        comment="Indicates lead appeared in multiple campaigns"
+    )
 
     interested_in: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     budget_range: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
@@ -219,6 +226,10 @@ class Lead(Base):
     )
     campaign_mapping: Mapped[Optional["CampaignMapping"]] = relationship(
         "CampaignMapping", foreign_keys=[campaign_mapping_id], lazy="noload"
+    )
+    campaigns: Mapped[List["LeadCampaign"]] = relationship(
+        "LeadCampaign", back_populates="lead", lazy="noload",
+        order_by="desc(LeadCampaign.added_at)"
     )
 
     # ── Backward-compat proxy properties (contact info lives on Customer) ──

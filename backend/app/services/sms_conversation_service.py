@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.timezone import utc_now
+from app.services.dealership_twilio_config_service import get_effective_twilio_config
 from app.models.sms_log import SMSLog, MessageDirection, SMSStatus
 from app.models.lead import Lead
 from app.models.customer import Customer
@@ -101,6 +102,10 @@ class SMSConversationService:
                 if customer:
                     customer_id = customer.id
 
+        effective = await get_effective_twilio_config(self.db, dealership_id)
+        if not effective.is_sms_ready():
+            return False, None, "SMS not configured for this dealership"
+
         # Create SMS log entry
         sms_log = SMSLog(
             customer_id=customer_id,
@@ -109,7 +114,7 @@ class SMSConversationService:
             dealership_id=dealership_id,
             twilio_message_sid="pending",  # Will be updated
             direction=MessageDirection.OUTBOUND,
-            from_number=settings.twilio_phone_number,
+            from_number=effective.sms_from_number,
             to_number=formatted_number,
             body=body,
             status=SMSStatus.QUEUED,
@@ -120,7 +125,7 @@ class SMSConversationService:
         await self.db.flush()
         
         # Send via Twilio
-        result = await sms_service.send_sms(formatted_number, body)
+        result = await sms_service.send_sms(formatted_number, body, effective)
         
         if result.get("success"):
             sms_log.twilio_message_sid = result["message_sid"]
@@ -148,7 +153,8 @@ class SMSConversationService:
         from_number: str,
         to_number: str,
         body: str,
-        media_urls: Optional[List[str]] = None
+        media_urls: Optional[List[str]] = None,
+        resolved_dealership_id: Optional[UUID] = None,
     ) -> SMSLog:
         """
         Process incoming SMS webhook and store message.
@@ -158,7 +164,9 @@ class SMSConversationService:
         lead = await self.find_lead_by_phone(from_number) if customer else None
         customer_id = customer.id if customer else None
         lead_id = lead.id if lead else None
-        dealership_id = (lead.dealership_id if lead else None) or (customer and None)
+        dealership_id = lead.dealership_id if lead else None
+        if resolved_dealership_id:
+            dealership_id = dealership_id or resolved_dealership_id
         user_id = lead.assigned_to if lead else None
 
         # Create SMS log (customer_id for thread; lead_id for context/notification)

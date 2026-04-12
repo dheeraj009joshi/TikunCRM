@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, update
+from sqlalchemy import and_, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -36,13 +36,6 @@ async def list_notifications(
     Get list of notifications for the current user.
     Sorted by creation date (newest first).
     """
-    # Base query
-    query = select(Notification).where(Notification.user_id == current_user.id)
-    
-    # Apply filters
-    if unread_only:
-        query = query.where(Notification.is_read == False)
-    
     # Normalize type filter (API may receive lowercase; DB stores uppercase)
     type_enum = None
     if notification_type:
@@ -50,22 +43,29 @@ async def list_notifications(
             type_enum = NotificationType(notification_type.upper())
         except ValueError:
             pass
+
+    # Filters for list + total (same scope)
+    conditions = [Notification.user_id == current_user.id]
+    if unread_only:
+        conditions.append(Notification.is_read == False)
     if type_enum is not None:
-        query = query.where(Notification.type == type_enum)
-    
-    # Get total count
-    count_query = select(func.count()).select_from(query.subquery())
-    total_result = await db.execute(count_query)
+        conditions.append(Notification.type == type_enum)
+
+    query = select(Notification).where(and_(*conditions))
+
+    # Total matching current filters (explicit FROM avoids subquery edge cases in some DB drivers)
+    total_stmt = select(func.count()).select_from(Notification).where(and_(*conditions))
+    total_result = await db.execute(total_stmt)
     total = total_result.scalar() or 0
-    
-    # Get unread count
-    unread_query = select(func.count()).where(
+
+    # Unread count for this user (ignores list filters — for badge / header)
+    unread_stmt = select(func.count()).select_from(Notification).where(
         Notification.user_id == current_user.id,
-        Notification.is_read == False
+        Notification.is_read == False,
     )
-    unread_result = await db.execute(unread_query)
+    unread_result = await db.execute(unread_stmt)
     unread_count = unread_result.scalar() or 0
-    
+
     # Apply pagination and ordering
     query = query.order_by(Notification.created_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
@@ -90,29 +90,35 @@ async def get_notification_stats(
     Useful for displaying badge count in the UI.
     """
     # Total count
-    total_query = select(func.count()).where(Notification.user_id == current_user.id)
+    total_query = select(func.count()).select_from(Notification).where(
+        Notification.user_id == current_user.id
+    )
     total_result = await db.execute(total_query)
     total = total_result.scalar() or 0
-    
+
     # Unread count
-    unread_query = select(func.count()).where(
+    unread_query = select(func.count()).select_from(Notification).where(
         Notification.user_id == current_user.id,
-        Notification.is_read == False
+        Notification.is_read == False,
     )
     unread_result = await db.execute(unread_query)
     unread = unread_result.scalar() or 0
-    
+
     # Count by type (for unread only)
     type_query = (
         select(Notification.type, func.count())
         .where(
             Notification.user_id == current_user.id,
-            Notification.is_read == False
+            Notification.is_read == False,
         )
         .group_by(Notification.type)
     )
     type_result = await db.execute(type_query)
-    by_type = {row[0].value: row[1] for row in type_result.all()}
+    by_type: dict[str, int] = {}
+    for row in type_result.all():
+        t = row[0]
+        key = getattr(t, "value", str(t))
+        by_type[str(key)] = row[1]
     
     return NotificationStats(
         total=total,

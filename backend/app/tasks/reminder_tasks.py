@@ -24,6 +24,7 @@ from app.models.activity import Activity, ActivityType
 from app.models.notification import NotificationType
 from app.services.notification_service import NotificationService
 from app.services.sms_service import sms_service
+from app.services.dealership_twilio_config_service import get_effective_twilio_config
 
 logger = logging.getLogger(__name__)
 
@@ -104,14 +105,13 @@ async def send_appointment_reminders():
                         )
                         logger.info(f"Sent reminder to user {appointment.assigned_to} for appointment {appointment.id}")
                     
-                    # Send SMS to lead (if they have a phone number)
-                    if lead.phone and sms_service.is_configured:
+                    effective = await get_effective_twilio_config(session, lead.dealership_id)
+                    if lead.phone and effective.is_sms_ready():
                         time_str = appointment.scheduled_at.strftime("%I:%M %p")
                         location_str = f" at {appointment.location}" if appointment.location else ""
                         sms_message = f"Reminder: You have an appointment in 2 hours at {time_str}{location_str}. See you soon!"
-                        
                         try:
-                            await sms_service.send_sms(lead.phone, sms_message)
+                            await sms_service.send_sms(lead.phone, sms_message, effective)
                             logger.info(f"Sent SMS reminder to lead {lead.id}")
                         except Exception as e:
                             logger.error(f"Failed to send SMS to lead {lead.id}: {e}")

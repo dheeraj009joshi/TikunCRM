@@ -13,6 +13,7 @@ from app.models.oauth_token import OAuthToken, OAuthProvider
 from app.models.email_log import EmailLog, EmailDirection
 from app.models.email_template import EmailTemplate, TemplateCategory
 from app.models.dealership_email_config import DealershipEmailConfig
+from app.models.dealership_twilio_config import DealershipTwilioConfig
 from app.models.notification import Notification, NotificationType
 from app.models.password_reset import PasswordResetToken
 from app.models.appointment import Appointment, AppointmentType, AppointmentStatus
@@ -27,6 +28,7 @@ from app.models.customer_stip_document import CustomerStipDocument
 from app.models.lead_stip_document import LeadStipDocument
 from app.models.lead_sync_source import LeadSyncSource, SyncSourceType
 from app.models.campaign_mapping import CampaignMapping, MatchType
+from app.models.lead_campaign import LeadCampaign
 from app.models.whatsapp_message import WhatsAppMessage, WhatsAppBulkSend, WhatsAppConnection, WhatsAppChannel
 
 __all__ = [
@@ -48,6 +50,7 @@ __all__ = [
     "EmailTemplate",
     "TemplateCategory",
     "DealershipEmailConfig",
+    "DealershipTwilioConfig",
     "Notification",
     "NotificationType",
     "PasswordResetToken",
@@ -74,6 +77,7 @@ __all__ = [
     "SyncSourceType",
     "CampaignMapping",
     "MatchType",
+    "LeadCampaign",
     "WhatsAppMessage",
     "WhatsAppBulkSend",
     "WhatsAppConnection",

@@ -45,7 +45,8 @@ import {
     UserMinus,
     Plus,
     History,
-    Check
+    Check,
+    Star
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -835,11 +836,14 @@ export default function LeadDetailsPage() {
         setStipsLoading(true)
         try {
             // Determine which customer ID to filter by based on target customer selection
+            // Use direct ID fields (customer_id, secondary_customer_id) which are always present,
+            // falling back to nested object IDs as secondary option
             let customerId: string | undefined = undefined
-            if (stipsTargetCustomer === "secondary" && lead.secondary_customer?.id) {
-                customerId = lead.secondary_customer.id
-            } else if (stipsTargetCustomer === "primary" && lead.customer?.id) {
-                customerId = lead.customer.id
+            if (stipsTargetCustomer === "secondary") {
+                customerId = lead.secondary_customer_id ?? lead.secondary_customer?.id
+            } else {
+                // Primary - always use customer_id
+                customerId = lead.customer_id ?? lead.customer?.id
             }
             const list = await StipsService.listDocuments(leadId, activeStipsCategoryId ?? undefined, customerId)
             setStipsDocuments(list)
@@ -849,6 +853,13 @@ export default function LeadDetailsPage() {
             setStipsLoading(false)
         }
     }, [leadId, activeStipsCategoryId, stipsTargetCustomer, lead])
+
+    // Reset stipsTargetCustomer to "primary" when secondary customer is removed
+    React.useEffect(() => {
+        if (stipsTargetCustomer === "secondary" && !lead?.secondary_customer_id) {
+            setStipsTargetCustomer("primary")
+        }
+    }, [lead?.secondary_customer_id, stipsTargetCustomer])
 
     React.useEffect(() => {
         if (leadId && activeActivityTab === "stips") {
@@ -1971,9 +1982,19 @@ export default function LeadDetailsPage() {
                                 <div className="h-20 w-20 rounded-full bg-primary/10 flex items-center justify-center text-primary text-3xl font-bold mb-4 ring-2 ring-primary/5 transition-transform duration-200 hover:scale-105">
                                     {(lead.customer?.first_name || "?").charAt(0)}
                             </div>
-                                <h1 className="text-2xl font-bold tracking-tight text-foreground">
+                                <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
                                     {getLeadFullName(lead)}
+                                    {lead.is_starred && (
+                                        <Star className="h-5 w-5 fill-yellow-400 text-yellow-400" title="Multi-campaign lead" />
+                                    )}
                                 </h1>
+                                
+                                {/* Multi-campaign info */}
+                                {lead.is_starred && lead.campaigns && lead.campaigns.length > 0 && (
+                                    <div className="mt-2 text-sm text-muted-foreground">
+                                        <span className="font-medium">Appears in {lead.campaigns.length + 1} campaigns</span>
+                                    </div>
+                                )}
                                 
                                 {/* Status Selector - hidden for mention-only access */}
                                 {!isMentionOnly && (
@@ -2406,6 +2427,39 @@ export default function LeadDetailsPage() {
                                         )}
                                 </div>
                             </div>
+                            )}
+                            
+                            {/* Multi-campaign info */}
+                            {lead.is_starred && lead.campaigns && lead.campaigns.length > 0 && (
+                                <div>
+                                    <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1">
+                                        <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                                        Campaign History
+                                    </p>
+                                    <div className="rounded-lg bg-yellow-50 dark:bg-yellow-950/20 p-3 mt-1 text-sm border border-yellow-200 dark:border-yellow-800">
+                                        <p className="text-xs text-muted-foreground mb-2">
+                                            This lead has appeared in multiple campaigns:
+                                        </p>
+                                        <div className="space-y-1.5">
+                                            <div className="flex items-center justify-between">
+                                                <span className="font-medium text-primary">
+                                                    {lead.source_display ?? lead.source?.replace(/_/g, ' ')}
+                                                </span>
+                                                <span className="text-xs text-muted-foreground">Original</span>
+                                            </div>
+                                            {lead.campaigns.map((campaign) => (
+                                                <div key={campaign.id} className="flex items-center justify-between">
+                                                    <span className="font-medium">
+                                                        {campaign.display_name ?? campaign.campaign_name}
+                                                    </span>
+                                                    <span className="text-xs text-muted-foreground">
+                                                        {new Date(campaign.added_at).toLocaleDateString()}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
                             )}
 
                             {lead.notes && !isEditingDetails && (

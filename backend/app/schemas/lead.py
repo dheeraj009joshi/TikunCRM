@@ -160,6 +160,21 @@ class DealershipBrief(BaseModel):
         from_attributes = True
 
 
+class LeadCampaignResponse(BaseModel):
+    """Response schema for a campaign association on a lead."""
+    id: UUID
+    campaign_name: str
+    campaign_mapping_id: Optional[UUID] = None
+    sync_source_id: Optional[UUID] = None
+    added_at: datetime
+    
+    # Optional display name from campaign mapping
+    display_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class LeadResponse(BaseModel):
     """Lead response — contact info comes from embedded customer."""
     id: UUID
@@ -186,6 +201,9 @@ class LeadResponse(BaseModel):
     external_id: Optional[str] = None
     interested_in: Optional[str] = None
     budget_range: Optional[str] = None
+    # Multi-campaign tracking
+    is_starred: bool = False
+    campaigns: List[LeadCampaignResponse] = Field(default_factory=list)
     # Timestamps
     first_contacted_at: Optional[datetime] = None
     last_contacted_at: Optional[datetime] = None

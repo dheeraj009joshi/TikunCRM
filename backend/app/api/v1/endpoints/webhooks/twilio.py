@@ -12,6 +12,9 @@ from sqlalchemy.orm import selectinload
 from app.db.database import get_db
 from app.services.sms_conversation_service import get_sms_conversation_service
 from app.services.whatsapp_conversation_service import get_whatsapp_conversation_service
+from app.services.dealership_twilio_config_service import (
+    find_dealership_id_by_inbound_to,
+)
 from app.services.notification_service import NotificationService
 from app.core.websocket_manager import ws_manager
 from app.models.lead import Lead
@@ -53,16 +56,18 @@ async def handle_incoming_sms(
             media_urls.append(media_url)
     
     logger.info(f"Incoming SMS webhook: {message_sid} from {from_number}")
-    
+
+    resolved_dealership_id = await find_dealership_id_by_inbound_to(db, to_number)
+
     service = get_sms_conversation_service(db)
-    
-    # Store the message
+
     sms_log = await service.receive_sms(
         message_sid=message_sid,
         from_number=from_number,
         to_number=to_number,
         body=body,
-        media_urls=media_urls
+        media_urls=media_urls,
+        resolved_dealership_id=resolved_dealership_id,
     )
     
     await db.commit()
@@ -188,13 +193,16 @@ async def handle_incoming_whatsapp(
             media_urls.append(url)
 
     logger.info(f"Incoming WhatsApp webhook: {message_sid} from {from_number}")
+    resolved_dealership_id = await find_dealership_id_by_inbound_to(db, to_raw)
+
     service = get_whatsapp_conversation_service(db)
     wa_log = await service.receive_whatsapp(
         message_sid=message_sid,
         from_number=from_number,
         to_number=to_number,
         body=body,
-        media_urls=media_urls
+        media_urls=media_urls,
+        resolved_dealership_id=resolved_dealership_id,
     )
     await db.commit()
 

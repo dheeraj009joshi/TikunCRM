@@ -14,6 +14,10 @@ from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.core.timezone import utc_now
+from app.services.dealership_twilio_config_service import (
+    EffectiveTwilioConfig,
+    get_effective_twilio_config,
+)
 from app.core.permissions import UserRole
 from app.models.call_log import CallLog, CallDirection, CallStatus
 from app.models.lead import Lead
@@ -44,32 +48,22 @@ class VoiceService:
     
     def __init__(self, db: AsyncSession):
         self.db = db
-        self._twilio_client = None
-    
-    @property
-    def is_configured(self) -> bool:
-        """Check if Twilio Voice is properly configured"""
-        return settings.is_twilio_voice_configured
-    
-    def _get_twilio_client(self):
-        """Get or create Twilio client"""
-        if self._twilio_client is None:
-            try:
-                from twilio.rest import Client
-                self._twilio_client = Client(
-                    settings.twilio_account_sid,
-                    settings.twilio_auth_token
-                )
-            except ImportError:
-                logger.error("Twilio package not installed. Run: pip install twilio")
-                raise
-        return self._twilio_client
-    
+
+    def _get_twilio_client(self, effective: EffectiveTwilioConfig):
+        """Twilio REST client for this dealership's credentials."""
+        try:
+            from twilio.rest import Client
+            return Client(effective.account_sid, effective.auth_token)
+        except ImportError:
+            logger.error("Twilio package not installed. Run: pip install twilio")
+            raise
+
     def generate_access_token(
         self,
         user_id: UUID,
         identity: str,
-        ttl: int = 3600
+        effective: EffectiveTwilioConfig,
+        ttl: int = 3600,
     ) -> str:
         """
         Generate a Twilio Access Token for WebRTC client.
@@ -82,26 +76,24 @@ class VoiceService:
         Returns:
             JWT access token string
         """
-        if not self.is_configured:
+        if not effective.is_voice_ready():
             raise ValueError("Twilio Voice not configured")
-        
+
         try:
             from twilio.jwt.access_token import AccessToken
             from twilio.jwt.access_token.grants import VoiceGrant
-            
-            # Create access token
+
             token = AccessToken(
-                settings.twilio_account_sid,
-                settings.twilio_api_key_sid,
-                settings.twilio_api_key_secret,
+                effective.account_sid,
+                effective.twilio_api_key_sid,
+                effective.twilio_api_key_secret,
                 identity=identity,
-                ttl=ttl
+                ttl=ttl,
             )
-            
-            # Create voice grant
+
             voice_grant = VoiceGrant(
-                outgoing_application_sid=settings.twilio_twiml_app_sid,
-                incoming_allow=True  # Allow incoming calls
+                outgoing_application_sid=effective.twilio_twiml_app_sid,
+                incoming_allow=True,
             )
             
             # Add grant to token
@@ -579,10 +571,10 @@ class VoiceService:
         call_sid: str,
         from_identity: str,
         to_number: str,
-    ) -> Optional[CallLog]:
+    ) -> Tuple[Optional[CallLog], Optional[EffectiveTwilioConfig]]:
         """
         Create call_log with real Twilio CallSid when outgoing webhook runs.
-        This is the only place outbound call_log rows are created (no pending SIDs).
+        Returns (call_log, effective_twilio_config) for TwiML generation.
         """
         identity = self._normalize_identity(from_identity)
         result = await self.db.execute(
@@ -590,13 +582,15 @@ class VoiceService:
         )
         user = result.scalar_one_or_none()
         if not user:
-            return None
+            return None, None
         lead = await self.find_lead_by_phone(to_number)
         dealership_id = user.dealership_id or (lead.dealership_id if lead else None)
+        effective = await get_effective_twilio_config(self.db, user.dealership_id)
+        caller_num = effective.voice_caller_id_number or effective.sms_from_number
         call_log = await self.create_call_log(
             twilio_call_sid=call_sid,
             direction=CallDirection.OUTBOUND,
-            from_number=settings.twilio_phone_number,
+            from_number=caller_num,
             to_number=to_number,
             user_id=user.id,
             lead_id=lead.id if lead else None,
@@ -605,13 +599,14 @@ class VoiceService:
             status=CallStatus.INITIATED,
         )
         logger.info(f"Created call_log {call_log.id} for outgoing call {call_sid} (no pending found)")
-        return call_log
+        return call_log, effective
 
     def generate_twiml_for_outbound(
         self,
         to_number: str,
+        effective: EffectiveTwilioConfig,
         caller_id: Optional[str] = None,
-        record: bool = True
+        record: bool = True,
     ) -> str:
         """Generate TwiML for outbound call"""
         from twilio.twiml.voice_response import VoiceResponse, Dial
@@ -620,9 +615,11 @@ class VoiceService:
         status_url = f"{base}/api/v1/voice/webhook/status"
         recording_url = f"{base}/api/v1/voice/webhook/recording"
 
+        cid = caller_id or effective.voice_caller_id_number or effective.sms_from_number
+
         response = VoiceResponse()
         dial = Dial(
-            caller_id=caller_id or settings.twilio_phone_number,
+            caller_id=cid,
             record="record-from-answer-dual" if record else "do-not-record",
             action=status_url,
             method="POST",
@@ -779,14 +776,18 @@ async def upload_recording_to_azure_background(
                 return
             
             try:
-                # Download from Twilio and upload to Azure
+                from app.services.dealership_twilio_config_service import get_effective_twilio_config
+
                 filename = f"call_{call_sid}_{recording_sid}.wav"
                 twilio_wav_url = f"{recording_url}.wav"
-                
+
+                eff = await get_effective_twilio_config(db, call_log.dealership_id)
+                auth_pair = (eff.account_sid, eff.auth_token)
+
                 azure_url = await azure_storage_service.upload_recording_from_url(
                     source_url=twilio_wav_url,
                     filename=filename,
-                    auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+                    auth=auth_pair,
                     metadata={
                         "call_sid": call_sid,
                         "recording_sid": recording_sid,

@@ -86,5 +86,47 @@ export const DealershipService = {
     async getDealershipsForSelect(): Promise<Array<{ id: string; name: string }>> {
         const dealerships = await this.listDealerships({ is_active: true });
         return dealerships.map(d => ({ id: d.id, name: d.name }));
-    }
+    },
+
+    async getTwilioConfig(dealershipId: string): Promise<DealershipTwilioConfig> {
+        const response = await apiClient.get(`${DEALERSHIPS_PREFIX}/${dealershipId}/twilio-config`);
+        return response.data;
+    },
+
+    async patchTwilioConfig(
+        dealershipId: string,
+        data: DealershipTwilioConfigUpdate
+    ): Promise<DealershipTwilioConfig> {
+        const response = await apiClient.patch(`${DEALERSHIPS_PREFIX}/${dealershipId}/twilio-config`, data);
+        return response.data;
+    },
 };
+
+export interface DealershipTwilioConfig {
+    dealership_id: string;
+    account_sid?: string | null;
+    auth_token_set: boolean;
+    sms_enabled: boolean;
+    sms_from_number?: string | null;
+    whatsapp_enabled: boolean;
+    whatsapp_from_number?: string | null;
+    voice_enabled: boolean;
+    twilio_twiml_app_sid?: string | null;
+    twilio_api_key_sid?: string | null;
+    api_key_secret_set: boolean;
+    voice_caller_id_number?: string | null;
+}
+
+export interface DealershipTwilioConfigUpdate {
+    account_sid?: string | null;
+    auth_token?: string | null;
+    sms_enabled?: boolean;
+    sms_from_number?: string | null;
+    whatsapp_enabled?: boolean;
+    whatsapp_from_number?: string | null;
+    voice_enabled?: boolean;
+    twilio_twiml_app_sid?: string | null;
+    twilio_api_key_sid?: string | null;
+    twilio_api_key_secret?: string | null;
+    voice_caller_id_number?: string | null;
+}

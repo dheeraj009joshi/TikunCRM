@@ -21,6 +21,10 @@ from app.models.user import User
 from app.models.call_log import CallLog, CallDirection, CallStatus
 from app.models.lead import Lead
 from app.services.voice_service import VoiceService, get_voice_service
+from app.services.dealership_twilio_config_service import (
+    get_effective_twilio_config,
+    find_dealership_id_by_voice_to,
+)
 from app.core.websocket_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -139,14 +143,16 @@ def _voice_missing_credentials() -> List[str]:
 
 @router.get("/config", response_model=VoiceConfigResponse)
 async def get_voice_config(
-    current_user: User = Depends(deps.get_current_active_user)
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get voice configuration status. When voice_enabled is false, missing_credentials lists env vars to set."""
-    enabled = settings.is_twilio_voice_configured
+    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+    enabled = effective.is_voice_ready()
     missing = None if enabled else _voice_missing_credentials()
     return VoiceConfigResponse(
         voice_enabled=enabled,
-        phone_number=settings.twilio_phone_number if enabled else None,
+        phone_number=effective.voice_caller_id_number if enabled else None,
         recording_enabled=True,
         azure_storage_configured=settings.is_azure_storage_configured,
         missing_credentials=missing,
@@ -156,21 +162,21 @@ async def get_voice_config(
 @router.get("/config/status")
 async def get_voice_config_status(
     current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """
-    Debug: which env vars are set for voice (no values).
-    Use this on production to see what is missing when voice_enabled is false.
+    Debug: effective voice readiness (merged dealership row + env). No secret values.
     """
+    effective = await get_effective_twilio_config(db, current_user.dealership_id)
     return {
-        "voice_enabled": settings.is_twilio_voice_configured,
+        "voice_enabled": effective.is_voice_ready(),
         "checks": {
-            "TWILIO_ACCOUNT_SID": bool(settings.twilio_account_sid),
-            "TWILIO_AUTH_TOKEN": bool(settings.twilio_auth_token),
-            "TWILIO_PHONE_NUMBER": bool(settings.twilio_phone_number),
-            "TWILIO_TWIML_APP_SID": bool(settings.twilio_twiml_app_sid),
-            "TWILIO_API_KEY_SID": bool(settings.twilio_api_key_sid),
-            "TWILIO_API_KEY_SECRET": bool(settings.twilio_api_key_secret),
-            "VOICE_ENABLED": settings.voice_enabled,
+            "account_sid": bool(effective.account_sid),
+            "auth_token": bool(effective.auth_token),
+            "voice_caller_id_number": bool(effective.voice_caller_id_number),
+            "twilio_twiml_app_sid": bool(effective.twilio_twiml_app_sid),
+            "twilio_api_key_sid": bool(effective.twilio_api_key_sid),
+            "twilio_api_key_secret": bool(effective.twilio_api_key_secret),
         },
     }
 
@@ -184,22 +190,23 @@ async def get_voice_token(
     Get a Twilio access token for the WebRTC softphone.
     Token is valid for 1 hour and allows making/receiving calls.
     """
-    if not settings.is_twilio_voice_configured:
+    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+    if not effective.is_voice_ready():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Voice calling is not configured"
         )
-    
+
     service = get_voice_service(db)
-    
-    # Use user email as identity (unique per user)
+
     identity = current_user.email
-    
+
     try:
         token = service.generate_access_token(
             user_id=current_user.id,
             identity=identity,
-            ttl=3600
+            effective=effective,
+            ttl=3600,
         )
         
         return VoiceTokenResponse(
@@ -225,15 +232,15 @@ async def initiate_call(
     Initiate an outbound call to a phone number.
     The call will be connected through the WebRTC softphone.
     """
-    if not settings.is_twilio_voice_configured:
+    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+    if not effective.is_voice_ready():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Voice calling is not configured"
         )
-    
+
     service = get_voice_service(db)
-    
-    # Validate phone number format
+
     from app.services.sms_service import SMSService
     sms = SMSService()
     formatted_number = sms.format_phone_number(request.to_number)
@@ -628,10 +635,11 @@ async def stream_recording(
     if "api.twilio.com" in call.recording_url:
         import httpx
         try:
+            eff = await get_effective_twilio_config(db, call.dealership_id)
             async with httpx.AsyncClient() as client:
                 r = await client.get(
                     call.recording_url,
-                    auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+                    auth=(eff.account_sid, eff.auth_token),
                     follow_redirects=True,
                 )
                 r.raise_for_status()
@@ -676,12 +684,11 @@ async def handle_incoming_call(
     is_unknown_caller = lead is None
     requires_lead_details = False
     
-    # Determine dealership from Twilio phone number config or use default
-    # For now, we'll get dealership from lead or first available user
     dealership_id = lead.dealership_id if lead else None
-    
-    # If unknown caller, we need a dealership to create the lead
-    # Get it from any user that has this Twilio number configured (simplified: use first dealership)
+    dealership_from_to = await find_dealership_id_by_voice_to(db, to_number)
+    if dealership_from_to:
+        dealership_id = dealership_id or dealership_from_to
+
     if is_unknown_caller and not dealership_id:
         from app.models.dealership import Dealership
         result = await db.execute(select(Dealership).limit(1))
@@ -787,14 +794,24 @@ async def handle_outgoing_call(
 
     try:
         service = get_voice_service(db)
-        # Create call_log only here with real CallSid (no pending rows)
-        await service.ensure_call_log_for_outgoing(
+        call_log, effective = await service.ensure_call_log_for_outgoing(
             call_sid=call_sid,
             from_identity=from_identity,
             to_number=to_number,
         )
+        if not call_log:
+            logger.warning("Outgoing webhook: could not create call log (unknown user)")
+            return Response(
+                content='<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, we could not place your call.</Say></Response>',
+                media_type="application/xml",
+            )
         await db.commit()
-        twiml = service.generate_twiml_for_outbound(to_number)
+        if not effective or not effective.is_voice_ready():
+            return Response(
+                content='<?xml version="1.0" encoding="UTF-8"?><Response><Say>Voice is not configured for your account.</Say></Response>',
+                media_type="application/xml",
+            )
+        twiml = service.generate_twiml_for_outbound(to_number, effective)
         return Response(content=twiml, media_type="application/xml")
     except Exception as e:
         logger.exception(f"Outgoing webhook error for call {call_sid}: {e}")

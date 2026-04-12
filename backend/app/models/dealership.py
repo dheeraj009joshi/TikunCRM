@@ -3,7 +3,7 @@ Dealership Model
 """
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import Boolean, DateTime, String, Text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from app.models.user import User
     from app.models.lead import Lead
     from app.models.dealership_email_config import DealershipEmailConfig
+    from app.models.dealership_twilio_config import DealershipTwilioConfig
 
 
 class Dealership(Base):
@@ -88,6 +89,12 @@ class Dealership(Base):
     # One-to-one relationship with email configuration
     email_config: Mapped["DealershipEmailConfig"] = relationship(
         "DealershipEmailConfig",
+        back_populates="dealership",
+        uselist=False,
+        lazy="noload"
+    )
+    twilio_config: Mapped[Optional["DealershipTwilioConfig"]] = relationship(
+        "DealershipTwilioConfig",
         back_populates="dealership",
         uselist=False,
         lazy="noload"

@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api import deps
-from app.core.config import settings
 from app.core.permissions import UserRole
 from app.core.timezone import utc_now
 from app.db.database import get_db
@@ -23,6 +22,7 @@ from app.models.customer import Customer
 from app.models.whatsapp_log import WhatsAppLog, WhatsAppDirection
 from app.models.whatsapp_template import WhatsAppTemplate
 from app.services.whatsapp_conversation_service import get_whatsapp_conversation_service
+from app.services.dealership_twilio_config_service import get_effective_twilio_config
 from app.core.websocket_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -174,11 +174,13 @@ async def search_leads_for_whatsapp(
 
 @router.get("/config", response_model=WhatsAppConfigResponse)
 async def get_whatsapp_config(
-    current_user: User = Depends(deps.get_current_active_user)
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
 ):
+    effective = await get_effective_twilio_config(db, current_user.dealership_id)
     return WhatsAppConfigResponse(
-        whatsapp_enabled=settings.is_whatsapp_configured,
-        phone_number=settings.twilio_whatsapp_number if settings.is_whatsapp_configured else None
+        whatsapp_enabled=effective.is_whatsapp_ready(),
+        phone_number=effective.whatsapp_from_number if effective.is_whatsapp_ready() else None,
     )
 
 
@@ -215,7 +217,8 @@ async def send_whatsapp(
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ):
-    if not settings.is_whatsapp_configured:
+    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+    if not effective.is_whatsapp_ready():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="WhatsApp is not configured"
