@@ -3,17 +3,14 @@ Lead Assignment Background Tasks
 
 Handles:
 1. Auto-assignment: When a user adds a note to an unassigned lead, assign it to them
-2. Stale unassignment: Unassign leads with no activity for 72 hours
+2. Stale unassignment: Unassign primary (and secondary) salesperson when the lead has had no activity in 3 days; dealership stays
 """
 import logging
-from datetime import datetime, timedelta
-from typing import Optional
-
-from sqlalchemy import select, and_, or_, exists
+from datetime import timedelta
+from sqlalchemy import select, and_, or_, exists, func, cast, String
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, selectinload
 
-from app.core.config import settings
 from app.core.timezone import utc_now
 from app.db.database import get_engine_url_and_connect_args
 from app.core.websocket_manager import ws_manager
@@ -24,12 +21,41 @@ from app.models.user import User
 from app.models.dealership import Dealership
 from app.models.notification import Notification, NotificationType
 from app.services.notification_service import NotificationService
-from app.services.follow_up_schedule_service import schedule_outbound_call_follow_ups
+from app.services.follow_up_schedule_service import (
+    schedule_outbound_call_follow_ups,
+    cancel_pending_follow_ups_for_lead,
+)
 
 logger = logging.getLogger(__name__)
 
-# Configuration
-STALE_HOURS = 72  # Hours of inactivity before unassigning
+# Configuration — unassign if no qualifying engagement in this window (any team member)
+STALE_INACTIVITY_DAYS = 3
+
+# PostgreSQL activitytype labels that count as "engagement" (assignment rows excluded).
+# Use exact enum labels — DB mixes UPPERCASE with lowercase e.g. sms_received (see alembic).
+# WHATSAPP_RECEIVED is not added to activitytype in migrations; omit until a migration exists.
+STALE_ENGAGEMENT_ACTIVITY_DB_LABELS = (
+    "NOTE_ADDED",
+    "CALL_LOGGED",
+    "EMAIL_SENT",
+    "EMAIL_RECEIVED",
+    "SMS_SENT",
+    "sms_received",
+    "WHATSAPP_SENT",
+    "STATUS_CHANGED",
+    "FOLLOW_UP_SCHEDULED",
+    "FOLLOW_UP_COMPLETED",
+    "FOLLOW_UP_MISSED",
+    "APPOINTMENT_SCHEDULED",
+    "APPOINTMENT_COMPLETED",
+    "APPOINTMENT_CANCELLED",
+    "STIP_DOCUMENT_ADDED",
+    "STIP_DOCUMENT_REMOVED",
+    "CREDIT_APP_INITIATED",
+    "CREDIT_APP_COMPLETED",
+    "CREDIT_APP_ABANDONED",
+    "LEAD_UPDATED",
+)
 
 # Roles that must NEVER receive auto-assignment (only salespersons can)
 AUTO_ASSIGN_BLOCKED_ROLES = frozenset({
@@ -302,16 +328,20 @@ async def auto_assign_leads_from_activity():
 
 async def unassign_stale_leads():
     """
-    Unassign leads that have had no activity BY THE ASSIGNED PERSON for 72 hours.
-    
+    Unassign primary (and secondary) salesperson when the lead has had no *engagement*
+    for STALE_INACTIVITY_DAYS (any team member).
+
     Logic:
     - Find assigned leads (assigned_to is NOT NULL)
-    - Check the last activity performed BY the assigned user on this lead
-    - If more than 72 hours ago (or no activity by them), unassign the salesperson
-    - Keep the dealership_id intact (lead stays in dealership, just unassigned from salesperson)
-    - Notify the original assignee
-    
-    This runs every hour.
+    - Last touch = max(Activity.created_at) for rows whose type is in STALE_ENGAGEMENT_ACTIVITY_DB_LABELS
+      (excludes LEAD_ASSIGNED / LEAD_UNASSIGNED / LEAD_CREATED / system noise — assignment is not activity)
+    - If there are no qualifying activities, reference time = latest of last_activity_at,
+      last LEAD_ASSIGNED/LEAD_REASSIGNED, or lead.created_at (so a fresh assign is not stale)
+    - If reference time is older than the cutoff, unassign salesperson(s) only
+    - Keep dealership_id; clear secondary_salesperson_id; cancel pending follow-ups
+    - Notify the primary assignee
+
+    This runs on the scheduler (typically hourly).
     """
     logger.debug("Running stale lead unassignment check...")
     
@@ -319,7 +349,7 @@ async def unassign_stale_leads():
     
     async with session_maker() as session:
         try:
-            cutoff_time = utc_now() - timedelta(hours=STALE_HOURS)
+            cutoff_time = utc_now() - timedelta(days=STALE_INACTIVITY_DAYS)
             
             # Find all assigned leads with active statuses (load customer for notification name)
             result = await session.execute(
@@ -338,57 +368,80 @@ async def unassign_stale_leads():
             if not assigned_leads:
                 logger.debug("No assigned leads found")
                 return
+
+            lead_ids = [l.id for l in assigned_leads]
+            last_engagement_by_lead: dict = {}
+            last_assignment_by_lead: dict = {}
+            if lead_ids:
+                eng_result = await session.execute(
+                    select(Activity.lead_id, func.max(Activity.created_at))
+                    .where(
+                        Activity.lead_id.in_(lead_ids),
+                        cast(Activity.type, String).in_(STALE_ENGAGEMENT_ACTIVITY_DB_LABELS),
+                    )
+                    .group_by(Activity.lead_id)
+                )
+                for lid, mx in eng_result.all():
+                    last_engagement_by_lead[lid] = mx
+
+                assign_result = await session.execute(
+                    select(Activity.lead_id, func.max(Activity.created_at))
+                    .where(
+                        Activity.lead_id.in_(lead_ids),
+                        cast(Activity.type, String).in_(("LEAD_ASSIGNED", "LEAD_REASSIGNED")),
+                    )
+                    .group_by(Activity.lead_id)
+                )
+                for lid, mx in assign_result.all():
+                    last_assignment_by_lead[lid] = mx
             
             unassigned_count = 0
             
             for lead in assigned_leads:
-                # Check the last activity BY the assigned person on this lead
-                last_activity_result = await session.execute(
-                    select(Activity)
-                    .where(
-                        Activity.lead_id == lead.id,
-                        Activity.user_id == lead.assigned_to
-                    )
-                    .order_by(Activity.created_at.desc())
-                    .limit(1)
-                )
-                last_activity = last_activity_result.scalar_one_or_none()
-                
-                # Determine if stale
-                is_stale = False
-                if last_activity:
-                    if last_activity.created_at < cutoff_time:
-                        is_stale = True
+                eng_ts = last_engagement_by_lead.get(lead.id)
+                assign_ts = last_assignment_by_lead.get(lead.id)
+                if eng_ts is not None:
+                    ref_time = eng_ts
                 else:
-                    # No activity by assigned user - check when lead was assigned
-                    # Use last_activity_at (set during assignment) or created_at
-                    check_time = lead.last_activity_at or lead.created_at
-                    if check_time < cutoff_time:
-                        is_stale = True
-                
-                if not is_stale:
+                    # No qualifying engagement — measure from last assign/reassign or lead timestamps
+                    candidates = [
+                        t
+                        for t in (lead.last_activity_at, assign_ts, lead.created_at)
+                        if t is not None
+                    ]
+                    ref_time = max(candidates) if candidates else lead.created_at
+                if ref_time >= cutoff_time:
                     continue
                 
                 old_assignee_id = lead.assigned_to
                 old_dealership_id = lead.dealership_id
                 old_assignee = lead.assigned_to_user
                 
-                # Unassign the salesperson only - keep the dealership assignment
+                # Unassign salesperson(s) only — keep the dealership assignment
                 lead.assigned_to = None
+                lead.secondary_salesperson_id = None
                 lead.last_activity_at = None  # Reset for next assignment cycle
                 lead.returned_to_pool_at = utc_now()
                 lead.previous_assigned_to_id = old_assignee_id
+
+                try:
+                    await cancel_pending_follow_ups_for_lead(session, lead.id)
+                except Exception as fu_err:
+                    logger.warning("Failed to cancel follow-ups for stale lead %s: %s", lead.id, fu_err)
                 
                 # Create unassignment activity
                 activity = Activity(
                     type=ActivityType.LEAD_UNASSIGNED,
-                    description=f"Lead returned to unassigned pool due to {STALE_HOURS} hours of inactivity by assigned user",
+                    description=(
+                        f"Lead returned to unassigned pool due to {STALE_INACTIVITY_DAYS} days "
+                        f"with no qualifying engagement on this lead"
+                    ),
                     lead_id=lead.id,
                     dealership_id=old_dealership_id,  # Keep the dealership association
                     meta_data={
                         "auto_unassigned": True,
                         "reason": "stale_no_activity",
-                        "hours_inactive": STALE_HOURS,
+                        "days_inactive": STALE_INACTIVITY_DAYS,
                         "previous_assignee_id": str(old_assignee_id) if old_assignee_id else None,
                         "dealership_id": str(old_dealership_id) if old_dealership_id else None
                     }
@@ -403,7 +456,10 @@ async def unassign_stale_leads():
                         user_id=old_assignee_id,
                         notification_type=NotificationType.SYSTEM,
                         title="Lead Unassigned - No Activity",
-                        message=f"Lead {lead_name} was unassigned from you due to {STALE_HOURS} hours of inactivity. The lead remains in the dealership.",
+                        message=(
+                            f"Lead {lead_name} was unassigned from you due to {STALE_INACTIVITY_DAYS} days "
+                            f"with no qualifying engagement on this lead. The lead remains in the dealership."
+                        ),
                         link=f"/leads/{lead.id}",
                         related_id=lead.id,
                         related_type="lead",
@@ -459,7 +515,10 @@ async def unassign_stale_leads():
                         users = users_result.scalars().all()
 
                         if users:
-                            message = f"🔔 {unassigned_count} lead(s) now unassigned from salespersons!\nNo activity for {STALE_HOURS}h. First activity claims them!"
+                            message = (
+                                f"🔔 {unassigned_count} lead(s) now unassigned from salespersons!\n"
+                                f"No activity for {STALE_INACTIVITY_DAYS} days. First activity claims them!"
+                            )
                             for user in users:
                                 if user.phone:
                                     effective = await get_effective_twilio_config(session, user.dealership_id)

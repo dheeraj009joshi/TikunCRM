@@ -86,7 +86,7 @@ def setup_scheduler():
         run_stale_unassign_task,
         trigger=IntervalTrigger(hours=1),
         id="lead_stale_unassign",
-        name="Unassign leads with no activity for 72 hours",
+        name="Unassign leads with no activity for 3 days (dealership kept)",
         replace_existing=True,
         max_instances=1,
     )

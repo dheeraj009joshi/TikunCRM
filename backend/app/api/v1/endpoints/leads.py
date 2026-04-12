@@ -1654,6 +1654,7 @@ async def assign_lead(
 
     lead.assigned_to = assign_in.assigned_to
     lead.clear_returned_to_pool_state()
+    lead.last_activity_at = utc_now()
 
     # Handle optional secondary salesperson assignment (for admins)
     secondary_user = None
