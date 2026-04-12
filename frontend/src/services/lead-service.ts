@@ -85,6 +85,10 @@ export interface Lead {
     closed_at?: string;
     created_at: string;
     updated_at: string;
+    /** Set when lead re-entered unassigned pool (stale/manual unassign); cleared on assign */
+    returned_to_pool_at?: string | null;
+    previous_assigned_to_id?: string | null;
+    previous_assigned_to_user?: UserBrief | null;
     /** Number of activities (1 = only creation = fresh/untouched lead) */
     activity_count?: number;
     /** Last activity description (list response) */
@@ -125,6 +129,11 @@ export function isFreshLead(lead: Lead): boolean {
     return (lead.activity_count ?? 0) <= 1;
 }
 
+/** Unassigned lead that was previously assigned (stale timeout or manual unassign) */
+export function isLeadReturnedToPool(lead: Lead): boolean {
+    return Boolean(lead.returned_to_pool_at && !lead.assigned_to);
+}
+
 export interface LeadListResponse {
     items: Lead[];
     total: number;
@@ -150,11 +159,27 @@ export interface LeadListParams {
     date_from?: string;
     /** Filter leads created on or before this date (ISO format) */
     date_to?: string;
+    /** Only leads with multiple campaign submissions (is_starred) */
+    multi_campaign_only?: boolean;
+    /** Filter by campaign mapping (primary or lead_campaigns) */
+    campaign_mapping_id?: string;
+}
+
+export interface CampaignFilterOption {
+    id: string;
+    display_name: string;
+    match_pattern: string;
+    sync_source_name?: string | null;
 }
 
 export const LeadService = {
     async listLeads(params: LeadListParams = {}): Promise<LeadListResponse> {
         const response = await apiClient.get(`${LEADS_PREFIX}/`, { params });
+        return response.data;
+    },
+
+    async getCampaignFilterOptions(): Promise<CampaignFilterOption[]> {
+        const response = await apiClient.get<CampaignFilterOption[]>(`${LEADS_PREFIX}/campaign-filter-options`);
         return response.data;
     },
 

@@ -75,7 +75,7 @@ export function normalizeNotificationType(type: string | null | undefined): stri
 const LEGACY_DUPLICATE_BODY = /^([\s\S]+?)\s+also appeared in campaign:\s*([\s\S]+)$/i;
 
 function duplicateLeadMessage(campaign: string): string {
-    return `A new lead came in from "${campaign}", but this contact is already in your CRM (duplicate). Open the lead to see campaign history before contacting them again.`;
+    return `A new lead came in from "${campaign}" (duplicate). Open the lead to see campaign history before contacting them again.`;
 }
 
 /**

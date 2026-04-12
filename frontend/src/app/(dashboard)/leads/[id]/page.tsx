@@ -88,6 +88,7 @@ import {
     getLeadPhone,
     getLeadEmail,
     dedupeLeadCampaigns,
+    isLeadReturnedToPool,
     type LeadCampaign,
 } from "@/services/lead-service"
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
@@ -1622,7 +1623,10 @@ export default function LeadDetailsPage() {
                     ...prev,
                     assigned_to: data.assigned_to,
                     assigned_to_user: data.assigned_to_user,
-                    dealership: data.dealership || prev.dealership
+                    dealership: data.dealership || prev.dealership,
+                    returned_to_pool_at: undefined,
+                    previous_assigned_to_id: undefined,
+                    previous_assigned_to_user: undefined,
                 } : null)
             } else if (data.update_type === "dealership_assigned" && data.dealership) {
                 // Update dealership in realtime
@@ -2509,9 +2513,24 @@ export default function LeadDetailsPage() {
                                         )}
                                     </div>
                                 ) : (
-                                    <Badge variant="outline" className="text-amber-600 border-amber-300">
-                                        Unassigned
-                                    </Badge>
+                                    <div className="space-y-2">
+                                        <Badge variant="outline" className="text-amber-600 border-amber-300">
+                                            Unassigned
+                                        </Badge>
+                                        {isLeadReturnedToPool(lead) && (
+                                            <p className="text-xs text-muted-foreground">
+                                                <Badge
+                                                    variant="secondary"
+                                                    className="mr-2 text-[10px] bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200 border-0"
+                                                >
+                                                    Recycled
+                                                </Badge>
+                                                {lead.previous_assigned_to_user
+                                                    ? `Previously assigned to ${lead.previous_assigned_to_user.first_name} ${lead.previous_assigned_to_user.last_name}.`
+                                                    : "Previously assigned; new engagement will claim this lead."}
+                                            </p>
+                                        )}
+                                    </div>
                                 )}
                             </div>
                             

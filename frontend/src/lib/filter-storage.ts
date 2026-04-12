@@ -16,6 +16,8 @@ export type LeadsFilterState = {
   source?: string
   view?: string
   assigned_to?: string
+  /** Campaign mapping UUID */
+  campaign?: string
 }
 
 export type AppointmentsFilterState = {

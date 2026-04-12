@@ -24,7 +24,8 @@ import {
     CheckCircle2,
     List,
     LayoutGrid,
-    Star
+    Star,
+    FileStack
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -77,7 +78,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar as CalendarPicker } from "@/components/ui/calendar"
-import { LeadService, Lead, LeadListResponse, type LeadListParams, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead } from "@/services/lead-service"
+import { LeadService, Lead, LeadListResponse, type LeadListParams, type CampaignFilterOption, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool } from "@/services/lead-service"
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
@@ -111,7 +112,7 @@ const LEAD_SOURCES = [
     { value: "walk_in", label: "Walk-in" },
 ]
 
-type ViewMode = "mine" | "unassigned" | "all" | "converted" | "fresh" | "manager_review"
+type ViewMode = "mine" | "unassigned" | "all" | "converted" | "fresh" | "manager_review" | "multi_campaign"
 type DisplayView = "list" | "pipeline"
 
 export default function LeadsPage() {
@@ -122,6 +123,7 @@ export default function LeadsPage() {
     const sourceParam = searchParams.get("source")
     const viewParam = searchParams.get("view")
     const assignedToParam = searchParams.get("assigned_to")
+    const campaignParam = searchParams.get("campaign")
     const { timezone } = useBrowserTimezone()
 
     const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, isSalesperson, canAssignToSalesperson, hasPermission } = useRole()
@@ -135,10 +137,26 @@ export default function LeadsPage() {
     const [selectedStageIds, setSelectedStageIds] = React.useState<string[]>([])
     const [source, setSource] = React.useState(sourceParam || "all")
     const [viewMode, setViewMode] = React.useState<ViewMode>(
-        filterParam === "unassigned" ? "unassigned" : filterParam === "converted" ? "converted" : filterParam === "fresh" ? "fresh" : filterParam === "all" ? "all" : filterParam === "manager_review" ? "manager_review" : "mine"
+        filterParam === "unassigned"
+            ? "unassigned"
+            : filterParam === "converted"
+              ? "converted"
+              : filterParam === "fresh"
+                ? "fresh"
+                : filterParam === "all"
+                  ? "all"
+                  : filterParam === "manager_review"
+                    ? "manager_review"
+                    : filterParam === "multi_campaign"
+                      ? "multi_campaign"
+                      : "mine"
     )
     const [displayView, setDisplayView] = React.useState<DisplayView>(viewParam === "pipeline" ? "pipeline" : "list")
     const [assignedTo, setAssignedTo] = React.useState(assignedToParam || "all")
+    const [campaignFilter, setCampaignFilter] = React.useState(
+        campaignParam && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(campaignParam) ? campaignParam : "all"
+    )
+    const [campaignOptions, setCampaignOptions] = React.useState<CampaignFilterOption[]>([])
     const [teamMembers, setTeamMembers] = React.useState<{ id: string; first_name: string; last_name: string }[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     
@@ -182,6 +200,7 @@ export default function LeadsPage() {
         if (saved.source && saved.source !== "all") params.set("source", saved.source)
         if (saved.view === "pipeline") params.set("view", "pipeline")
         if (saved.assigned_to && saved.assigned_to !== "all") params.set("assigned_to", saved.assigned_to)
+        if (saved.campaign && saved.campaign !== "all") params.set("campaign", saved.campaign)
         router.replace(`/leads?${params.toString()}`)
     }, [router, searchParams])
 
@@ -208,6 +227,7 @@ export default function LeadsPage() {
         } else if (filter === "mine") setViewMode("mine")
         else if (filter === "fresh") setViewMode("fresh")
         else if (filter === "manager_review") setViewMode("manager_review")
+        else if (filter === "multi_campaign") setViewMode("multi_campaign")
         else if (urlStatus === "converted") {
             setViewMode("converted")
             setStatus("converted")
@@ -219,6 +239,13 @@ export default function LeadsPage() {
         else if (urlView === "list") setDisplayView("list")
         if (urlAssignedTo) setAssignedTo(urlAssignedTo)
         else setAssignedTo("all")
+
+        const urlCampaign = searchParams.get("campaign")
+        if (urlCampaign && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(urlCampaign)) {
+            setCampaignFilter(urlCampaign)
+        } else {
+            setCampaignFilter("all")
+        }
     }, [searchParams])
 
     // Load team members for admin/owner salesperson filter
@@ -229,6 +256,10 @@ export default function LeadsPage() {
             .then((list) => setTeamMembers(list))
             .catch(() => setTeamMembers([]))
     }, [isDealershipLevel, isSuperAdmin, user?.dealership_id])
+
+    React.useEffect(() => {
+        LeadService.getCampaignFilterOptions().then(setCampaignOptions).catch(() => setCampaignOptions([]))
+    }, [])
     
     // Assignment modal state
     const [assignModalOpen, setAssignModalOpen] = React.useState(false)
@@ -259,7 +290,8 @@ export default function LeadsPage() {
             const params: Record<string, unknown> = { page, page_size: 20 }
             if (search) params.search = search
             if (source && source !== "all") params.source = source
-            
+            if (campaignFilter !== "all") params.campaign_mapping_id = campaignFilter
+
             // Filter by view mode
             if (viewMode === "unassigned") {
                 params.pool = "unassigned"
@@ -268,6 +300,8 @@ export default function LeadsPage() {
             } else if (viewMode === "fresh") {
                 params.fresh_only = true
                 // Fresh = unassigned only; do not set pool so backend returns unassigned fresh leads in scope
+            } else if (viewMode === "multi_campaign") {
+                params.multi_campaign_only = true
             } else if (viewMode === "converted") {
                 // Find converted stage id
                 const convertedStage = stages.find(s => s.name === "converted")
@@ -299,7 +333,7 @@ export default function LeadsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [page, search, status, source, viewMode, stages, assignedTo, dateMode, specificDate, dateFrom, dateTo])
+    }, [page, search, status, source, viewMode, stages, assignedTo, dateMode, specificDate, dateFrom, dateTo, campaignFilter])
 
     const fetchLeadsForPipeline = React.useCallback(async () => {
         if (stages.length === 0) return
@@ -310,6 +344,7 @@ export default function LeadsPage() {
             const baseParams: Record<string, unknown> = { page: 1, page_size: PIPELINE_PAGE_SIZE }
             if (search) baseParams.search = search
             if (source && source !== "all") baseParams.source = source
+            if (campaignFilter !== "all") baseParams.campaign_mapping_id = campaignFilter
             if (assignedTo && assignedTo !== "all") baseParams.assigned_to = assignedTo
 
             // Date range filters
@@ -327,6 +362,8 @@ export default function LeadsPage() {
                 baseParams.pool = "mine"
             } else if (viewMode === "fresh") {
                 baseParams.fresh_only = true
+            } else if (viewMode === "multi_campaign") {
+                baseParams.multi_campaign_only = true
             } else if (viewMode === "converted" && convertedStage) {
                 baseParams.stage_id = convertedStage.id
                 baseParams.is_active = false
@@ -374,7 +411,7 @@ export default function LeadsPage() {
         } finally {
             setIsLoadingPipeline(false)
         }
-    }, [viewMode, search, source, selectedStageIds, stages, assignedTo, dateMode, specificDate, dateFrom, dateTo])
+    }, [viewMode, search, source, selectedStageIds, stages, assignedTo, dateMode, specificDate, dateFrom, dateTo, campaignFilter])
 
     const loadMoreForStage = React.useCallback(
         async (stageId: string) => {
@@ -391,9 +428,12 @@ export default function LeadsPage() {
                 }
                 if (search) params.search = search
                 if (source && source !== "all") params.source = source
+                if (campaignFilter !== "all") params.campaign_mapping_id = campaignFilter
                 if (assignedTo && assignedTo !== "all") params.assigned_to = assignedTo
                 if (viewMode === "unassigned") params.pool = "unassigned"
                 else if (viewMode === "mine") params.pool = "mine"
+                else if (viewMode === "fresh") params.fresh_only = true
+                else if (viewMode === "multi_campaign") params.multi_campaign_only = true
                 else if (viewMode === "converted" && convertedStage) params.is_active = false
 
                 const data = await LeadService.listLeads(params as LeadListParams)
@@ -416,7 +456,7 @@ export default function LeadsPage() {
                 setLoadingMoreStageId(null)
             }
         },
-        [stagePagination, loadingMoreStageId, stages, search, source, viewMode, assignedTo]
+        [stagePagination, loadingMoreStageId, stages, search, source, viewMode, assignedTo, campaignFilter]
     )
 
     React.useEffect(() => {
@@ -612,6 +652,8 @@ export default function LeadsPage() {
                             router.push("/leads?filter=all")
                         } else if (mode === "manager_review") {
                             router.push("/leads?filter=manager_review")
+                        } else if (mode === "multi_campaign") {
+                            router.push("/leads?filter=multi_campaign")
                         } else {
                             router.push("/leads?filter=mine")
                         }
@@ -622,6 +664,7 @@ export default function LeadsPage() {
                             source,
                             view: displayView,
                             assigned_to: assignedTo !== "all" ? assignedTo : undefined,
+                            campaign: campaignFilter !== "all" ? campaignFilter : undefined,
                         })
                     }}
                 >
@@ -629,6 +672,10 @@ export default function LeadsPage() {
                         <TabsTrigger value="mine">Your Leads</TabsTrigger>
                         <TabsTrigger value="unassigned">Unassigned</TabsTrigger>
                         <TabsTrigger value="all">All Leads</TabsTrigger>
+                        <TabsTrigger value="multi_campaign">
+                            <FileStack className="h-4 w-4 mr-1.5 shrink-0" />
+                            Multiple form fills
+                        </TabsTrigger>
                         <TabsTrigger value="fresh">Fresh (untouched)</TabsTrigger>
                         <TabsTrigger value="converted">
                             <CheckCircle2 className="h-4 w-4 mr-1.5" />
@@ -656,6 +703,7 @@ export default function LeadsPage() {
                                 source,
                                 view: next,
                                 assigned_to: assignedTo !== "all" ? assignedTo : undefined,
+                                campaign: campaignFilter !== "all" ? campaignFilter : undefined,
                             })
                         }}
                     >
@@ -700,6 +748,7 @@ export default function LeadsPage() {
                                             source,
                                             view: displayView,
                                             assigned_to: assignedTo !== "all" ? assignedTo : undefined,
+                                            campaign: campaignFilter !== "all" ? campaignFilter : undefined,
                                         })
                                     }}
                                 >
@@ -780,6 +829,7 @@ export default function LeadsPage() {
                                             source: v,
                                             view: displayView,
                                             assigned_to: assignedTo !== "all" ? assignedTo : undefined,
+                                            campaign: campaignFilter !== "all" ? campaignFilter : undefined,
                                         })
                                     }}
                                 >
@@ -809,6 +859,7 @@ export default function LeadsPage() {
                                             source,
                                             view: displayView,
                                             assigned_to: v !== "all" ? v : undefined,
+                                            campaign: campaignFilter !== "all" ? campaignFilter : undefined,
                                         })
                                     }}
                                 >
@@ -820,6 +871,40 @@ export default function LeadsPage() {
                                         {teamMembers.map((u) => (
                                             <SelectItem key={u.id} value={u.id}>
                                                 {u.first_name} {u.last_name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            )}
+                            {campaignOptions.length > 0 && (
+                                <Select
+                                    value={campaignFilter}
+                                    onValueChange={(v) => {
+                                        setCampaignFilter(v)
+                                        setPage(1)
+                                        const params = new URLSearchParams(searchParams.toString())
+                                        if (v !== "all") params.set("campaign", v)
+                                        else params.delete("campaign")
+                                        router.replace(`/leads?${params.toString()}`)
+                                        filterStorage.setLeads({
+                                            filter: viewMode,
+                                            status,
+                                            source,
+                                            view: displayView,
+                                            assigned_to: assignedTo !== "all" ? assignedTo : undefined,
+                                            campaign: v !== "all" ? v : undefined,
+                                        })
+                                    }}
+                                >
+                                    <SelectTrigger className="w-[200px] min-w-[10rem]">
+                                        <SelectValue placeholder="Campaign" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All campaigns</SelectItem>
+                                        {campaignOptions.map((c) => (
+                                            <SelectItem key={c.id} value={c.id} title={c.match_pattern}>
+                                                {c.display_name}
+                                                {c.sync_source_name ? ` · ${c.sync_source_name}` : ""}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>
@@ -1069,6 +1154,19 @@ export default function LeadsPage() {
                                                     {isFreshLead(lead) && (
                                                         <Badge variant="secondary" className="text-[10px] font-normal bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border-0">
                                                             Fresh
+                                                        </Badge>
+                                                    )}
+                                                    {isLeadReturnedToPool(lead) && (
+                                                        <Badge
+                                                            variant="secondary"
+                                                            className="text-[10px] font-normal bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200 border-0"
+                                                            title={
+                                                                lead.previous_assigned_to_user
+                                                                    ? `Previously assigned to ${lead.previous_assigned_to_user.first_name} ${lead.previous_assigned_to_user.last_name}`
+                                                                    : "Returned to unassigned pool"
+                                                            }
+                                                        >
+                                                            Recycled
                                                         </Badge>
                                                     )}
                                                 </p>

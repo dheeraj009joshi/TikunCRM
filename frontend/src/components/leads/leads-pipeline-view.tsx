@@ -18,7 +18,7 @@ import { CSS } from "@dnd-kit/utilities"
 import { Phone, Mail, Loader2, Target, DollarSign } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { UserAvatar } from "@/components/ui/avatar"
-import { Lead, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead } from "@/services/lead-service"
+import { Lead, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool } from "@/services/lead-service"
 import { LeadStage } from "@/services/lead-stage-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
@@ -76,6 +76,19 @@ function PipelineLeadCard({ lead, isDragging }: { lead: Lead; isDragging?: boole
                     {isFreshLead(lead) && (
                         <Badge variant="secondary" className="text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border-0">
                             Fresh
+                        </Badge>
+                    )}
+                    {isLeadReturnedToPool(lead) && (
+                        <Badge
+                            variant="secondary"
+                            className="text-[10px] bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200 border-0"
+                            title={
+                                lead.previous_assigned_to_user
+                                    ? `Previously assigned to ${lead.previous_assigned_to_user.first_name} ${lead.previous_assigned_to_user.last_name}`
+                                    : "Returned to unassigned pool"
+                            }
+                        >
+                            Recycled
                         </Badge>
                     )}
                     <Badge variant="outline" className="text-[10px]">
