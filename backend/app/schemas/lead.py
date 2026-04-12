@@ -175,6 +175,14 @@ class LeadCampaignResponse(BaseModel):
         from_attributes = True
 
 
+class CampaignFilterOption(BaseModel):
+    """Campaign mapping row for leads list filter dropdown."""
+    id: UUID
+    display_name: str
+    match_pattern: str
+    sync_source_name: Optional[str] = None
+
+
 class LeadResponse(BaseModel):
     """Lead response — contact info comes from embedded customer."""
     id: UUID

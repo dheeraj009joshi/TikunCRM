@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select, func, and_, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
@@ -29,10 +30,13 @@ from app.models.lead_stage import LeadStage
 from app.models.activity import Activity, ActivityType
 from app.models.dealership import Dealership
 from app.models.lead_campaign import LeadCampaign
+from app.models.campaign_mapping import CampaignMapping
+from app.models.lead_sync_source import LeadSyncSource
 from app.schemas.lead import (
     LeadResponse, LeadCreate, LeadUpdate, LeadDetail,
     LeadStageChangeRequest, LeadStatusUpdateCompat, LeadAssignment, LeadListResponse,
     LeadDealershipAssignment, BulkLeadDealershipAssignment,
+    CampaignFilterOption,
     LeadSecondaryAssignment, LeadSwapSalespersons
 )
 from app.schemas.activity import NoteCreate
@@ -453,6 +457,14 @@ async def list_leads(
     is_active: Optional[bool] = None,
     pool: Optional[str] = None,  # "unassigned" | "mine" | None (all)
     fresh_only: Optional[bool] = Query(None, description="Only leads with no activity except creation (untouched/fresh)"),
+    multi_campaign_only: Optional[bool] = Query(
+        None,
+        description="Only leads with multiple campaign submissions (duplicate form fills / is_starred)",
+    ),
+    campaign_mapping_id: Optional[UUID] = Query(
+        None,
+        description="Leads tied to this campaign (primary campaign or lead_campaigns row)",
+    ),
     assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson (admin/owner only). Show only leads assigned to this user."),
     date_from: Optional[datetime] = Query(None, description="Filter leads created on or after this date (ISO format)"),
     date_to: Optional[datetime] = Query(None, description="Filter leads created on or before this date (ISO format)"),
@@ -553,6 +565,20 @@ async def list_leads(
             .having(func.count(Activity.id) == 1)
         )
         query = query.where(Lead.id.in_(fresh_subq)).where(Lead.assigned_to.is_(None))
+
+    if multi_campaign_only:
+        query = query.where(Lead.is_starred.is_(True))
+
+    if campaign_mapping_id is not None:
+        campaign_lead_subq = select(LeadCampaign.lead_id).where(
+            LeadCampaign.campaign_mapping_id == campaign_mapping_id
+        )
+        query = query.where(
+            or_(
+                Lead.campaign_mapping_id == campaign_mapping_id,
+                Lead.id.in_(campaign_lead_subq),
+            )
+        )
 
     # Pagination
     total_query = select(func.count()).select_from(query.subquery())
@@ -681,6 +707,53 @@ async def list_leads_unassigned_to_salesperson(
         "page_size": page_size,
         "pages": (total + page_size - 1) // page_size
     }
+
+
+@router.get("/campaign-filter-options", response_model=List[CampaignFilterOption])
+async def list_campaign_filter_options(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Campaign mappings available for the leads list filter (all users who can open Leads).
+    Scoped to the user's dealership; super admin sees all active mappings.
+    """
+    if current_user.role == UserRole.SUPER_ADMIN:
+        cm_query = (
+            select(CampaignMapping)
+            .where(CampaignMapping.is_active == True)
+            .options(selectinload(CampaignMapping.sync_source))
+            .order_by(CampaignMapping.sync_source_id, CampaignMapping.priority)
+        )
+    else:
+        if not current_user.dealership_id:
+            return []
+        cm_query = (
+            select(CampaignMapping)
+            .join(LeadSyncSource, CampaignMapping.sync_source_id == LeadSyncSource.id)
+            .where(
+                CampaignMapping.is_active == True,
+                or_(
+                    CampaignMapping.dealership_id == current_user.dealership_id,
+                    (CampaignMapping.dealership_id.is_(None))
+                    & (LeadSyncSource.default_dealership_id == current_user.dealership_id),
+                ),
+            )
+            .options(selectinload(CampaignMapping.sync_source))
+            .order_by(CampaignMapping.sync_source_id, CampaignMapping.priority)
+        )
+
+    result = await db.execute(cm_query)
+    mappings = result.scalars().all()
+    return [
+        CampaignFilterOption(
+            id=m.id,
+            display_name=(m.display_name or m.match_pattern or "").strip() or "Campaign",
+            match_pattern=m.match_pattern or "",
+            sync_source_name=m.sync_source.name if m.sync_source else None,
+        )
+        for m in mappings
+    ]
 
 
 @router.post("/", response_model=LeadResponse)
