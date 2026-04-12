@@ -20,7 +20,7 @@ _RE_LEGACY_MULTI_CAMPAIGN = re.compile(
 _DUPLICATE_TITLE_PREFIX = "duplicate lead:"
 
 _MSG_DUPLICATE = (
-    'A new lead came in from "{campaign}", but this contact is already in your CRM '
+    'A new lead came in from "{campaign}"'
     "(duplicate). Open the lead to see campaign history before contacting them again."
 )
 
