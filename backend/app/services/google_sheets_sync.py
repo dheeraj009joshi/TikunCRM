@@ -363,12 +363,42 @@ async def get_existing_leads_by_external_id(
     return {lead.external_id: lead for lead in leads}
 
 
-async def get_existing_phones(session: AsyncSession) -> Set[str]:
-    """Get all existing phone numbers from customers who have leads."""
-    result = await session.execute(
-        select(Customer.phone).join(Lead, Lead.customer_id == Customer.id).where(Customer.phone.isnot(None))
-    )
-    return {row[0] for row in result.fetchall()}
+async def load_leads_by_phone_dealership_pairs(
+    session: AsyncSession,
+    pairs: List[Tuple[str, Optional[UUID]]],
+) -> Dict[Tuple[str, Optional[UUID]], Lead]:
+    """
+    For each (phone, dealership_id), return one existing lead (newest first).
+    Multi-campaign / duplicate detection is scoped to the same dealership only:
+    same phone at another dealership is a separate lead, not a duplicate.
+    """
+    if not pairs:
+        return {}
+    unique_pairs = list({(p, d) for p, d in pairs})
+    by_dealership: Dict[Optional[UUID], Set[str]] = {}
+    for phone, did in unique_pairs:
+        by_dealership.setdefault(did, set()).add(phone)
+
+    result: Dict[Tuple[str, Optional[UUID]], Lead] = {}
+    for dealership_id, phones in by_dealership.items():
+        if not phones:
+            continue
+        stmt = (
+            select(Lead, Customer.phone)
+            .join(Customer, Lead.customer_id == Customer.id)
+            .where(Customer.phone.in_(phones))
+        )
+        if dealership_id is not None:
+            stmt = stmt.where(Lead.dealership_id == dealership_id)
+        else:
+            stmt = stmt.where(Lead.dealership_id.is_(None))
+        stmt = stmt.order_by(Lead.created_at.desc())
+        rows = await session.execute(stmt)
+        for lead, p in rows.all():
+            key = (p, dealership_id)
+            if key not in result:
+                result[key] = lead
+    return result
 
 
 async def get_lead_by_phone(session: AsyncSession, phone: str) -> Optional[Lead]:
@@ -381,22 +411,6 @@ async def get_lead_by_phone(session: AsyncSession, phone: str) -> Optional[Lead]
         .limit(1)
     )
     return result.scalar_one_or_none()
-
-
-async def get_phone_to_lead_map(session: AsyncSession, phones: Set[str]) -> Dict[str, Lead]:
-    """Get a mapping of phone numbers to their leads."""
-    if not phones:
-        return {}
-    result = await session.execute(
-        select(Lead, Customer.phone)
-        .join(Customer, Lead.customer_id == Customer.id)
-        .where(Customer.phone.in_(phones))
-    )
-    phone_to_lead: Dict[str, Lead] = {}
-    for lead, phone in result.all():
-        if phone not in phone_to_lead:
-            phone_to_lead[phone] = lead
-    return phone_to_lead
 
 
 def _empty_sync_result(error: Optional[str] = None) -> Dict[str, Any]:
@@ -479,17 +493,21 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                 # Check for duplicates
                 sheet_external_ids = {ld["external_id"] for ld in parsed_leads}
                 existing_leads_map = await get_existing_leads_by_external_id(session, sheet_external_ids)
-                existing_phones = await get_existing_phones(session)
-                
-                # Get phone-to-lead mapping for multi-campaign tracking
-                phones_for_multicampaign = {
-                    ld.get("phone") for ld in parsed_leads 
-                    if ld.get("phone") and ld.get("phone") in existing_phones
-                }
-                phone_to_lead_map = await get_phone_to_lead_map(session, phones_for_multicampaign)
-                
+
+                # Phone → lead lookup scoped by dealership (same phone elsewhere = new lead, not duplicate)
+                phone_dealership_pairs: List[Tuple[str, Optional[UUID]]] = []
+                for ld in parsed_leads:
+                    ph = ld.get("phone")
+                    if not ph:
+                        continue
+                    tdid = ld.get("target_dealership_id") or source.default_dealership_id
+                    phone_dealership_pairs.append((ph, tdid))
+                phone_deal_lead_map = await load_leads_by_phone_dealership_pairs(
+                    session, phone_dealership_pairs
+                )
+
                 tracked_external_ids: Set[str] = set()
-                tracked_phones: Set[str] = set()
+                tracked_phone_dealership: Set[Tuple[str, Optional[UUID]]] = set()
                 
                 new_leads_data: List[Dict[str, Any]] = []
                 updated_count = 0
@@ -499,7 +517,8 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                 for lead_data in parsed_leads:
                     ext_id = lead_data["external_id"]
                     phone = lead_data.get("phone")
-                    
+                    target_dealership_id = lead_data.get("target_dealership_id") or source.default_dealership_id
+
                     if ext_id in existing_leads_map:
                         # Update existing lead
                         lead = existing_leads_map[ext_id]
@@ -518,42 +537,42 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                             lead.campaign_mapping_id = matched_mapping.id
                             matched_mapping.leads_matched += 1
                         updated_count += 1
-                    elif ext_id in tracked_external_ids or (phone and phone in tracked_phones):
+                    elif ext_id in tracked_external_ids or (
+                        phone and (phone, target_dealership_id) in tracked_phone_dealership
+                    ):
                         duplicate_count += 1
-                    elif phone and phone in existing_phones:
-                        # Multi-campaign scenario: lead exists from different campaign
-                        existing_lead = phone_to_lead_map.get(phone)
-                        if existing_lead:
-                            campaign_name = lead_data.get("campaign_name_raw") or "Unknown Campaign"
-                            matched_mapping = lead_data.get("matched_mapping")
+                    elif phone and (existing_lead := phone_deal_lead_map.get((phone, target_dealership_id))):
+                        # Multi-campaign: same dealership, same phone — another campaign row
+                        campaign_name = lead_data.get("campaign_name_raw") or "Unknown Campaign"
+                        matched_mapping = lead_data.get("matched_mapping")
 
-                            already_linked = await _lead_campaign_association_exists(
-                                session,
-                                existing_lead.id,
-                                matched_mapping,
-                                campaign_name,
+                        already_linked = await _lead_campaign_association_exists(
+                            session,
+                            existing_lead.id,
+                            matched_mapping,
+                            campaign_name,
+                        )
+                        if not already_linked:
+                            lead_campaign = LeadCampaign(
+                                lead_id=existing_lead.id,
+                                campaign_mapping_id=matched_mapping.id if matched_mapping else None,
+                                campaign_name=campaign_name,
+                                sync_source_id=source.id,
                             )
-                            if not already_linked:
-                                lead_campaign = LeadCampaign(
-                                    lead_id=existing_lead.id,
-                                    campaign_mapping_id=matched_mapping.id if matched_mapping else None,
-                                    campaign_name=campaign_name,
-                                    sync_source_id=source.id,
-                                )
-                                session.add(lead_campaign)
+                            session.add(lead_campaign)
 
-                                existing_lead.is_starred = True
+                            existing_lead.is_starred = True
 
-                                if matched_mapping:
-                                    matched_mapping.leads_matched += 1
+                            if matched_mapping:
+                                matched_mapping.leads_matched += 1
 
-                                multi_campaign_leads.append((existing_lead, lead_data))
+                            multi_campaign_leads.append((existing_lead, lead_data))
 
-                                logger.info(
-                                    f"Multi-campaign lead: {existing_lead.id} now also in campaign '{campaign_name}'"
-                                )
-                            else:
-                                existing_lead.is_starred = True
+                            logger.info(
+                                f"Multi-campaign lead: {existing_lead.id} now also in campaign '{campaign_name}'"
+                            )
+                        else:
+                            existing_lead.is_starred = True
 
                         duplicate_count += 1
                     else:
@@ -561,7 +580,7 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                         if ext_id:
                             tracked_external_ids.add(ext_id)
                         if phone:
-                            tracked_phones.add(phone)
+                            tracked_phone_dealership.add((phone, target_dealership_id))
                 
                 # Create new leads
                 created_leads = []
@@ -925,31 +944,42 @@ async def _legacy_sync_google_sheet_leads() -> Dict[str, Any]:
                 
                 sheet_external_ids = {ld["external_id"] for ld in parsed_leads}
                 existing_leads_map = await get_existing_leads_by_external_id(session, sheet_external_ids)
-                existing_phones = await get_existing_phones(session)
+
+                legacy_pairs: List[Tuple[str, Optional[UUID]]] = []
+                for ld in parsed_leads:
+                    ph = ld.get("phone")
+                    if ph:
+                        legacy_pairs.append((ph, target_dealership_id))
+                phone_deal_lead_map_legacy = await load_leads_by_phone_dealership_pairs(
+                    session, legacy_pairs
+                )
+
                 tracked_external_ids: Set[str] = set()
-                tracked_phones: Set[str] = set()
-                
+                tracked_phone_dealership_legacy: Set[Tuple[str, Optional[UUID]]] = set()
+
                 new_leads: List[Dict[str, Any]] = []
                 for lead_data in parsed_leads:
                     ext_id = lead_data["external_id"]
                     phone = lead_data.get("phone")
-                    
+
                     if ext_id in existing_leads_map:
                         lead = existing_leads_map[ext_id]
                         if lead_data.get("created_at"):
                             lead.created_at = lead_data["created_at"]
                         lead.meta_data = {**(lead.meta_data or {}), **lead_data["meta_data"]}
                         updated_count += 1
-                    elif ext_id in tracked_external_ids or (phone and phone in tracked_phones):
+                    elif ext_id in tracked_external_ids or (
+                        phone and (phone, target_dealership_id) in tracked_phone_dealership_legacy
+                    ):
                         duplicate_count += 1
-                    elif phone and phone in existing_phones:
+                    elif phone and phone_deal_lead_map_legacy.get((phone, target_dealership_id)):
                         duplicate_count += 1
                     else:
                         new_leads.append(lead_data)
                         if ext_id:
                             tracked_external_ids.add(ext_id)
                         if phone:
-                            tracked_phones.add(phone)
+                            tracked_phone_dealership_legacy.add((phone, target_dealership_id))
                 
                 created_leads = []
                 if new_leads:

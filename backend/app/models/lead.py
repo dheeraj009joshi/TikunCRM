@@ -165,6 +165,18 @@ class Lead(Base):
         DateTime(timezone=True), nullable=True, index=True,
         comment="Last activity timestamp for auto-assignment tracking",
     )
+    # After stale or manual unassign: auto-assign uses only activities at/after this time
+    returned_to_pool_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
+        comment="When lead entered unassigned pool; first-touch auto-assign ignores prior activity",
+    )
+    previous_assigned_to_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Primary assignee before last return to pool (for UI)",
+    )
     converted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -192,6 +204,9 @@ class Lead(Base):
     )
     assigned_to_user: Mapped[Optional["User"]] = relationship(
         "User", back_populates="assigned_leads", foreign_keys=[assigned_to], lazy="noload"
+    )
+    previous_assigned_to_user: Mapped[Optional["User"]] = relationship(
+        "User", foreign_keys=[previous_assigned_to_id], lazy="noload",
     )
     secondary_salesperson: Mapped[Optional["User"]] = relationship(
         "User", foreign_keys=[secondary_salesperson_id], lazy="noload"
@@ -298,6 +313,11 @@ class Lead(Base):
     @property
     def preferred_contact_time(self) -> Optional[str]:
         return self.customer.preferred_contact_time if self.customer else None
+
+    def clear_returned_to_pool_state(self) -> None:
+        """Clear pool-entry tracking after a successful assignment."""
+        self.returned_to_pool_at = None
+        self.previous_assigned_to_id = None
 
     def __repr__(self) -> str:
         stage_name = self.stage.display_name if self.stage else "?"

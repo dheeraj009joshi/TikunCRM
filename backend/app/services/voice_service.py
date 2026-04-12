@@ -300,6 +300,7 @@ class VoiceService:
             return False
         
         lead.assigned_to = answered_by_user.id
+        lead.clear_returned_to_pool_state()
         await self.db.flush()
         
         # Log activity for assignment

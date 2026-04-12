@@ -184,6 +184,7 @@ async def auto_assign_lead_on_activity(
     # Perform the auto-assignment
     logger.info(f"[INLINE-AUTO-ASSIGN-v2] ASSIGNING lead {lead.id} to {user.email} (role verified: {final_role_check})")
     lead.assigned_to = user.id
+    lead.clear_returned_to_pool_state()
     dealership_just_assigned = lead.dealership_id is None
     if lead.dealership_id is None:
         lead.dealership_id = user.dealership_id  # Also assign to dealership if in global pool
@@ -278,6 +279,8 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
     for lead in leads:
         if lead.assigned_to:
             user_ids.add(lead.assigned_to)
+        if getattr(lead, "previous_assigned_to_id", None):
+            user_ids.add(lead.previous_assigned_to_id)
         if hasattr(lead, 'secondary_salesperson_id') and lead.secondary_salesperson_id:
             user_ids.add(lead.secondary_salesperson_id)
         if lead.dealership_id:
@@ -410,6 +413,9 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "closed_at": lead.closed_at.isoformat() if lead.closed_at else None,
             "created_at": lead.created_at.isoformat() if lead.created_at else None,
             "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
+            "returned_to_pool_at": lead.returned_to_pool_at.isoformat() if getattr(lead, "returned_to_pool_at", None) else None,
+            "previous_assigned_to_id": str(lead.previous_assigned_to_id) if getattr(lead, "previous_assigned_to_id", None) else None,
+            "previous_assigned_to_user": users_map.get(lead.previous_assigned_to_id) if getattr(lead, "previous_assigned_to_id", None) else None,
             "assigned_to_user": users_map.get(lead.assigned_to) if lead.assigned_to else None,
             "secondary_salesperson": users_map.get(lead.secondary_salesperson_id) if hasattr(lead, 'secondary_salesperson_id') and lead.secondary_salesperson_id else None,
             "dealership": dealerships_map.get(lead.dealership_id) if lead.dealership_id else None,
@@ -1233,6 +1239,9 @@ async def get_lead(
         "closed_at": lead.closed_at,
         "created_at": lead.created_at,
         "updated_at": lead.updated_at,
+        "returned_to_pool_at": getattr(lead, "returned_to_pool_at", None),
+        "previous_assigned_to_id": getattr(lead, "previous_assigned_to_id", None),
+        "previous_assigned_to_user": None,
         "assigned_to_user": None,
         "secondary_salesperson": None,
         "created_by_user": None,
@@ -1253,6 +1262,20 @@ async def get_lead(
                 "role": assigned_user.role,
                 "is_active": assigned_user.is_active,
                 "dealership_id": assigned_user.dealership_id
+            }
+
+    if getattr(lead, "previous_assigned_to_id", None):
+        prev_result = await db.execute(select(User).where(User.id == lead.previous_assigned_to_id))
+        prev_user = prev_result.scalar_one_or_none()
+        if prev_user:
+            response_data["previous_assigned_to_user"] = {
+                "id": prev_user.id,
+                "email": prev_user.email,
+                "first_name": prev_user.first_name,
+                "last_name": prev_user.last_name,
+                "role": prev_user.role,
+                "is_active": prev_user.is_active,
+                "dealership_id": prev_user.dealership_id,
             }
     
     # Fetch secondary salesperson info
@@ -1557,7 +1580,8 @@ async def assign_lead(
             old_assigned_to_name = f"{old_user.first_name} {old_user.last_name}"
 
     lead.assigned_to = assign_in.assigned_to
-    
+    lead.clear_returned_to_pool_state()
+
     # Handle optional secondary salesperson assignment (for admins)
     secondary_user = None
     if assign_in.secondary_salesperson_id:
@@ -1707,6 +1731,9 @@ async def unassign_lead(
 
     lead.assigned_to = None
     lead.secondary_salesperson_id = None
+    lead.last_activity_at = None
+    lead.returned_to_pool_at = utc_now()
+    lead.previous_assigned_to_id = old_assigned_to_id
 
     await ActivityService.log_activity(
         db,

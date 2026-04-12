@@ -211,6 +211,10 @@ class LeadResponse(BaseModel):
     closed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    # Unassigned pool: set when stale/manual unassign; cleared on assign
+    returned_to_pool_at: Optional[datetime] = None
+    previous_assigned_to_id: Optional[UUID] = None
+    previous_assigned_to_user: Optional[UserBrief] = None
 
     # Convenience: flattened customer fields for backward compat
     @property

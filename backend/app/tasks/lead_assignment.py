@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, exists
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, selectinload
 
@@ -54,12 +54,13 @@ def get_assignment_session_maker():
 
 async def auto_assign_leads_from_activity():
     """
-    Check for unassigned leads that have ANY user activity and auto-assign them.
-    
+    Check for unassigned leads that have qualifying user activity and auto-assign them.
+
     Logic:
     - Find leads with no salesperson assigned (assigned_to is NULL)
-    - That have at least one user-initiated activity (note, call, email, etc.)
-    - Assign to the user who performed the FIRST activity BY A SALESPERSON
+    - That have at least one user-initiated activity (note, call, email, etc.) after any
+      return to the unassigned pool (returned_to_pool_at); if never pooled, use all time
+    - Assign to the user who performed the FIRST such activity BY A SALESPERSON
     - NEVER assign to admins, owners, or super admins
     - Also assign to that user's dealership if lead is in global pool
     
@@ -85,22 +86,26 @@ async def auto_assign_leads_from_activity():
     
     async with session_maker() as session:
         try:
-            # Find leads with user activities
-            leads_with_activity_subquery = (
-                select(Activity.lead_id)
-                .where(
+            # Qualifying activity exists, and if lead was returned to pool, only count
+            # activities at/after that moment (ignore historical first-touch before pool entry)
+            has_post_pool_activity = exists(
+                select(Activity.id).where(
+                    Activity.lead_id == Lead.id,
                     Activity.type.in_(assignable_activity_types),
-                    Activity.user_id.isnot(None)
+                    Activity.user_id.isnot(None),
+                    or_(
+                        Lead.returned_to_pool_at.is_(None),
+                        Activity.created_at >= Lead.returned_to_pool_at,
+                    ),
                 )
-                .distinct()
             )
-            
+
             # Get leads with no salesperson assigned (including leads in dealerships)
             result = await session.execute(
                 select(Lead)
                 .where(
                     Lead.assigned_to.is_(None),  # No salesperson assigned
-                    Lead.id.in_(leads_with_activity_subquery)
+                    has_post_pool_activity,
                 )
             )
             unassigned_leads = result.scalars().all()
@@ -117,16 +122,20 @@ async def auto_assign_leads_from_activity():
                 # Get the first user activity for this lead that was performed by a salesperson
                 # (admins/owners should not auto-claim leads on first activity)
                 # IMPORTANT: Use BOTH inclusion (salesperson) AND exclusion (not admin roles) for maximum safety
+                first_act_filters = [
+                    Activity.lead_id == lead.id,
+                    Activity.type.in_(assignable_activity_types),
+                    Activity.user_id.isnot(None),
+                    User.role == "salesperson",  # Must be salesperson
+                    User.role.notin_(["super_admin", "dealership_admin", "dealership_owner"]),  # Explicitly exclude admins
+                ]
+                if lead.returned_to_pool_at is not None:
+                    first_act_filters.append(Activity.created_at >= lead.returned_to_pool_at)
+
                 first_activity_result = await session.execute(
                     select(Activity, User)
                     .join(User, Activity.user_id == User.id)
-                    .where(
-                        Activity.lead_id == lead.id,
-                        Activity.type.in_(assignable_activity_types),
-                        Activity.user_id.isnot(None),
-                        User.role == "salesperson",  # Must be salesperson
-                        User.role.notin_(["super_admin", "dealership_admin", "dealership_owner"]),  # Explicitly exclude admins
-                    )
+                    .where(*first_act_filters)
                     .order_by(Activity.created_at.asc())
                     .limit(1)
                 )
@@ -134,15 +143,19 @@ async def auto_assign_leads_from_activity():
                 
                 if not first_row:
                     # No salesperson activity found - check if there are admin activities we're skipping
+                    admin_filters = [
+                        Activity.lead_id == lead.id,
+                        Activity.type.in_(assignable_activity_types),
+                        Activity.user_id.isnot(None),
+                        User.role != "salesperson",  # Use string literal
+                    ]
+                    if lead.returned_to_pool_at is not None:
+                        admin_filters.append(Activity.created_at >= lead.returned_to_pool_at)
+
                     admin_activity_result = await session.execute(
                         select(Activity, User)
                         .join(User, Activity.user_id == User.id)
-                        .where(
-                            Activity.lead_id == lead.id,
-                            Activity.type.in_(assignable_activity_types),
-                            Activity.user_id.isnot(None),
-                            User.role != "salesperson",  # Use string literal
-                        )
+                        .where(*admin_filters)
                         .limit(1)
                     )
                     admin_row = admin_activity_result.first()
@@ -206,6 +219,7 @@ async def auto_assign_leads_from_activity():
                     f"based on {first_activity.type.value if hasattr(first_activity.type, 'value') else first_activity.type} activity"
                 )
                 lead.assigned_to = first_activity.user_id
+                lead.clear_returned_to_pool_state()
                 if lead.dealership_id is None:
                     lead.dealership_id = activity_user.dealership_id
                 lead.last_activity_at = utc_now()
@@ -362,6 +376,8 @@ async def unassign_stale_leads():
                 # Unassign the salesperson only - keep the dealership assignment
                 lead.assigned_to = None
                 lead.last_activity_at = None  # Reset for next assignment cycle
+                lead.returned_to_pool_at = utc_now()
+                lead.previous_assigned_to_id = old_assignee_id
                 
                 # Create unassignment activity
                 activity = Activity(
