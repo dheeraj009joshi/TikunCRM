@@ -137,5 +137,19 @@ export const ActivityService = {
             confirm_skate: data.confirmSkate ?? false
         });
         return response.data;
-    }
+    },
+
+    /** Manual SMS or WhatsApp outreach log (timeline only; does not send a message). */
+    async logOutreach(leadId: string, data: {
+        channel: "sms" | "whatsapp";
+        notes: string;
+        confirmSkate?: boolean;
+    }): Promise<Activity | Record<string, unknown>> {
+        const response = await apiClient.post(`/leads/${leadId}/log-outreach`, {
+            channel: data.channel,
+            notes: data.notes,
+            confirm_skate: data.confirmSkate ?? false,
+        });
+        return response.data;
+    },
 };

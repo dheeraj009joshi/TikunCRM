@@ -76,9 +76,17 @@ export const DealershipService = {
         return response.data;
     },
 
-    // Toggle dealership active status
+    // Toggle dealership active status (Super Admin only)
     async toggleDealershipStatus(id: string, isActive: boolean): Promise<Dealership> {
-        const response = await apiClient.patch(`${DEALERSHIPS_PREFIX}/${id}`, { is_active: isActive });
+        const response = await apiClient.patch(`${DEALERSHIPS_PREFIX}/${id}/status`, null, {
+            params: { is_active: isActive }
+        });
+        return response.data;
+    },
+
+    // Partial update dealership
+    async patchDealership(id: string, data: Partial<UpdateDealershipData>): Promise<Dealership> {
+        const response = await apiClient.patch(`${DEALERSHIPS_PREFIX}/${id}`, data);
         return response.data;
     },
 
@@ -106,6 +114,8 @@ export interface DealershipTwilioConfig {
     dealership_id: string;
     account_sid?: string | null;
     auth_token_set: boolean;
+    /** Present after configuration unlock; decrypted server-side */
+    auth_token?: string | null;
     sms_enabled: boolean;
     sms_from_number?: string | null;
     whatsapp_enabled: boolean;
@@ -114,6 +124,8 @@ export interface DealershipTwilioConfig {
     twilio_twiml_app_sid?: string | null;
     twilio_api_key_sid?: string | null;
     api_key_secret_set: boolean;
+    /** Present after configuration unlock; decrypted server-side */
+    twilio_api_key_secret?: string | null;
     voice_caller_id_number?: string | null;
 }
 

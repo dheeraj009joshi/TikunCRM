@@ -10,10 +10,13 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import apiClient from "@/lib/api-client"
+import { useRole } from "@/hooks/use-role"
+import { setConfigAccessPassword } from "@/services/config-access-service"
 
 export default function SecuritySettingsPage() {
     const router = useRouter()
-    
+    const { isSuperAdmin, isDealershipLevel } = useRole()
+
     const [currentPassword, setCurrentPassword] = React.useState("")
     const [newPassword, setNewPassword] = React.useState("")
     const [confirmPassword, setConfirmPassword] = React.useState("")
@@ -23,6 +26,69 @@ export default function SecuritySettingsPage() {
     const [showCurrentPassword, setShowCurrentPassword] = React.useState(false)
     const [showNewPassword, setShowNewPassword] = React.useState(false)
     const [showConfirmPassword, setShowConfirmPassword] = React.useState(false)
+
+    const [cfgLoginPw, setCfgLoginPw] = React.useState("")
+    const [cfgPw, setCfgPw] = React.useState("")
+    const [cfgPw2, setCfgPw2] = React.useState("")
+    const [cfgCurrent, setCfgCurrent] = React.useState("")
+    const [cfgLoading, setCfgLoading] = React.useState(false)
+    const [cfgError, setCfgError] = React.useState<string | null>(null)
+    const [cfgSuccess, setCfgSuccess] = React.useState<string | null>(null)
+    const [hasConfigPw, setHasConfigPw] = React.useState<boolean | null>(null)
+
+    React.useEffect(() => {
+        if (!isSuperAdmin && !isDealershipLevel) return
+        apiClient
+            .get<{ config_access_password_set: boolean }>("/auth/config-access-status")
+            .then((r) => setHasConfigPw(r.data.config_access_password_set))
+            .catch(() => setHasConfigPw(null))
+    }, [isSuperAdmin, isDealershipLevel])
+
+    async function handleConfigAccessPassword(e: React.FormEvent) {
+        e.preventDefault()
+        setCfgError(null)
+        setCfgSuccess(null)
+        if (!cfgLoginPw.trim() || !cfgPw || !cfgPw2) {
+            setCfgError("All fields are required")
+            return
+        }
+        if (cfgPw.length < 8) {
+            setCfgError("Configuration password must be at least 8 characters")
+            return
+        }
+        if (cfgPw !== cfgPw2) {
+            setCfgError("Configuration passwords do not match")
+            return
+        }
+        if (cfgPw === cfgLoginPw) {
+            setCfgError("Must differ from your login password")
+            return
+        }
+        if (hasConfigPw && !cfgCurrent.trim()) {
+            setCfgError("Enter your current configuration password to change it")
+            return
+        }
+        setCfgLoading(true)
+        try {
+            await setConfigAccessPassword({
+                login_password: cfgLoginPw,
+                config_password: cfgPw,
+                config_password_confirm: cfgPw2,
+                current_config_password: hasConfigPw ? cfgCurrent : undefined,
+            })
+            setCfgSuccess("Configuration-access password saved.")
+            setCfgLoginPw("")
+            setCfgPw("")
+            setCfgPw2("")
+            setCfgCurrent("")
+            setHasConfigPw(true)
+        } catch (err: unknown) {
+            const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+            setCfgError(typeof detail === "string" ? detail : "Could not save")
+        } finally {
+            setCfgLoading(false)
+        }
+    }
     
     async function handleChangePassword(e: React.FormEvent) {
         e.preventDefault()
@@ -57,8 +123,9 @@ export default function SecuritySettingsPage() {
             setCurrentPassword("")
             setNewPassword("")
             setConfirmPassword("")
-        } catch (err: any) {
-            setError(err.response?.data?.detail || "Failed to change password")
+        } catch (err: unknown) {
+            const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+            setError(typeof detail === "string" ? detail : "Failed to change password")
         } finally {
             setIsLoading(false)
         }
@@ -183,6 +250,84 @@ export default function SecuritySettingsPage() {
                     </form>
                 </CardContent>
             </Card>
+
+            {(isSuperAdmin || isDealershipLevel) && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <Shield className="h-5 w-5" />
+                            Configuration-access password
+                        </CardTitle>
+                        <CardDescription>
+                            Separate from your CRM login password. Required to view and edit Twilio and dealership email
+                            integration settings. You will be prompted for this password when opening those screens (short
+                            unlock session per browser tab).
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <form onSubmit={handleConfigAccessPassword} className="space-y-4">
+                            {cfgError && (
+                                <Alert variant="destructive">
+                                    <XCircle className="h-4 w-4" />
+                                    <AlertDescription>{cfgError}</AlertDescription>
+                                </Alert>
+                            )}
+                            {cfgSuccess && (
+                                <Alert className="border-green-500 text-green-700 bg-green-50 dark:bg-green-950 dark:text-green-300">
+                                    <CheckCircle2 className="h-4 w-4" />
+                                    <AlertDescription>{cfgSuccess}</AlertDescription>
+                                </Alert>
+                            )}
+                            <div className="space-y-2">
+                                <Label htmlFor="cfg-login">CRM login password (confirm identity)</Label>
+                                <Input
+                                    id="cfg-login"
+                                    type="password"
+                                    autoComplete="current-password"
+                                    value={cfgLoginPw}
+                                    onChange={(e) => setCfgLoginPw(e.target.value)}
+                                />
+                            </div>
+                            {hasConfigPw && (
+                                <div className="space-y-2">
+                                    <Label htmlFor="cfg-cur">Current configuration password</Label>
+                                    <Input
+                                        id="cfg-cur"
+                                        type="password"
+                                        autoComplete="off"
+                                        value={cfgCurrent}
+                                        onChange={(e) => setCfgCurrent(e.target.value)}
+                                    />
+                                </div>
+                            )}
+                            <div className="space-y-2">
+                                <Label htmlFor="cfg-new">New configuration password (min 8 characters)</Label>
+                                <Input
+                                    id="cfg-new"
+                                    type="password"
+                                    autoComplete="new-password"
+                                    value={cfgPw}
+                                    onChange={(e) => setCfgPw(e.target.value)}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="cfg-new2">Confirm configuration password</Label>
+                                <Input
+                                    id="cfg-new2"
+                                    type="password"
+                                    autoComplete="new-password"
+                                    value={cfgPw2}
+                                    onChange={(e) => setCfgPw2(e.target.value)}
+                                />
+                            </div>
+                            <Button type="submit" disabled={cfgLoading}>
+                                {cfgLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                {hasConfigPw ? "Update configuration password" : "Save configuration password"}
+                            </Button>
+                        </form>
+                    </CardContent>
+                </Card>
+            )}
             
             {/* Security Tips */}
             <Card>
@@ -204,7 +349,7 @@ export default function SecuritySettingsPage() {
                         </li>
                         <li className="flex items-start gap-2">
                             <span className="text-green-500 mt-1">•</span>
-                            Use a unique password for this account that you don't use elsewhere
+                            Use a unique password for this account that you do not use elsewhere
                         </li>
                         <li className="flex items-start gap-2">
                             <span className="text-green-500 mt-1">•</span>

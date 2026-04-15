@@ -61,6 +61,7 @@ import {
 } from "@/services/reports-service"
 import { TeamService, type UserBrief } from "@/services/team-service"
 import { DealershipService, type Dealership } from "@/services/dealership-service"
+import { WhatsAppIcon } from "@/components/icons/whatsapp"
 import { ACTIVITY_TYPE_INFO, type ActivityType } from "@/services/activity-service"
 import { LeadService } from "@/services/lead-service"
 import { LocalTime } from "@/components/ui/local-time"
@@ -99,6 +100,8 @@ function getActivityIcon(type: string) {
         case "call_logged": return <PhoneCall className="h-4 w-4 text-emerald-500" />
         case "email_sent": return <Send className="h-4 w-4 text-blue-500" />
         case "email_received": return <Mail className="h-4 w-4 text-indigo-500" />
+        case "sms_sent": return <MessageSquare className="h-4 w-4 text-sky-600" />
+        case "whatsapp_sent": return <WhatsAppIcon className="h-4 w-4 text-[#25D366]" />
         case "follow_up_scheduled": return <CalendarIcon className="h-4 w-4 text-amber-500" />
         case "follow_up_completed": return <CheckCircle className="h-4 w-4 text-emerald-500" />
         case "follow_up_missed": return <AlertCircle className="h-4 w-4 text-rose-500" />

@@ -118,3 +118,21 @@ class ChangePasswordResponse(BaseModel):
     """Response after password change"""
     message: str
     success: bool = True
+
+
+# ============== Configuration access (second password for integration secrets) ==============
+
+class ConfigAccessStatusResponse(BaseModel):
+    """Whether the user may use / must set a configuration-access password."""
+    eligible: bool
+    config_access_password_set: bool
+
+
+class ConfigAccessVerifyRequest(BaseModel):
+    """Unlock sensitive configuration APIs for a short time."""
+    config_password: str = Field(..., min_length=1)
+
+
+class ConfigAccessUnlockResponse(BaseModel):
+    unlock_token: str
+    expires_in: int  # seconds

@@ -3,13 +3,13 @@ API Dependencies
 """
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import Permission, UserRole, has_permission
-from app.core.security import verify_token
+from app.core.security import verify_token, verify_config_unlock_token
 from app.db.database import get_db
 from app.models.user import User
 from app.schemas.auth import CurrentUser
@@ -100,3 +100,43 @@ require_any_role = require_role(
     UserRole.DEALERSHIP_OWNER,
     UserRole.SALESPERSON
 )
+
+# Roles that may set a configuration-access password and unlock Twilio / dealership email secrets
+_CONFIG_UNLOCK_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.DEALERSHIP_OWNER,
+    UserRole.DEALERSHIP_ADMIN,
+)
+
+
+async def require_config_unlock(
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+) -> User:
+    """
+    Second factor for APIs that expose or change integration secrets.
+    Requires login + X-Config-Unlock-Token from POST /auth/verify-config-access.
+    """
+    if current_user.role not in _CONFIG_UNLOCK_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Configuration unlock is not available for this account",
+        )
+    if not current_user.config_access_password_hash:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="config_access_password_not_set",
+        )
+    token = request.headers.get("X-Config-Unlock-Token")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="config_unlock_token_required",
+        )
+    uid = verify_config_unlock_token(token)
+    if not uid or uid != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid_or_expired_config_unlock_token",
+        )
+    return current_user

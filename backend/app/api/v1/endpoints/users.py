@@ -14,8 +14,16 @@ from app.db.database import get_db
 from app.models.user import User
 from app.models.lead import Lead
 from app.models.dealership import Dealership
-from app.schemas.user import UserResponse, UserCreate, UserUpdate, UserBrief, UserWithStats, TeamListResponse
-from app.core.security import get_password_hash
+from app.schemas.user import (
+    UserResponse,
+    UserCreate,
+    UserUpdate,
+    UserBrief,
+    UserWithStats,
+    TeamListResponse,
+    SetConfigAccessPasswordRequest,
+)
+from app.core.security import get_password_hash, verify_password
 from app.services.email_notifier import send_new_member_welcome_email
 
 router = APIRouter()
@@ -339,6 +347,66 @@ async def update_current_user_profile(
     return current_user
 
 
+_CONFIG_ACCESS_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.DEALERSHIP_OWNER,
+    UserRole.DEALERSHIP_ADMIN,
+)
+
+
+@router.put("/me/config-access-password", response_model=UserResponse)
+async def set_config_access_password(
+    body: SetConfigAccessPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Set or change the configuration-access password (used with /auth/verify-config-access).
+    Must differ from your CRM login password.
+    """
+    if current_user.role not in _CONFIG_ACCESS_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your role cannot set a configuration-access password",
+        )
+    if not verify_password(body.login_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Login password is incorrect",
+        )
+    if body.config_password != body.config_password_confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Configuration passwords do not match",
+        )
+    if body.config_password == body.login_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Configuration-access password must differ from your login password",
+        )
+    if verify_password(body.config_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Configuration-access password must differ from your login password",
+        )
+    if current_user.config_access_password_hash:
+        if not body.current_config_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current configuration password is required to change it",
+            )
+        if not verify_password(body.current_config_password, current_user.config_access_password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current configuration password is incorrect",
+            )
+
+    current_user.config_access_password_hash = get_password_hash(body.config_password)
+    await db.commit()
+    await db.refresh(current_user)
+    return current_user
+
+
 @router.patch("/{user_id}", response_model=UserResponse)
 async def update_user(
     user_id: UUID,
@@ -349,7 +417,7 @@ async def update_user(
     """
     Update a user by ID.
     Only Super Admin, Dealership Admin, or Dealership Owner can update users.
-    Only Dealership Admin or Dealership Owner can change is_active (deactivate/activate team members).
+    Super Admin, Dealership Admin, or Dealership Owner can change is_active (deactivate/activate team members).
     Users cannot deactivate themselves.
     """
     # Only admin or owner can update other users
@@ -371,13 +439,12 @@ async def update_user(
 
     update_data = user_update.model_dump(exclude_unset=True)
 
-    # Only Dealership Admin or Dealership Owner can change is_active (deactivate/activate).
-    # Super Admin cannot deactivate/activate; only admins or owners of the dealership can.
+    # Super Admin, Dealership Admin, or Dealership Owner can change is_active (deactivate/activate)
     if "is_active" in update_data:
-        if current_user.role not in (UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
+        if current_user.role not in (UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only dealership administrators or owners can deactivate or activate team members",
+                detail="Only administrators or dealership owners can deactivate or activate team members",
             )
         if current_user.id == user_id:
             # Cannot deactivate yourself

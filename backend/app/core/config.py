@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 43200  # 30 days (1 month)
     refresh_token_expire_days: int = 60  # 60 days (2 months) to allow refresh
+    # Short-lived JWT after POST /auth/verify-config-access (sensitive CRM config screens)
+    config_unlock_token_expire_minutes: int = 30
     
     # CORS
     cors_origins: str = "http://localhost:3000,http://localhost:3001"

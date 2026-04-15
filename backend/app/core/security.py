@@ -105,3 +105,29 @@ def verify_token(token: str, token_type: str = "access") -> Optional[str]:
         return None
     
     return payload.get("sub")
+
+
+def create_config_unlock_token(
+    subject: str,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    """JWT for X-Config-Unlock-Token header (sensitive configuration APIs)."""
+    if expires_delta is None:
+        expires_delta = timedelta(minutes=settings.config_unlock_token_expire_minutes)
+    expire = utc_now() + expires_delta
+    to_encode = {
+        "sub": subject,
+        "exp": expire,
+        "type": "config_unlock",
+    }
+    encoded_jwt = jwt.encode(
+        to_encode,
+        settings.secret_key,
+        algorithm=settings.algorithm,
+    )
+    return encoded_jwt
+
+
+def verify_config_unlock_token(token: str) -> Optional[str]:
+    """Return user id (sub) if token is a valid config_unlock JWT."""
+    return verify_token(token, token_type="config_unlock")

@@ -12,7 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.config import settings
-from app.core.security import create_access_token, create_refresh_token, verify_password, get_password_hash, verify_token
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    create_config_unlock_token,
+    verify_password,
+    get_password_hash,
+    verify_token,
+)
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User, UserRole
@@ -22,13 +29,22 @@ from app.schemas.auth import (
     Token, SignupRequest, SignupResponse, RefreshTokenRequest,
     ForgotPasswordRequest, ForgotPasswordResponse,
     ResetPasswordRequest, ResetPasswordResponse,
-    ChangePasswordRequest, ChangePasswordResponse
+    ChangePasswordRequest, ChangePasswordResponse,
+    ConfigAccessStatusResponse,
+    ConfigAccessVerifyRequest,
+    ConfigAccessUnlockResponse,
 )
 from app.schemas.user import UserResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_CONFIG_ACCESS_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.DEALERSHIP_OWNER,
+    UserRole.DEALERSHIP_ADMIN,
+)
 
 
 @router.post("/login", response_model=Token)
@@ -411,4 +427,48 @@ async def change_password(
     return ChangePasswordResponse(
         message="Your password has been changed successfully.",
         success=True
+    )
+
+
+@router.get("/config-access-status", response_model=ConfigAccessStatusResponse)
+async def config_access_status(
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Whether this user must set a separate configuration-access password to use Twilio / dealership email secret APIs.
+    """
+    eligible = current_user.role in _CONFIG_ACCESS_ROLES
+    return ConfigAccessStatusResponse(
+        eligible=eligible,
+        config_access_password_set=bool(current_user.config_access_password_hash),
+    )
+
+
+@router.post("/verify-config-access", response_model=ConfigAccessUnlockResponse)
+async def verify_config_access(
+    body: ConfigAccessVerifyRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Verify the configuration-access password and return a short-lived JWT for the X-Config-Unlock-Token header.
+    """
+    if current_user.role not in _CONFIG_ACCESS_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Configuration unlock is not available for this account",
+        )
+    if not current_user.config_access_password_hash:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="config_access_password_not_set",
+        )
+    if not verify_password(body.config_password, current_user.config_access_password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid_config_access_password",
+        )
+    unlock_token = create_config_unlock_token(str(current_user.id))
+    return ConfigAccessUnlockResponse(
+        unlock_token=unlock_token,
+        expires_in=settings.config_unlock_token_expire_minutes * 60,
     )

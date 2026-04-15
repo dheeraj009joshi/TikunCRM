@@ -69,12 +69,14 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { TeamService, UserWithStats, CreateUserData } from "@/services/team-service"
 import { useRole, getRoleDisplayName } from "@/hooks/use-role"
+import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { BarChart } from "@tremor/react"
 import { SalespersonPendingTasksModal } from "@/components/team/salesperson-pending-tasks-modal"
 import { NotifySalespersonDialog } from "@/components/team/notify-salesperson-dialog"
 
 export default function TeamPage() {
+    const { toast } = useToast()
     const { isSuperAdmin, isDealershipOwner, isDealershipAdmin, isDealershipLevel, user } = useRole()
     const [team, setTeam] = React.useState<UserWithStats[]>([])
     const [dealershipName, setDealershipName] = React.useState<string | null>(null)
@@ -175,14 +177,28 @@ export default function TeamPage() {
     }
 
     const handleToggleStatus = async (userId: string, currentStatus: boolean) => {
+        const member = team.find((m) => m.id === userId)
+        const name = member ? `${member.first_name} ${member.last_name}`.trim() : "Team member"
         try {
             setIsTogglingStatus(true)
             setTogglingUserId(userId)
             await TeamService.toggleUserStatus(userId, !currentStatus)
             setToggleStatusConfirm(null)
             await fetchTeam()
+            const nowActive = !currentStatus
+            toast({
+                title: nowActive ? "Member activated" : "Member deactivated",
+                description: nowActive
+                    ? `${name} can sign in again.`
+                    : `${name} can no longer sign in until reactivated.`,
+            })
         } catch (error) {
             console.error("Failed to toggle status:", error)
+            toast({
+                variant: "destructive",
+                title: "Could not update status",
+                description: "Please try again or check your connection.",
+            })
         } finally {
             setIsTogglingStatus(false)
             setTogglingUserId(null)
@@ -450,7 +466,7 @@ export default function TeamPage() {
                                                     Send Email
                                                 </DropdownMenuItem>
                                                 {/* Only dealership admin or owner can deactivate/activate team members; cannot deactivate yourself */}
-                                                {(isDealershipAdmin || isDealershipOwner) && (
+                                                {(isSuperAdmin || isDealershipAdmin || isDealershipOwner) && (
                                                     <>
                                                         <DropdownMenuSeparator />
                                                         <DropdownMenuItem 

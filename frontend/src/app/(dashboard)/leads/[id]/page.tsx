@@ -11,7 +11,6 @@ import {
     Clock,
     ChevronLeft,
     MessageSquare,
-    MessageCircle,
     Send,
     User,
     Building2,
@@ -97,6 +96,7 @@ import { ShowroomService, ShowroomVisit, ShowroomOutcome, getOutcomeLabel } from
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
 import { AssignToDealershipModal, AssignToSalespersonModal, AssignSecondaryCustomerModal } from "@/components/leads/assignment-modal"
+import { LogContactModal } from "@/components/leads/log-contact-modal"
 import { getCustomerFullName } from "@/services/customer-service"
 import { EmailComposerModal } from "@/components/emails/email-composer-modal"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
@@ -114,6 +114,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
+import { WhatsAppIcon } from "@/components/icons/whatsapp"
 import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
@@ -162,6 +163,8 @@ const getActivityIcon = (type: ActivityType) => {
         case "call_logged": return <PhoneCall className="h-4 w-4 text-emerald-500" />
         case "email_sent": return <Send className="h-4 w-4 text-blue-500" />
         case "email_received": return <Mail className="h-4 w-4 text-indigo-500" />
+        case "sms_sent": return <MessageSquare className="h-4 w-4 text-sky-600" />
+        case "whatsapp_sent": return <WhatsAppIcon className="h-4 w-4 text-[#25D366]" />
         case "follow_up_scheduled": return <Calendar className="h-4 w-4 text-amber-500" />
         case "follow_up_completed": return <CheckCircle className="h-4 w-4 text-emerald-500" />
         case "appointment_scheduled": return <CalendarClock className="h-4 w-4 text-purple-500" />
@@ -391,15 +394,14 @@ export default function LeadDetailsPage() {
     const [isAddingNote, setIsAddingNote] = React.useState(false)
     
     // Call/Email logging
-    const [showCallModal, setShowCallModal] = React.useState(false)
     const [showCallTextComingSoon, setShowCallTextComingSoon] = React.useState(false)
     const [voiceEnabled, setVoiceEnabled] = React.useState(false)
     const callLeadCtx = useCallLeadOptional()
-    const [isLoggingCall, setIsLoggingCall] = React.useState(false)
     const [showEmailComposer, setShowEmailComposer] = React.useState(false)
     
     // Follow-up scheduling
     const [showScheduleFollowUp, setShowScheduleFollowUp] = React.useState(false)
+    const [showLogContactModal, setShowLogContactModal] = React.useState(false)
     
     // Appointment booking
     const [showBookAppointment, setShowBookAppointment] = React.useState(false)
@@ -1858,35 +1860,6 @@ export default function LeadDetailsPage() {
         }
     }
     
-    const handleLogCall = async (outcome: string, notes?: string, duration?: number, confirmSkate?: boolean) => {
-        if (!lead) return
-        setIsLoggingCall(true)
-        try {
-            const result = await ActivityService.logCall(lead.id, {
-                outcome,
-                notes,
-                duration_seconds: duration,
-                confirmSkate
-            })
-            // Check if this is a skate warning response
-            if (isSkateWarningResponse(result)) {
-                useSkateConfirmStore.getState().show(
-                    result as SkateWarningInfo,
-                    () => handleLogCall(outcome, notes, duration, true) // Retry with confirmation
-                )
-            } else {
-                fetchActivities() // Refresh activities
-                fetchLead() // Refresh lead to update last_contacted_at
-            }
-        } catch (error) {
-            const skate = getSkateAttemptDetail(error)
-            if (skate) useSkateAlertStore.getState().show(skate)
-            else console.error("Failed to log call:", error)
-        } finally {
-            setIsLoggingCall(false)
-        }
-    }
-    
     const handleEditStart = () => {
         if (!lead) return
         setEditForm({
@@ -2145,27 +2118,24 @@ export default function LeadDetailsPage() {
                                 {/* Quick Actions - hidden for mention-only access */}
                                 {!isMentionOnly && (
                                 <div className="flex flex-col gap-3 mt-6 w-full">
+                                    <Button
+                                        variant="outline"
+                                        className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
+                                        onClick={() => setShowLogContactModal(true)}
+                                    >
+                                        <PhoneCall className="h-4 w-4 mr-2 shrink-0" />
+                                        <span className="whitespace-nowrap">Log contact</span>
+                                    </Button>
                                     {getLeadPhone(lead) && (
-                                        <div className="grid grid-cols-2 gap-2 w-full">
-                                            <Button
-                                                variant="outline"
-                                                className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
-                                                onClick={handleCallClick}
-                                                title={voiceEnabled ? "Call in app" : "Call this lead"}
-                                            >
-                                                <Phone className="h-4 w-4 mr-2 shrink-0" />
-                                                <span className="whitespace-nowrap">Call</span>
-                                            </Button>
-                                            <Button
-                                                variant="outline"
-                                                className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
-                                                onClick={() => setShowCallTextComingSoon(true)}
-                                                title="Text this lead"
-                                            >
-                                                <MessageSquare className="h-4 w-4 mr-2 shrink-0" />
-                                                <span className="whitespace-nowrap">Text</span>
-                                            </Button>
-                                        </div>
+                                        <Button
+                                            variant="outline"
+                                            className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
+                                            onClick={handleCallClick}
+                                            title={voiceEnabled ? "Call in app" : "Call this lead"}
+                                        >
+                                            <Phone className="h-4 w-4 mr-2 shrink-0" />
+                                            <span className="whitespace-nowrap">Call</span>
+                                        </Button>
                                     )}
                                     {getLeadEmail(lead) && (
                                         <Button
@@ -3215,6 +3185,17 @@ export default function LeadDetailsPage() {
                                             const updatedFieldsNode: React.ReactNode = (showUpdatedFields ? (
                                                 <div className="mt-1 text-xs text-muted-foreground">Fields: {updatedFieldsLabelText}</div>
                                             ) : null) as unknown as React.ReactNode;
+                                            const isSmsSent = activity.type === "sms_sent"
+                                            const isWhatsappSent = activity.type === "whatsapp_sent"
+                                            const meta = activity.meta_data as Record<string, unknown> | undefined
+                                            const outreachBody =
+                                                meta?.notes != null && String(meta.notes).trim() !== ""
+                                                    ? String(meta.notes)
+                                                    : meta?.body_preview != null && String(meta.body_preview).trim() !== ""
+                                                      ? String(meta.body_preview)
+                                                      : null
+                                            const hideOutreachDescription =
+                                                (isSmsSent || isWhatsappSent) && outreachBody != null
                                             return (
                                             <div key={activity.id} className="flex gap-3 relative">
                                                 {/* Timeline line */}
@@ -3236,7 +3217,7 @@ export default function LeadDetailsPage() {
                                                                     ? activity.description
                                                                     : (ACTIVITY_TYPE_INFO[activity.type]?.label || activity.type.replace('_', ' '))}
                                                             </p>
-                                                            {activity.type !== "lead_updated" && (
+                                                            {activity.type !== "lead_updated" && !hideOutreachDescription && (
                                                                 <p className="text-xs text-muted-foreground">
                                                                     {activity.description}
                                                                 </p>
@@ -3296,6 +3277,16 @@ export default function LeadDetailsPage() {
                                                     {(activity.type === "email_sent" || activity.type === "email_received") && (
                                                         <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-900/20 rounded text-sm">
                                                             <span className="font-medium">{String(activity.meta_data?.subject || 'Email')}</span>
+                                                        </div>
+                                                    )}
+                                                    {isSmsSent && outreachBody && (
+                                                        <div className="mt-2 p-2 bg-sky-50 dark:bg-sky-950/30 border border-sky-200/60 dark:border-sky-800/50 rounded text-sm">
+                                                            {outreachBody}
+                                                        </div>
+                                                    )}
+                                                    {isWhatsappSent && outreachBody && (
+                                                        <div className="mt-2 p-2 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200/60 dark:border-emerald-800/50 rounded text-sm">
+                                                            {outreachBody}
                                                         </div>
                                                     )}
                                                     {activity.type === "status_changed" && activity.meta_data?.old_status != null ? (
@@ -4574,6 +4565,25 @@ export default function LeadDetailsPage() {
                 }}
             />
             
+            {/* Log contact (phone / SMS / WhatsApp) → then schedule follow-up */}
+            {lead && (
+                <LogContactModal
+                    open={showLogContactModal}
+                    onOpenChange={setShowLogContactModal}
+                    leadId={lead.id}
+                    hasPhone={Boolean(getLeadPhone(lead))}
+                    onLogged={() => {
+                        void fetchActivities()
+                        void fetchLead()
+                        toast({
+                            title: "Contact logged",
+                            description: "Add your next follow-up below.",
+                        })
+                        setShowScheduleFollowUp(true)
+                    }}
+                />
+            )}
+
             {/* Schedule Follow-up Modal */}
             {lead && (
                 <ScheduleFollowUpModal

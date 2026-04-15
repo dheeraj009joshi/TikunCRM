@@ -120,50 +120,62 @@ export type SmtpPresetKey = keyof typeof SMTP_PRESETS;
 export const DealershipEmailService = {
     /**
      * Get email configuration status
+     * @param dealershipId - Required for Super Admins to specify which dealership
      */
-    async getStatus(): Promise<EmailConfigStatus> {
-        const response = await apiClient.get<EmailConfigStatus>("/dealership-email/status");
+    async getStatus(dealershipId?: string): Promise<EmailConfigStatus> {
+        const params = dealershipId ? { dealership_id: dealershipId } : {};
+        const response = await apiClient.get<EmailConfigStatus>("/dealership-email/status", { params });
         return response.data;
     },
 
     /**
      * Get email configuration details
+     * @param dealershipId - Required for Super Admins to specify which dealership
      */
-    async getConfig(): Promise<DealershipEmailConfig> {
-        const response = await apiClient.get<DealershipEmailConfig>("/dealership-email/config");
+    async getConfig(dealershipId?: string): Promise<DealershipEmailConfig> {
+        const params = dealershipId ? { dealership_id: dealershipId } : {};
+        const response = await apiClient.get<DealershipEmailConfig>("/dealership-email/config", { params });
         return response.data;
     },
 
     /**
      * Create or update email configuration
+     * @param dealershipId - Required for Super Admins to specify which dealership
      */
-    async saveConfig(data: DealershipEmailConfigCreate): Promise<DealershipEmailConfig> {
-        const response = await apiClient.post<DealershipEmailConfig>("/dealership-email/config", data);
+    async saveConfig(data: DealershipEmailConfigCreate, dealershipId?: string): Promise<DealershipEmailConfig> {
+        const params = dealershipId ? { dealership_id: dealershipId } : {};
+        const response = await apiClient.post<DealershipEmailConfig>("/dealership-email/config", data, { params });
         return response.data;
     },
 
     /**
      * Partially update email configuration
+     * @param dealershipId - Required for Super Admins to specify which dealership
      */
-    async updateConfig(data: DealershipEmailConfigUpdate): Promise<DealershipEmailConfig> {
-        const response = await apiClient.patch<DealershipEmailConfig>("/dealership-email/config", data);
+    async updateConfig(data: DealershipEmailConfigUpdate, dealershipId?: string): Promise<DealershipEmailConfig> {
+        const params = dealershipId ? { dealership_id: dealershipId } : {};
+        const response = await apiClient.patch<DealershipEmailConfig>("/dealership-email/config", data, { params });
         return response.data;
     },
 
     /**
      * Delete email configuration
+     * @param dealershipId - Required for Super Admins to specify which dealership
      */
-    async deleteConfig(): Promise<void> {
-        await apiClient.delete("/dealership-email/config");
+    async deleteConfig(dealershipId?: string): Promise<void> {
+        const params = dealershipId ? { dealership_id: dealershipId } : {};
+        await apiClient.delete("/dealership-email/config", { params });
     },
 
     /**
      * Test email configuration
+     * @param dealershipId - Required for Super Admins to specify which dealership
      */
-    async testConfig(testEmail: string): Promise<EmailTestResponse> {
+    async testConfig(testEmail: string, dealershipId?: string): Promise<EmailTestResponse> {
+        const params = dealershipId ? { dealership_id: dealershipId } : {};
         const response = await apiClient.post<EmailTestResponse>("/dealership-email/test", {
             test_email: testEmail,
-        });
+        }, { params });
         return response.data;
     },
 };

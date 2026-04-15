@@ -42,6 +42,17 @@ class UserPasswordUpdate(BaseModel):
     new_password: str = Field(..., min_length=8)
 
 
+class SetConfigAccessPasswordRequest(BaseModel):
+    """Set or change the configuration-access password (must differ from login password)."""
+    login_password: str = Field(..., min_length=1, description="Your CRM login password (verifies identity)")
+    config_password: str = Field(..., min_length=8, max_length=200)
+    config_password_confirm: str = Field(..., min_length=8, max_length=200)
+    current_config_password: Optional[str] = Field(
+        None,
+        description="Required when changing an existing configuration password",
+    )
+
+
 # ===== User Email Configuration Schemas =====
 class UserEmailConfigUpdate(BaseModel):
     """Schema for updating user's email configuration"""
@@ -91,6 +102,7 @@ class UserResponse(UserBase):
     last_login_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    config_access_password_set: bool = False
     
     class Config:
         from_attributes = True

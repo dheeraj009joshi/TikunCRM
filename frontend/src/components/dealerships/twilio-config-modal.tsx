@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Eye, EyeOff } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -21,6 +21,7 @@ import {
 } from "@/services/dealership-service";
 import { API_BASE_URL } from "@/lib/api-client";
 import { useToast } from "@/hooks/use-toast";
+import { ConfigUnlockModal } from "@/components/security/config-unlock-modal";
 
 const webhookBase = `${API_BASE_URL}/webhooks/twilio`;
 
@@ -55,6 +56,9 @@ export function TwilioConfigModal({
     const [callerId, setCallerId] = React.useState("");
     const [authTokenSet, setAuthTokenSet] = React.useState(false);
     const [apiSecretSet, setApiSecretSet] = React.useState(false);
+    const [showUnlockModal, setShowUnlockModal] = React.useState(false);
+    const [showAuthToken, setShowAuthToken] = React.useState(false);
+    const [showApiKeySecret, setShowApiKeySecret] = React.useState(false);
 
     const applyConfig = React.useCallback((c: DealershipTwilioConfig) => {
         setAccountSid(c.account_sid || "");
@@ -68,24 +72,47 @@ export function TwilioConfigModal({
         setCallerId(c.voice_caller_id_number || "");
         setAuthTokenSet(c.auth_token_set);
         setApiSecretSet(c.api_key_secret_set);
-        setAuthToken("");
-        setApiKeySecret("");
+        setAuthToken(c.auth_token || "");
+        setApiKeySecret(c.twilio_api_key_secret || "");
     }, []);
 
-    React.useEffect(() => {
-        if (!open || !dealershipId) return;
+    const loadTwilio = React.useCallback(async () => {
+        if (!dealershipId) return;
         setLoading(true);
-        DealershipService.getTwilioConfig(dealershipId)
-            .then(applyConfig)
-            .catch((e) => {
-                console.error(e);
+        try {
+            const config = await DealershipService.getTwilioConfig(dealershipId);
+            applyConfig(config);
+        } catch (e: unknown) {
+            console.error(e);
+            const err = e as { response?: { status?: number; data?: { detail?: string } } };
+            const d = err.response?.data?.detail;
+            const st = err.response?.status;
+            if (
+                st === 401 &&
+                (d === "config_unlock_token_required" || d === "invalid_or_expired_config_unlock_token")
+            ) {
+                setShowUnlockModal(true);
+            } else if (st === 403 && d === "config_access_password_not_set") {
+                toast({
+                    title: "Set configuration password first",
+                    description: "Open Settings → Security and create a configuration-access password.",
+                    variant: "destructive",
+                });
+            } else {
                 toast({
                     title: "Could not load Twilio config",
                     variant: "destructive",
                 });
-            })
-            .finally(() => setLoading(false));
-    }, [open, dealershipId, applyConfig, toast]);
+            }
+        } finally {
+            setLoading(false);
+        }
+    }, [dealershipId, applyConfig, toast]);
+
+    React.useEffect(() => {
+        if (!open || !dealershipId) return;
+        void loadTwilio();
+    }, [open, dealershipId, loadTwilio]);
 
     const handleSave = async () => {
         if (!dealershipId) return;
@@ -110,20 +137,45 @@ export function TwilioConfigModal({
             toast({ title: "Twilio settings saved" });
             onSaved?.();
             onOpenChange(false);
-        } catch (e) {
+        } catch (e: unknown) {
             console.error(e);
-            toast({
-                title: "Save failed",
-                description: "Check values and try again.",
-                variant: "destructive",
-            });
+            const err = e as { response?: { status?: number; data?: { detail?: string } } };
+            const d = err.response?.data?.detail;
+            const st = err.response?.status;
+            if (
+                st === 401 &&
+                (d === "config_unlock_token_required" || d === "invalid_or_expired_config_unlock_token")
+            ) {
+                setShowUnlockModal(true);
+            } else if (st === 403 && d === "config_access_password_not_set") {
+                toast({
+                    title: "Set configuration password first",
+                    description: "Settings → Security",
+                    variant: "destructive",
+                });
+            } else {
+                toast({
+                    title: "Save failed",
+                    description: "Check values and try again.",
+                    variant: "destructive",
+                });
+            }
         } finally {
             setSaving(false);
         }
     };
 
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
+        <>
+            <ConfigUnlockModal
+                open={showUnlockModal}
+                onOpenChange={setShowUnlockModal}
+                needsSetup={false}
+                onUnlocked={() => {
+                    void loadTwilio();
+                }}
+            />
+            <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                     <DialogTitle>Twilio · {dealershipName}</DialogTitle>
@@ -163,14 +215,25 @@ export function TwilioConfigModal({
                             </div>
                             <div>
                                 <Label htmlFor="auth">Auth Token {authTokenSet && "(set — enter new to replace)"}</Label>
-                                <Input
-                                    id="auth"
-                                    type="password"
-                                    value={authToken}
-                                    onChange={(e) => setAuthToken(e.target.value)}
-                                    placeholder={authTokenSet ? "••••••••" : "Your auth token"}
-                                    className="mt-1"
-                                />
+                                <div className="relative mt-1">
+                                    <Input
+                                        id="auth"
+                                        type={showAuthToken ? "text" : "password"}
+                                        value={authToken}
+                                        onChange={(e) => setAuthToken(e.target.value)}
+                                        placeholder={authTokenSet ? "••••••••" : "Your auth token"}
+                                        className="pr-10"
+                                    />
+                                    <button
+                                        type="button"
+                                        tabIndex={-1}
+                                        aria-label={showAuthToken ? "Hide auth token" : "Show auth token"}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                        onClick={() => setShowAuthToken((v) => !v)}
+                                    >
+                                        {showAuthToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -235,14 +298,25 @@ export function TwilioConfigModal({
                                 <Label htmlFor="apiks">
                                     API Key Secret {apiSecretSet && "(set — enter new to replace)"}
                                 </Label>
-                                <Input
-                                    id="apiks"
-                                    type="password"
-                                    value={apiKeySecret}
-                                    onChange={(e) => setApiKeySecret(e.target.value)}
-                                    placeholder={apiSecretSet ? "••••••••" : ""}
-                                    className="mt-1"
-                                />
+                                <div className="relative mt-1">
+                                    <Input
+                                        id="apiks"
+                                        type={showApiKeySecret ? "text" : "password"}
+                                        value={apiKeySecret}
+                                        onChange={(e) => setApiKeySecret(e.target.value)}
+                                        placeholder={apiSecretSet ? "••••••••" : ""}
+                                        className="pr-10"
+                                    />
+                                    <button
+                                        type="button"
+                                        tabIndex={-1}
+                                        aria-label={showApiKeySecret ? "Hide API key secret" : "Show API key secret"}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                        onClick={() => setShowApiKeySecret((v) => !v)}
+                                    >
+                                        {showApiKeySecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                    </button>
+                                </div>
                             </div>
                             <div>
                                 <Label htmlFor="cid">Caller ID / voice number</Label>
@@ -269,5 +343,6 @@ export function TwilioConfigModal({
                 </DialogFooter>
             </DialogContent>
         </Dialog>
+        </>
     );
 }

@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useRouter } from "next/navigation"
 import {
     Building2,
     Plus,
@@ -13,10 +14,14 @@ import {
     Users,
     ExternalLink,
     Loader2,
-    Inbox
+    Inbox,
+    Settings,
+    MessageSquare,
+    CheckCircle,
+    XCircle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { DealershipService } from "@/services/dealership-service"
+import { DealershipService, Dealership } from "@/services/dealership-service"
 import { CreateDealershipModal } from "@/components/dealerships/create-dealership-modal"
 import { TwilioConfigModal } from "@/components/dealerships/twilio-config-modal"
 import { useRole } from "@/hooks/use-role"
@@ -24,14 +29,24 @@ import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
+    DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
 
 export default function DealershipsPage() {
+    const router = useRouter()
     const { isSuperAdmin } = useRole()
-    const [dealerships, setDealerships] = React.useState<any[]>([])
+    const [dealerships, setDealerships] = React.useState<Dealership[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const [search, setSearch] = React.useState("")
+    const [statusFilter, setStatusFilter] = React.useState<"all" | "active" | "inactive">("all")
     const [createModalOpen, setCreateModalOpen] = React.useState(false)
     const [twilioModalOpen, setTwilioModalOpen] = React.useState(false)
     const [twilioDealershipId, setTwilioDealershipId] = React.useState<string | null>(null)
@@ -53,11 +68,31 @@ export default function DealershipsPage() {
         fetchDealerships()
     }, [fetchDealerships])
 
-    const filteredDealerships = dealerships.filter(dealer =>
-        dealer.name.toLowerCase().includes(search.toLowerCase()) ||
-        (dealer.city && dealer.city.toLowerCase().includes(search.toLowerCase())) ||
-        (dealer.email && dealer.email.toLowerCase().includes(search.toLowerCase()))
-    )
+    const filteredDealerships = dealerships.filter(dealer => {
+        const matchesSearch = dealer.name.toLowerCase().includes(search.toLowerCase()) ||
+            (dealer.city && dealer.city.toLowerCase().includes(search.toLowerCase())) ||
+            (dealer.email && dealer.email.toLowerCase().includes(search.toLowerCase()))
+        
+        const matchesStatus = statusFilter === "all" ||
+            (statusFilter === "active" && dealer.is_active) ||
+            (statusFilter === "inactive" && !dealer.is_active)
+        
+        return matchesSearch && matchesStatus
+    })
+
+    const handleCardClick = (dealerId: string) => {
+        router.push(`/dealerships/${dealerId}`)
+    }
+
+    const handleToggleStatus = async (e: React.MouseEvent, dealer: Dealership) => {
+        e.stopPropagation()
+        try {
+            await DealershipService.toggleDealershipStatus(dealer.id, !dealer.is_active)
+            await fetchDealerships()
+        } catch (error) {
+            console.error("Failed to toggle status:", error)
+        }
+    }
 
     return (
         <div className="space-y-6">
@@ -119,10 +154,17 @@ export default function DealershipsPage() {
                     />
                 </div>
                 <div className="flex items-center gap-2">
-                    <button className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 text-sm hover:bg-accent font-medium">
-                        <Filter className="h-4 w-4" />
-                        Filters
-                    </button>
+                    <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
+                        <SelectTrigger className="w-[140px]">
+                            <Filter className="h-4 w-4 mr-2" />
+                            <SelectValue placeholder="Filter" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Status</SelectItem>
+                            <SelectItem value="active">Active Only</SelectItem>
+                            <SelectItem value="inactive">Inactive Only</SelectItem>
+                        </SelectContent>
+                    </Select>
                 </div>
             </div>
 
@@ -148,7 +190,11 @@ export default function DealershipsPage() {
                     </div>
                 ) : (
                     filteredDealerships.map((dealer) => (
-                        <div key={dealer.id} className="group relative rounded-xl border bg-card p-6 hover:shadow-xl transition-all hover:border-primary/20">
+                        <div 
+                            key={dealer.id} 
+                            className="group relative rounded-xl border bg-card p-6 hover:shadow-xl transition-all hover:border-primary/20 cursor-pointer"
+                            onClick={() => handleCardClick(dealer.id)}
+                        >
                             <div className="flex items-start justify-between">
                                 <div className="flex gap-4">
                                     <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary font-black text-white shadow-xl shadow-primary/20 text-lg">
@@ -169,19 +215,58 @@ export default function DealershipsPage() {
                                                 type="button"
                                                 className="rounded-md p-1 hover:bg-accent text-muted-foreground transition-colors"
                                                 aria-label="Dealership actions"
+                                                onClick={(e) => e.stopPropagation()}
                                             >
                                                 <MoreVertical className="h-5 w-5" />
                                             </button>
                                         </DropdownMenuTrigger>
                                         <DropdownMenuContent align="end">
                                             <DropdownMenuItem
-                                                onClick={() => {
+                                                onClick={(e) => {
+                                                    e.stopPropagation()
+                                                    router.push(`/dealerships/${dealer.id}`)
+                                                }}
+                                            >
+                                                <Settings className="h-4 w-4 mr-2" />
+                                                Manage Dealership
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem
+                                                onClick={(e) => {
+                                                    e.stopPropagation()
+                                                    router.push(`/dealerships/${dealer.id}?tab=team`)
+                                                }}
+                                            >
+                                                <Users className="h-4 w-4 mr-2" />
+                                                View Team
+                                            </DropdownMenuItem>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem
+                                                onClick={(e) => {
+                                                    e.stopPropagation()
                                                     setTwilioDealershipId(dealer.id)
                                                     setTwilioDealershipName(dealer.name)
                                                     setTwilioModalOpen(true)
                                                 }}
                                             >
-                                                Twilio configuration
+                                                <MessageSquare className="h-4 w-4 mr-2" />
+                                                Twilio Configuration
+                                            </DropdownMenuItem>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem
+                                                onClick={(e) => handleToggleStatus(e, dealer)}
+                                                className={dealer.is_active ? "text-destructive" : "text-emerald-600"}
+                                            >
+                                                {dealer.is_active ? (
+                                                    <>
+                                                        <XCircle className="h-4 w-4 mr-2" />
+                                                        Deactivate
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <CheckCircle className="h-4 w-4 mr-2" />
+                                                        Activate
+                                                    </>
+                                                )}
                                             </DropdownMenuItem>
                                         </DropdownMenuContent>
                                     </DropdownMenu>
@@ -208,11 +293,11 @@ export default function DealershipsPage() {
                                     <p className="text-[10px] text-muted-foreground font-black uppercase tracking-widest">Business Pulse</p>
                                     <div className="flex justify-between items-center text-xs">
                                         <span className="text-muted-foreground font-medium">Active Seats:</span>
-                                        <span className="font-black">{dealer.users_count || 0}</span>
+                                        <span className="font-black">{(dealer as any).users_count || 0}</span>
                                     </div>
                                     <div className="flex justify-between items-center text-xs">
                                         <span className="text-muted-foreground font-medium">Total Leads:</span>
-                                        <span className="font-black">{dealer.leads_count || 0}</span>
+                                        <span className="font-black">{(dealer as any).leads_count || 0}</span>
                                     </div>
                                 </div>
                             </div>
@@ -225,10 +310,10 @@ export default function DealershipsPage() {
                                     )} />
                                     <span className="text-[10px] font-black uppercase tracking-widest">{dealer.is_active ? 'Active Operation' : 'Suspended'}</span>
                                 </div>
-                                <button className="flex items-center gap-1 text-xs font-black uppercase tracking-widest text-primary hover:underline group-hover:gap-2 transition-all">
-                                    Enter Dashboard
+                                <span className="flex items-center gap-1 text-xs font-black uppercase tracking-widest text-primary group-hover:gap-2 transition-all">
+                                    View Details
                                     <ExternalLink className="h-3 w-3" />
-                                </button>
+                                </span>
                             </div>
                         </div>
                     ))

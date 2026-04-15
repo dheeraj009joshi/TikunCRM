@@ -1,4 +1,5 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
+import { getConfigUnlockToken, clearConfigUnlockToken } from "@/lib/config-unlock";
 
 // Get API URL from environment variable, default to production backend.
 // Backend mounts routes at /api/v1 — ensure base URL ends with /api/v1 to avoid 404s.
@@ -38,6 +39,10 @@ apiClient.interceptors.request.use(
         const token = localStorage.getItem("auth_token");
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
+        }
+        const unlock = getConfigUnlockToken();
+        if (unlock) {
+            config.headers["X-Config-Unlock-Token"] = unlock;
         }
         return config;
     },
@@ -145,6 +150,14 @@ apiClient.interceptors.response.use(
                 }
                 return Promise.reject(refreshError);
             }
+        }
+
+        const detail = (error.response?.data as { detail?: string })?.detail;
+        if (
+            error.response?.status === 401 &&
+            detail === "invalid_or_expired_config_unlock_token"
+        ) {
+            clearConfigUnlockToken();
         }
 
         return Promise.reject(error);

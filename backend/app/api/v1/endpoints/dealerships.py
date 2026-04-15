@@ -26,6 +26,22 @@ from app.services.email_notifier import send_new_member_welcome_email
 router = APIRouter()
 
 
+def _ensure_can_manage_dealership_twilio(current_user: User, dealership_id: UUID) -> None:
+    """Super Admins any dealership; owners/admins only their own."""
+    if current_user.role == UserRole.SUPER_ADMIN:
+        return
+    if current_user.dealership_id != dealership_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to manage Twilio for this dealership",
+        )
+    if current_user.role not in (UserRole.DEALERSHIP_OWNER, UserRole.DEALERSHIP_ADMIN):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Super Admins and dealership owners or admins can manage Twilio settings",
+        )
+
+
 @router.get("/", response_model=List[DealershipResponse])
 async def list_dealerships(
     db: AsyncSession = Depends(get_db),
@@ -154,6 +170,9 @@ async def update_dealership(
             raise HTTPException(status_code=403, detail="Not authorized to update another dealership")
         if current_user.role not in [UserRole.DEALERSHIP_OWNER, UserRole.DEALERSHIP_ADMIN]:
             raise HTTPException(status_code=403, detail="Only dealership owners and admins can update settings")
+        # Non-super-admins cannot change is_active
+        if dealership_in.is_active is not None:
+            raise HTTPException(status_code=403, detail="Only Super Admins can change dealership active status")
     
     # Update fields
     update_data = dealership_in.model_dump(exclude_unset=True, exclude={"config", "working_hours", "lead_assignment_rules"})
@@ -172,6 +191,81 @@ async def update_dealership(
         dealership.lead_assignment_rules = dealership_in.lead_assignment_rules.model_dump()
     
     await db.flush()
+    await db.commit()
+    await db.refresh(dealership)
+    return dealership
+
+
+@router.patch("/{dealership_id}", response_model=DealershipResponse)
+async def patch_dealership(
+    dealership_id: UUID,
+    dealership_in: DealershipUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Partially update dealership settings (same as PUT but explicit PATCH).
+    Dealership Owner/Admin can update their own dealership.
+    Super Admin can update any dealership.
+    """
+    result = await db.execute(select(Dealership).where(Dealership.id == dealership_id))
+    dealership = result.scalar_one_or_none()
+    
+    if not dealership:
+        raise HTTPException(status_code=404, detail="Dealership not found")
+    
+    # Permission checks
+    if current_user.role != UserRole.SUPER_ADMIN:
+        if current_user.dealership_id != dealership_id:
+            raise HTTPException(status_code=403, detail="Not authorized to update another dealership")
+        if current_user.role not in [UserRole.DEALERSHIP_OWNER, UserRole.DEALERSHIP_ADMIN]:
+            raise HTTPException(status_code=403, detail="Only dealership owners and admins can update settings")
+        # Non-super-admins cannot change is_active
+        if dealership_in.is_active is not None:
+            raise HTTPException(status_code=403, detail="Only Super Admins can change dealership active status")
+    
+    # Update only provided fields
+    update_data = dealership_in.model_dump(exclude_unset=True, exclude={"config", "working_hours", "lead_assignment_rules"})
+    
+    for field, value in update_data.items():
+        setattr(dealership, field, value)
+    
+    # Update nested objects if provided
+    if dealership_in.config is not None:
+        dealership.config = dealership_in.config
+    
+    if dealership_in.working_hours is not None:
+        dealership.working_hours = {k: v.model_dump() if hasattr(v, 'model_dump') else v for k, v in dealership_in.working_hours.items()}
+    
+    if dealership_in.lead_assignment_rules is not None:
+        dealership.lead_assignment_rules = dealership_in.lead_assignment_rules.model_dump()
+    
+    await db.flush()
+    await db.commit()
+    await db.refresh(dealership)
+    return dealership
+
+
+@router.patch("/{dealership_id}/status", response_model=DealershipResponse)
+async def toggle_dealership_status(
+    dealership_id: UUID,
+    is_active: bool,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_super_admin),
+) -> Any:
+    """
+    Toggle dealership active/inactive status (Super Admin only).
+    """
+    result = await db.execute(select(Dealership).where(Dealership.id == dealership_id))
+    dealership = result.scalar_one_or_none()
+    
+    if not dealership:
+        raise HTTPException(status_code=404, detail="Dealership not found")
+    
+    dealership.is_active = is_active
+    await db.flush()
+    await db.commit()
+    await db.refresh(dealership)
     return dealership
 
 
@@ -190,6 +284,7 @@ def _twilio_config_to_response(
         dealership_id=dealership_id,
         account_sid=row.account_sid,
         auth_token_set=bool(auth_plain),
+        auth_token=auth_plain or None,
         sms_enabled=row.sms_enabled,
         sms_from_number=row.sms_from_number,
         whatsapp_enabled=row.whatsapp_enabled,
@@ -198,6 +293,7 @@ def _twilio_config_to_response(
         twilio_twiml_app_sid=row.twilio_twiml_app_sid,
         twilio_api_key_sid=row.twilio_api_key_sid,
         api_key_secret_set=bool(sec_plain),
+        twilio_api_key_secret=sec_plain or None,
         voice_caller_id_number=row.voice_caller_id_number,
     )
 
@@ -209,9 +305,10 @@ def _twilio_config_to_response(
 async def get_dealership_twilio_config(
     dealership_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_super_admin),
+    current_user: User = Depends(deps.require_config_unlock),
 ) -> Any:
-    """Super Admin: read per-dealership Twilio settings (secrets shown only as set/not set)."""
+    """Read per-dealership Twilio settings. Decrypted auth token and API key secret are included after config unlock."""
+    _ensure_can_manage_dealership_twilio(current_user, dealership_id)
     result = await db.execute(select(Dealership).where(Dealership.id == dealership_id))
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Dealership not found")
@@ -227,9 +324,10 @@ async def patch_dealership_twilio_config(
     dealership_id: UUID,
     body: DealershipTwilioConfigUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_super_admin),
+    current_user: User = Depends(deps.require_config_unlock),
 ) -> Any:
-    """Super Admin: create or update encrypted Twilio credentials for a dealership."""
+    """Create or update Twilio credentials (secrets stored encrypted at rest)."""
+    _ensure_can_manage_dealership_twilio(current_user, dealership_id)
     result = await db.execute(select(Dealership).where(Dealership.id == dealership_id))
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Dealership not found")

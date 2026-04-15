@@ -6,9 +6,10 @@ import smtplib
 import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Any
+from typing import Any, Optional
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,7 @@ from app.api import deps
 from app.core.permissions import UserRole
 from app.db.database import get_db
 from app.models.user import User
+from app.models.dealership import Dealership
 from app.models.dealership_email_config import DealershipEmailConfig
 from app.schemas.dealership_email_config import (
     DealershipEmailConfigCreate,
@@ -29,13 +31,30 @@ from app.schemas.dealership_email_config import (
 router = APIRouter()
 
 
-async def get_user_dealership_id(current_user: User) -> str:
-    """Get the dealership ID for the current user"""
+async def resolve_dealership_id(
+    current_user: User,
+    dealership_id: Optional[UUID],
+    db: AsyncSession,
+) -> UUID:
+    """
+    Resolve the dealership ID for the current request.
+    - Super Admins can specify any dealership_id via query param
+    - Other admins use their own dealership_id
+    """
     if current_user.role == UserRole.SUPER_ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Super Admins must specify a dealership_id"
-        )
+        if not dealership_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Super Admins must specify a dealership_id query parameter"
+            )
+        # Verify dealership exists
+        result = await db.execute(select(Dealership).where(Dealership.id == dealership_id))
+        if not result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Dealership not found"
+            )
+        return dealership_id
     
     if not current_user.dealership_id:
         raise HTTPException(
@@ -48,18 +67,20 @@ async def get_user_dealership_id(current_user: User) -> str:
 
 @router.get("/status", response_model=EmailConfigStatusResponse)
 async def get_email_config_status(
+    dealership_id: Optional[UUID] = Query(None, description="Dealership ID (required for Super Admins)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.require_admin),
 ) -> Any:
     """
-    Get the status of email configuration for the current user's dealership.
-    Available to Dealership Admins and Super Admins.
+    Get the status of email configuration for a dealership.
+    Super Admins must specify dealership_id query parameter.
+    Dealership Admins/Owners use their own dealership.
     """
-    dealership_id = await get_user_dealership_id(current_user)
+    resolved_dealership_id = await resolve_dealership_id(current_user, dealership_id, db)
     
     result = await db.execute(
         select(DealershipEmailConfig).where(
-            DealershipEmailConfig.dealership_id == dealership_id
+            DealershipEmailConfig.dealership_id == resolved_dealership_id
         )
     )
     config = result.scalar_one_or_none()
@@ -82,18 +103,20 @@ async def get_email_config_status(
 
 @router.get("/config", response_model=DealershipEmailConfigResponse)
 async def get_email_config(
+    dealership_id: Optional[UUID] = Query(None, description="Dealership ID (required for Super Admins)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_admin),
+    current_user: User = Depends(deps.require_config_unlock),
 ) -> Any:
     """
-    Get the email configuration for the current user's dealership.
-    Available to Dealership Admins and Super Admins.
+    Get the email configuration for a dealership.
+    Super Admins must specify dealership_id query parameter.
+    Dealership Admins/Owners use their own dealership.
     """
-    dealership_id = await get_user_dealership_id(current_user)
+    resolved_dealership_id = await resolve_dealership_id(current_user, dealership_id, db)
     
     result = await db.execute(
         select(DealershipEmailConfig).where(
-            DealershipEmailConfig.dealership_id == dealership_id
+            DealershipEmailConfig.dealership_id == resolved_dealership_id
         )
     )
     config = result.scalar_one_or_none()
@@ -110,19 +133,21 @@ async def get_email_config(
 @router.post("/config", response_model=DealershipEmailConfigResponse)
 async def create_or_update_email_config(
     config_data: DealershipEmailConfigCreate,
+    dealership_id: Optional[UUID] = Query(None, description="Dealership ID (required for Super Admins)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_admin),
+    current_user: User = Depends(deps.require_config_unlock),
 ) -> Any:
     """
-    Create or update email configuration for the current user's dealership.
-    Available to Dealership Admins and Super Admins.
+    Create or update email configuration for a dealership.
+    Super Admins must specify dealership_id query parameter.
+    Dealership Admins/Owners use their own dealership.
     """
-    dealership_id = await get_user_dealership_id(current_user)
+    resolved_dealership_id = await resolve_dealership_id(current_user, dealership_id, db)
     
     # Check if config already exists
     result = await db.execute(
         select(DealershipEmailConfig).where(
-            DealershipEmailConfig.dealership_id == dealership_id
+            DealershipEmailConfig.dealership_id == resolved_dealership_id
         )
     )
     existing_config = result.scalar_one_or_none()
@@ -160,7 +185,7 @@ async def create_or_update_email_config(
     
     # Create new config
     new_config = DealershipEmailConfig(
-        dealership_id=dealership_id,
+        dealership_id=resolved_dealership_id,
         smtp_host=config_data.smtp_host,
         smtp_port=config_data.smtp_port,
         smtp_username=config_data.smtp_username,
@@ -187,18 +212,20 @@ async def create_or_update_email_config(
 @router.patch("/config", response_model=DealershipEmailConfigResponse)
 async def partial_update_email_config(
     config_data: DealershipEmailConfigUpdate,
+    dealership_id: Optional[UUID] = Query(None, description="Dealership ID (required for Super Admins)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_admin),
+    current_user: User = Depends(deps.require_config_unlock),
 ) -> Any:
     """
     Partially update email configuration.
-    Available to Dealership Admins and Super Admins.
+    Super Admins must specify dealership_id query parameter.
+    Dealership Admins/Owners use their own dealership.
     """
-    dealership_id = await get_user_dealership_id(current_user)
+    resolved_dealership_id = await resolve_dealership_id(current_user, dealership_id, db)
     
     result = await db.execute(
         select(DealershipEmailConfig).where(
-            DealershipEmailConfig.dealership_id == dealership_id
+            DealershipEmailConfig.dealership_id == resolved_dealership_id
         )
     )
     config = result.scalar_one_or_none()
@@ -233,18 +260,20 @@ async def partial_update_email_config(
 
 @router.delete("/config", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_email_config(
+    dealership_id: Optional[UUID] = Query(None, description="Dealership ID (required for Super Admins)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_admin),
+    current_user: User = Depends(deps.require_config_unlock),
 ) -> None:
     """
-    Delete email configuration for the dealership.
-    Available to Dealership Admins and Super Admins.
+    Delete email configuration for a dealership.
+    Super Admins must specify dealership_id query parameter.
+    Dealership Admins/Owners use their own dealership.
     """
-    dealership_id = await get_user_dealership_id(current_user)
+    resolved_dealership_id = await resolve_dealership_id(current_user, dealership_id, db)
     
     result = await db.execute(
         select(DealershipEmailConfig).where(
-            DealershipEmailConfig.dealership_id == dealership_id
+            DealershipEmailConfig.dealership_id == resolved_dealership_id
         )
     )
     config = result.scalar_one_or_none()
@@ -262,18 +291,20 @@ async def delete_email_config(
 @router.post("/test", response_model=EmailTestResponse)
 async def test_email_config(
     test_data: EmailTestRequest,
+    dealership_id: Optional[UUID] = Query(None, description="Dealership ID (required for Super Admins)"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_admin),
+    current_user: User = Depends(deps.require_config_unlock),
 ) -> Any:
     """
     Test the email configuration by sending a test email.
     This also marks the configuration as verified if successful.
+    Super Admins must specify dealership_id query parameter.
     """
-    dealership_id = await get_user_dealership_id(current_user)
+    resolved_dealership_id = await resolve_dealership_id(current_user, dealership_id, db)
     
     result = await db.execute(
         select(DealershipEmailConfig).where(
-            DealershipEmailConfig.dealership_id == dealership_id
+            DealershipEmailConfig.dealership_id == resolved_dealership_id
         )
     )
     config = result.scalar_one_or_none()

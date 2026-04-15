@@ -4,7 +4,7 @@ CODE VERSION: 2024-01-28-v2 (admin-auto-assign-blocked)
 """
 import logging
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ logger.info("=== LEADS.PY LOADED: VERSION 2024-01-28-v2 (admin auto-assign block
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, func, and_, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -81,6 +81,14 @@ class EmailLogCreate(BaseModel):
     body: Optional[str] = None
     direction: str = "sent"  # sent or received
     confirm_skate: bool = False  # If True, user confirmed they want to proceed despite SKATE warning
+
+
+class OutreachLogCreate(BaseModel):
+    """Manual log of SMS or WhatsApp outreach (e.g. from the user's phone or external app)."""
+
+    channel: Literal["sms", "whatsapp"]
+    notes: str = Field(..., min_length=1, max_length=5000)
+    confirm_skate: bool = False
 
 
 class CreditAppComplete(BaseModel):
@@ -2754,6 +2762,123 @@ async def log_email(
         "message": f"Email {email_in.direction} logged successfully",
         "lead_id": str(lead_id),
         "subject": email_in.subject
+    }
+
+
+@router.post("/{lead_id}/log-outreach")
+async def log_outreach(
+    lead_id: UUID,
+    outreach_in: OutreachLogCreate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Log manual SMS or WhatsApp outreach to the timeline (no Twilio send).
+    Auto-assigns the lead if in the unassigned pool (salesperson only).
+    """
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    skate_info = await check_skate_condition(db, current_user, lead, "log outreach")
+    is_skate_action = False
+
+    if skate_info:
+        if not outreach_in.confirm_skate:
+            return JSONResponse(
+                status_code=200,
+                content=skate_info,
+            )
+        is_skate_action = True
+        dealership_id = lead.dealership_id or current_user.dealership_id
+        if dealership_id:
+            performer_name = f"{current_user.first_name} {current_user.last_name}"
+            background_tasks.add_task(
+                send_skate_alert_background,
+                lead_id=lead.id,
+                lead_name=skate_info["lead_name"],
+                dealership_id=dealership_id,
+                assigned_to_user_id=lead.assigned_to,
+                assigned_to_name=skate_info["assigned_to_name"],
+                performer_name=performer_name,
+                action="logged outreach",
+                performer_user_id=current_user.id,
+            )
+
+    is_unassigned_pool = lead.dealership_id is None
+    if not is_unassigned_pool:
+        has_access = (
+            current_user.role == UserRole.SUPER_ADMIN
+            or (
+                current_user.role == UserRole.SALESPERSON
+                and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id)
+            )
+            or (
+                current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]
+                and lead.dealership_id == current_user.dealership_id
+            )
+        )
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Not authorized to log outreach for this lead")
+
+    notification_service = NotificationService(db)
+    auto_assigned = await auto_assign_lead_on_activity(
+        db, lead, current_user, "outreach", notification_service
+    )
+
+    lead.last_contacted_at = utc_now()
+    lead.last_activity_at = utc_now()
+    if not lead.first_contacted_at:
+        lead.first_contacted_at = utc_now()
+
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
+    channel_label = "SMS" if outreach_in.channel == "sms" else "WhatsApp"
+    activity_type = (
+        ActivityType.SMS_SENT if outreach_in.channel == "sms" else ActivityType.WHATSAPP_SENT
+    )
+    description = f"{channel_label} outreach logged by {performer_name}"
+    if is_skate_action:
+        description = f"[SKATE] {description}"
+
+    await ActivityService.log_activity(
+        db,
+        activity_type=activity_type,
+        description=description,
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=lead.dealership_id,
+        meta_data={
+            "channel": outreach_in.channel,
+            "notes": outreach_in.notes,
+            "performer_name": performer_name,
+            "auto_assigned": auto_assigned,
+            "is_skate_action": is_skate_action,
+            "manual_log": True,
+        },
+    )
+
+    from app.services.notification_service import emit_activity_added
+
+    await emit_activity_added(
+        str(lead.id),
+        str(lead.dealership_id) if lead.dealership_id else None,
+        {
+            "type": "sms_sent" if outreach_in.channel == "sms" else "whatsapp_sent",
+            "performer_name": performer_name,
+            "channel": outreach_in.channel,
+            "timestamp": utc_now().isoformat(),
+        },
+    )
+
+    await db.flush()
+
+    return {
+        "message": f"{channel_label} outreach logged successfully",
+        "lead_id": str(lead_id),
+        "channel": outreach_in.channel,
     }
 
 

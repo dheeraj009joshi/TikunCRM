@@ -40,6 +40,13 @@ class User(Base):
         index=True
     )
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # Second factor for viewing/editing Twilio & dealership email secrets (not the login password)
+    config_access_password_hash: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Bcrypt hash; used with X-Config-Unlock-Token after POST /auth/verify-config-access",
+    )
     
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -214,6 +221,10 @@ class User(Base):
     def full_name(self) -> str:
         """Get user's full name"""
         return f"{self.first_name} {self.last_name}"
+
+    @property
+    def config_access_password_set(self) -> bool:
+        return bool(self.config_access_password_hash)
     
     def __repr__(self) -> str:
         return f"<User {self.email} ({self.role.value})>"

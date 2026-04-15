@@ -11,6 +11,8 @@ class DealershipTwilioConfigResponse(BaseModel):
     dealership_id: UUID
     account_sid: Optional[str] = None
     auth_token_set: bool = False
+    # Decrypted values; only included when caller sent X-Config-Unlock-Token (same as GET/PATCH auth)
+    auth_token: Optional[str] = None
     sms_enabled: bool = False
     sms_from_number: Optional[str] = None
     whatsapp_enabled: bool = False
@@ -19,6 +21,7 @@ class DealershipTwilioConfigResponse(BaseModel):
     twilio_twiml_app_sid: Optional[str] = None
     twilio_api_key_sid: Optional[str] = None
     api_key_secret_set: bool = False
+    twilio_api_key_secret: Optional[str] = None
     voice_caller_id_number: Optional[str] = None
 
 

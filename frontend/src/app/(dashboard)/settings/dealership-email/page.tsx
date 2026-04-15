@@ -49,6 +49,7 @@ import {
     SmtpPresetKey,
 } from "@/services/dealership-email-service"
 import { useRole } from "@/hooks/use-role"
+import { ConfigUnlockModal } from "@/components/security/config-unlock-modal"
 
 export default function DealershipEmailConfigPage() {
     const router = useRouter()
@@ -69,7 +70,8 @@ export default function DealershipEmailConfigPage() {
     const [successMessage, setSuccessMessage] = React.useState<string | null>(null)
     const [showSmtpPassword, setShowSmtpPassword] = React.useState(false)
     const [showImapPassword, setShowImapPassword] = React.useState(false)
-    
+    const [showUnlockModal, setShowUnlockModal] = React.useState(false)
+
     // Form data
     const [formData, setFormData] = React.useState<DealershipEmailConfigCreate>({
         smtp_host: "",
@@ -86,39 +88,47 @@ export default function DealershipEmailConfigPage() {
         from_name: "",
     })
     
-    // Load existing config
-    React.useEffect(() => {
-        const loadConfig = async () => {
-            setIsLoading(true)
-            try {
-                const config = await DealershipEmailService.getConfig()
-                setExistingConfig(config)
-                setFormData({
-                    smtp_host: config.smtp_host,
-                    smtp_port: config.smtp_port,
-                    smtp_username: config.smtp_username,
-                    smtp_password: "", // Don't populate password
-                    smtp_use_ssl: config.smtp_use_ssl,
-                    smtp_use_tls: config.smtp_use_tls,
-                    imap_host: config.imap_host || "",
-                    imap_port: config.imap_port,
-                    imap_username: config.imap_username || "",
-                    imap_password: "", // Don't populate password
-                    imap_use_ssl: config.imap_use_ssl,
-                    from_name: config.from_name || "",
-                })
-            } catch (err: any) {
-                // 404 means no config exists yet - that's okay
-                if (err.response?.status !== 404) {
-                    console.error("Failed to load config:", err)
-                }
-            } finally {
-                setIsLoading(false)
+    const loadExistingConfig = React.useCallback(async () => {
+        setIsLoading(true)
+        try {
+            const config = await DealershipEmailService.getConfig()
+            setExistingConfig(config)
+            setFormData({
+                smtp_host: config.smtp_host,
+                smtp_port: config.smtp_port,
+                smtp_username: config.smtp_username,
+                smtp_password: "",
+                smtp_use_ssl: config.smtp_use_ssl,
+                smtp_use_tls: config.smtp_use_tls,
+                imap_host: config.imap_host || "",
+                imap_port: config.imap_port,
+                imap_username: config.imap_username || "",
+                imap_password: "",
+                imap_use_ssl: config.imap_use_ssl,
+                from_name: config.from_name || "",
+            })
+        } catch (err: unknown) {
+            const e = err as { response?: { status?: number; data?: { detail?: string } } }
+            const st = e.response?.status
+            const d = e.response?.data?.detail
+            if (
+                st === 401 &&
+                (d === "config_unlock_token_required" || d === "invalid_or_expired_config_unlock_token")
+            ) {
+                setShowUnlockModal(true)
+            } else if (st === 403 && d === "config_access_password_not_set") {
+                setError("Set a configuration-access password under Settings → Security first.")
+            } else if (st !== 404) {
+                console.error("Failed to load config:", err)
             }
+        } finally {
+            setIsLoading(false)
         }
-        
-        loadConfig()
     }, [])
+
+    React.useEffect(() => {
+        void loadExistingConfig()
+    }, [loadExistingConfig])
     
     // Handle preset selection
     const handlePresetSelect = (presetKey: string) => {
@@ -670,6 +680,15 @@ export default function DealershipEmailConfigPage() {
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
+
+            <ConfigUnlockModal
+                open={showUnlockModal}
+                onOpenChange={setShowUnlockModal}
+                needsSetup={false}
+                onUnlocked={() => {
+                    void loadExistingConfig()
+                }}
+            />
         </div>
     )
 }

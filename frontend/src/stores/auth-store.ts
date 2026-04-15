@@ -13,6 +13,8 @@ export interface User {
     is_active: boolean;
     email_config_verified?: boolean;
     must_change_password?: boolean;
+    /** Separate password for Twilio / dealership email config APIs */
+    config_access_password_set?: boolean;
 }
 
 interface AuthState {
