@@ -20,6 +20,9 @@ export interface Dealership {
     is_active: boolean;
     created_at: string;
     updated_at: string;
+    /** Optional aggregates when returned by list/detail endpoints */
+    users_count?: number;
+    leads_count?: number;
 }
 
 export interface OwnerData {

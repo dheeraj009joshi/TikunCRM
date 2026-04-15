@@ -293,11 +293,11 @@ export default function DealershipsPage() {
                                     <p className="text-[10px] text-muted-foreground font-black uppercase tracking-widest">Business Pulse</p>
                                     <div className="flex justify-between items-center text-xs">
                                         <span className="text-muted-foreground font-medium">Active Seats:</span>
-                                        <span className="font-black">{(dealer as any).users_count || 0}</span>
+                                        <span className="font-black">{dealer.users_count ?? 0}</span>
                                     </div>
                                     <div className="flex justify-between items-center text-xs">
                                         <span className="text-muted-foreground font-medium">Total Leads:</span>
-                                        <span className="font-black">{(dealer as any).leads_count || 0}</span>
+                                        <span className="font-black">{dealer.leads_count ?? 0}</span>
                                     </div>
                                 </div>
                             </div>
