@@ -274,7 +274,7 @@ async def initiate_twilio_call(db: AsyncSession, ai_outbound_call_id: UUID) -> b
         # Initiate call
         call = client.calls.create(
             to=outbound_call.customer_phone,
-            from_=effective_config.phone_number or settings.twilio_phone_number,
+            from_=effective_config.voice_caller_id_number or settings.twilio_phone_number,
             url=twiml_url,
             status_callback=status_callback_url,
             status_callback_event=['initiated', 'ringing', 'answered', 'completed'],
