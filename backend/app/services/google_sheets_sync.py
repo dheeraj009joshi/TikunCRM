@@ -684,6 +684,13 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                                 )
                         except Exception as e:
                             logger.warning(f"Failed to emit notification for lead {lead.id}: {e}")
+                        
+                        # Enqueue AI outbound call
+                        try:
+                            from app.services.ai_outbound_service import maybe_enqueue_ai_outbound
+                            await maybe_enqueue_ai_outbound(session, lead.id)
+                        except Exception as e:
+                            logger.error(f"Failed to enqueue AI outbound for sheet lead {lead.id}: {e}")
                     
                     try:
                         from app.services.notification_service import emit_badges_refresh
@@ -1063,6 +1070,13 @@ async def _legacy_sync_google_sheet_leads() -> Dict[str, Any]:
                                 )
                         except Exception as e:
                             logger.warning(f"Failed to emit notification for lead {lead.id}: {e}")
+                        
+                        # Enqueue AI outbound call
+                        try:
+                            from app.services.ai_outbound_service import maybe_enqueue_ai_outbound
+                            await maybe_enqueue_ai_outbound(session, lead.id)
+                        except Exception as e:
+                            logger.error(f"Failed to enqueue AI outbound for sheet lead {lead.id}: {e}")
                     
                     if new_leads_count > 0:
                         try:

@@ -898,8 +898,43 @@ async def create_lead(
             await emit_badges_refresh(unassigned=True)
     except Exception:
         pass
+    
+    # Enqueue AI outbound call (new leads only, not repeat interest)
+    from app.services.ai_outbound_service import maybe_enqueue_ai_outbound
+    background_tasks.add_task(_enqueue_ai_call_background, lead.id)
 
     return lead
+
+
+async def _enqueue_ai_call_background(lead_id: UUID):
+    """Background task to enqueue AI outbound call with new DB session."""
+    from app.db.database import get_engine_url_and_connect_args
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession as AsyncSessionType
+    from sqlalchemy.orm import sessionmaker
+    from app.services.ai_outbound_service import maybe_enqueue_ai_outbound
+    
+    try:
+        url, connect_args = get_engine_url_and_connect_args()
+        engine = create_async_engine(url, echo=False, pool_pre_ping=True, connect_args=connect_args)
+        async_session = sessionmaker(engine, class_=AsyncSessionType, expire_on_commit=False)
+        
+        async with async_session() as session:
+            status = await maybe_enqueue_ai_outbound(session, lead_id)
+            logger.info(f"AI outbound enqueue result for lead {lead_id}: {status}")
+            
+            # If pending, initiate the call
+            if status == "pending":
+                from app.models.ai_outbound_call import AiOutboundCall
+                from sqlalchemy import select
+                result = await session.execute(
+                    select(AiOutboundCall).where(AiOutboundCall.lead_id == lead_id)
+                )
+                outbound_call = result.scalar_one_or_none()
+                if outbound_call:
+                    from app.services.ai_outbound_service import initiate_twilio_call
+                    await initiate_twilio_call(session, outbound_call.id)
+    except Exception as e:
+        logger.error(f"Failed to enqueue AI outbound for lead {lead_id}: {e}", exc_info=True)
 
 
 @router.patch("/{lead_id}", response_model=LeadResponse)

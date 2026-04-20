@@ -62,6 +62,14 @@ class DealershipTwilioConfig(Base):
         comment="Encrypted API Key Secret for WebRTC tokens",
     )
     voice_caller_id_number: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    
+    # AI Outbound Calling
+    ai_outbound_enabled: Mapped[bool] = mapped_column(
+        Boolean, 
+        nullable=False, 
+        default=False,
+        comment="Enable AI outbound calling for new leads"
+    )
 
     updated_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

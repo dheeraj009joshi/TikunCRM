@@ -295,6 +295,7 @@ def _twilio_config_to_response(
         api_key_secret_set=bool(sec_plain),
         twilio_api_key_secret=sec_plain or None,
         voice_caller_id_number=row.voice_caller_id_number,
+        ai_outbound_enabled=row.ai_outbound_enabled,
     )
 
 
@@ -357,6 +358,7 @@ async def patch_dealership_twilio_config(
         "twilio_twiml_app_sid",
         "twilio_api_key_sid",
         "voice_caller_id_number",
+        "ai_outbound_enabled",
     ):
         if key in data:
             setattr(row, key, data[key])

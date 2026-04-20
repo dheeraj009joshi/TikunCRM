@@ -14,7 +14,8 @@ import {
     Mail,
     Calendar,
     CalendarClock,
-    Store
+    Store,
+    Calendar as CalendarIcon,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, MetricCard } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -42,7 +43,7 @@ import { useStatsRefresh, useShowroomUpdates } from "@/hooks/use-websocket"
 export function SalespersonDashboard() {
     const [stats, setStats] = React.useState<SalespersonStats | null>(null)
     const [showroomStats, setShowroomStats] = React.useState<ShowroomStats | null>(null)
-    const [recentLeads, setRecentLeads] = React.useState<Lead[]>([])
+    const [myLeads, setMyLeads] = React.useState<Lead[]>([])
     const [freshLeads, setFreshLeads] = React.useState<Lead[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [upcomingAppointments, setUpcomingAppointments] = React.useState<Appointment[]>([])
@@ -51,17 +52,17 @@ export function SalespersonDashboard() {
 
     const loadData = React.useCallback(async () => {
         try {
-            const [statsData, showroomData, leadsData, freshData, todayData, upcomingData] = await Promise.all([
+            const [statsData, showroomData, mineData, freshData, todayData, upcomingData] = await Promise.all([
                 DashboardService.getSalespersonStats(),
                 ShowroomService.getStats().catch(() => null),
-                LeadService.listLeads({ page: 1, page_size: 5 }),
+                LeadService.listLeads({ pool: "mine", page: 1, page_size: 20 }),
                 LeadService.listLeads({ fresh_only: true, page_size: 5 }).catch(() => ({ items: [] })),
                 AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] })),
                 AppointmentService.list({ upcoming_only: true, page_size: 3 }).catch(() => ({ items: [] }))
             ])
             setStats(statsData)
             setShowroomStats(showroomData)
-            setRecentLeads(leadsData.items)
+            setMyLeads(mineData.items)
             setFreshLeads(freshData.items || [])
             setTodayAppointments(todayData?.items || [])
             setUpcomingAppointments(upcomingData?.items || [])
@@ -119,7 +120,7 @@ export function SalespersonDashboard() {
 
     // Lead status distribution for chart
     const statusChartData = stats ? Object.entries(stats.leads_by_status)
-        .filter(([_, count]) => count > 0)
+        .filter(([, count]) => count > 0)
         .map(([status, count]) => ({
             name: status.replace('_', ' ').toUpperCase(),
             value: count
@@ -235,7 +236,7 @@ export function SalespersonDashboard() {
                             </div>
                             <div>
                                 <CardTitle className="text-base font-semibold text-blue-700 dark:text-blue-300">
-                                    Today's Appointments ({todayAppointments.length})
+                                    Today&apos;s Appointments ({todayAppointments.length})
                                 </CardTitle>
                             </div>
                         </div>
@@ -445,6 +446,169 @@ export function SalespersonDashboard() {
                 </Card>
             )}
 
+            {/* My Leads — primary table (below Fresh leads) */}
+            <Card>
+                <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 border-b bg-muted/30 pb-4">
+                    <div>
+                        <CardTitle className="text-lg font-semibold">My Leads</CardTitle>
+                        <p className="text-sm text-muted-foreground mt-0.5">
+                            Your assigned leads — newest first
+                        </p>
+                    </div>
+                    <Link href="/leads?filter=mine">
+                        <Button variant="outline" size="sm" className="gap-1.5">
+                            View all
+                            <ArrowUpRight className="h-3.5 w-3.5" />
+                        </Button>
+                    </Link>
+                </CardHeader>
+                <CardContent className="p-0">
+                    <div className="overflow-x-auto">
+                        <Table>
+                            <TableHeader>
+                                <TableRow className="bg-muted/50 hover:bg-muted/50">
+                                    <TableHead className="min-w-[180px] pl-6">Customer</TableHead>
+                                    <TableHead className="min-w-[100px]">Status</TableHead>
+                                    <TableHead className="min-w-[90px]">Source</TableHead>
+                                    <TableHead className="min-w-[160px] max-w-[220px]">Notes</TableHead>
+                                    <TableHead className="min-w-[160px]">Last action</TableHead>
+                                    <TableHead className="min-w-[130px]">Created</TableHead>
+                                    <TableHead className="w-[100px] pr-6 text-right">Open</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {isLoading ? (
+                                    <TableLoading columns={7} rows={6} />
+                                ) : myLeads.length === 0 ? (
+                                    <TableEmpty
+                                        icon={<Inbox className="h-10 w-10 opacity-30" />}
+                                        title="No leads assigned yet"
+                                        description="When leads are assigned to you, they will appear here."
+                                    />
+                                ) : (
+                                    myLeads.map((lead) => {
+                                        const noteText =
+                                            lead.notes?.trim() ||
+                                            lead.last_note_content?.trim() ||
+                                            null
+                                        const notePreview = noteText
+                                            ? noteText.length > 80
+                                                ? `${noteText.slice(0, 80)}…`
+                                                : noteText
+                                            : "—"
+                                        return (
+                                            <TableRow
+                                                key={lead.id}
+                                                className="cursor-pointer hover:bg-muted/40"
+                                                onClick={() => {
+                                                    window.location.href = `/leads/${lead.id}`
+                                                }}
+                                            >
+                                                <TableCell className="pl-6">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
+                                                            {(lead.customer?.first_name || "?").charAt(0)}
+                                                            {(lead.customer?.last_name || "").charAt(0) || ""}
+                                                        </div>
+                                                        <div className="min-w-0">
+                                                            <p className="font-medium text-sm truncate">
+                                                                {getLeadFullName(lead)}
+                                                            </p>
+                                                            {getLeadPhone(lead) && (
+                                                                <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
+                                                                    <Phone className="h-3 w-3 shrink-0" />
+                                                                    {getLeadPhone(lead)}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <Badge
+                                                        size="sm"
+                                                        style={{
+                                                            backgroundColor: getStageColor(lead.stage),
+                                                            color: "#fff",
+                                                        }}
+                                                    >
+                                                        {getStageLabel(lead.stage)}
+                                                    </Badge>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <span className="text-xs text-muted-foreground line-clamp-2">
+                                                        {lead.source_display || lead.source || "—"}
+                                                    </span>
+                                                </TableCell>
+                                                <TableCell className="max-w-[220px]">
+                                                    <span
+                                                        className="text-xs text-muted-foreground line-clamp-3"
+                                                        title={noteText ?? undefined}
+                                                    >
+                                                        {notePreview}
+                                                    </span>
+                                                </TableCell>
+                                                <TableCell className="max-w-[200px]">
+                                                    {lead.last_activity_description ? (
+                                                        <div className="space-y-0.5">
+                                                            <p
+                                                                className="text-xs line-clamp-2"
+                                                                title={lead.last_activity_description}
+                                                            >
+                                                                {lead.last_activity_description.length > 70
+                                                                    ? `${lead.last_activity_description.slice(0, 70)}…`
+                                                                    : lead.last_activity_description}
+                                                            </p>
+                                                            {lead.last_activity_at && (
+                                                                <p className="text-[10px] text-muted-foreground">
+                                                                    {formatDateInTimezone(
+                                                                        lead.last_activity_at,
+                                                                        timezone,
+                                                                        {
+                                                                            month: "short",
+                                                                            day: "numeric",
+                                                                            hour: "2-digit",
+                                                                            minute: "2-digit",
+                                                                        }
+                                                                    )}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-xs text-muted-foreground">—</span>
+                                                    )}
+                                                </TableCell>
+                                                <TableCell>
+                                                    <span className="flex items-center gap-1 text-xs text-muted-foreground whitespace-nowrap">
+                                                        <CalendarIcon className="h-3 w-3 shrink-0" />
+                                                        {formatDateInTimezone(lead.created_at, timezone, {
+                                                            month: "short",
+                                                            day: "numeric",
+                                                            year: "numeric",
+                                                        })}
+                                                    </span>
+                                                </TableCell>
+                                                <TableCell className="pr-6 text-right">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            window.location.href = `/leads/${lead.id}`
+                                                        }}
+                                                    >
+                                                        Open
+                                                    </Button>
+                                                </TableCell>
+                                            </TableRow>
+                                        )
+                                    })
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+                </CardContent>
+            </Card>
+
             {/* Stats Grid */}
             <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-5">
                 {isLoading ? (
@@ -469,143 +633,33 @@ export function SalespersonDashboard() {
                 )}
             </div>
 
-            {/* Content Grid */}
-            <div className="grid gap-6 lg:grid-cols-3">
-                {/* Lead Status Distribution */}
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="text-base font-semibold">Lead Pipeline</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        {isLoading ? (
-                            <div className="flex h-48 items-center justify-center">
-                                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                            </div>
-                        ) : statusChartData.length === 0 ? (
-                            <div className="flex h-48 flex-col items-center justify-center text-center">
-                                <Inbox className="h-10 w-10 text-muted-foreground/20 mb-2" />
-                                <p className="text-sm text-muted-foreground">No leads assigned yet</p>
-                            </div>
-                        ) : (
-                            <DonutChart
-                                data={statusChartData}
-                                category="value"
-                                index="name"
-                                colors={["blue", "amber", "purple", "emerald", "gray", "rose"]}
-                                className="h-48"
-                                showLabel
-                            />
-                        )}
-                    </CardContent>
-                </Card>
-
-                {/* Recent Leads */}
-                <Card className="lg:col-span-2">
-                    <CardHeader className="flex flex-row items-center justify-between">
-                        <CardTitle className="text-base font-semibold">Recent Leads</CardTitle>
-                        <Link href="/leads">
-                            <Button variant="ghost" size="sm">
-                                View All
-                                <ArrowUpRight className="ml-1 h-3 w-3" />
-                            </Button>
-                        </Link>
-                    </CardHeader>
-                    <Table>
-                        <TableHeader>
-                            <TableRow className="bg-muted/50">
-                                <TableHead>Lead</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Contact</TableHead>
-                                <TableHead className="text-right">Actions</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {isLoading ? (
-                                <TableLoading columns={4} rows={5} />
-                            ) : recentLeads.length === 0 ? (
-                                <TableEmpty
-                                    icon={<Inbox className="h-8 w-8" />}
-                                    title="No leads assigned"
-                                    description="Leads will appear here once assigned to you"
-                                />
-                            ) : (
-                                recentLeads.map((lead) => (
-                                    <TableRow 
-                                        key={lead.id} 
-                                        className="cursor-pointer hover:bg-muted/30"
-                                        onClick={() => window.location.href = `/leads/${lead.id}`}
-                                    >
-                                        <TableCell>
-                                            <div className="flex items-center gap-2">
-                                                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-bold">
-                                                    {(lead.customer?.first_name || "?").charAt(0)}
-                                                </div>
-                                                <div>
-                                                    <p className="font-medium text-sm">
-                                                        {getLeadFullName(lead)}
-                                                    </p>
-                                                    <p className="text-xs text-muted-foreground">
-                                                        {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </TableCell>
-                                        <TableCell>
-                                            <Badge size="sm" style={{ backgroundColor: getStageColor(lead.stage), color: "#fff" }}>
-                                                {getStageLabel(lead.stage)}
-                                            </Badge>
-                                        </TableCell>
-                                        <TableCell>
-                                            <div className="flex flex-col gap-1">
-                                                {getLeadPhone(lead) && (
-                                                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                                                        <Phone className="h-3 w-3" />
-                                                        {getLeadPhone(lead)}
-                                                    </span>
-                                                )}
-                                                {getLeadEmail(lead) && (
-                                                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                                                        <Mail className="h-3 w-3" />
-                                                        {getLeadEmail(lead)}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                            <div className="flex justify-end gap-1">
-                                                {getLeadPhone(lead) && (
-                                                    <Button 
-                                                        variant="ghost" 
-                                                        size="icon"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation()
-                                                            window.location.href = `tel:${getLeadPhone(lead)}`
-                                                        }}
-                                                    >
-                                                        <Phone className="h-4 w-4" />
-                                                    </Button>
-                                                )}
-                                                {getLeadEmail(lead) && (
-                                                    <Button 
-                                                        variant="ghost" 
-                                                        size="icon"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation()
-                                                            window.location.href = `mailto:${getLeadEmail(lead)}`
-                                                        }}
-                                                    >
-                                                        <Mail className="h-4 w-4" />
-                                                    </Button>
-                                                )}
-                                            </div>
-                                        </TableCell>
-                                    </TableRow>
-                                ))
-                            )}
-                        </TableBody>
-                    </Table>
-                </Card>
-            </div>
+            {/* Lead pipeline */}
+            <Card>
+                <CardHeader>
+                    <CardTitle className="text-base font-semibold">Lead Pipeline</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    {isLoading ? (
+                        <div className="flex h-48 items-center justify-center">
+                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        </div>
+                    ) : statusChartData.length === 0 ? (
+                        <div className="flex h-48 flex-col items-center justify-center text-center">
+                            <Inbox className="h-10 w-10 text-muted-foreground/20 mb-2" />
+                            <p className="text-sm text-muted-foreground">No leads assigned yet</p>
+                        </div>
+                    ) : (
+                        <DonutChart
+                            data={statusChartData}
+                            category="value"
+                            index="name"
+                            colors={["blue", "amber", "purple", "emerald", "gray", "rose"]}
+                            className="h-48"
+                            showLabel
+                        />
+                    )}
+                </CardContent>
+            </Card>
         </div>
     )
 }

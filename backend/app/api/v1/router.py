@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, voice, sms, whatsapp, showroom, customers, lead_stages, stips, admin_sync_sources, campaign_mappings
 from app.api.v1.endpoints.webhooks import sendgrid as sendgrid_webhook
 from app.api.v1.endpoints.webhooks import twilio as twilio_webhook
+from app.api.v1.endpoints.webhooks import twilio_ai_voice as twilio_ai_voice_webhook
 
 api_router = APIRouter()
 
@@ -45,6 +46,7 @@ api_router.include_router(campaign_mappings.router, prefix="/campaign-mappings",
 # Webhook endpoints (no auth required - secured by signatures)
 api_router.include_router(sendgrid_webhook.router, prefix="/webhooks/sendgrid", tags=["Webhooks"])
 api_router.include_router(twilio_webhook.router, prefix="/webhooks/twilio", tags=["Webhooks"])
+api_router.include_router(twilio_ai_voice_webhook.router, prefix="/webhooks/twilio/ai-voice", tags=["Webhooks"])
 
 # WebSocket endpoint for real-time updates
 api_router.include_router(websocket.router, tags=["WebSocket"])

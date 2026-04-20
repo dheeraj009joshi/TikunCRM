@@ -112,6 +112,18 @@ class Settings(BaseSettings):
     twilio_api_key_secret: str = ""  # API Key Secret
     voice_enabled: bool = True  # Set to false to disable voice even when Twilio credentials are set
     
+    # AI Outbound Calling Settings
+    ai_outbound_enabled: bool = False  # Global kill switch for AI outbound calls
+    ai_outbound_quiet_hours_start: int = 21  # 9 PM local time (hour 0-23)
+    ai_outbound_quiet_hours_end: int = 9  # 9 AM local time (hour 0-23)
+    ai_voice_system_user_id: str = ""  # Optional: UUID of system user for AI call attribution
+    
+    # STT/LLM/TTS API Keys for AI Voice
+    deepgram_api_key: str = ""  # Speech-to-Text
+    openai_api_key: str = ""  # LLM for conversation
+    cartesia_api_key: str = ""  # Text-to-Speech (or use elevenlabs_api_key)
+    elevenlabs_api_key: str = ""  # Alternative TTS provider
+    
     # Azure Blob Storage (for call recordings)
     azure_storage_connection_string: str = ""
     azure_storage_container: str = "call-recordings"

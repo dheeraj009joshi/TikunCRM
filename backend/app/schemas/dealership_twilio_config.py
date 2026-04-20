@@ -23,6 +23,7 @@ class DealershipTwilioConfigResponse(BaseModel):
     api_key_secret_set: bool = False
     twilio_api_key_secret: Optional[str] = None
     voice_caller_id_number: Optional[str] = None
+    ai_outbound_enabled: bool = False
 
 
 class DealershipTwilioConfigUpdate(BaseModel):
@@ -39,3 +40,6 @@ class DealershipTwilioConfigUpdate(BaseModel):
         None, description="Set only to change API key secret"
     )
     voice_caller_id_number: Optional[str] = None
+    ai_outbound_enabled: Optional[bool] = Field(
+        None, description="Enable AI outbound calling for new leads"
+    )

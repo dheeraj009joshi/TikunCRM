@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from app.models.lead_sync_source import LeadSyncSource
     from app.models.campaign_mapping import CampaignMapping
     from app.models.lead_campaign import LeadCampaign
+    from app.models.ai_outbound_call import AiOutboundCall
 
 
 class LeadSource(str, Enum):
@@ -245,6 +246,9 @@ class Lead(Base):
     campaigns: Mapped[List["LeadCampaign"]] = relationship(
         "LeadCampaign", back_populates="lead", lazy="noload",
         order_by="desc(LeadCampaign.added_at)"
+    )
+    ai_outbound_call: Mapped[Optional["AiOutboundCall"]] = relationship(
+        "AiOutboundCall", back_populates="lead", lazy="noload", uselist=False
     )
 
     # ── Backward-compat proxy properties (contact info lives on Customer) ──

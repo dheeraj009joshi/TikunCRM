@@ -132,6 +132,61 @@ def create_application() -> FastAPI:
     # Include API router
     app.include_router(api_router, prefix="/api/v1")
     
+    # AI Voice WebSocket endpoint (must be at root level for Twilio)
+    @app.websocket("/ws/twilio-ai")
+    async def twilio_ai_websocket(websocket):
+        """
+        WebSocket endpoint for Twilio Media Streams + Pipecat AI voice pipeline.
+        """
+        from fastapi import WebSocket
+        from app.pipecat_runner import run_ai_conversation
+        from app.db.database import get_engine_url_and_connect_args
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession as AsyncSessionType
+        from sqlalchemy.orm import sessionmaker
+        from uuid import UUID
+        
+        await websocket.accept()
+        
+        # Get query params
+        query_params = websocket.query_params
+        lead_id_str = query_params.get("lead_id")
+        call_sid = query_params.get("call_sid", "")
+        token = query_params.get("token", "")
+        
+        if not lead_id_str or not token:
+            logger.error("Missing lead_id or token in WebSocket")
+            await websocket.close(code=4000, reason="Missing parameters")
+            return
+        
+        try:
+            lead_id = UUID(lead_id_str)
+        except ValueError:
+            logger.error(f"Invalid lead_id format: {lead_id_str}")
+            await websocket.close(code=4001, reason="Invalid lead ID")
+            return
+        
+        # Create new DB session for this WebSocket connection
+        url, connect_args = get_engine_url_and_connect_args()
+        engine = create_async_engine(url, echo=False, pool_pre_ping=True, connect_args=connect_args)
+        async_session = sessionmaker(engine, class_=AsyncSessionType, expire_on_commit=False)
+        
+        async with async_session() as session:
+            try:
+                result = await run_ai_conversation(
+                    websocket,
+                    lead_id,
+                    call_sid,
+                    token,
+                    session
+                )
+                logger.info(f"AI conversation completed for lead {lead_id}: {result}")
+            except Exception as e:
+                logger.error(f"AI conversation error for lead {lead_id}: {e}", exc_info=True)
+                try:
+                    await websocket.close(code=1011, reason="Internal error")
+                except:
+                    pass
+    
     # Health check endpoint
     @app.get("/health", tags=["Health"])
     async def health_check():

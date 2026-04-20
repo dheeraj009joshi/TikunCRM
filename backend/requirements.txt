@@ -62,3 +62,10 @@ azure-storage-blob==12.19.0
 
 # WebSockets
 websockets==12.0
+
+# AI Voice Pipeline (Pipecat + providers)
+pipecat-ai==0.0.45
+deepgram-sdk==3.2.0
+openai==1.12.0
+# Alternative TTS: elevenlabs or cartesia
+# elevenlabs==0.2.26

@@ -30,6 +30,7 @@ from app.models.lead_sync_source import LeadSyncSource, SyncSourceType
 from app.models.campaign_mapping import CampaignMapping, MatchType
 from app.models.lead_campaign import LeadCampaign
 from app.models.whatsapp_message import WhatsAppMessage, WhatsAppBulkSend, WhatsAppConnection, WhatsAppChannel
+from app.models.ai_outbound_call import AiOutboundCall
 
 __all__ = [
     "Customer",
@@ -82,4 +83,5 @@ __all__ = [
     "WhatsAppBulkSend",
     "WhatsAppConnection",
     "WhatsAppChannel",
+    "AiOutboundCall",
 ]

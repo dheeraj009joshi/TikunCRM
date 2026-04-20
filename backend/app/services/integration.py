@@ -83,7 +83,14 @@ class IntegrationService:
             meta_data={"form_id": lead_data.get("form_id")}
         )
         
-        # Trigger assignment logic here (omitted for now)
+        # Enqueue AI outbound call
+        from app.services.ai_outbound_service import maybe_enqueue_ai_outbound
+        try:
+            await maybe_enqueue_ai_outbound(db, new_lead.id)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to enqueue AI outbound for Meta lead {new_lead.id}: {e}")
+        
         return new_lead
 
     @staticmethod
