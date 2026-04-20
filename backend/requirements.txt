@@ -61,7 +61,7 @@ httpx==0.26.0  # Already included above
 azure-storage-blob==12.19.0
 
 # WebSockets
-websockets==12.0
+websockets>=13.1,<16
 
 # AI Voice Pipeline (Pipecat + providers)
 # AI Voice Calling (Pipecat 1.0 - Python 3.13 compatible)
