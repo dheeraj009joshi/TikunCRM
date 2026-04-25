@@ -25,7 +25,8 @@ import {
     List,
     LayoutGrid,
     Star,
-    FileStack
+    FileStack,
+    ExternalLink,
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -1268,6 +1269,17 @@ export default function LeadsPage() {
                                                 }}>
                                                     <Eye className="mr-2 h-4 w-4" />
                                                     View Details
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem asChild>
+                                                    <Link
+                                                        href={`/leads/${lead.id}`}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                        <ExternalLink className="mr-2 h-4 w-4" />
+                                                        Open in new tab
+                                                    </Link>
                                                 </DropdownMenuItem>
                                                 {isSuperAdmin && !lead.dealership_id && (
                                                     <DropdownMenuItem onClick={(e) => {
