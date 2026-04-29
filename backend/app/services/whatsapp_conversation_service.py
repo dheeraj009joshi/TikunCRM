@@ -302,11 +302,13 @@ class WhatsAppConversationService:
         await self.db.flush()
         if lead:
             try:
-                await self._log_activity(
-                    wa_log,
-                    ActivityType.WHATSAPP_RECEIVED,
-                    f"WhatsApp received from {from_number}"
-                )
+                # Savepoint so a bad activity row cannot poison the session and block commit of wa_log.
+                async with self.db.begin_nested():
+                    await self._log_activity(
+                        wa_log,
+                        ActivityType.WHATSAPP_RECEIVED,
+                        f"WhatsApp received from {from_number}",
+                    )
             except Exception as e:
                 logger.warning(
                     "WhatsApp inbound saved (id=%s) but activity log failed: %s",

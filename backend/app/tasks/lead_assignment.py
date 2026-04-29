@@ -33,7 +33,6 @@ STALE_INACTIVITY_DAYS = 3
 
 # PostgreSQL activitytype labels that count as "engagement" (assignment rows excluded).
 # Use exact enum labels — DB mixes UPPERCASE with lowercase e.g. sms_received (see alembic).
-# WHATSAPP_RECEIVED is not added to activitytype in migrations; omit until a migration exists.
 STALE_ENGAGEMENT_ACTIVITY_DB_LABELS = (
     "NOTE_ADDED",
     "CALL_LOGGED",
@@ -42,6 +41,7 @@ STALE_ENGAGEMENT_ACTIVITY_DB_LABELS = (
     "SMS_SENT",
     "sms_received",
     "WHATSAPP_SENT",
+    "WHATSAPP_RECEIVED",
     "STATUS_CHANGED",
     "FOLLOW_UP_SCHEDULED",
     "FOLLOW_UP_COMPLETED",
