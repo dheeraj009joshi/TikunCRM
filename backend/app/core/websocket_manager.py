@@ -40,8 +40,9 @@ class WebSocketManager:
             if dealership_id not in self.dealership_users:
                 self.dealership_users[dealership_id] = set()
             self.dealership_users[dealership_id].add(user_id)
-        
-        logger.info(f"WebSocket connected: user={user_id}, dealership={dealership_id}")
+            logger.info(f"WebSocket connected: user={user_id}, dealership={dealership_id} (now {len(self.dealership_users[dealership_id])} users in dealership)")
+        else:
+            logger.warning(f"WebSocket connected WITHOUT dealership_id: user={user_id} - dealership broadcasts won't reach this user!")
     
     def disconnect(self, websocket: WebSocket, user_id: str, dealership_id: Optional[str] = None):
         """Remove a WebSocket connection"""
@@ -80,10 +81,18 @@ class WebSocketManager:
     
     async def broadcast_to_dealership(self, dealership_id: str, message: dict, exclude_user: Optional[str] = None):
         """Broadcast a message to all users in a dealership"""
+        if not dealership_id:
+            logger.warning("broadcast_to_dealership called with empty dealership_id")
+            return
+        
         if dealership_id in self.dealership_users:
+            user_count = len(self.dealership_users[dealership_id])
+            logger.info(f"Broadcasting {message.get('type')} to {user_count} users in dealership {dealership_id}")
             for user_id in self.dealership_users[dealership_id]:
                 if user_id != exclude_user:
                     await self.send_to_user(user_id, message)
+        else:
+            logger.warning(f"No users connected for dealership {dealership_id}. Active dealerships: {list(self.dealership_users.keys())}")
     
     async def broadcast_all(self, message: dict):
         """Broadcast a message to all connected users"""

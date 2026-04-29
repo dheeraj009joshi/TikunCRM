@@ -77,8 +77,15 @@ async def login(
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
     refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
     
+    # Include dealership_id in token for WebSocket dealership broadcasts
+    additional_claims = {}
+    if user.dealership_id:
+        additional_claims["dealership_id"] = str(user.dealership_id)
+    
     access_token = create_access_token(
-        subject=str(user.id), expires_delta=access_token_expires
+        subject=str(user.id),
+        expires_delta=access_token_expires,
+        additional_claims=additional_claims if additional_claims else None,
     )
     refresh_token = create_refresh_token(
         subject=str(user.id), expires_delta=refresh_token_expires
@@ -138,8 +145,13 @@ async def signup(
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
     refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
     
+    # Include dealership_id in token for WebSocket dealership broadcasts
+    additional_claims = {"dealership_id": str(dealership.id)}
+    
     access_token = create_access_token(
-        subject=str(user.id), expires_delta=access_token_expires
+        subject=str(user.id),
+        expires_delta=access_token_expires,
+        additional_claims=additional_claims,
     )
     refresh_token = create_refresh_token(
         subject=str(user.id), expires_delta=refresh_token_expires
@@ -188,10 +200,16 @@ async def refresh_access_token(
             detail="account_deactivated",
         )
     
-    # Generate new access token
+    # Generate new access token with dealership_id for WebSocket broadcasts
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+    additional_claims = {}
+    if user.dealership_id:
+        additional_claims["dealership_id"] = str(user.dealership_id)
+    
     access_token = create_access_token(
-        subject=str(user.id), expires_delta=access_token_expires
+        subject=str(user.id),
+        expires_delta=access_token_expires,
+        additional_claims=additional_claims if additional_claims else None,
     )
     
     # Optionally generate a new refresh token (rotate refresh tokens)
