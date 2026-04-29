@@ -77,7 +77,7 @@ export function MessageComposer({
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         disabled={disabled || sending}
-        className="min-h-[40px] max-h-[120px] resize-none"
+        className="min-h-[40px] max-h-[120px] resize-none focus-visible:ring-0 focus-visible:ring-offset-0 focus:ring-0 focus:outline-none"
         rows={1}
       />
       <Button

@@ -156,13 +156,35 @@ export function VoiceRecorder({
   };
 
   const handleSend = () => {
-    if (chunksRef.current.length === 0) return;
+    if (chunksRef.current.length === 0) {
+      console.error("No audio chunks recorded");
+      toast({
+        title: "Recording Error",
+        description: "No audio was recorded. Please try again.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     const mimeType = mediaRecorderRef.current?.mimeType || "audio/webm";
     const extension = mimeType.includes("ogg") ? "ogg" : mimeType.includes("webm") ? "webm" : "wav";
     const blob = new Blob(chunksRef.current, { type: mimeType });
+    
+    // Check if blob has content
+    if (blob.size === 0) {
+      console.error("Audio blob is empty");
+      toast({
+        title: "Recording Error",
+        description: "Audio recording is empty. Please try again.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
     const file = new File([blob], `voice-message.${extension}`, { type: mimeType });
     const recordedDuration = recordedDurationRef.current;
+
+    console.log("Sending voice message:", { mimeType, extension, blobSize: blob.size, fileSize: file.size });
 
     // Generate temp ID for optimistic update
     const tempId = generateTempId();
@@ -197,10 +219,12 @@ export function VoiceRecorder({
       })
       .catch((error) => {
         console.error("Voice message send failed:", error);
+        console.error("Error details:", error.response?.data || error.message);
         onSendFailed?.(tempId);
+        const errorMessage = error.response?.data?.detail || error.message || "Failed to send voice message";
         toast({
           title: "Error",
-          description: "Failed to send voice message",
+          description: errorMessage,
           variant: "destructive",
         });
       });

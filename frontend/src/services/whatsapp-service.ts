@@ -312,9 +312,18 @@ class WhatsAppService {
   async uploadMedia(file: File): Promise<UploadMediaResponse> {
     const formData = new FormData();
     formData.append("file", file);
-    // Don't set Content-Type manually - axios will set it with proper boundary
-    const response = await apiClient.post<UploadMediaResponse>("/whatsapp/upload-media", formData);
-    return response.data;
+    // Use axios directly to avoid the default Content-Type header from apiClient
+    const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1"}/whatsapp/upload-media`, {
+      method: "POST",
+      headers: token ? { "Authorization": `Bearer ${token}` } : {},
+      body: formData,
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: "Upload failed" }));
+      throw new Error(error.detail || `Upload failed with status ${response.status}`);
+    }
+    return response.json();
   }
 
   /** Send media to a lead */
