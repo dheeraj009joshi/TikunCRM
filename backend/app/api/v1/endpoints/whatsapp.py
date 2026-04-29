@@ -244,6 +244,65 @@ async def get_whatsapp_config(
     )
 
 
+@router.get("/diagnostics/ffmpeg")
+async def check_ffmpeg_status(
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Check if ffmpeg is installed and working on the server."""
+    import shutil
+    import subprocess
+    import asyncio
+    
+    result = {
+        "ffmpeg_installed": False,
+        "ffmpeg_path": None,
+        "ffmpeg_version": None,
+        "aac_encoder_available": False,
+        "error": None,
+    }
+    
+    # Check if ffmpeg is in PATH
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        result["error"] = "ffmpeg not found in PATH"
+        return result
+    
+    result["ffmpeg_installed"] = True
+    result["ffmpeg_path"] = ffmpeg_path
+    
+    # Get ffmpeg version
+    try:
+        def _get_version():
+            proc = subprocess.run(
+                ["ffmpeg", "-version"],
+                capture_output=True,
+                timeout=5
+            )
+            return proc.stdout.decode().split("\n")[0] if proc.stdout else "unknown"
+        
+        result["ffmpeg_version"] = await asyncio.to_thread(_get_version)
+    except Exception as e:
+        result["error"] = f"Failed to get version: {e}"
+        return result
+    
+    # Check if AAC encoder is available
+    try:
+        def _check_aac():
+            proc = subprocess.run(
+                ["ffmpeg", "-encoders"],
+                capture_output=True,
+                timeout=5
+            )
+            output = proc.stdout.decode() if proc.stdout else ""
+            return "aac" in output.lower()
+        
+        result["aac_encoder_available"] = await asyncio.to_thread(_check_aac)
+    except Exception as e:
+        result["error"] = f"Failed to check encoders: {e}"
+    
+    return result
+
+
 @router.get("/templates", response_model=WhatsAppTemplatesListResponse)
 async def list_whatsapp_templates(
     current_user: User = Depends(deps.get_current_active_user),
@@ -1154,8 +1213,11 @@ async def convert_audio_to_ogg(content: bytes, source_format: str = "webm") -> t
     return await asyncio.to_thread(_convert_audio_to_ogg_sync, content, source_format)
 
 
-def _convert_audio_to_aac_sync(content: bytes, source_format: str = "webm") -> tuple[bytes, str]:
-    """Synchronous audio conversion to AAC format using ffmpeg."""
+def _convert_audio_to_mp3_sync(content: bytes, source_format: str = "webm") -> tuple[bytes, str]:
+    """Synchronous audio conversion to MP3 format using ffmpeg.
+    
+    MP3 is universally supported by WhatsApp and most reliable for voice messages.
+    """
     import tempfile
     import subprocess
     import os
@@ -1170,15 +1232,19 @@ def _convert_audio_to_aac_sync(content: bytes, source_format: str = "webm") -> t
         infile.write(content)
         input_path = infile.name
     
-    output_path = input_path.rsplit(".", 1)[0] + ".m4a"
+    output_path = input_path.rsplit(".", 1)[0] + ".mp3"
     
     try:
-        # Convert using ffmpeg with AAC codec (WhatsApp natively supports AAC)
+        # Convert using ffmpeg to MP3 (universally supported by WhatsApp)
+        # -c:a libmp3lame = MP3 encoder
+        # -b:a 128k = good quality bitrate
+        # -ar 44100 = standard sample rate
+        # -ac 1 = mono (voice)
         result = subprocess.run(
             [
                 "ffmpeg", "-y", "-i", input_path,
-                "-c:a", "aac",
-                "-b:a", "64k",
+                "-c:a", "libmp3lame",
+                "-b:a", "128k",
                 "-ar", "44100",
                 "-ac", "1",
                 output_path
@@ -1189,8 +1255,8 @@ def _convert_audio_to_aac_sync(content: bytes, source_format: str = "webm") -> t
         
         if result.returncode != 0:
             stderr = result.stderr.decode() if result.stderr else "Unknown error"
-            logger.error(f"ffmpeg AAC conversion failed: {stderr}")
-            raise Exception(f"ffmpeg AAC conversion failed: {stderr}")
+            logger.error(f"ffmpeg MP3 conversion failed: {stderr}")
+            raise Exception(f"ffmpeg MP3 conversion failed: {stderr}")
         
         # Verify output file exists and has content
         if not os.path.exists(output_path):
@@ -1200,12 +1266,12 @@ def _convert_audio_to_aac_sync(content: bytes, source_format: str = "webm") -> t
         if output_size == 0:
             raise Exception("ffmpeg created empty output file")
         
-        logger.info(f"Audio AAC conversion successful: {output_size} bytes")
+        logger.info(f"Audio MP3 conversion successful: {output_size} bytes")
         
         with open(output_path, "rb") as f:
             converted_content = f.read()
         
-        return converted_content, "audio/mp4"
+        return converted_content, "audio/mpeg"
     finally:
         # Clean up temp files
         if os.path.exists(input_path):
@@ -1214,10 +1280,10 @@ def _convert_audio_to_aac_sync(content: bytes, source_format: str = "webm") -> t
             os.unlink(output_path)
 
 
-async def convert_audio_to_aac(content: bytes, source_format: str = "webm") -> tuple[bytes, str]:
-    """Convert audio to AAC format (supported by WhatsApp) using ffmpeg via subprocess."""
+async def convert_audio_to_mp3(content: bytes, source_format: str = "webm") -> tuple[bytes, str]:
+    """Convert audio to MP3 format (universally supported by WhatsApp) using ffmpeg via subprocess."""
     import asyncio
-    return await asyncio.to_thread(_convert_audio_to_aac_sync, content, source_format)
+    return await asyncio.to_thread(_convert_audio_to_mp3_sync, content, source_format)
 
 
 @router.post("/upload-media", response_model=UploadMediaResponse)
@@ -1266,31 +1332,51 @@ async def upload_whatsapp_media(
     # Convert webm/wav to AAC (WhatsApp natively supports AAC/MP4)
     # Skip conversion for audio/mp4 and audio/m4a - WhatsApp accepts these natively
     original_filename = file.filename or "media"
-    audio_formats_to_convert = {"audio/webm", "audio/wav"}
+    # Convert ALL browser-recorded audio to AAC-LC for WhatsApp compatibility
+    # Safari may output HE-AAC or other codecs that WhatsApp rejects
+    # Chrome/Firefox output webm/opus which also needs conversion
+    audio_formats_to_convert = {"audio/webm", "audio/wav", "audio/mp4", "audio/x-m4a", "audio/m4a"}
     logger.info(f"Upload media: content_type={content_type}, filename={original_filename}, size={len(content)} bytes")
     
-    # Keep MP4/M4A as-is since WhatsApp supports AAC codec natively
-    # Only convert webm/wav which WhatsApp doesn't support
     if content_type in audio_formats_to_convert:
-        logger.info(f"Audio conversion needed: {content_type} -> audio/mp4 (AAC)")
+        logger.info(f"Audio conversion needed: {content_type} -> audio/mpeg (MP3)")
+        format_map = {
+            "audio/webm": "webm",
+            "audio/wav": "wav",
+            "audio/mp4": "mp4",
+            "audio/x-m4a": "m4a",
+            "audio/m4a": "m4a",
+        }
+        source_format = format_map.get(content_type, "mp4")
+        logger.info(f"Converting from {source_format} ({content_type}) to MP3... Input size: {len(content)} bytes")
+        
         try:
-            format_map = {
-                "audio/webm": "webm",
-                "audio/wav": "wav",
-            }
-            source_format = format_map.get(content_type, "webm")
-            logger.info(f"Converting from {source_format} to AAC...")
-            content, content_type = await convert_audio_to_aac(content, source_format)
-            logger.info(f"Conversion successful: new size={len(content)} bytes, new content_type={content_type}")
-            # Update filename extension
-            ext_to_remove = [".webm", ".wav"]
+            converted_content, converted_type = await convert_audio_to_mp3(content, source_format)
+            
+            # Verify conversion produced valid output
+            if len(converted_content) < 100:
+                raise Exception(f"Converted file too small: {len(converted_content)} bytes")
+            
+            content = converted_content
+            content_type = converted_type
+            logger.info(f"Conversion successful: output size={len(content)} bytes, content_type={content_type}")
+            
+            # Update filename extension to .mp3 (universally supported)
+            ext_to_remove = [".webm", ".wav", ".mp4", ".m4a"]
+            base_name = original_filename
             for ext in ext_to_remove:
                 if original_filename.lower().endswith(ext):
-                    original_filename = original_filename[:-len(ext)] + ".m4a"
+                    base_name = original_filename[:-len(ext)]
                     break
+            original_filename = base_name + ".mp3"
+            
         except Exception as e:
-            logger.error(f"Audio conversion FAILED: {e}")
-            # Fall back to original content if conversion fails
+            logger.error(f"Audio conversion FAILED: {e}", exc_info=True)
+            # DO NOT fall back - WhatsApp won't accept unconverted audio
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Audio conversion failed: {str(e)}. Please ensure ffmpeg is installed on the server."
+            )
 
     # Upload to Azure
     url = await azure_storage_service.upload_whatsapp_media(
@@ -1342,6 +1428,26 @@ async def send_whatsapp_media_to_lead(
 
     logger.info(f"Sending media to lead: url={request.media_url}, content_type={request.content_type}")
 
+    # Verify the media URL is accessible (Twilio needs to fetch it)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http_client:
+            head_response = await http_client.head(request.media_url)
+            if head_response.status_code != 200:
+                logger.error(f"Media URL not accessible: status={head_response.status_code}, url={request.media_url}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Media URL not accessible (status {head_response.status_code}). Twilio won't be able to fetch it."
+                )
+            azure_content_type = head_response.headers.get("content-type", "unknown")
+            azure_content_length = head_response.headers.get("content-length", "unknown")
+            logger.info(f"Media URL verified accessible: content-type={azure_content_type}, size={azure_content_length}")
+    except httpx.RequestError as e:
+        logger.error(f"Failed to verify media URL: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot verify media URL is accessible: {str(e)}"
+        )
+
     # Send via Twilio with MediaUrl
     try:
         from twilio.rest import Client
@@ -1349,7 +1455,7 @@ async def send_whatsapp_media_to_lead(
         client = Client(effective.account_sid, effective.auth_token)
 
         # Run Twilio API call in thread pool to avoid blocking
-        logger.info(f"Calling Twilio messages.create with media_url={request.media_url}")
+        logger.info(f"Calling Twilio messages.create with media_url={request.media_url}, verified content-type={azure_content_type}")
         message = await asyncio.to_thread(
             client.messages.create,
             from_=f"whatsapp:{effective.whatsapp_from_number}",
@@ -1368,10 +1474,11 @@ async def send_whatsapp_media_to_lead(
                 content_type = "image/jpeg"
             elif any(ext in url_lower for ext in [".mp4", ".3gpp"]):
                 content_type = "video/mp4"
-            elif any(ext in url_lower for ext in [".m4a", ".mp4"]):
-                # AAC audio in MP4/M4A container (WhatsApp native support)
+            elif ".mp3" in url_lower:
+                content_type = "audio/mpeg"
+            elif any(ext in url_lower for ext in [".m4a"]):
                 content_type = "audio/mp4"
-            elif any(ext in url_lower for ext in [".ogg", ".mp3", ".amr", ".aac", ".webm", ".wav"]):
+            elif any(ext in url_lower for ext in [".ogg", ".amr", ".aac"]):
                 content_type = "audio/ogg"
             else:
                 content_type = "application/octet-stream"
