@@ -1068,7 +1068,7 @@ async def get_whatsapp_unread_count(
 ALLOWED_MEDIA_TYPES = {
     "image/jpeg", "image/png", "image/gif", "image/webp",
     "video/mp4", "video/3gpp",
-    "audio/ogg", "audio/mpeg", "audio/amr", "audio/aac", "audio/webm", "audio/wav",
+    "audio/ogg", "audio/mpeg", "audio/amr", "audio/aac", "audio/webm", "audio/wav", "audio/mp4", "audio/m4a",
     "application/pdf",
 }
 MAX_MEDIA_SIZE = 16 * 1024 * 1024  # 16MB
