@@ -15,7 +15,7 @@ import {
   WhatsAppLeadSearchItem,
   UnknownConversationItem,
 } from "@/services/whatsapp-service";
-import { teamService, UserBrief } from "@/services/team-service";
+import { TeamService, UserBrief } from "@/services/team-service";
 import { useWebSocketEvent } from "@/hooks/use-websocket";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthStore } from "@/stores/auth-store";
@@ -712,7 +712,7 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
       if (!currentUser?.dealership_id) return;
       setLoadingUsers(true);
       try {
-        const usersList = await teamService.listUsers({
+        const usersList = await TeamService.listUsers({
           dealership_id: currentUser.dealership_id,
           is_active: true,
         });
