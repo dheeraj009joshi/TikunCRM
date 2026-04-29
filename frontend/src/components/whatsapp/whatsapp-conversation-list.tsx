@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { format, isToday, isYesterday } from "date-fns";
-import { MessageCircle, User, Image, Video, Mic, FileText } from "lucide-react";
+import { MessageCircle, User, Image, Video, Mic, FileText, Check, CheckCheck, Clock, AlertCircle, FileStack } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { WhatsAppConversationListItem } from "@/services/whatsapp-service";
 
@@ -130,15 +130,46 @@ export function WhatsAppConversationList({
                 style={{ color: WA_TEXT_SECONDARY }}
               >
                 {conv.last_message.direction === "outbound" && (
-                  <span style={{ color: WA_TEXT_SECONDARY }}>You: </span>
+                  <>
+                    {(() => {
+                      const status = conv.last_message.status;
+                      if (status === "failed" || status === "undelivered") {
+                        return <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />;
+                      }
+                      if (status === "sending" || status === "queued") {
+                        return <Clock className="h-3.5 w-3.5 shrink-0" style={{ color: WA_TEXT_SECONDARY }} />;
+                      }
+                      if (status === "read") {
+                        return <CheckCheck className="h-3.5 w-3.5 shrink-0" style={{ color: "#53bdeb" }} />;
+                      }
+                      if (status === "delivered") {
+                        return <CheckCheck className="h-3.5 w-3.5 shrink-0" style={{ color: WA_TEXT_SECONDARY }} />;
+                      }
+                      // sent
+                      return <Check className="h-3.5 w-3.5 shrink-0" style={{ color: WA_TEXT_SECONDARY }} />;
+                    })()}
+                  </>
                 )}
                 {(() => {
                   const body = conv.last_message.body;
+                  // Check if it's a template placeholder
+                  if (body?.startsWith("[Template")) {
+                    // Extract template name if present: "[Template: Name]" -> "Name"
+                    const templateName = body.startsWith("[Template: ") 
+                      ? body.replace("[Template: ", "").replace("]", "")
+                      : "Template";
+                    return (
+                      <>
+                        <FileStack className="h-4 w-4 inline-block shrink-0" />
+                        <span className="truncate">{templateName}</span>
+                      </>
+                    );
+                  }
                   // Check if it's a media placeholder
                   if (!body || body === "[Photo]" || body === "[Media]") {
                     return (
                       <>
-                        <Image className="h-4 w-4 inline-block" />
+                        <Image className="h-4 w-4 inline-block shrink-0" />
                         <span>Photo</span>
                       </>
                     );
@@ -146,7 +177,7 @@ export function WhatsAppConversationList({
                   if (body === "[Video]") {
                     return (
                       <>
-                        <Video className="h-4 w-4 inline-block" />
+                        <Video className="h-4 w-4 inline-block shrink-0" />
                         <span>Video</span>
                       </>
                     );
@@ -154,7 +185,7 @@ export function WhatsAppConversationList({
                   if (body === "[Voice message]" || body === "[Audio]") {
                     return (
                       <>
-                        <Mic className="h-4 w-4 inline-block" />
+                        <Mic className="h-4 w-4 inline-block shrink-0" />
                         <span>Voice message</span>
                       </>
                     );
@@ -162,12 +193,12 @@ export function WhatsAppConversationList({
                   if (body === "[Document]") {
                     return (
                       <>
-                        <FileText className="h-4 w-4 inline-block" />
+                        <FileText className="h-4 w-4 inline-block shrink-0" />
                         <span>Document</span>
                       </>
                     );
                   }
-                  return body;
+                  return <span className="truncate">{body}</span>;
                 })()}
               </p>
               {conv.unread_count > 0 && (

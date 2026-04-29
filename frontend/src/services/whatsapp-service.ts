@@ -229,7 +229,8 @@ class WhatsAppService {
     leadId: string,
     contentSid: string,
     contentVariables: Record<string, string>,
-    toNumber?: string
+    toNumber?: string,
+    templateName?: string
   ): Promise<SendWhatsAppResponse> {
     const response = await apiClient.post<SendWhatsAppResponse>(
       `/whatsapp/conversations/${leadId}/send`,
@@ -237,6 +238,7 @@ class WhatsAppService {
         to_number: toNumber ?? "",
         content_sid: contentSid,
         content_variables: contentVariables,
+        template_name: templateName,
       }
     );
     return response.data;

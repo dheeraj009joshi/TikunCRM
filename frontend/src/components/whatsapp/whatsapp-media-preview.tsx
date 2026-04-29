@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Play, Pause, Download, FileText, X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2 } from "lucide-react";
+import { Play, Pause, Download, FileText, X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, Upload, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getMediaProxyUrl, getMediaCategory } from "@/services/whatsapp-service";
 import { Button } from "@/components/ui/button";
@@ -189,11 +189,12 @@ export function WhatsAppMediaPreview({
 interface AudioPlayerProps {
   url: string | null;
   loading: boolean;
+  isPending?: boolean;
   isOutbound: boolean;
   onDownload: () => void;
 }
 
-function AudioPlayer({ url, loading, isOutbound, onDownload }: AudioPlayerProps) {
+function AudioPlayer({ url, loading, isPending, isOutbound, onDownload }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -266,8 +267,15 @@ function AudioPlayer({ url, loading, isOutbound, onDownload }: AudioPlayerProps)
       isOutbound ? "bg-[#005c4b]" : "bg-[#1f2c34]"
     )}>
       {loading ? (
-        <div className="flex items-center justify-center h-12">
-          <Loader2 className="h-5 w-5 animate-spin text-[#8696a0]" />
+        <div className="flex items-center justify-center h-12 gap-2">
+          {isPending ? (
+            <>
+              <Mic className="h-5 w-5 text-[#00a884]" />
+              <span className="text-sm text-[#8696a0]">Sending...</span>
+            </>
+          ) : (
+            <Loader2 className="h-5 w-5 animate-spin text-[#8696a0]" />
+          )}
         </div>
       ) : (
         <div className="flex items-center gap-2">
@@ -339,8 +347,17 @@ function MediaThumbnail({
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  
+  // Check if this is a pending/uploading media (optimistic update)
+  const isPending = url.includes("pending") || url.includes("temp_");
 
   useEffect(() => {
+    // Don't fetch if it's a pending media URL
+    if (isPending) {
+      setLoading(true);
+      return;
+    }
+
     let cancelled = false;
     let objectUrl: string | null = null;
     
@@ -379,10 +396,11 @@ function MediaThumbnail({
 
   if (category === "image") {
     return (
-      <div className={thumbnailClass} onClick={onClick}>
+      <div className={thumbnailClass} onClick={isPending ? undefined : onClick}>
         {loading ? (
-          <div className="w-full h-32 flex items-center justify-center text-[#8696a0]">
-            <Loader2 className="h-6 w-6 animate-spin" />
+          <div className="w-full h-32 flex flex-col items-center justify-center text-[#8696a0] gap-1">
+            {isPending ? <Upload className="h-5 w-5" /> : <Loader2 className="h-6 w-6 animate-spin" />}
+            {isPending && <span className="text-xs">Sending...</span>}
           </div>
         ) : error || !blobUrl ? (
           <div className="w-full h-32 flex items-center justify-center text-[#8696a0]">
@@ -400,22 +418,25 @@ function MediaThumbnail({
           />
         )}
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-        <button
-          className="absolute top-2 right-2 p-1.5 rounded-full bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity"
-          onClick={(e) => { e.stopPropagation(); onDownload(); }}
-        >
-          <Download className="h-4 w-4" />
-        </button>
+        {!isPending && (
+          <button
+            className="absolute top-2 right-2 p-1.5 rounded-full bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={(e) => { e.stopPropagation(); onDownload(); }}
+          >
+            <Download className="h-4 w-4" />
+          </button>
+        )}
       </div>
     );
   }
 
   if (category === "video") {
     return (
-      <div className={thumbnailClass} onClick={onClick}>
+      <div className={thumbnailClass} onClick={isPending ? undefined : onClick}>
         {loading ? (
-          <div className="w-full h-32 flex items-center justify-center text-[#8696a0]">
-            <Loader2 className="h-6 w-6 animate-spin" />
+          <div className="w-full h-32 flex flex-col items-center justify-center text-[#8696a0] gap-1">
+            {isPending ? <Upload className="h-5 w-5" /> : <Loader2 className="h-6 w-6 animate-spin" />}
+            {isPending && <span className="text-xs">Sending...</span>}
           </div>
         ) : error || !blobUrl ? (
           <div className="w-full h-32 flex items-center justify-center text-[#8696a0]">
@@ -454,6 +475,7 @@ function MediaThumbnail({
       <AudioPlayer
         url={blobUrl || url}
         loading={loading}
+        isPending={isPending}
         isOutbound={isOutbound}
         onDownload={onDownload}
       />

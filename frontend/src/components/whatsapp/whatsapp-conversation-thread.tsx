@@ -96,6 +96,8 @@ export function WhatsAppConversationThread({
   const [error, setError] = useState<string | null>(null);
   const previousLeadIdRef = useRef<string | null>(null);
   const shouldScrollRef = useRef(true);
+  // Track message IDs we sent ourselves to prevent WebSocket duplicates
+  const sentMessageIdsRef = useRef<Set<string>>(new Set());
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [templates, setTemplates] = useState<WhatsAppTemplateItem[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<WhatsAppTemplateItem | null>(null);
@@ -233,8 +235,16 @@ export function WhatsAppConversationThread({
     (data) => {
       if (!data?.lead_id || String(data.lead_id) !== String(leadId)) return;
       if (data.message) {
+        const messageId = data.message.id;
+        
+        // Skip if we already handled this via our own API response
+        if (sentMessageIdsRef.current.has(messageId)) {
+          sentMessageIdsRef.current.delete(messageId); // Clean up
+          return;
+        }
+        
         const newMsg: WhatsAppMessage = {
-          id: data.message.id,
+          id: messageId,
           lead_id: data.message.lead_id,
           user_id: data.message.user_id,
           direction: data.message.direction as "inbound" | "outbound",
@@ -255,7 +265,8 @@ export function WhatsAppConversationThread({
           created_at: newMsg.created_at,
           message: newMsg,
         };
-        // Dedupe: only add if not already present (handles optimistic updates)
+        
+        // Dedupe: only add if not already present
         setTimelineItems((prev) => {
           if (prev.some((item) => item.id === newMsg.id)) return prev;
           return [...prev, newItem];
@@ -330,6 +341,9 @@ export function WhatsAppConversationThread({
     whatsappService.sendToLead(leadId, body, leadPhone ?? undefined)
       .then((result) => {
         if (result.success && result.message_id) {
+          // Track this message ID to prevent WebSocket duplicate
+          sentMessageIdsRef.current.add(result.message_id);
+          
           // Replace temp message with real one
           setTimelineItems((prev) =>
             prev.map((item) =>
@@ -425,7 +439,8 @@ export function WhatsAppConversationThread({
         leadId,
         selectedTemplate.content_sid,
         vars,
-        leadPhone ?? undefined
+        leadPhone ?? undefined,
+        selectedTemplate.name
       );
       if (result.success && result.message_id) {
         toast({ title: "Template sent" });
@@ -595,6 +610,55 @@ export function WhatsAppConversationThread({
             leadId={leadId}
             disabled={sessionWindowLoading}
             onMediaSent={loadConversation}
+            onOptimisticSend={(tempId, contentType, caption) => {
+              const optimisticMessage: WhatsAppMessage = {
+                id: tempId,
+                lead_id: leadId,
+                user_id: null,
+                direction: "outbound",
+                from_number: "",
+                to_number: leadPhone || "",
+                body: caption || "",
+                status: "sending",
+                is_read: true,
+                created_at: new Date().toISOString(),
+                sent_at: null,
+                delivered_at: null,
+                media_urls: ["media-pending"],
+                media_content_types: [contentType],
+              };
+              setTimelineItems((prev) => [...prev, {
+                item_type: "message",
+                id: tempId,
+                created_at: optimisticMessage.created_at,
+                message: optimisticMessage,
+              }]);
+            }}
+            onSendSuccess={(tempId, realId) => {
+              sentMessageIdsRef.current.add(realId);
+              setTimelineItems((prev) =>
+                prev.map((item) =>
+                  item.id === tempId
+                    ? {
+                        ...item,
+                        id: realId,
+                        message: item.message
+                          ? { ...item.message, id: realId, status: "sent", sent_at: new Date().toISOString() }
+                          : undefined,
+                      }
+                    : item
+                )
+              );
+            }}
+            onSendFailed={(tempId) => {
+              setTimelineItems((prev) =>
+                prev.map((item) =>
+                  item.id === tempId && item.message
+                    ? { ...item, message: { ...item.message, status: "failed" } }
+                    : item
+                )
+              );
+            }}
           />
           <Button
             type="button"
@@ -629,6 +693,56 @@ export function WhatsAppConversationThread({
             leadId={leadId}
             disabled={sessionWindowLoading}
             onVoiceSent={loadConversation}
+            onOptimisticSend={(tempId, duration) => {
+              // Add optimistic voice message immediately
+              const optimisticMessage: WhatsAppMessage = {
+                id: tempId,
+                lead_id: leadId,
+                user_id: null,
+                direction: "outbound",
+                from_number: "",
+                to_number: leadPhone || "",
+                body: "",
+                status: "sending",
+                is_read: true,
+                created_at: new Date().toISOString(),
+                sent_at: null,
+                delivered_at: null,
+                media_urls: ["voice-message-pending"],
+                media_content_types: ["audio/webm"],
+              };
+              setTimelineItems((prev) => [...prev, {
+                item_type: "message",
+                id: tempId,
+                created_at: optimisticMessage.created_at,
+                message: optimisticMessage,
+              }]);
+            }}
+            onSendSuccess={(tempId, realId) => {
+              sentMessageIdsRef.current.add(realId);
+              setTimelineItems((prev) =>
+                prev.map((item) =>
+                  item.id === tempId
+                    ? {
+                        ...item,
+                        id: realId,
+                        message: item.message
+                          ? { ...item.message, id: realId, status: "sent", sent_at: new Date().toISOString() }
+                          : undefined,
+                      }
+                    : item
+                )
+              );
+            }}
+            onSendFailed={(tempId) => {
+              setTimelineItems((prev) =>
+                prev.map((item) =>
+                  item.id === tempId && item.message
+                    ? { ...item, message: { ...item.message, status: "failed" } }
+                    : item
+                )
+              );
+            }}
           />
         </div>
       </div>

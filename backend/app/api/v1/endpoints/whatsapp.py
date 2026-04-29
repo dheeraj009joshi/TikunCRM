@@ -47,6 +47,7 @@ class SendWhatsAppRequest(BaseModel):
     lead_id: Optional[UUID] = None
     content_sid: Optional[str] = Field(None, description="Template Content SID (e.g. HX...) for template message")
     content_variables: Optional[Dict[str, str]] = Field(None, description="Template variables e.g. {\"1\": \"value1\"}")
+    template_name: Optional[str] = Field(None, description="Template display name for UI")
 
     @model_validator(mode="after")
     def body_or_content_sid(self):
@@ -506,6 +507,7 @@ async def send_whatsapp(
             user_id=current_user.id,
             lead_id=request.lead_id,
             dealership_id=current_user.dealership_id,
+            template_name=request.template_name,
         )
     else:
         if request.lead_id:
@@ -809,6 +811,7 @@ async def send_whatsapp_to_lead(
             user_id=current_user.id,
             lead_id=lead.id,
             dealership_id=lead.dealership_id,
+            template_name=request.template_name,
         )
     else:
         if not await service.is_within_whatsapp_session_window(lead_id):

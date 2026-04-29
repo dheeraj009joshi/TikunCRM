@@ -70,16 +70,12 @@ export function WhatsAppMessageBubble({ message }: WhatsAppMessageBubbleProps) {
         {hasText && (
           <div className={cn(hasMedia && "px-1.5 pt-1.5")}>
             {isTemplateStub ? (
-              <div className="space-y-0.5">
-                <p className="text-sm font-medium">WhatsApp template</p>
-                <p
-                  className={cn(
-                    "text-[11px] leading-snug whitespace-pre-wrap break-all",
-                    isOutbound ? "text-white/65" : "text-[#8696a0]"
-                  )}
-                >
-                  {message.body}
-                </p>
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm">
+                  {message.body.startsWith("[Template: ") 
+                    ? message.body.replace("[Template: ", "").replace("]", "")
+                    : "Template message"}
+                </span>
               </div>
             ) : (
               <p className="text-sm whitespace-pre-wrap break-words">{message.body}</p>

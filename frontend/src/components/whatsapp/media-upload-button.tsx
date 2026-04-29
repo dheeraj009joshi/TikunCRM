@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Paperclip, X, Image, Video, Mic, FileText, Loader2, Send, Camera, File } from "lucide-react";
+import { Paperclip, X, Image, Video, Mic, FileText, Send, File } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +24,9 @@ interface MediaUploadButtonProps {
   leadId: string;
   disabled?: boolean;
   onMediaSent?: () => void;
+  onOptimisticSend?: (tempId: string, contentType: string, caption?: string) => void;
+  onSendSuccess?: (tempId: string, realId: string) => void;
+  onSendFailed?: (tempId: string) => void;
 }
 
 const ACCEPTED_TYPES = {
@@ -33,7 +36,14 @@ const ACCEPTED_TYPES = {
   document: "application/pdf",
 };
 
-export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUploadButtonProps) {
+export function MediaUploadButton({ 
+  leadId, 
+  disabled, 
+  onMediaSent,
+  onOptimisticSend,
+  onSendSuccess,
+  onSendFailed,
+}: MediaUploadButtonProps) {
   const { toast } = useToast();
   const photoInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
@@ -41,7 +51,6 @@ export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUpload
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [caption, setCaption] = useState("");
-  const [uploading, setUploading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -85,40 +94,54 @@ export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUpload
     setDialogOpen(false);
   };
 
-  const handleSend = async () => {
+  const generateTempId = () => `temp_media_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+  const handleSend = () => {
     if (!selectedFile) return;
 
-    setUploading(true);
-    try {
-      const uploadResult = await whatsappService.uploadMedia(selectedFile);
-      const sendResult = await whatsappService.sendMediaToLead(
-        leadId,
-        uploadResult.url,
-        uploadResult.content_type,
-        caption || undefined
-      );
+    const fileType = selectedFile.type;
+    const captionText = caption;
+    const file = selectedFile;
+    const tempId = generateTempId();
 
-      if (sendResult.success) {
-        toast({ title: "Media sent" });
-        handleClose();
-        onMediaSent?.();
-      } else {
+    // Notify parent for optimistic update immediately
+    onOptimisticSend?.(tempId, fileType, captionText || undefined);
+
+    // Close dialog immediately
+    handleClose();
+
+    // Upload and send in background
+    whatsappService.uploadMedia(file)
+      .then((uploadResult) => {
+        return whatsappService.sendMediaToLead(
+          leadId,
+          uploadResult.url,
+          uploadResult.content_type,
+          captionText || undefined
+        );
+      })
+      .then((sendResult) => {
+        if (sendResult.success && sendResult.message_id) {
+          onSendSuccess?.(tempId, sendResult.message_id);
+          onMediaSent?.();
+        } else {
+          onSendFailed?.(tempId);
+          toast({
+            title: "Failed to send",
+            description: sendResult.error || "Could not send media",
+            variant: "destructive",
+          });
+        }
+      })
+      .catch((error) => {
+        console.error("Media upload/send failed:", error);
+        onSendFailed?.(tempId);
         toast({
-          title: "Failed to send",
-          description: sendResult.error || "Could not send media",
+          title: "Error",
+          description: "Failed to upload or send media",
           variant: "destructive",
         });
-      }
-    } catch (error) {
-      console.error("Media upload/send failed:", error);
-      toast({
-        title: "Error",
-        description: "Failed to upload or send media",
-        variant: "destructive",
       });
-    } finally {
-      setUploading(false);
-    }
   };
 
   const getFileIcon = () => {
@@ -286,27 +309,17 @@ export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUpload
             <Button
               variant="outline"
               onClick={handleClose}
-              disabled={uploading}
               className="border-[#3b4a54] bg-[#2a3942] text-[#e9edef] hover:bg-[#3b4a54] hover:text-[#e9edef]"
             >
               Cancel
             </Button>
             <Button
               onClick={handleSend}
-              disabled={!selectedFile || uploading}
+              disabled={!selectedFile}
               className="bg-[#00a884] hover:bg-[#00a884]/90 text-white"
             >
-              {uploading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Sending...
-                </>
-              ) : (
-                <>
-                  <Send className="h-4 w-4 mr-2" />
-                  Send
-                </>
-              )}
+              <Send className="h-4 w-4 mr-2" />
+              Send
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -167,6 +167,7 @@ class WhatsAppConversationService:
         user_id: UUID,
         lead_id: Optional[UUID] = None,
         dealership_id: Optional[UUID] = None,
+        template_name: Optional[str] = None,
     ) -> Tuple[bool, Optional[WhatsAppLog], Optional[str]]:
         """Send WhatsApp template (Content SID + variables). Returns (success, log, error)."""
         formatted = whatsapp_service.format_phone_number(to_number)
@@ -202,7 +203,10 @@ class WhatsAppConversationService:
         if not effective.is_whatsapp_ready():
             return False, None, "WhatsApp not configured for this dealership"
 
-        body_display = f"[Template {content_sid[:12]}...]" if len(content_sid) > 12 else f"[Template {content_sid}]"
+        if template_name:
+            body_display = f"[Template: {template_name}]"
+        else:
+            body_display = f"[Template {content_sid[:12]}...]" if len(content_sid) > 12 else f"[Template {content_sid}]"
         wa_from = normalize_twilio_to_number(effective.whatsapp_from_number)
         if not wa_from:
             wa_from = (effective.whatsapp_from_number or "").strip()
