@@ -6,7 +6,9 @@ from datetime import datetime
 from typing import Optional, List, Dict
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,14 +20,16 @@ from app.db.database import get_db
 from app.models.user import User
 from app.models.lead import Lead
 from app.models.customer import Customer
-from app.models.whatsapp_log import WhatsAppLog, WhatsAppDirection
+from app.models.whatsapp_log import WhatsAppLog, WhatsAppDirection, WhatsAppStatus
 from app.models.whatsapp_template import WhatsAppTemplate
 from app.models.whatsapp_message import WhatsAppBulkSend
 from app.models.campaign_mapping import CampaignMapping
 from app.models.lead_campaign import LeadCampaign
+from app.models.call_log import CallLog
 from app.services.whatsapp_conversation_service import get_whatsapp_conversation_service
 from app.services.dealership_twilio_config_service import get_effective_twilio_config
 from app.core.websocket_manager import ws_manager
+from app.core.timezone import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +79,8 @@ class WhatsAppMessageResponse(BaseModel):
     created_at: datetime
     sent_at: Optional[datetime]
     delivered_at: Optional[datetime]
+    media_urls: List[str] = []
+    media_content_types: List[str] = []
 
     class Config:
         from_attributes = True
@@ -120,6 +126,42 @@ class WhatsAppLeadSearchItem(BaseModel):
 class SessionWindowResponse(BaseModel):
     within_window: bool
     last_inbound_at: Optional[datetime] = None
+
+
+class CallLogResponse(BaseModel):
+    id: UUID
+    direction: str
+    from_number: str
+    to_number: str
+    status: str
+    duration_seconds: int
+    recording_url: Optional[str] = None
+    recording_duration_seconds: Optional[int] = None
+    notes: Optional[str] = None
+    outcome: Optional[str] = None
+    started_at: datetime
+    answered_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class TimelineItem(BaseModel):
+    """Unified timeline item - can be a message or a call"""
+    item_type: str  # "message" | "call"
+    id: UUID
+    created_at: datetime
+    message: Optional[WhatsAppMessageResponse] = None
+    call: Optional[CallLogResponse] = None
+
+
+class TimelineResponse(BaseModel):
+    lead_id: UUID
+    lead_name: str
+    lead_phone: Optional[str]
+    items: List[TimelineItem]
+    has_more: bool = False
 
 
 class WhatsAppTemplateItem(BaseModel):
@@ -604,7 +646,9 @@ async def get_whatsapp_conversation(
                 is_read=msg.is_read,
                 created_at=msg.created_at,
                 sent_at=msg.sent_at,
-                delivered_at=msg.delivered_at
+                delivered_at=msg.delivered_at,
+                media_urls=msg.media_urls or [],
+                media_content_types=msg.media_content_types or [],
             )
             for msg in messages
         ]
@@ -630,6 +674,112 @@ async def get_whatsapp_session_window(
     service = get_whatsapp_conversation_service(db)
     within_window, last_inbound_at = await service.get_session_window_state(lead_id)
     return SessionWindowResponse(within_window=within_window, last_inbound_at=last_inbound_at)
+
+
+@router.get("/conversations/{lead_id}/timeline", response_model=TimelineResponse)
+async def get_whatsapp_timeline(
+    lead_id: UUID,
+    limit: int = Query(50, ge=1, le=100),
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get a unified timeline of WhatsApp messages and voice calls for a lead.
+    Items are sorted by timestamp, newest first.
+    """
+    result = await db.execute(
+        select(Lead).options(selectinload(Lead.customer)).where(Lead.id == lead_id)
+    )
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
+    if current_user.role == UserRole.SALESPERSON and lead.assigned_to != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+        if current_user.dealership_id and lead.dealership_id != current_user.dealership_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    # Fetch WhatsApp messages
+    msg_result = await db.execute(
+        select(WhatsAppLog)
+        .where(WhatsAppLog.lead_id == lead_id)
+        .order_by(WhatsAppLog.created_at.desc())
+        .limit(limit)
+    )
+    messages = msg_result.scalars().all()
+
+    # Fetch call logs
+    call_result = await db.execute(
+        select(CallLog)
+        .where(CallLog.lead_id == lead_id)
+        .order_by(CallLog.started_at.desc())
+        .limit(limit)
+    )
+    calls = call_result.scalars().all()
+
+    # Build timeline items
+    timeline_items: List[TimelineItem] = []
+
+    for msg in messages:
+        timeline_items.append(TimelineItem(
+            item_type="message",
+            id=msg.id,
+            created_at=msg.created_at,
+            message=WhatsAppMessageResponse(
+                id=msg.id,
+                lead_id=msg.lead_id,
+                user_id=msg.user_id,
+                direction=msg.direction.value,
+                from_number=msg.from_number,
+                to_number=msg.to_number,
+                body=msg.body,
+                status=msg.status.value,
+                is_read=msg.is_read,
+                created_at=msg.created_at,
+                sent_at=msg.sent_at,
+                delivered_at=msg.delivered_at,
+                media_urls=msg.media_urls or [],
+                media_content_types=msg.media_content_types or [],
+            ),
+        ))
+
+    for call in calls:
+        timeline_items.append(TimelineItem(
+            item_type="call",
+            id=call.id,
+            created_at=call.started_at,
+            call=CallLogResponse(
+                id=call.id,
+                direction=call.direction.value,
+                from_number=call.from_number,
+                to_number=call.to_number,
+                status=call.status.value,
+                duration_seconds=call.duration_seconds,
+                recording_url=call.recording_url,
+                recording_duration_seconds=call.recording_duration_seconds,
+                notes=call.notes,
+                outcome=call.outcome,
+                started_at=call.started_at,
+                answered_at=call.answered_at,
+                ended_at=call.ended_at,
+            ),
+        ))
+
+    # Sort by created_at descending, then reverse for oldest-first display
+    timeline_items.sort(key=lambda x: x.created_at, reverse=False)
+
+    # Mark messages as read
+    service = get_whatsapp_conversation_service(db)
+    await service.mark_conversation_as_read(lead_id)
+    await db.commit()
+
+    return TimelineResponse(
+        lead_id=lead.id,
+        lead_name=f"{lead.first_name} {lead.last_name or ''}".strip(),
+        lead_phone=lead.phone,
+        items=timeline_items[-limit:],
+        has_more=len(timeline_items) > limit,
+    )
 
 
 @router.post("/conversations/{lead_id}/send", response_model=SendWhatsAppResponse)
@@ -747,9 +897,68 @@ async def get_whatsapp_message(
         created_at=msg.created_at,
         sent_at=msg.sent_at,
         delivered_at=msg.delivered_at,
+        media_urls=msg.media_urls or [],
+        media_content_types=msg.media_content_types or [],
         twilio_message_sid=msg.twilio_message_sid if not str(msg.twilio_message_sid or "").startswith("pending_") else None,
         error_code=msg.error_code,
         error_message=msg.error_message,
+    )
+
+
+@router.get("/media/{message_id}/{media_index}")
+async def get_whatsapp_media(
+    message_id: UUID,
+    media_index: int,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Proxy endpoint to fetch WhatsApp media from Twilio.
+    Twilio media URLs require authentication, so we proxy through the backend.
+    """
+    result = await db.execute(
+        select(WhatsAppLog).where(WhatsAppLog.id == message_id)
+    )
+    msg = result.scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    
+    # Check access permissions
+    if current_user.role == UserRole.SALESPERSON and msg.lead_id:
+        lead = (await db.execute(select(Lead).where(Lead.id == msg.lead_id))).scalar_one_or_none()
+        if lead and lead.assigned_to != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    
+    media_urls = msg.media_urls or []
+    media_types = msg.media_content_types or []
+    
+    if media_index < 0 or media_index >= len(media_urls):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
+    
+    media_url = media_urls[media_index]
+    content_type = media_types[media_index] if media_index < len(media_types) else "application/octet-stream"
+    
+    # Get Twilio credentials for authentication
+    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+    
+    async def stream_media():
+        async with httpx.AsyncClient() as client:
+            # Twilio media URLs require Basic auth with account SID and auth token
+            auth = (effective.account_sid, effective.auth_token) if effective.account_sid and effective.auth_token else None
+            async with client.stream("GET", media_url, auth=auth, follow_redirects=True) as response:
+                if response.status_code != 200:
+                    logger.warning(f"Failed to fetch Twilio media: {response.status_code}")
+                    return
+                async for chunk in response.aiter_bytes(chunk_size=8192):
+                    yield chunk
+    
+    return StreamingResponse(
+        stream_media(),
+        media_type=content_type,
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "Content-Disposition": f"inline",
+        }
     )
 
 
@@ -781,6 +990,200 @@ async def get_whatsapp_unread_count(
         dealership_id = current_user.dealership_id
     count = await service.get_unread_count(user_id=user_id, dealership_id=dealership_id)
     return WhatsAppUnreadCountResponse(count=count)
+
+
+# ======================= MEDIA UPLOAD AND SEND =======================
+
+ALLOWED_MEDIA_TYPES = {
+    "image/jpeg", "image/png", "image/gif", "image/webp",
+    "video/mp4", "video/3gpp",
+    "audio/ogg", "audio/mpeg", "audio/amr", "audio/aac",
+    "application/pdf",
+}
+MAX_MEDIA_SIZE = 16 * 1024 * 1024  # 16MB
+
+
+class UploadMediaResponse(BaseModel):
+    url: str
+    content_type: str
+    filename: str
+
+
+class SendMediaRequest(BaseModel):
+    media_url: str = Field(..., description="Public URL of media (after upload)")
+    caption: Optional[str] = Field(None, max_length=1024, description="Optional caption")
+
+
+@router.post("/upload-media", response_model=UploadMediaResponse)
+async def upload_whatsapp_media(
+    file: UploadFile = File(...),
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Upload media file for sending via WhatsApp.
+    Returns a public URL that can be used with send-media endpoint.
+    
+    Supported types: images (JPEG, PNG, GIF, WebP), videos (MP4, 3GPP),
+    audio (OGG, MP3, AMR, AAC), documents (PDF)
+    Max size: 16MB
+    """
+    from app.services.azure_storage_service import azure_storage_service
+
+    if not azure_storage_service.is_whatsapp_media_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Media storage not configured"
+        )
+
+    content_type = file.content_type or "application/octet-stream"
+    if content_type not in ALLOWED_MEDIA_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported media type: {content_type}. Allowed: {', '.join(ALLOWED_MEDIA_TYPES)}"
+        )
+
+    # Read file content
+    content = await file.read()
+    if len(content) > MAX_MEDIA_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File too large. Maximum size: {MAX_MEDIA_SIZE // (1024*1024)}MB"
+        )
+
+    # Upload to Azure
+    url = await azure_storage_service.upload_whatsapp_media(
+        data=content,
+        filename=file.filename or "media",
+        content_type=content_type,
+        dealership_id=current_user.dealership_id,
+    )
+
+    if not url:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to upload media"
+        )
+
+    return UploadMediaResponse(
+        url=url,
+        content_type=content_type,
+        filename=file.filename or "media",
+    )
+
+
+@router.post("/conversations/{lead_id}/send-media", response_model=SendWhatsAppResponse)
+async def send_whatsapp_media_to_lead(
+    lead_id: UUID,
+    request: SendMediaRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Send media (image, video, audio, document) to a lead via WhatsApp.
+    First upload the media using /upload-media, then call this with the returned URL.
+    """
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
+    if not lead.phone:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Lead has no phone number")
+    if current_user.role == UserRole.SALESPERSON and lead.assigned_to != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    effective = await get_effective_twilio_config(db, lead.dealership_id)
+    if not effective.is_whatsapp_ready():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="WhatsApp is not configured"
+        )
+
+    # Send via Twilio with MediaUrl
+    try:
+        from twilio.rest import Client
+        client = Client(effective.account_sid, effective.auth_token)
+
+        message = client.messages.create(
+            from_=f"whatsapp:{effective.whatsapp_from_number}",
+            to=f"whatsapp:{lead.phone}",
+            media_url=[request.media_url],
+            body=request.caption or "",
+        )
+
+        # Determine content type from URL extension
+        url_lower = request.media_url.lower()
+        if any(ext in url_lower for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"]):
+            content_type = "image/jpeg"
+        elif any(ext in url_lower for ext in [".mp4", ".3gpp"]):
+            content_type = "video/mp4"
+        elif any(ext in url_lower for ext in [".ogg", ".mp3", ".amr", ".aac"]):
+            content_type = "audio/ogg"
+        else:
+            content_type = "application/octet-stream"
+
+        # Create log entry
+        wa_log = WhatsAppLog(
+            customer_id=lead.customer_id,
+            lead_id=lead.id,
+            dealership_id=lead.dealership_id,
+            user_id=current_user.id,
+            twilio_message_sid=message.sid,
+            direction=WhatsAppDirection.OUTBOUND,
+            from_number=effective.whatsapp_from_number,
+            to_number=lead.phone,
+            body=request.caption or "",
+            media_urls=[request.media_url],
+            media_content_types=[content_type],
+            status=WhatsAppStatus.SENT,
+            sent_at=utc_now(),
+            is_read=True,
+        )
+        db.add(wa_log)
+        await db.commit()
+        await db.refresh(wa_log)
+
+        # Broadcast to WebSocket
+        if lead.dealership_id:
+            try:
+                await ws_manager.broadcast_to_dealership(
+                    str(lead.dealership_id),
+                    {
+                        "type": "whatsapp:sent",
+                        "payload": {
+                            "message_id": str(wa_log.id),
+                            "lead_id": str(lead.id),
+                            "body_preview": request.caption[:50] if request.caption else "[Media]",
+                            "message": {
+                                "id": str(wa_log.id),
+                                "lead_id": str(wa_log.lead_id),
+                                "user_id": str(wa_log.user_id) if wa_log.user_id else None,
+                                "direction": wa_log.direction.value,
+                                "from_number": wa_log.from_number,
+                                "to_number": wa_log.to_number,
+                                "body": wa_log.body,
+                                "status": wa_log.status.value,
+                                "is_read": wa_log.is_read,
+                                "created_at": wa_log.created_at.isoformat() if wa_log.created_at else None,
+                                "sent_at": wa_log.sent_at.isoformat() if wa_log.sent_at else None,
+                                "delivered_at": wa_log.delivered_at.isoformat() if wa_log.delivered_at else None,
+                                "media_urls": wa_log.media_urls or [],
+                                "media_content_types": wa_log.media_content_types or [],
+                            },
+                        }
+                    }
+                )
+            except Exception as e:
+                logger.warning("whatsapp:sent media broadcast failed: %s", e)
+
+        return SendWhatsAppResponse(success=True, message_id=wa_log.id)
+
+    except Exception as e:
+        logger.error(f"Failed to send WhatsApp media: {e}")
+        return SendWhatsAppResponse(
+            success=False,
+            error=str(e),
+        )
 
 
 # ======================= BULK SEND =======================

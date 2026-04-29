@@ -157,6 +157,8 @@ class Settings(BaseSettings):
     azure_storage_container: str = "call-recordings"
     # Azure Blob Storage - Stips documents (lead/customer documents)
     azure_storage_container_stips: str = "lead-stips"
+    # Azure Blob Storage - WhatsApp media (images, videos, audio)
+    azure_storage_container_whatsapp: str = "whatsapp-media"
     
     @property
     def is_twilio_configured(self) -> bool:

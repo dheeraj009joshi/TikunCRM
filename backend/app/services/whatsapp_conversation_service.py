@@ -253,6 +253,7 @@ class WhatsAppConversationService:
         to_number: str,
         body: str,
         media_urls: Optional[List[str]] = None,
+        media_content_types: Optional[List[str]] = None,
         resolved_dealership_id: Optional[UUID] = None,
     ) -> WhatsAppLog:
         """Process incoming WhatsApp webhook."""
@@ -294,6 +295,7 @@ class WhatsAppConversationService:
             to_number=to_number,
             body=body,
             media_urls=media_urls or [],
+            media_content_types=media_content_types or [],
             status=WhatsAppStatus.RECEIVED,
             received_at=utc_now(),
             is_read=False

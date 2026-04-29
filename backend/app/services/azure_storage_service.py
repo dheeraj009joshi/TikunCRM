@@ -26,6 +26,7 @@ class AzureStorageService:
         self._blob_service_client = None
         self._container_client = None
         self._stips_container_client = None
+        self._whatsapp_container_client = None
     
     @property
     def is_configured(self) -> bool:
@@ -421,6 +422,128 @@ class AzureStorageService:
         except Exception as e:
             logger.error(f"Failed to delete stip document: {e}")
             return False
+
+    # ========== WhatsApp Media Methods ==========
+
+    @property
+    def is_whatsapp_media_configured(self) -> bool:
+        """Check if Azure Storage is configured for WhatsApp media"""
+        return bool(settings.azure_storage_connection_string and settings.azure_storage_container_whatsapp)
+
+    def _get_whatsapp_container_client(self):
+        """Get WhatsApp media container client."""
+        if self._whatsapp_container_client is None and self.is_whatsapp_media_configured:
+            service = self._get_blob_service_client()
+            self._whatsapp_container_client = service.get_container_client(settings.azure_storage_container_whatsapp)
+        return self._whatsapp_container_client
+
+    async def _ensure_whatsapp_container(self) -> None:
+        """Ensure the WhatsApp media container exists."""
+        if not self.is_whatsapp_media_configured:
+            return
+        if self._whatsapp_container_client is not None:
+            return
+        service = self._get_blob_service_client()
+        self._whatsapp_container_client = service.get_container_client(settings.azure_storage_container_whatsapp)
+
+        def _check_and_create() -> None:
+            try:
+                self._whatsapp_container_client.get_container_properties()
+            except Exception:
+                logger.info(f"Creating container: {settings.azure_storage_container_whatsapp}")
+                self._whatsapp_container_client.create_container(public_access="blob")
+
+        await asyncio.to_thread(_check_and_create)
+
+    async def upload_whatsapp_media(
+        self,
+        data: bytes,
+        filename: str,
+        content_type: str,
+        dealership_id: Optional[UUID] = None,
+    ) -> str:
+        """
+        Upload WhatsApp media to Azure Blob Storage.
+        Returns the public URL that Twilio can access for sending.
+        
+        Args:
+            data: File content as bytes
+            filename: Original filename
+            content_type: MIME type
+            dealership_id: Optional dealership for organizing
+            
+        Returns:
+            Public URL for the uploaded media
+        """
+        if not self.is_whatsapp_media_configured:
+            logger.warning("Azure WhatsApp media storage not configured")
+            return ""
+        try:
+            from azure.storage.blob import ContentSettings
+            import uuid as uuid_mod
+
+            await self._ensure_whatsapp_container()
+            container = self._get_whatsapp_container_client()
+            if container is None:
+                return ""
+
+            # Create unique blob path
+            unique_id = uuid_mod.uuid4().hex[:12]
+            safe_filename = "".join(c if c.isalnum() or c in ".-_" else "_" for c in filename)
+            if dealership_id:
+                blob_path = f"{dealership_id}/{unique_id}_{safe_filename}"
+            else:
+                blob_path = f"general/{unique_id}_{safe_filename}"
+
+            blob_client = container.get_blob_client(blob_path)
+
+            def _do_upload() -> str:
+                blob_client.upload_blob(
+                    data,
+                    overwrite=True,
+                    content_settings=ContentSettings(content_type=content_type),
+                )
+                return blob_client.url
+
+            url = await asyncio.to_thread(_do_upload)
+            logger.info(f"Uploaded WhatsApp media: {blob_path}")
+            return url
+        except Exception as e:
+            logger.error(f"Failed to upload WhatsApp media: {e}")
+            raise
+
+    def get_whatsapp_media_secure_url(self, blob_path: str, expiry_hours: int = 24) -> str:
+        """Generate a SAS URL for WhatsApp media (for private container access)."""
+        if not self.is_whatsapp_media_configured:
+            return ""
+        try:
+            from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+            from datetime import timezone
+
+            connection_parts = dict(
+                part.split("=", 1)
+                for part in settings.azure_storage_connection_string.split(";")
+                if "=" in part
+            )
+            account_name = connection_parts.get("AccountName", "")
+            account_key = connection_parts.get("AccountKey", "")
+            if not account_name or not account_key:
+                return ""
+
+            now = datetime.now(timezone.utc)
+            sas_token = generate_blob_sas(
+                account_name=account_name,
+                container_name=settings.azure_storage_container_whatsapp,
+                blob_name=blob_path,
+                account_key=account_key,
+                permission=BlobSasPermissions(read=True),
+                start=now - timedelta(minutes=5),
+                expiry=now + timedelta(hours=expiry_hours)
+            )
+            return f"https://{account_name}.blob.core.windows.net/{settings.azure_storage_container_whatsapp}/{blob_path}?{sas_token}"
+        except Exception as e:
+            logger.error(f"Failed to generate WhatsApp media SAS URL: {e}")
+            return ""
 
 
 # Singleton instance

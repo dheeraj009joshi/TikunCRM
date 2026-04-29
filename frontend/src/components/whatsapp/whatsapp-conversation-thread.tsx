@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { format, isToday, isYesterday } from "date-fns";
-import { Loader2, ArrowLeft, FileText } from "lucide-react";
+import { Loader2, ArrowLeft, FileText, Phone } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { WhatsAppMessageBubble } from "./whatsapp-message-bubble";
+import { MediaUploadButton } from "./media-upload-button";
+import { VoiceRecorder } from "./voice-recorder";
 import { MessageComposer } from "@/components/sms/message-composer";
 import {
   WhatsAppMessage,
@@ -53,6 +55,8 @@ interface WsMessagePayload {
     created_at: string | null;
     sent_at: string | null;
     delivered_at: string | null;
+    media_urls?: string[];
+    media_content_types?: string[];
   };
 }
 
@@ -184,6 +188,8 @@ export function WhatsAppConversationThread({
           created_at: data.message.created_at || new Date().toISOString(),
           sent_at: data.message.sent_at,
           delivered_at: data.message.delivered_at,
+          media_urls: data.message.media_urls || [],
+          media_content_types: data.message.media_content_types || [],
         };
         // Dedupe: only add if not already present
         setMessages((prev) => {
@@ -220,6 +226,8 @@ export function WhatsAppConversationThread({
           created_at: data.message.created_at || new Date().toISOString(),
           sent_at: data.message.sent_at,
           delivered_at: data.message.delivered_at,
+          media_urls: data.message.media_urls || [],
+          media_content_types: data.message.media_content_types || [],
         };
         // Dedupe: only add if not already present (handles optimistic updates)
         setMessages((prev) => {
@@ -394,12 +402,25 @@ export function WhatsAppConversationThread({
             {leadName.charAt(0).toUpperCase()}
           </span>
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h2 className="font-semibold text-[#e9edef] truncate">{leadName}</h2>
           {leadPhone && (
             <p className="text-xs text-[#8696a0] truncate">{leadPhone}</p>
           )}
         </div>
+        {leadPhone && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              window.open(`/voice?call=${encodeURIComponent(leadPhone)}&lead_id=${leadId}`, "_blank");
+            }}
+            className="text-[#8696a0] hover:text-[#e9edef] hover:bg-white/10"
+            title="Call lead"
+          >
+            <Phone className="h-5 w-5" />
+          </Button>
+        )}
       </div>
 
       {/* Messages area - WhatsApp chat background */}
@@ -449,6 +470,11 @@ export function WhatsAppConversationThread({
           </div>
         )}
         <div className="flex items-end gap-2 min-h-[52px] min-w-0">
+          <MediaUploadButton
+            leadId={leadId}
+            disabled={sessionWindowLoading}
+            onMediaSent={loadConversation}
+          />
           <Button
             type="button"
             variant={freeFormAllowed && !sessionWindowLoading ? "outline" : "default"}
@@ -478,6 +504,11 @@ export function WhatsAppConversationThread({
               className="border-0 bg-transparent p-1.5 gap-1.5 [&_textarea]:min-h-[40px] [&_textarea]:rounded-lg [&_textarea]:border-[#3b4a54] [&_textarea]:bg-[#2a3942] [&_textarea]:text-[#e9edef] [&_textarea]:placeholder:text-[#8696a0] [&_button]:h-10 [&_button]:w-10 [&_button]:rounded-full [&_button]:bg-[#00a884] [&_button]:hover:bg-[#00a884]/90 [&_button]:text-white [&_button]:shrink-0"
             />
           </div>
+          <VoiceRecorder
+            leadId={leadId}
+            disabled={sessionWindowLoading}
+            onVoiceSent={loadConversation}
+          />
         </div>
       </div>
 

@@ -192,17 +192,21 @@ async def handle_incoming_whatsapp(
     to_number = _normalize_whatsapp_number(to_raw) or (str(to_raw).replace("whatsapp:", "")[:32])
 
     media_urls = []
+    media_content_types = []
     for i in range(max(0, num_media)):
         url = form_data.get(f"MediaUrl{i}")
+        content_type = form_data.get(f"MediaContentType{i}") or ""
         if url:
             media_urls.append(url)
+            media_content_types.append(content_type)
 
     logger.info(
-        "Incoming WhatsApp webhook: sid=%s from=%s to=%s body_len=%s",
+        "Incoming WhatsApp webhook: sid=%s from=%s to=%s body_len=%s media_count=%s",
         message_sid or "(empty)",
         from_number,
         to_number,
         len(body),
+        len(media_urls),
     )
     resolved_dealership_id = await find_dealership_id_by_inbound_to(db, to_raw)
 
@@ -213,6 +217,7 @@ async def handle_incoming_whatsapp(
         to_number=to_number,
         body=body,
         media_urls=media_urls,
+        media_content_types=media_content_types,
         resolved_dealership_id=resolved_dealership_id,
     )
     await db.commit()
@@ -245,6 +250,8 @@ async def handle_incoming_whatsapp(
                             "created_at": wa_log.created_at.isoformat() if wa_log.created_at else None,
                             "sent_at": wa_log.sent_at.isoformat() if wa_log.sent_at else None,
                             "delivered_at": wa_log.delivered_at.isoformat() if wa_log.delivered_at else None,
+                            "media_urls": wa_log.media_urls or [],
+                            "media_content_types": wa_log.media_content_types or [],
                         },
                     },
                 },

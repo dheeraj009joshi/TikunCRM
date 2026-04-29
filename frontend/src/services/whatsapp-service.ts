@@ -36,6 +36,22 @@ export interface WhatsAppMessage {
   created_at: string;
   sent_at: string | null;
   delivered_at: string | null;
+  media_urls?: string[];
+  media_content_types?: string[];
+}
+
+/** Get the proxied URL for a WhatsApp media item */
+export function getMediaProxyUrl(messageId: string, mediaIndex: number): string {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
+  return `${apiUrl}/whatsapp/media/${messageId}/${mediaIndex}`;
+}
+
+/** Helper to determine media type category */
+export function getMediaCategory(contentType: string): "image" | "video" | "audio" | "document" {
+  if (contentType.startsWith("image/")) return "image";
+  if (contentType.startsWith("video/")) return "video";
+  if (contentType.startsWith("audio/")) return "audio";
+  return "document";
 }
 
 export interface WhatsAppConversation {
@@ -127,6 +143,49 @@ export interface BulkSendStatusResponse {
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
+}
+
+export interface UploadMediaResponse {
+  url: string;
+  content_type: string;
+  filename: string;
+}
+
+export interface SendMediaRequest {
+  media_url: string;
+  caption?: string;
+}
+
+export interface CallLogItem {
+  id: string;
+  direction: "inbound" | "outbound";
+  from_number: string;
+  to_number: string;
+  status: string;
+  duration_seconds: number;
+  recording_url: string | null;
+  recording_duration_seconds: number | null;
+  notes: string | null;
+  outcome: string | null;
+  started_at: string;
+  answered_at: string | null;
+  ended_at: string | null;
+}
+
+export interface TimelineItem {
+  item_type: "message" | "call";
+  id: string;
+  created_at: string;
+  message?: WhatsAppMessage;
+  call?: CallLogItem;
+}
+
+export interface TimelineResponse {
+  lead_id: string;
+  lead_name: string;
+  lead_phone: string | null;
+  items: TimelineItem[];
+  has_more: boolean;
 }
 
 class WhatsAppService {
@@ -243,6 +302,38 @@ class WhatsAppService {
     const response = await apiClient.get<WhatsAppLeadSearchItem[]>("/whatsapp/leads/search", {
       params: { q: q.trim(), limit },
     });
+    return response.data;
+  }
+
+  /** Upload media file for sending via WhatsApp */
+  async uploadMedia(file: File): Promise<UploadMediaResponse> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await apiClient.post<UploadMediaResponse>("/whatsapp/upload-media", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    return response.data;
+  }
+
+  /** Send media to a lead */
+  async sendMediaToLead(
+    leadId: string,
+    mediaUrl: string,
+    caption?: string
+  ): Promise<SendWhatsAppResponse> {
+    const response = await apiClient.post<SendWhatsAppResponse>(
+      `/whatsapp/conversations/${leadId}/send-media`,
+      { media_url: mediaUrl, caption }
+    );
+    return response.data;
+  }
+
+  /** Get unified timeline of messages and calls */
+  async getTimeline(leadId: string, limit = 50): Promise<TimelineResponse> {
+    const response = await apiClient.get<TimelineResponse>(
+      `/whatsapp/conversations/${leadId}/timeline`,
+      { params: { limit } }
+    );
     return response.data;
   }
 }

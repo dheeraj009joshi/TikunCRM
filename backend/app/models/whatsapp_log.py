@@ -127,6 +127,11 @@ class WhatsAppLog(Base):
         default=list,
         nullable=False
     )
+    media_content_types: Mapped[dict] = mapped_column(
+        JSONB,
+        default=list,
+        nullable=True
+    )
     status: Mapped[WhatsAppStatus] = mapped_column(
         _WhatsAppStatusEnumType(),
         nullable=False,

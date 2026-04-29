@@ -45,16 +45,22 @@ async def websocket_endpoint(
     - lead:assigned - Lead was assigned
     - activity:new - New activity on a lead
     """
+    logger.info(f"WebSocket connection attempt from {websocket.client}")
+    
     # Verify token
     payload = verify_ws_token(token)
     if not payload:
+        logger.warning(f"WebSocket rejected: invalid token from {websocket.client}")
         await websocket.close(code=4001, reason="Invalid token")
         return
     
     user_id = payload.get("sub")
     dealership_id = payload.get("dealership_id")
     
+    logger.info(f"WebSocket token verified: user={user_id}, dealership={dealership_id}")
+    
     if not user_id:
+        logger.warning("WebSocket rejected: no user_id in token")
         await websocket.close(code=4001, reason="Invalid token payload")
         return
     
@@ -71,6 +77,7 @@ async def websocket_endpoint(
             if data == "ping":
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected: user={user_id}")
         ws_manager.disconnect(websocket, user_id, dealership_id)
     except Exception as e:
         logger.error(f"WebSocket error for user {user_id}: {e}")
