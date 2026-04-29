@@ -256,6 +256,20 @@ class WhatsAppConversationService:
         resolved_dealership_id: Optional[UUID] = None,
     ) -> WhatsAppLog:
         """Process incoming WhatsApp webhook."""
+        body = str(body or "")
+        sid = (message_sid or "").strip()
+        if not sid:
+            sid = f"wa_incoming_{uuid_module.uuid4().hex}"
+            logger.warning("Incoming WhatsApp missing MessageSid/SmsSid; using generated sid=%s", sid)
+        else:
+            existing = await self.db.execute(
+                select(WhatsAppLog).where(WhatsAppLog.twilio_message_sid == sid)
+            )
+            prev = existing.scalar_one_or_none()
+            if prev is not None:
+                logger.info("Duplicate Twilio webhook for sid=%s; returning existing log id=%s", sid, prev.id)
+                return prev
+
         customer = await self.find_customer_by_phone(from_number)
         lead = await self.find_lead_by_phone(from_number) if customer else None
         if lead is None:
@@ -274,7 +288,7 @@ class WhatsAppConversationService:
             lead_id=lead_id,
             dealership_id=dealership_id,
             user_id=user_id,
-            twilio_message_sid=message_sid,
+            twilio_message_sid=sid,
             direction=WhatsAppDirection.INBOUND,
             from_number=from_number,
             to_number=to_number,
@@ -287,11 +301,19 @@ class WhatsAppConversationService:
         self.db.add(wa_log)
         await self.db.flush()
         if lead:
-            await self._log_activity(
-                wa_log,
-                ActivityType.WHATSAPP_RECEIVED,
-                f"WhatsApp received from {from_number}"
-            )
+            try:
+                await self._log_activity(
+                    wa_log,
+                    ActivityType.WHATSAPP_RECEIVED,
+                    f"WhatsApp received from {from_number}"
+                )
+            except Exception as e:
+                logger.warning(
+                    "WhatsApp inbound saved (id=%s) but activity log failed: %s",
+                    wa_log.id,
+                    e,
+                    exc_info=True,
+                )
         return wa_log
 
     async def update_delivery_status(

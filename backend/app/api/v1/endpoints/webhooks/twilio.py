@@ -178,21 +178,32 @@ async def handle_incoming_whatsapp(
 ):
     """Twilio webhook for incoming WhatsApp messages."""
     form_data = await request.form()
-    message_sid = form_data.get("MessageSid", "")
-    from_raw = form_data.get("From", "")
-    to_raw = form_data.get("To", "")
-    body = form_data.get("Body", "")
-    num_media = int(form_data.get("NumMedia", "0"))
-    from_number = _normalize_whatsapp_number(from_raw)
-    to_number = _normalize_whatsapp_number(to_raw)
+    # MessageSid is standard; SmsSid appears on some Twilio channels / retries.
+    message_sid = (form_data.get("MessageSid") or form_data.get("SmsSid") or "").strip()
+    from_raw = form_data.get("From") or ""
+    to_raw = form_data.get("To") or ""
+    body = str(form_data.get("Body") or "")
+    raw_num_media = form_data.get("NumMedia")
+    try:
+        num_media = int(raw_num_media) if raw_num_media not in (None, "") else 0
+    except (TypeError, ValueError):
+        num_media = 0
+    from_number = _normalize_whatsapp_number(from_raw) or (str(from_raw).replace("whatsapp:", "")[:32])
+    to_number = _normalize_whatsapp_number(to_raw) or (str(to_raw).replace("whatsapp:", "")[:32])
 
     media_urls = []
-    for i in range(num_media):
+    for i in range(max(0, num_media)):
         url = form_data.get(f"MediaUrl{i}")
         if url:
             media_urls.append(url)
 
-    logger.info(f"Incoming WhatsApp webhook: {message_sid} from {from_number}")
+    logger.info(
+        "Incoming WhatsApp webhook: sid=%s from=%s to=%s body_len=%s",
+        message_sid or "(empty)",
+        from_number,
+        to_number,
+        len(body),
+    )
     resolved_dealership_id = await find_dealership_id_by_inbound_to(db, to_raw)
 
     service = get_whatsapp_conversation_service(db)
@@ -205,45 +216,52 @@ async def handle_incoming_whatsapp(
         resolved_dealership_id=resolved_dealership_id,
     )
     await db.commit()
+    logger.info("Incoming WhatsApp stored: id=%s direction=inbound sid=%s", wa_log.id, wa_log.twilio_message_sid)
 
     if wa_log.lead_id and wa_log.dealership_id:
-        await ws_manager.broadcast_to_dealership(
-            str(wa_log.dealership_id),
-            {
-                "type": "whatsapp:received",
-                "payload": {
-                    "message_id": str(wa_log.id),
-                    "lead_id": str(wa_log.lead_id),
-                    "from_number": from_number,
-                    "body_preview": body[:100] if body else "",
-                    "has_media": len(media_urls) > 0,
+        try:
+            await ws_manager.broadcast_to_dealership(
+                str(wa_log.dealership_id),
+                {
+                    "type": "whatsapp:received",
+                    "payload": {
+                        "message_id": str(wa_log.id),
+                        "lead_id": str(wa_log.lead_id),
+                        "from_number": from_number,
+                        "body_preview": body[:100] if body else "",
+                        "has_media": len(media_urls) > 0,
+                    },
                 },
-            },
-        )
+            )
+        except Exception as e:
+            logger.warning("whatsapp:received broadcast failed: %s", e, exc_info=True)
 
     if wa_log.lead_id and wa_log.user_id:
-        notification_service = NotificationService(db)
-        result = await db.execute(
-            select(Lead).options(selectinload(Lead.customer)).where(Lead.id == wa_log.lead_id)
-        )
-        lead = result.scalar_one_or_none()
-        lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() if lead else "Unknown"
-        await notification_service.create_notification(
-            user_id=wa_log.user_id,
-            title="New WhatsApp",
-            message=f"Message from {lead_name}: {body[:50]}..." if len(body) > 50 else f"Message from {lead_name}: {body}",
-            link=f"/leads/{wa_log.lead_id}?tab=whatsapp",
-            notification_type="whatsapp_received",
-            meta_data={
-                "lead_id": str(wa_log.lead_id),
-                "message_id": str(wa_log.id),
-                "from_number": from_number
-            },
-            send_push=True,
-            send_email=False,
-            send_sms=False
-        )
-        await db.commit()
+        try:
+            notification_service = NotificationService(db)
+            result = await db.execute(
+                select(Lead).options(selectinload(Lead.customer)).where(Lead.id == wa_log.lead_id)
+            )
+            lead = result.scalar_one_or_none()
+            lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() if lead else "Unknown"
+            await notification_service.create_notification(
+                user_id=wa_log.user_id,
+                title="New WhatsApp",
+                message=f"Message from {lead_name}: {body[:50]}..." if len(body) > 50 else f"Message from {lead_name}: {body}",
+                link=f"/leads/{wa_log.lead_id}?tab=whatsapp",
+                notification_type="whatsapp_received",
+                meta_data={
+                    "lead_id": str(wa_log.lead_id),
+                    "message_id": str(wa_log.id),
+                    "from_number": from_number
+                },
+                send_push=True,
+                send_email=False,
+                send_sms=False
+            )
+            await db.commit()
+        except Exception as e:
+            logger.warning("WhatsApp incoming notification failed (message already stored): %s", e, exc_info=True)
 
     return Response(
         content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
