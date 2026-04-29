@@ -80,10 +80,53 @@ export interface WhatsAppTemplateItem {
   content_sid: string;
   name: string;
   variable_names: string[];
+  dealership_id?: string | null;
 }
 
 export interface WhatsAppTemplatesListResponse {
   items: WhatsAppTemplateItem[];
+}
+
+export interface CreateWhatsAppTemplateRequest {
+  content_sid: string;
+  name: string;
+  variable_names?: string[];
+  dealership_id?: string | null;
+}
+
+export interface UpdateWhatsAppTemplateRequest {
+  content_sid?: string;
+  name?: string;
+  variable_names?: string[];
+  dealership_id?: string | null;
+}
+
+export interface BulkSendRequest {
+  campaign_mapping_id?: string;
+  lead_ids?: string[];
+  content_sid: string;
+  content_variables?: Record<string, string>;
+  name?: string;
+}
+
+export interface BulkSendResponse {
+  id: string;
+  status: string;
+  total_recipients: number;
+  message: string;
+}
+
+export interface BulkSendStatusResponse {
+  id: string;
+  name: string | null;
+  status: string;
+  total_recipients: number;
+  sent_count: number;
+  delivered_count: number;
+  failed_count: number;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
 }
 
 class WhatsAppService {
@@ -149,6 +192,40 @@ class WhatsAppService {
   async listTemplates(): Promise<WhatsAppTemplateItem[]> {
     const response = await apiClient.get<WhatsAppTemplatesListResponse>("/whatsapp/templates");
     return response.data.items;
+  }
+
+  async getTemplate(templateId: string): Promise<WhatsAppTemplateItem> {
+    const response = await apiClient.get<WhatsAppTemplateItem>(`/whatsapp/templates/${templateId}`);
+    return response.data;
+  }
+
+  async createTemplate(data: CreateWhatsAppTemplateRequest): Promise<WhatsAppTemplateItem> {
+    const response = await apiClient.post<WhatsAppTemplateItem>("/whatsapp/templates", data);
+    return response.data;
+  }
+
+  async updateTemplate(templateId: string, data: UpdateWhatsAppTemplateRequest): Promise<WhatsAppTemplateItem> {
+    const response = await apiClient.put<WhatsAppTemplateItem>(`/whatsapp/templates/${templateId}`, data);
+    return response.data;
+  }
+
+  async deleteTemplate(templateId: string): Promise<void> {
+    await apiClient.delete(`/whatsapp/templates/${templateId}`);
+  }
+
+  async initiateBulkSend(data: BulkSendRequest): Promise<BulkSendResponse> {
+    const response = await apiClient.post<BulkSendResponse>("/whatsapp/bulk-send", data);
+    return response.data;
+  }
+
+  async listBulkSends(params?: { limit?: number; offset?: number }): Promise<BulkSendStatusResponse[]> {
+    const response = await apiClient.get<BulkSendStatusResponse[]>("/whatsapp/bulk-sends", { params });
+    return response.data;
+  }
+
+  async getBulkSendStatus(bulkSendId: string): Promise<BulkSendStatusResponse> {
+    const response = await apiClient.get<BulkSendStatusResponse>(`/whatsapp/bulk-sends/${bulkSendId}`);
+    return response.data;
   }
 
   async markAsRead(messageId: string): Promise<void> {

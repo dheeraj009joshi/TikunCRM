@@ -9,25 +9,54 @@ import {
     X,
     Tag,
     Building2,
+    MessageSquare,
+    Zap,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
 import { useRole } from "@/hooks/use-role"
 import { useToast } from "@/hooks/use-toast"
 import {
     DealershipCampaignMappingResponse,
     getDealershipCampaignMappings,
     updateCampaignMappingDisplayName,
+    updateCampaignWhatsAppTemplate,
 } from "@/services/sync-source-service"
+import { whatsappService, WhatsAppTemplateItem } from "@/services/whatsapp-service"
 
 export default function CampaignMappingsPage() {
     const [mappings, setMappings] = React.useState<DealershipCampaignMappingResponse[]>([])
+    const [templates, setTemplates] = React.useState<WhatsAppTemplateItem[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const [editingId, setEditingId] = React.useState<string | null>(null)
     const [editValue, setEditValue] = React.useState("")
     const [isSaving, setIsSaving] = React.useState(false)
+    
+    // WhatsApp template dialog state
+    const [whatsappDialogOpen, setWhatsappDialogOpen] = React.useState(false)
+    const [selectedMapping, setSelectedMapping] = React.useState<DealershipCampaignMappingResponse | null>(null)
+    const [selectedTemplateId, setSelectedTemplateId] = React.useState<string>("")
+    const [autoSendEnabled, setAutoSendEnabled] = React.useState(false)
+    const [isSavingWhatsApp, setIsSavingWhatsApp] = React.useState(false)
     
     const { isSuperAdmin, isDealershipAdmin, isDealershipOwner } = useRole()
     const canEdit = isSuperAdmin || isDealershipAdmin || isDealershipOwner
@@ -49,13 +78,23 @@ export default function CampaignMappingsPage() {
         }
     }, [toast])
 
+    const loadTemplates = React.useCallback(async () => {
+        try {
+            const data = await whatsappService.listTemplates()
+            setTemplates(data)
+        } catch (error) {
+            console.error("Failed to load WhatsApp templates:", error)
+        }
+    }, [])
+
     React.useEffect(() => {
         if (canEdit) {
             loadMappings()
+            loadTemplates()
         } else {
             setIsLoading(false)
         }
-    }, [loadMappings, canEdit])
+    }, [loadMappings, loadTemplates, canEdit])
 
     const startEdit = (mapping: DealershipCampaignMappingResponse) => {
         setEditingId(mapping.id)
@@ -97,6 +136,47 @@ export default function CampaignMappingsPage() {
             saveEdit()
         } else if (e.key === "Escape") {
             cancelEdit()
+        }
+    }
+
+    const openWhatsAppDialog = (mapping: DealershipCampaignMappingResponse) => {
+        setSelectedMapping(mapping)
+        setSelectedTemplateId(mapping.whatsapp_template_id || "")
+        setAutoSendEnabled(mapping.whatsapp_auto_send || false)
+        setWhatsappDialogOpen(true)
+    }
+
+    const closeWhatsAppDialog = () => {
+        setWhatsappDialogOpen(false)
+        setSelectedMapping(null)
+        setSelectedTemplateId("")
+        setAutoSendEnabled(false)
+    }
+
+    const saveWhatsAppSettings = async () => {
+        if (!selectedMapping) return
+        
+        setIsSavingWhatsApp(true)
+        try {
+            await updateCampaignWhatsAppTemplate(selectedMapping.id, {
+                whatsapp_template_id: selectedTemplateId || null,
+                whatsapp_auto_send: autoSendEnabled,
+            })
+            toast({
+                title: "Success",
+                description: "WhatsApp settings updated successfully",
+            })
+            closeWhatsAppDialog()
+            await loadMappings()
+        } catch (error: any) {
+            console.error("Failed to update WhatsApp settings:", error)
+            toast({
+                title: "Error",
+                description: error.response?.data?.detail || "Failed to update WhatsApp settings",
+                variant: "destructive",
+            })
+        } finally {
+            setIsSavingWhatsApp(false)
         }
     }
 
@@ -248,18 +328,52 @@ export default function CampaignMappingsPage() {
                                                         </Badge>
                                                     )}
                                                 </div>
+                                                
+                                                {/* WhatsApp Template Info */}
+                                                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border/50">
+                                                    <MessageSquare className="h-3.5 w-3.5 text-green-600" />
+                                                    {mapping.whatsapp_template ? (
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-xs">
+                                                                Template: <span className="font-medium">{mapping.whatsapp_template.name}</span>
+                                                            </span>
+                                                            {mapping.whatsapp_auto_send && (
+                                                                <Badge variant="outline" className="text-[10px] bg-green-50 text-green-700 border-green-200">
+                                                                    <Zap className="h-2.5 w-2.5 mr-0.5" />
+                                                                    Auto-send
+                                                                </Badge>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-xs text-muted-foreground">
+                                                            No WhatsApp template assigned
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
                                             
-                                            {editingId !== mapping.id && (
+                                            <div className="flex flex-col gap-1 shrink-0">
+                                                {editingId !== mapping.id && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8"
+                                                        onClick={() => startEdit(mapping)}
+                                                        title="Edit display name"
+                                                    >
+                                                        <Pencil className="h-3.5 w-3.5" />
+                                                    </Button>
+                                                )}
                                                 <Button
                                                     variant="ghost"
                                                     size="icon"
-                                                    className="h-8 w-8 shrink-0"
-                                                    onClick={() => startEdit(mapping)}
+                                                    className="h-8 w-8"
+                                                    onClick={() => openWhatsAppDialog(mapping)}
+                                                    title="Configure WhatsApp"
                                                 >
-                                                    <Pencil className="h-3.5 w-3.5" />
+                                                    <MessageSquare className="h-3.5 w-3.5 text-green-600" />
                                                 </Button>
-                                            )}
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
@@ -272,9 +386,9 @@ export default function CampaignMappingsPage() {
             <Card className="bg-muted/30">
                 <CardContent className="py-4">
                     <p className="text-sm text-muted-foreground">
-                        <strong>Note:</strong> You can only edit the display name for campaigns. 
+                        <strong>Note:</strong> You can edit the display name and configure WhatsApp templates for campaigns. 
                         The display name is what your team sees when viewing leads. 
-                        Changes apply globally to the campaign mapping.
+                        WhatsApp templates can be set to auto-send when new leads match the campaign.
                         {isSuperAdmin && (
                             <span className="block mt-1">
                                 As a Super Admin, you can manage all mapping settings in{" "}
@@ -286,6 +400,92 @@ export default function CampaignMappingsPage() {
                     </p>
                 </CardContent>
             </Card>
+
+            {/* WhatsApp Template Dialog */}
+            <Dialog open={whatsappDialogOpen} onOpenChange={setWhatsappDialogOpen}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <MessageSquare className="h-5 w-5 text-green-600" />
+                            WhatsApp Template Settings
+                        </DialogTitle>
+                        <DialogDescription>
+                            Configure WhatsApp template for campaign: <strong>{selectedMapping?.display_name}</strong>
+                        </DialogDescription>
+                    </DialogHeader>
+                    
+                    <div className="space-y-4 py-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="template">WhatsApp Template</Label>
+                            <Select
+                                value={selectedTemplateId}
+                                onValueChange={setSelectedTemplateId}
+                            >
+                                <SelectTrigger id="template">
+                                    <SelectValue placeholder="Select a template..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="">No template</SelectItem>
+                                    {templates.map((template) => (
+                                        <SelectItem key={template.id} value={template.id}>
+                                            {template.name}
+                                            <span className="text-muted-foreground ml-2 text-xs">
+                                                ({template.content_sid})
+                                            </span>
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                                Select a pre-approved WhatsApp template to use for this campaign.
+                            </p>
+                        </div>
+
+                        <div className="flex items-center justify-between space-x-2 pt-2 border-t">
+                            <div className="space-y-0.5">
+                                <Label htmlFor="auto-send" className="flex items-center gap-2">
+                                    <Zap className="h-4 w-4 text-yellow-500" />
+                                    Auto-send on new leads
+                                </Label>
+                                <p className="text-xs text-muted-foreground">
+                                    Automatically send the template when a new lead matches this campaign.
+                                </p>
+                            </div>
+                            <Switch
+                                id="auto-send"
+                                checked={autoSendEnabled}
+                                onCheckedChange={setAutoSendEnabled}
+                                disabled={!selectedTemplateId}
+                            />
+                        </div>
+
+                        {autoSendEnabled && !selectedTemplateId && (
+                            <p className="text-xs text-orange-600 flex items-center gap-1">
+                                <AlertCircle className="h-3 w-3" />
+                                Select a template to enable auto-send.
+                            </p>
+                        )}
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={closeWhatsAppDialog}>
+                            Cancel
+                        </Button>
+                        <Button
+                            onClick={saveWhatsAppSettings}
+                            disabled={isSavingWhatsApp}
+                            className="bg-green-600 hover:bg-green-700"
+                        >
+                            {isSavingWhatsApp ? (
+                                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                            ) : (
+                                <Save className="h-4 w-4 mr-2" />
+                            )}
+                            Save
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

@@ -267,6 +267,14 @@ export async function createSyncSourceWithMappings(
 
 // ============== DEALERSHIP ADMIN/OWNER: Campaign Mapping Display Name ==============
 
+// WhatsApp template brief for campaign mapping responses
+export interface WhatsAppTemplateBrief {
+    id: string;
+    content_sid: string;
+    name: string;
+    variable_names: string[];
+}
+
 // Response type for dealership campaign mappings endpoint
 export interface DealershipCampaignMappingResponse {
     id: string;
@@ -278,6 +286,16 @@ export interface DealershipCampaignMappingResponse {
     is_active: boolean;
     leads_matched: number;
     updated_at?: string | null;
+    // WhatsApp campaign fields
+    whatsapp_template_id?: string | null;
+    whatsapp_template?: WhatsAppTemplateBrief | null;
+    whatsapp_auto_send: boolean;
+}
+
+// WhatsApp template update for campaign
+export interface CampaignWhatsAppTemplateUpdate {
+    whatsapp_template_id: string | null;
+    whatsapp_auto_send: boolean;
 }
 
 export interface DealershipCampaignMappingList {
@@ -306,6 +324,17 @@ export async function updateCampaignMappingDisplayName(
     const response = await apiClient.put<DealershipCampaignMappingResponse>(
         `${CAMPAIGN_MAPPINGS_PREFIX}/${mappingId}/display-name`,
         { display_name: displayName }
+    );
+    return response.data;
+}
+
+export async function updateCampaignWhatsAppTemplate(
+    mappingId: string,
+    data: CampaignWhatsAppTemplateUpdate
+): Promise<DealershipCampaignMappingResponse> {
+    const response = await apiClient.patch<DealershipCampaignMappingResponse>(
+        `${CAMPAIGN_MAPPINGS_PREFIX}/${mappingId}/whatsapp-template`,
+        data
     );
     return response.data;
 }

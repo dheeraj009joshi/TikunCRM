@@ -16,6 +16,7 @@ import {
     Database,
     Tag,
     GitBranch,
+    MessageSquare,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -44,6 +45,13 @@ const settingsSections: SettingSection[] = [
         description: "Create and manage reusable email templates",
         href: "/settings/email-templates",
         icon: FileText,
+    },
+    {
+        title: "WhatsApp Templates",
+        description: "Manage WhatsApp message templates for campaigns",
+        href: "/settings/whatsapp-templates",
+        icon: MessageSquare,
+        adminOnly: true,
     },
     {
         title: "Profile",
