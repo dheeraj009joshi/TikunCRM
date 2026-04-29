@@ -433,6 +433,35 @@ class WhatsAppService {
     );
     return response.data;
   }
+
+  /** Send a message to an unknown contact */
+  async sendToUnknown(
+    phoneNumber: string,
+    body: string
+  ): Promise<SendWhatsAppResponse> {
+    const response = await apiClient.post<SendWhatsAppResponse>(
+      `/whatsapp/unknown/${encodeURIComponent(phoneNumber)}/send`,
+      { phone_number: phoneNumber, body }
+    );
+    return response.data;
+  }
+
+  /** Send a template to an unknown contact */
+  async sendTemplateToUnknown(
+    phoneNumber: string,
+    contentSid: string,
+    contentVariables?: Record<string, string>
+  ): Promise<SendWhatsAppResponse> {
+    const response = await apiClient.post<SendWhatsAppResponse>(
+      `/whatsapp/unknown/${encodeURIComponent(phoneNumber)}/send`,
+      {
+        phone_number: phoneNumber,
+        content_sid: contentSid,
+        content_variables: contentVariables || {},
+      }
+    );
+    return response.data;
+  }
 }
 
 export const whatsappService = new WhatsAppService();

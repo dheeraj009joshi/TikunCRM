@@ -390,6 +390,17 @@ async def handle_incoming_whatsapp(
                         "from_number": from_number,
                         "body_preview": body[:100] if body else "",
                         "has_media": len(media_urls) > 0,
+                        "message": {
+                            "id": str(wa_log.id),
+                            "direction": "inbound",
+                            "from_number": wa_log.from_number,
+                            "to_number": wa_log.to_number,
+                            "body": wa_log.body,
+                            "status": wa_log.status.value if wa_log.status else "received",
+                            "media_urls": wa_log.media_urls or [],
+                            "media_content_types": wa_log.media_content_types or [],
+                            "created_at": wa_log.created_at.isoformat() if wa_log.created_at else None,
+                        },
                     },
                 },
             )

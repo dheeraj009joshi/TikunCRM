@@ -822,6 +822,112 @@ async def create_lead_from_unknown(
         )
 
 
+class SendToUnknownRequest(BaseModel):
+    phone_number: str = Field(..., description="The WhatsApp phone number to send to")
+    body: Optional[str] = Field(None, description="Message body (for session messages)")
+    content_sid: Optional[str] = Field(None, description="Template Content SID for template messages")
+    content_variables: Optional[Dict[str, str]] = Field(None, description="Template variables")
+
+
+@router.post("/unknown/{phone_number}/send", response_model=SendWhatsAppResponse)
+async def send_to_unknown_contact(
+    phone_number: str,
+    request: SendToUnknownRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Send a WhatsApp message to an unknown contact (not linked to any lead).
+    This allows salespeople to chat with unknown contacts to qualify them
+    before adding them as leads.
+    """
+    if not current_user.dealership_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User must belong to a dealership"
+        )
+    
+    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+    if not effective.is_whatsapp_ready():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="WhatsApp is not configured"
+        )
+    
+    # Normalize phone number
+    normalized_phone = "".join(c for c in phone_number if c.isdigit())
+    if len(normalized_phone) < 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid phone number"
+        )
+    
+    service = get_whatsapp_conversation_service(db)
+    
+    try:
+        if request.content_sid:
+            # Send template message
+            success, wa_log, error = await service.send_whatsapp_template(
+                to_number=phone_number,
+                content_sid=request.content_sid,
+                content_variables=request.content_variables or {},
+                user_id=current_user.id,
+                lead_id=None,  # No lead
+                dealership_id=current_user.dealership_id,
+            )
+        else:
+            # Send session message
+            if not request.body:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Message body is required for session messages"
+                )
+            success, wa_log, error = await service.send_whatsapp(
+                to_number=phone_number,
+                body=request.body,
+                user_id=current_user.id,
+                lead_id=None,  # No lead
+                dealership_id=current_user.dealership_id,
+            )
+        
+        if not success:
+            return SendWhatsAppResponse(success=False, error=error)
+        
+        await db.commit()
+        
+        # Broadcast to update UI
+        if wa_log:
+            await ws_manager.broadcast_to_dealership(
+                str(current_user.dealership_id),
+                {
+                    "type": "whatsapp:unknown_sent",
+                    "payload": {
+                        "message_id": str(wa_log.id),
+                        "phone_number": phone_number,
+                        "body_preview": (request.body or "")[:100],
+                        "message": {
+                            "id": str(wa_log.id),
+                            "direction": "outbound",
+                            "from_number": wa_log.from_number,
+                            "to_number": wa_log.to_number,
+                            "body": wa_log.body,
+                            "status": wa_log.status.value,
+                            "is_read": True,
+                            "created_at": wa_log.created_at.isoformat() if wa_log.created_at else None,
+                        },
+                    },
+                },
+            )
+        
+        return SendWhatsAppResponse(
+            success=True,
+            message_id=wa_log.id if wa_log else None,
+        )
+    except Exception as e:
+        logger.error(f"Failed to send to unknown contact {phone_number}: {e}", exc_info=True)
+        return SendWhatsAppResponse(success=False, error=str(e))
+
+
 @router.get("/conversations/{lead_id}", response_model=WhatsAppConversationResponse)
 async def get_whatsapp_conversation(
     lead_id: UUID,

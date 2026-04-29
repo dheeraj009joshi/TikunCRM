@@ -305,6 +305,20 @@ export default function WhatsAppInboxPage() {
     [config?.whatsapp_enabled]
   );
 
+  // Real-time: message sent to unknown - refresh unknown conversations list
+  useWebSocketEvent<{ phone_number: string; body_preview?: string }>(
+    "whatsapp:unknown_sent",
+    useCallback(
+      () => {
+        if (!config?.whatsapp_enabled) return;
+        // Refresh unknown conversations list to show latest message preview
+        loadUnknownConversations({ silent: true });
+      },
+      [config?.whatsapp_enabled, loadUnknownConversations]
+    ),
+    [config?.whatsapp_enabled]
+  );
+
   const handleSelect = (leadId: string) => {
     setSelectedLeadId(leadId);
     setSelectedLeadInfo(null);
@@ -666,7 +680,13 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [messageText, setMessageText] = useState("");
+  const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Normalize phone for comparison
+  const normalizedPhone = phoneNumber.replace(/\D/g, "");
 
   useEffect(() => {
     loadMessages();
@@ -687,6 +707,164 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
       console.error("Failed to load messages:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Real-time: new message received from unknown contact
+  useWebSocketEvent<{
+    message_id: string;
+    from_number: string;
+    body_preview: string;
+    has_media: boolean;
+    message?: {
+      id: string;
+      direction: string;
+      body: string;
+      status: string;
+      media_urls?: string[];
+      media_content_types?: string[];
+      created_at: string;
+    };
+  }>(
+    "whatsapp:unknown_received",
+    useCallback(
+      (data) => {
+        // Check if this message is for the current conversation
+        const incomingPhone = data.from_number.replace(/\D/g, "");
+        if (!incomingPhone.includes(normalizedPhone) && !normalizedPhone.includes(incomingPhone)) {
+          return;
+        }
+        // Add the new message using full message data if available
+        const newMsg = data.message
+          ? {
+              id: data.message.id,
+              direction: data.message.direction,
+              body: data.message.body,
+              created_at: data.message.created_at,
+              status: data.message.status,
+              media_urls: data.message.media_urls,
+              media_content_types: data.message.media_content_types,
+            }
+          : {
+              id: data.message_id,
+              direction: "inbound",
+              body: data.body_preview,
+              created_at: new Date().toISOString(),
+              status: "received",
+            };
+        setMessages((prev) => {
+          // Avoid duplicates
+          if (prev.some((m) => m.id === data.message_id)) return prev;
+          return [...prev, newMsg];
+        });
+        // Mark as read since we're viewing this conversation
+        whatsappService.markUnknownConversationRead(phoneNumber).catch(console.error);
+      },
+      [normalizedPhone, phoneNumber]
+    ),
+    [normalizedPhone]
+  );
+
+  // Real-time: message sent to unknown contact (from another tab/device)
+  useWebSocketEvent<{
+    message_id: string;
+    phone_number: string;
+    body_preview: string;
+    message?: {
+      id: string;
+      body: string;
+      status: string;
+      created_at: string;
+    };
+  }>(
+    "whatsapp:unknown_sent",
+    useCallback(
+      (data) => {
+        // Check if this message is for the current conversation
+        const targetPhone = data.phone_number.replace(/\D/g, "");
+        if (!targetPhone.includes(normalizedPhone) && !normalizedPhone.includes(targetPhone)) {
+          return;
+        }
+        // Add the new message if not already present (could be from another tab)
+        const newMsg = {
+          id: data.message_id,
+          direction: "outbound",
+          body: data.message?.body || data.body_preview,
+          created_at: data.message?.created_at || new Date().toISOString(),
+          status: data.message?.status || "sent",
+        };
+        setMessages((prev) => {
+          // Avoid duplicates (we might have added it optimistically)
+          if (prev.some((m) => m.id === data.message_id)) return prev;
+          return [...prev, newMsg];
+        });
+      },
+      [normalizedPhone]
+    ),
+    [normalizedPhone]
+  );
+
+  const handleSendMessage = async () => {
+    const text = messageText.trim();
+    if (!text || sending) return;
+
+    // Optimistic update
+    const tempId = `temp_${Date.now()}`;
+    const optimisticMsg = {
+      id: tempId,
+      direction: "outbound",
+      body: text,
+      created_at: new Date().toISOString(),
+      status: "sending",
+    };
+    setMessages(prev => [...prev, optimisticMsg]);
+    setMessageText("");
+    setSending(true);
+
+    try {
+      const response = await whatsappService.sendToUnknown(phoneNumber, text);
+      if (response.success && response.message_id) {
+        // Replace temp message with real one
+        setMessages(prev => prev.map(m => 
+          m.id === tempId 
+            ? { ...m, id: response.message_id!, status: "sent" }
+            : m
+        ));
+      } else {
+        // Mark as failed
+        setMessages(prev => prev.map(m => 
+          m.id === tempId 
+            ? { ...m, status: "failed" }
+            : m
+        ));
+        toast({
+          title: "Failed to send",
+          description: response.error || "Message could not be sent",
+          variant: "destructive",
+        });
+      }
+    } catch (err) {
+      console.error("Failed to send message:", err);
+      setMessages(prev => prev.map(m => 
+        m.id === tempId 
+          ? { ...m, status: "failed" }
+          : m
+      ));
+      toast({
+        title: "Failed to send",
+        description: "Please try again",
+        variant: "destructive",
+      });
+    } finally {
+      setSending(false);
+      textareaRef.current?.focus();
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
     }
   };
 
@@ -728,25 +906,25 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
   };
 
   return (
-    <div className="flex flex-col h-full w-full bg-[#efeae2]">
-      {/* Header */}
-      <div className="shrink-0 flex items-center gap-3 px-4 py-2 bg-[#f0f2f5] border-b border-[#e9edef]">
+    <div className="flex flex-col h-full w-full bg-[#0b141a]">
+      {/* Header - dark theme like main chat */}
+      <div className="shrink-0 flex items-center gap-3 px-4 py-3 bg-[#202c33] border-b border-[#2a3942]">
         <Button
           variant="ghost"
           size="icon"
           onClick={onBack}
-          className="md:hidden"
+          className="md:hidden text-[#e9edef] hover:bg-white/10"
         >
           <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </Button>
-        <div className="h-10 w-10 rounded-full bg-orange-100 flex items-center justify-center shrink-0">
-          <UserX className="h-5 w-5 text-orange-500" />
+        <div className="h-10 w-10 rounded-full bg-orange-500/20 flex items-center justify-center shrink-0">
+          <UserX className="h-5 w-5 text-orange-400" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="font-medium text-[#111b21] truncate">{displayName}</p>
-          <p className="text-xs text-orange-500">Unknown contact</p>
+          <p className="font-medium text-[#e9edef] truncate">{displayName}</p>
+          <p className="text-xs text-orange-400">Unknown contact</p>
         </div>
         <Button
           onClick={() => setShowCreateForm(true)}
@@ -812,21 +990,29 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
         </div>
       )}
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2">
+      {/* Messages area with WhatsApp background */}
+      <div 
+        className="flex-1 overflow-y-auto p-4 space-y-2"
+        style={{
+          backgroundImage: "url(\"data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2317222d' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E\")",
+        }}
+      >
         {loading ? (
           <div className="flex justify-center py-12">
             <Loader2 className="h-6 w-6 animate-spin text-[#8696a0]" />
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <p className="text-sm text-[#667781]">No messages yet</p>
+            <p className="text-sm text-[#8696a0]">No messages yet</p>
+            <p className="text-xs text-[#667781] mt-1">Send a message to start the conversation</p>
           </div>
         ) : (
           messages.map((msg) => {
             const isInbound = msg.direction === "inbound";
             const time = new Date(msg.created_at);
             const timeStr = time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            const isFailed = msg.status === "failed";
+            const isSending = msg.status === "sending";
             
             return (
               <div
@@ -836,8 +1022,10 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
                 <div
                   className={`max-w-[75%] rounded-lg px-3 py-2 ${
                     isInbound
-                      ? "bg-white text-[#111b21]"
-                      : "bg-[#d9fdd3] text-[#111b21]"
+                      ? "bg-[#202c33] text-[#e9edef]"
+                      : isFailed
+                        ? "bg-red-900/50 text-[#e9edef]"
+                        : "bg-[#005c4b] text-[#e9edef]"
                   }`}
                 >
                   {/* Media preview */}
@@ -847,21 +1035,32 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
                         if (type.startsWith("image/")) {
                           return (
                             <div key={idx} className="rounded overflow-hidden">
-                              <span className="text-sm text-[#667781]">📷 Photo</span>
+                              <span className="text-sm text-[#8696a0]">📷 Photo</span>
                             </div>
                           );
                         } else if (type.startsWith("video/")) {
-                          return <span key={idx} className="text-sm text-[#667781]">🎥 Video</span>;
+                          return <span key={idx} className="text-sm text-[#8696a0]">🎥 Video</span>;
                         } else if (type.startsWith("audio/")) {
-                          return <span key={idx} className="text-sm text-[#667781]">🎤 Voice message</span>;
+                          return <span key={idx} className="text-sm text-[#8696a0]">🎤 Voice message</span>;
                         } else {
-                          return <span key={idx} className="text-sm text-[#667781]">📎 File</span>;
+                          return <span key={idx} className="text-sm text-[#8696a0]">📎 File</span>;
                         }
                       })}
                     </div>
                   )}
                   {msg.body && <p className="text-sm whitespace-pre-wrap">{msg.body}</p>}
-                  <p className="text-[11px] text-[#667781] text-right mt-1">{timeStr}</p>
+                  <div className="flex items-center justify-end gap-1 mt-1">
+                    <p className="text-[11px] text-[#8696a0]">{timeStr}</p>
+                    {!isInbound && (
+                      isSending ? (
+                        <Loader2 className="h-3 w-3 animate-spin text-[#8696a0]" />
+                      ) : isFailed ? (
+                        <span className="text-red-400 text-xs">!</span>
+                      ) : (
+                        <span className="text-[#53bdeb]">✓✓</span>
+                      )
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -870,11 +1069,35 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Footer - info bar */}
-      <div className="shrink-0 px-4 py-3 bg-[#f0f2f5] border-t border-[#e9edef] text-center">
-        <p className="text-sm text-[#667781]">
-          This is an unknown contact. Click &quot;Add as Lead&quot; to start a conversation.
-        </p>
+      {/* Message composer - dark theme */}
+      <div className="shrink-0 border-t border-[#2a3942] bg-[#202c33] px-3 py-2">
+        <div className="flex items-end gap-2">
+          <div className="flex-1 bg-[#2a3942] rounded-lg">
+            <textarea
+              ref={textareaRef}
+              value={messageText}
+              onChange={(e) => setMessageText(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Type a message"
+              rows={1}
+              className="w-full bg-transparent text-[#e9edef] placeholder:text-[#8696a0] px-3 py-2 resize-none focus:outline-none text-sm"
+              style={{ maxHeight: "120px" }}
+            />
+          </div>
+          <Button
+            onClick={handleSendMessage}
+            disabled={!messageText.trim() || sending}
+            className="h-10 w-10 rounded-full bg-[#00a884] hover:bg-[#008f6f] p-0"
+          >
+            {sending ? (
+              <Loader2 className="h-5 w-5 animate-spin text-white" />
+            ) : (
+              <svg className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+              </svg>
+            )}
+          </Button>
+        </div>
       </div>
     </div>
   );
