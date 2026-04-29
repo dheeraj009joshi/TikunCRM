@@ -33,6 +33,38 @@ import {
 /** Radix Select must not use empty string as a value. */
 const TEMPLATE_SELECT_NONE = "__none__";
 
+/** WebSocket payload for whatsapp:received and whatsapp:sent events */
+interface WsMessagePayload {
+  message_id: string;
+  lead_id: string;
+  body_preview?: string;
+  from_number?: string;
+  has_media?: boolean;
+  message?: {
+    id: string;
+    lead_id: string;
+    user_id: string | null;
+    direction: string;
+    from_number: string;
+    to_number: string;
+    body: string;
+    status: string;
+    is_read: boolean;
+    created_at: string | null;
+    sent_at: string | null;
+    delivered_at: string | null;
+  };
+}
+
+/** WebSocket payload for whatsapp:status events */
+interface WsStatusPayload {
+  message_id: string;
+  lead_id: string;
+  status: string;
+  delivered_at?: string | null;
+  read_at?: string | null;
+}
+
 interface WhatsAppConversationThreadProps {
   leadId: string;
   leadName: string;
@@ -75,22 +107,27 @@ export function WhatsAppConversationThread({
     }
   }, [leadId]);
 
-  const loadConversation = useCallback(async () => {
+  const loadConversation = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
     try {
-      setLoading(true);
-      setError(null);
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
       const conversation = await whatsappService.getConversation(leadId);
       setMessages(conversation.messages);
     } catch (err) {
-      setError("Failed to load chat");
       console.error(err);
-      toast({
-        title: "Could not load chat",
-        description: "Check your connection and try again.",
-        variant: "destructive",
-      });
+      if (!silent) {
+        setError("Failed to load chat");
+        toast({
+          title: "Could not load chat",
+          description: "Check your connection and try again.",
+          variant: "destructive",
+        });
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [leadId, toast]);
 
@@ -106,37 +143,95 @@ export function WhatsAppConversationThread({
     void loadSessionWindow();
   }, [leadId, loadSessionWindow]);
 
-  // When Twilio sends delivery status (delivered/read), refresh so ticks update
-  useWebSocketEvent<{ message_id: string; lead_id: string; status: string }>(
+  // Real-time status updates (delivered/read ticks) - update locally, no API call
+  useWebSocketEvent<WsStatusPayload>(
     "whatsapp:status",
     (data) => {
-      if (data.lead_id === leadId) {
-        loadConversation();
+      if (!data?.lead_id || String(data.lead_id) !== String(leadId)) return;
+      // Update the message status in local state instantly
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === data.message_id
+            ? {
+                ...msg,
+                status: data.status,
+                delivered_at: data.delivered_at ?? msg.delivered_at,
+              }
+            : msg
+        )
+      );
+    },
+    [leadId]
+  );
+
+  // Real-time incoming messages - add to state instantly, no API call
+  useWebSocketEvent<WsMessagePayload>(
+    "whatsapp:received",
+    (data) => {
+      if (!data?.lead_id || String(data.lead_id) !== String(leadId)) return;
+      // If we have the full message object, add it directly
+      if (data.message) {
+        const newMsg: WhatsAppMessage = {
+          id: data.message.id,
+          lead_id: data.message.lead_id,
+          user_id: data.message.user_id,
+          direction: data.message.direction as "inbound" | "outbound",
+          from_number: data.message.from_number,
+          to_number: data.message.to_number,
+          body: data.message.body,
+          status: data.message.status,
+          is_read: data.message.is_read,
+          created_at: data.message.created_at || new Date().toISOString(),
+          sent_at: data.message.sent_at,
+          delivered_at: data.message.delivered_at,
+        };
+        // Dedupe: only add if not already present
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === newMsg.id)) return prev;
+          return [...prev, newMsg];
+        });
+        // Refresh session window since inbound message extends it
+        void loadSessionWindow();
+      } else {
+        // Fallback: if no full message, do a silent API refresh
+        void loadConversation({ silent: true });
+        void loadSessionWindow();
+      }
+    },
+    [leadId, loadConversation, loadSessionWindow]
+  );
+
+  // Real-time sent messages (from other tabs/users) - add to state instantly
+  useWebSocketEvent<WsMessagePayload>(
+    "whatsapp:sent",
+    (data) => {
+      if (!data?.lead_id || String(data.lead_id) !== String(leadId)) return;
+      if (data.message) {
+        const newMsg: WhatsAppMessage = {
+          id: data.message.id,
+          lead_id: data.message.lead_id,
+          user_id: data.message.user_id,
+          direction: data.message.direction as "inbound" | "outbound",
+          from_number: data.message.from_number,
+          to_number: data.message.to_number,
+          body: data.message.body,
+          status: data.message.status,
+          is_read: data.message.is_read,
+          created_at: data.message.created_at || new Date().toISOString(),
+          sent_at: data.message.sent_at,
+          delivered_at: data.message.delivered_at,
+        };
+        // Dedupe: only add if not already present (handles optimistic updates)
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === newMsg.id)) return prev;
+          return [...prev, newMsg];
+        });
+      } else {
+        // Fallback
+        void loadConversation({ silent: true });
       }
     },
     [leadId, loadConversation]
-  );
-
-  useWebSocketEvent<{ lead_id?: string }>(
-    "whatsapp:received",
-    (data) => {
-      if (data?.lead_id === leadId) {
-        void loadConversation();
-        void loadSessionWindow();
-      }
-    },
-    [leadId, loadConversation, loadSessionWindow]
-  );
-
-  useWebSocketEvent<{ lead_id?: string }>(
-    "whatsapp:sent",
-    (data) => {
-      if (data?.lead_id === leadId) {
-        void loadConversation();
-        void loadSessionWindow();
-      }
-    },
-    [leadId, loadConversation, loadSessionWindow]
   );
 
   useEffect(() => {
@@ -280,7 +375,7 @@ export function WhatsAppConversationThread({
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-4">
         <p className="text-muted-foreground mb-4">{error}</p>
-        <Button onClick={loadConversation}>Retry</Button>
+        <Button onClick={() => void loadConversation()}>Retry</Button>
       </div>
     );
   }

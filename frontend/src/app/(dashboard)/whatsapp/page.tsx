@@ -14,8 +14,32 @@ import {
   WhatsAppConfig,
   WhatsAppLeadSearchItem,
 } from "@/services/whatsapp-service";
-import { useWebSocket } from "@/hooks/use-websocket";
+import { useWebSocketEvent } from "@/hooks/use-websocket";
 import { useToast } from "@/hooks/use-toast";
+
+/** WebSocket payload for whatsapp:received and whatsapp:sent events */
+interface WsMessagePayload {
+  message_id: string;
+  lead_id: string;
+  body_preview?: string;
+  from_number?: string;
+  has_media?: boolean;
+  message?: {
+    id: string;
+    lead_id: string;
+    direction: string;
+    body: string;
+    status: string;
+    created_at: string | null;
+  };
+}
+
+/** WebSocket payload for whatsapp:status events */
+interface WsStatusPayload {
+  message_id: string;
+  lead_id: string;
+  status: string;
+}
 
 // WhatsApp Desktop colors
 const WA_HEADER_BG = "#00a884";
@@ -26,7 +50,6 @@ const WA_EMPTY_TEXT = "#8696a0";
 export default function WhatsAppInboxPage() {
   const searchParams = useSearchParams();
   const { toast } = useToast();
-  const { lastMessage } = useWebSocket();
   const [config, setConfig] = useState<WhatsAppConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(true);
   const [conversations, setConversations] = useState<WhatsAppConversationListItem[]>([]);
@@ -55,22 +78,25 @@ export default function WhatsAppInboxPage() {
       .finally(() => setConfigLoading(false));
   }, []);
 
-  const loadConversations = useCallback(async () => {
+  const loadConversations = useCallback(async (opts?: { silent?: boolean }) => {
     if (!config?.whatsapp_enabled) return;
+    const silent = opts?.silent === true;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const response = await whatsappService.listConversations();
       setConversations(response.items);
       setTotalUnread(response.total_unread);
     } catch (err) {
       console.error("Failed to load WhatsApp conversations:", err);
-      toast({
-        title: "Could not load conversations",
-        description: "Check your connection and try again.",
-        variant: "destructive",
-      });
+      if (!silent) {
+        toast({
+          title: "Could not load conversations",
+          description: "Check your connection and try again.",
+          variant: "destructive",
+        });
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [config?.whatsapp_enabled, toast]);
 
@@ -98,18 +124,114 @@ export default function WhatsAppInboxPage() {
     return () => clearTimeout(t);
   }, [searchQuery, config?.whatsapp_enabled]);
 
-  useEffect(() => {
-    if (!lastMessage || !config?.whatsapp_enabled) return;
-    if (lastMessage.type === "whatsapp:received" || lastMessage.type === "whatsapp:sent") {
-      loadConversations();
-      if (lastMessage.type === "whatsapp:received") {
+  // Real-time: new incoming message - update conversation list instantly
+  useWebSocketEvent<WsMessagePayload>(
+    "whatsapp:received",
+    useCallback(
+      (data) => {
+        if (!config?.whatsapp_enabled || !data?.lead_id) return;
+        const leadId = data.lead_id;
+        const messageId = data.message?.id || data.message_id;
+        const body = data.message?.body || data.body_preview || "";
+        const createdAt = data.message?.created_at || new Date().toISOString();
+
+        setConversations((prev) => {
+          const existingIdx = prev.findIndex((c) => c.lead_id === leadId);
+          if (existingIdx >= 0) {
+            // Update existing conversation and move to top
+            const updated = [...prev];
+            const conv = { ...updated[existingIdx] };
+            conv.last_message = {
+              id: messageId,
+              body: body.slice(0, 100),
+              direction: "inbound",
+              created_at: createdAt,
+              status: "received",
+            };
+            // Increment unread only if not currently viewing this conversation
+            if (selectedLeadId !== leadId) {
+              conv.unread_count = (conv.unread_count || 0) + 1;
+            }
+            updated.splice(existingIdx, 1);
+            return [conv, ...updated];
+          } else {
+            // New conversation - do a silent refresh to get full details
+            void loadConversations({ silent: true });
+            return prev;
+          }
+        });
+
+        // Update total unread count if not viewing this conversation
+        if (selectedLeadId !== leadId) {
+          setTotalUnread((prev) => prev + 1);
+        }
+
+        // Show toast notification
         toast({
           title: "New WhatsApp",
-          description: (lastMessage.payload as { body_preview?: string }).body_preview || "New message",
+          description: body.slice(0, 50) || "New message received",
         });
-      }
-    }
-  }, [lastMessage, loadConversations, toast, config?.whatsapp_enabled]);
+      },
+      [config?.whatsapp_enabled, selectedLeadId, loadConversations, toast]
+    ),
+    [config?.whatsapp_enabled, selectedLeadId, loadConversations, toast]
+  );
+
+  // Real-time: sent message - update conversation list instantly
+  useWebSocketEvent<WsMessagePayload>(
+    "whatsapp:sent",
+    useCallback(
+      (data) => {
+        if (!config?.whatsapp_enabled || !data?.lead_id) return;
+        const leadId = data.lead_id;
+        const messageId = data.message?.id || data.message_id;
+        const body = data.message?.body || data.body_preview || "";
+        const createdAt = data.message?.created_at || new Date().toISOString();
+
+        setConversations((prev) => {
+          const existingIdx = prev.findIndex((c) => c.lead_id === leadId);
+          if (existingIdx >= 0) {
+            // Update existing conversation and move to top
+            const updated = [...prev];
+            const conv = { ...updated[existingIdx] };
+            conv.last_message = {
+              id: messageId,
+              body: body.slice(0, 100),
+              direction: "outbound",
+              created_at: createdAt,
+              status: data.message?.status || "sent",
+            };
+            updated.splice(existingIdx, 1);
+            return [conv, ...updated];
+          }
+          return prev;
+        });
+      },
+      [config?.whatsapp_enabled]
+    ),
+    [config?.whatsapp_enabled]
+  );
+
+  // Real-time: status update (delivered/read) - update conversation list
+  useWebSocketEvent<WsStatusPayload>(
+    "whatsapp:status",
+    useCallback(
+      (data) => {
+        if (!config?.whatsapp_enabled || !data?.lead_id) return;
+        const leadId = data.lead_id;
+
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.lead_id === leadId && c.last_message
+              ? { ...c, last_message: { ...c.last_message, status: data.status } }
+              : c
+          )
+        );
+      },
+      [config?.whatsapp_enabled]
+    ),
+    [config?.whatsapp_enabled]
+  );
 
   const handleSelect = (leadId: string) => {
     setSelectedLeadId(leadId);
@@ -198,7 +320,7 @@ export default function WhatsAppInboxPage() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={loadConversations}
+              onClick={() => void loadConversations()}
               disabled={loading}
               className="text-white hover:bg-white/20"
             >

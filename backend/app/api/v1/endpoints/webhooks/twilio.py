@@ -220,6 +220,7 @@ async def handle_incoming_whatsapp(
 
     if wa_log.lead_id and wa_log.dealership_id:
         try:
+            # Include full message for instant local updates on frontend
             await ws_manager.broadcast_to_dealership(
                 str(wa_log.dealership_id),
                 {
@@ -230,6 +231,21 @@ async def handle_incoming_whatsapp(
                         "from_number": from_number,
                         "body_preview": body[:100] if body else "",
                         "has_media": len(media_urls) > 0,
+                        # Full message object for instant UI updates
+                        "message": {
+                            "id": str(wa_log.id),
+                            "lead_id": str(wa_log.lead_id),
+                            "user_id": str(wa_log.user_id) if wa_log.user_id else None,
+                            "direction": wa_log.direction.value,
+                            "from_number": wa_log.from_number,
+                            "to_number": wa_log.to_number,
+                            "body": wa_log.body,
+                            "status": wa_log.status.value,
+                            "is_read": wa_log.is_read,
+                            "created_at": wa_log.created_at.isoformat() if wa_log.created_at else None,
+                            "sent_at": wa_log.sent_at.isoformat() if wa_log.sent_at else None,
+                            "delivered_at": wa_log.delivered_at.isoformat() if wa_log.delivered_at else None,
+                        },
                     },
                 },
             )
@@ -295,18 +311,22 @@ async def handle_whatsapp_status(
     )
 
     if wa_log and wa_log.lead_id and wa_log.dealership_id:
-        await ws_manager.broadcast_to_dealership(
-            str(wa_log.dealership_id),
-            {
-                "type": "whatsapp:status",
-                "data": {
-                    "message_id": str(wa_log.id),
-                    "lead_id": str(wa_log.lead_id),
-                    "status": message_status,
-                    "delivered_at": wa_log.delivered_at.isoformat() if wa_log.delivered_at else None,
+        try:
+            await ws_manager.broadcast_to_dealership(
+                str(wa_log.dealership_id),
+                {
+                    "type": "whatsapp:status",
+                    "payload": {
+                        "message_id": str(wa_log.id),
+                        "lead_id": str(wa_log.lead_id),
+                        "status": message_status,
+                        "delivered_at": wa_log.delivered_at.isoformat() if wa_log.delivered_at else None,
+                        "read_at": wa_log.read_at.isoformat() if hasattr(wa_log, "read_at") and wa_log.read_at else None,
+                    },
                 },
-            },
-        )
+            )
+        except Exception as e:
+            logger.warning("whatsapp:status broadcast failed: %s", e, exc_info=True)
 
     await db.commit()
     return {"status": "ok"}

@@ -494,18 +494,36 @@ async def send_whatsapp(
         )
     await db.commit()
     if success and wa_log:
-        if wa_log.lead_id:
-            await ws_manager.broadcast_to_dealership(
-                str(wa_log.dealership_id) if wa_log.dealership_id else None,
-                {
-                    "type": "whatsapp:sent",
-                    "payload": {
-                        "message_id": str(wa_log.id),
-                        "lead_id": str(wa_log.lead_id),
-                        "body_preview": wa_log.body[:50] if wa_log.body else ""
+        if wa_log.lead_id and wa_log.dealership_id:
+            try:
+                await ws_manager.broadcast_to_dealership(
+                    str(wa_log.dealership_id),
+                    {
+                        "type": "whatsapp:sent",
+                        "payload": {
+                            "message_id": str(wa_log.id),
+                            "lead_id": str(wa_log.lead_id),
+                            "body_preview": wa_log.body[:50] if wa_log.body else "",
+                            # Full message object for instant UI updates
+                            "message": {
+                                "id": str(wa_log.id),
+                                "lead_id": str(wa_log.lead_id),
+                                "user_id": str(wa_log.user_id) if wa_log.user_id else None,
+                                "direction": wa_log.direction.value,
+                                "from_number": wa_log.from_number,
+                                "to_number": wa_log.to_number,
+                                "body": wa_log.body,
+                                "status": wa_log.status.value,
+                                "is_read": wa_log.is_read,
+                                "created_at": wa_log.created_at.isoformat() if wa_log.created_at else None,
+                                "sent_at": wa_log.sent_at.isoformat() if wa_log.sent_at else None,
+                                "delivered_at": wa_log.delivered_at.isoformat() if wa_log.delivered_at else None,
+                            },
+                        }
                     }
-                }
-            )
+                )
+            except Exception as e:
+                logger.warning("whatsapp:sent broadcast failed: %s", e)
         return SendWhatsAppResponse(success=True, message_id=wa_log.id)
     return SendWhatsAppResponse(
         success=False,
@@ -662,17 +680,35 @@ async def send_whatsapp_to_lead(
     await db.commit()
     if success and wa_log:
         if lead.dealership_id:
-            await ws_manager.broadcast_to_dealership(
-                str(lead.dealership_id),
-                {
-                    "type": "whatsapp:sent",
-                    "payload": {
-                        "message_id": str(wa_log.id),
-                        "lead_id": str(lead.id),
-                        "body_preview": wa_log.body[:50] if wa_log.body else ""
+            try:
+                await ws_manager.broadcast_to_dealership(
+                    str(lead.dealership_id),
+                    {
+                        "type": "whatsapp:sent",
+                        "payload": {
+                            "message_id": str(wa_log.id),
+                            "lead_id": str(lead.id),
+                            "body_preview": wa_log.body[:50] if wa_log.body else "",
+                            # Full message object for instant UI updates
+                            "message": {
+                                "id": str(wa_log.id),
+                                "lead_id": str(wa_log.lead_id),
+                                "user_id": str(wa_log.user_id) if wa_log.user_id else None,
+                                "direction": wa_log.direction.value,
+                                "from_number": wa_log.from_number,
+                                "to_number": wa_log.to_number,
+                                "body": wa_log.body,
+                                "status": wa_log.status.value,
+                                "is_read": wa_log.is_read,
+                                "created_at": wa_log.created_at.isoformat() if wa_log.created_at else None,
+                                "sent_at": wa_log.sent_at.isoformat() if wa_log.sent_at else None,
+                                "delivered_at": wa_log.delivered_at.isoformat() if wa_log.delivered_at else None,
+                            },
+                        }
                     }
-                }
-            )
+                )
+            except Exception as e:
+                logger.warning("whatsapp:sent broadcast failed: %s", e)
         return SendWhatsAppResponse(success=True, message_id=wa_log.id)
     return SendWhatsAppResponse(
         success=False,
