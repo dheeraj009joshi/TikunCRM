@@ -438,7 +438,7 @@ export default function WhatsAppInboxPage() {
               setSelectedLeadId(null);
               setSelectedLeadInfo(null);
             }}
-            onMessageSent={loadConversations}
+            onMessageSent={() => loadConversations({ silent: true })}
           />
         ) : (
           <div

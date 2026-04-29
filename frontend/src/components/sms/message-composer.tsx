@@ -38,6 +38,10 @@ export function MessageComposer({
       }
     } finally {
       setSending(false);
+      // Keep focus on textarea after sending
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+      });
     }
   };
   
@@ -77,6 +81,7 @@ export function MessageComposer({
         rows={1}
       />
       <Button
+        type="button"
         size="icon"
         onClick={handleSend}
         disabled={!message.trim() || disabled || sending}

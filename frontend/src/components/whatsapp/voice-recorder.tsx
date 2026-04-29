@@ -257,32 +257,30 @@ export function VoiceRecorder({
   }
 
   return (
-    <div className="flex items-center gap-2 bg-[#2a3942] rounded-2xl px-3 py-1.5 min-w-[220px]">
+    <div className="flex-1 flex items-center gap-3 bg-[#2a3942] rounded-full px-4 py-2">
       {/* Cancel button */}
       <Button
         type="button"
         variant="ghost"
         size="icon"
         onClick={cancelRecording}
-        className="h-7 w-7 text-[#ef4444] hover:text-[#ef4444] hover:bg-transparent p-0"
+        className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-500/20 rounded-full shrink-0"
         title="Cancel"
       >
-        <X className="h-4 w-4" />
+        <X className="h-5 w-5" />
       </Button>
 
       {/* Recording indicator */}
       {state === "recording" && (
         <>
-          <div className="flex items-center gap-1">
-            <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-          </div>
-          <div className="flex-1 h-1 bg-[#3b4a54] rounded-full overflow-hidden">
+          <span className="h-3 w-3 rounded-full bg-red-500 animate-pulse shrink-0" />
+          <div className="flex-1 h-1.5 bg-[#3b4a54] rounded-full overflow-hidden">
             <div 
               className="h-full bg-red-500 rounded-full transition-all duration-1000"
               style={{ width: `${Math.min((duration / 120) * 100, 100)}%` }}
             />
           </div>
-          <span className="text-sm text-red-400 font-mono min-w-[36px] tabular-nums">
+          <span className="text-sm text-red-400 font-mono tabular-nums shrink-0">
             {formatDuration(duration)}
           </span>
           <Button
@@ -290,10 +288,10 @@ export function VoiceRecorder({
             variant="ghost"
             size="icon"
             onClick={stopRecording}
-            className="h-7 w-7 bg-red-500 hover:bg-red-600 text-white rounded-full p-0"
-            title="Stop"
+            className="h-10 w-10 bg-red-500 hover:bg-red-600 text-white rounded-full shrink-0 flex items-center justify-center"
+            title="Stop recording"
           >
-            <Square className="h-3 w-3 fill-current" />
+            <Square className="h-4 w-4 fill-current" />
           </Button>
         </>
       )}
@@ -307,21 +305,21 @@ export function VoiceRecorder({
             variant="ghost"
             size="icon"
             onClick={togglePlayback}
-            className="h-7 w-7 bg-white/10 hover:bg-white/20 text-white rounded-full p-0"
+            className="h-8 w-8 bg-white/10 hover:bg-white/20 text-white rounded-full shrink-0 flex items-center justify-center"
           >
             {isPlaying ? (
-              <Pause className="h-3.5 w-3.5 fill-current" />
+              <Pause className="h-4 w-4 fill-current" />
             ) : (
-              <Play className="h-3.5 w-3.5 fill-current ml-0.5" />
+              <Play className="h-4 w-4 fill-current ml-0.5" />
             )}
           </Button>
-          <div className="flex-1 h-1 bg-[#3b4a54] rounded-full overflow-hidden">
+          <div className="flex-1 h-1.5 bg-[#3b4a54] rounded-full overflow-hidden">
             <div 
               className="h-full bg-[#00a884] rounded-full transition-all duration-100"
               style={{ width: `${playbackProgress}%` }}
             />
           </div>
-          <span className="text-sm text-[#8696a0] font-mono min-w-[36px] tabular-nums">
+          <span className="text-sm text-[#8696a0] font-mono tabular-nums shrink-0">
             {formatDuration(recordedDurationRef.current)}
           </span>
           <Button
@@ -329,10 +327,10 @@ export function VoiceRecorder({
             variant="ghost"
             size="icon"
             onClick={handleSend}
-            className="h-9 w-9 bg-[#00a884] hover:bg-[#00a884]/90 text-white rounded-full flex items-center justify-center"
+            className="h-10 w-10 bg-[#00a884] hover:bg-[#00a884]/90 text-white rounded-full shrink-0 flex items-center justify-center"
             title="Send voice message"
           >
-            <Send className="h-4 w-4" />
+            <Send className="h-5 w-5" />
           </Button>
         </>
       )}

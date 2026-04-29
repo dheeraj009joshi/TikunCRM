@@ -312,9 +312,8 @@ class WhatsAppService {
   async uploadMedia(file: File): Promise<UploadMediaResponse> {
     const formData = new FormData();
     formData.append("file", file);
-    const response = await apiClient.post<UploadMediaResponse>("/whatsapp/upload-media", formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
+    // Don't set Content-Type manually - axios will set it with proper boundary
+    const response = await apiClient.post<UploadMediaResponse>("/whatsapp/upload-media", formData);
     return response.data;
   }
 
