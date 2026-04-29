@@ -1180,14 +1180,26 @@ async def upload_whatsapp_media(
             detail=f"File too large. Maximum size: {MAX_MEDIA_SIZE // (1024*1024)}MB"
         )
 
-    # Convert webm audio to ogg (WhatsApp doesn't support webm)
+    # Convert unsupported audio formats to ogg (WhatsApp only supports ogg/opus, aac, mp3, amr)
     original_filename = file.filename or "media"
-    if content_type == "audio/webm":
+    audio_formats_to_convert = {"audio/webm", "audio/mp4", "audio/m4a", "audio/wav"}
+    if content_type in audio_formats_to_convert:
         try:
-            content, content_type = await convert_audio_to_ogg(content, "webm")
+            # Determine source format from content type
+            format_map = {
+                "audio/webm": "webm",
+                "audio/mp4": "mp4",
+                "audio/m4a": "m4a",
+                "audio/wav": "wav",
+            }
+            source_format = format_map.get(content_type, "mp4")
+            content, content_type = await convert_audio_to_ogg(content, source_format)
             # Update filename extension
-            if original_filename.endswith(".webm"):
-                original_filename = original_filename[:-5] + ".ogg"
+            ext_to_remove = [".webm", ".mp4", ".m4a", ".wav"]
+            for ext in ext_to_remove:
+                if original_filename.lower().endswith(ext):
+                    original_filename = original_filename[:-len(ext)] + ".ogg"
+                    break
         except Exception as e:
             logger.warning(f"Audio conversion failed, using original: {e}")
             # Fall back to original content if conversion fails
