@@ -2,7 +2,9 @@
 Twilio Webhooks - SMS and WhatsApp incoming and status updates
 """
 import logging
-from typing import Optional
+from typing import Optional, List, Tuple
+from uuid import UUID
+import httpx
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
@@ -17,11 +19,96 @@ from app.services.dealership_twilio_config_service import (
 )
 from app.services.notification_service import NotificationService
 from app.core.websocket_manager import ws_manager
+from app.core.config import settings
 from app.models.lead import Lead
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def transfer_twilio_media_to_azure(
+    twilio_urls: List[str],
+    content_types: List[str],
+    dealership_id: Optional[UUID] = None,
+) -> Tuple[List[str], List[str]]:
+    """
+    Download media from Twilio URLs and upload to Azure Blob storage.
+    Returns tuple of (azure_urls, content_types).
+    """
+    from app.services.azure_storage_service import azure_storage_service
+    
+    if not azure_storage_service.is_whatsapp_media_configured:
+        logger.warning("Azure WhatsApp media storage not configured, keeping Twilio URLs")
+        return twilio_urls, content_types
+    
+    azure_urls = []
+    final_content_types = []
+    
+    # Get Twilio credentials for authenticated media fetch
+    account_sid = settings.twilio_account_sid
+    auth_token = settings.twilio_auth_token
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for i, twilio_url in enumerate(twilio_urls):
+            content_type = content_types[i] if i < len(content_types) else "application/octet-stream"
+            
+            try:
+                # Twilio media URLs require authentication
+                response = await client.get(
+                    twilio_url,
+                    auth=(account_sid, auth_token) if account_sid and auth_token else None,
+                    follow_redirects=True,
+                )
+                
+                if response.status_code != 200:
+                    logger.error(f"Failed to download Twilio media: {response.status_code}")
+                    azure_urls.append(twilio_url)  # Keep original URL as fallback
+                    final_content_types.append(content_type)
+                    continue
+                
+                media_data = response.content
+                
+                # Determine filename from content type
+                ext_map = {
+                    "image/jpeg": "jpg",
+                    "image/png": "png",
+                    "image/gif": "gif",
+                    "image/webp": "webp",
+                    "video/mp4": "mp4",
+                    "video/3gpp": "3gp",
+                    "audio/ogg": "ogg",
+                    "audio/mpeg": "mp3",
+                    "audio/amr": "amr",
+                    "audio/aac": "aac",
+                    "application/pdf": "pdf",
+                }
+                ext = ext_map.get(content_type, content_type.split("/")[-1] if "/" in content_type else "bin")
+                filename = f"incoming_media.{ext}"
+                
+                # Upload to Azure
+                azure_url = await azure_storage_service.upload_whatsapp_media(
+                    data=media_data,
+                    filename=filename,
+                    content_type=content_type,
+                    dealership_id=dealership_id,
+                )
+                
+                if azure_url:
+                    azure_urls.append(azure_url)
+                    final_content_types.append(content_type)
+                    logger.info(f"Transferred Twilio media to Azure: {azure_url}")
+                else:
+                    logger.error("Azure upload returned None, keeping Twilio URL")
+                    azure_urls.append(twilio_url)
+                    final_content_types.append(content_type)
+                    
+            except Exception as e:
+                logger.error(f"Error transferring media from Twilio to Azure: {e}")
+                azure_urls.append(twilio_url)  # Keep original URL as fallback
+                final_content_types.append(content_type)
+    
+    return azure_urls, final_content_types
 
 
 def _normalize_whatsapp_number(raw: str) -> str:
@@ -48,16 +135,33 @@ async def handle_incoming_sms(
     body = form_data.get("Body", "")
     num_media = int(form_data.get("NumMedia", "0"))
     
-    # Extract media URLs if any
-    media_urls = []
+    # Extract media URLs and content types
+    twilio_media_urls = []
+    twilio_content_types = []
     for i in range(num_media):
         media_url = form_data.get(f"MediaUrl{i}")
+        content_type = form_data.get(f"MediaContentType{i}") or "application/octet-stream"
         if media_url:
-            media_urls.append(media_url)
+            twilio_media_urls.append(media_url)
+            twilio_content_types.append(content_type)
     
     logger.info(f"Incoming SMS webhook: {message_sid} from {from_number}")
 
     resolved_dealership_id = await find_dealership_id_by_inbound_to(db, to_number)
+
+    # Transfer media from Twilio to Azure Blob storage
+    media_urls = twilio_media_urls
+    if twilio_media_urls:
+        try:
+            media_urls, _ = await transfer_twilio_media_to_azure(
+                twilio_media_urls,
+                twilio_content_types,
+                dealership_id=resolved_dealership_id,
+            )
+            logger.info(f"SMS: Transferred {len(media_urls)} media files to Azure")
+        except Exception as e:
+            logger.error(f"SMS: Failed to transfer media to Azure, using Twilio URLs: {e}")
+            media_urls = twilio_media_urls
 
     service = get_sms_conversation_service(db)
 
@@ -191,14 +295,14 @@ async def handle_incoming_whatsapp(
     from_number = _normalize_whatsapp_number(from_raw) or (str(from_raw).replace("whatsapp:", "")[:32])
     to_number = _normalize_whatsapp_number(to_raw) or (str(to_raw).replace("whatsapp:", "")[:32])
 
-    media_urls = []
-    media_content_types = []
+    twilio_media_urls = []
+    twilio_content_types = []
     for i in range(max(0, num_media)):
         url = form_data.get(f"MediaUrl{i}")
         content_type = form_data.get(f"MediaContentType{i}") or ""
         if url:
-            media_urls.append(url)
-            media_content_types.append(content_type)
+            twilio_media_urls.append(url)
+            twilio_content_types.append(content_type)
 
     logger.info(
         "Incoming WhatsApp webhook: sid=%s from=%s to=%s body_len=%s media_count=%s",
@@ -206,9 +310,25 @@ async def handle_incoming_whatsapp(
         from_number,
         to_number,
         len(body),
-        len(media_urls),
+        len(twilio_media_urls),
     )
     resolved_dealership_id = await find_dealership_id_by_inbound_to(db, to_raw)
+
+    # Transfer media from Twilio to Azure Blob storage
+    media_urls = twilio_media_urls
+    media_content_types = twilio_content_types
+    if twilio_media_urls:
+        try:
+            media_urls, media_content_types = await transfer_twilio_media_to_azure(
+                twilio_media_urls,
+                twilio_content_types,
+                dealership_id=resolved_dealership_id,
+            )
+            logger.info(f"Transferred {len(media_urls)} media files to Azure")
+        except Exception as e:
+            logger.error(f"Failed to transfer media to Azure, using Twilio URLs: {e}")
+            media_urls = twilio_media_urls
+            media_content_types = twilio_content_types
 
     service = get_whatsapp_conversation_service(db)
     wa_log = await service.receive_whatsapp(

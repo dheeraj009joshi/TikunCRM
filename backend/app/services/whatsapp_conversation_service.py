@@ -504,7 +504,9 @@ class WhatsAppConversationService:
                     "body": wa.body,
                     "direction": wa.direction.value,
                     "created_at": wa.created_at.isoformat(),
-                    "status": wa.status.value
+                    "status": wa.status.value,
+                    "media_urls": wa.media_urls or [],
+                    "media_content_types": wa.media_content_types or [],
                 },
                 "unread_count": unread_count
             })

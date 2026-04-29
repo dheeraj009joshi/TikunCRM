@@ -152,6 +152,11 @@ export function WhatsAppConversationList({
                 )}
                 {(() => {
                   const body = conv.last_message.body;
+                  const mediaContentTypes = (conv.last_message as { media_content_types?: string[] }).media_content_types || [];
+                  const mediaUrls = (conv.last_message as { media_urls?: string[] }).media_urls || [];
+                  const hasMedia = mediaUrls.length > 0;
+                  const firstContentType = mediaContentTypes[0] || "";
+                  
                   // Check if it's a template placeholder
                   if (body?.startsWith("[Template")) {
                     // Extract template name if present: "[Template: Name]" -> "Name"
@@ -165,36 +170,39 @@ export function WhatsAppConversationList({
                       </>
                     );
                   }
-                  // Check if it's a media placeholder
-                  if (!body || body === "[Photo]" || body === "[Media]") {
+                  
+                  // Determine media type from content type
+                  if (hasMedia || body === "[Photo]" || body === "[Media]" || body === "[Video]" || body === "[Voice message]" || body === "[Audio]") {
+                    // Check actual content type first
+                    if (firstContentType.startsWith("audio/") || body === "[Voice message]" || body === "[Audio]") {
+                      return (
+                        <>
+                          <Mic className="h-4 w-4 inline-block shrink-0" />
+                          <span>Voice message</span>
+                        </>
+                      );
+                    }
+                    if (firstContentType.startsWith("video/") || body === "[Video]") {
+                      return (
+                        <>
+                          <Video className="h-4 w-4 inline-block shrink-0" />
+                          <span>Video</span>
+                        </>
+                      );
+                    }
+                    if (firstContentType === "application/pdf" || body === "[Document]") {
+                      return (
+                        <>
+                          <FileText className="h-4 w-4 inline-block shrink-0" />
+                          <span>Document</span>
+                        </>
+                      );
+                    }
+                    // Default to photo for images and unknown media
                     return (
                       <>
                         <Image className="h-4 w-4 inline-block shrink-0" />
                         <span>Photo</span>
-                      </>
-                    );
-                  }
-                  if (body === "[Video]") {
-                    return (
-                      <>
-                        <Video className="h-4 w-4 inline-block shrink-0" />
-                        <span>Video</span>
-                      </>
-                    );
-                  }
-                  if (body === "[Voice message]" || body === "[Audio]") {
-                    return (
-                      <>
-                        <Mic className="h-4 w-4 inline-block shrink-0" />
-                        <span>Voice message</span>
-                      </>
-                    );
-                  }
-                  if (body === "[Document]") {
-                    return (
-                      <>
-                        <FileText className="h-4 w-4 inline-block shrink-0" />
-                        <span>Document</span>
                       </>
                     );
                   }

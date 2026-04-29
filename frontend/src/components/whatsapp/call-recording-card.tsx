@@ -94,31 +94,31 @@ export function CallRecordingCard({ call }: CallRecordingCardProps) {
 
   const isMissed = ["no-answer", "failed", "canceled"].includes(call.status);
 
-  const togglePlayback = () => {
-    if (!audioRef.current) return;
+  const togglePlayback = async () => {
+    if (!audioRef.current || !audioBlobUrl) return;
     
     if (isPlaying) {
       audioRef.current.pause();
+      setIsPlaying(false);
     } else {
-      audioRef.current.play();
+      try {
+        await audioRef.current.play();
+        setIsPlaying(true);
+      } catch (err) {
+        console.error("Playback failed:", err);
+      }
     }
-    setIsPlaying(!isPlaying);
-  };
-
-  const handleTimeUpdate = () => {
-    if (!audioRef.current) return;
-    const audio = audioRef.current;
-    const progressPercent = (audio.currentTime / audio.duration) * 100;
-    setProgress(progressPercent);
-    setCurrentTime(audio.currentTime);
   };
 
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!audioRef.current) return;
+    if (!audioRef.current || !audioBlobUrl) return;
+    const audio = audioRef.current;
+    if (!audio.duration || !isFinite(audio.duration)) return;
+    
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const percent = clickX / rect.width;
-    audioRef.current.currentTime = percent * audioRef.current.duration;
+    audio.currentTime = percent * audio.duration;
   };
 
   const handleDownload = async () => {
@@ -154,22 +154,37 @@ export function CallRecordingCard({ call }: CallRecordingCardProps) {
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || !audioBlobUrl) return;
+    
+    const handleTimeUpdate = () => {
+      if (audio.duration && isFinite(audio.duration)) {
+        const progressPercent = (audio.currentTime / audio.duration) * 100;
+        setProgress(progressPercent);
+        setCurrentTime(audio.currentTime);
+      }
+    };
     
     const handleEnded = () => {
       setIsPlaying(false);
       setProgress(0);
       setCurrentTime(0);
     };
+
+    const handleLoadedMetadata = () => {
+      // Audio is ready to play
+      console.log("Audio loaded, duration:", audio.duration);
+    };
     
     audio.addEventListener("ended", handleEnded);
     audio.addEventListener("timeupdate", handleTimeUpdate);
+    audio.addEventListener("loadedmetadata", handleLoadedMetadata);
     
     return () => {
       audio.removeEventListener("ended", handleEnded);
       audio.removeEventListener("timeupdate", handleTimeUpdate);
+      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
     };
-  }, []);
+  }, [audioBlobUrl]); // Re-attach when audio source changes
 
   const duration = call.recording_duration_seconds || call.duration_seconds || 0;
   const displayTime = isPlaying || progress > 0 ? currentTime : duration;

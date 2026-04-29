@@ -1086,6 +1086,57 @@ class SendMediaRequest(BaseModel):
     caption: Optional[str] = Field(None, max_length=1024, description="Optional caption")
 
 
+def _convert_audio_to_ogg_sync(content: bytes, source_format: str = "webm") -> tuple[bytes, str]:
+    """Synchronous audio conversion to OGG format using ffmpeg."""
+    import tempfile
+    import subprocess
+    import os
+    import shutil
+    
+    # Check if ffmpeg is available
+    if not shutil.which("ffmpeg"):
+        raise Exception("ffmpeg not installed")
+    
+    # Create temp files for input and output
+    with tempfile.NamedTemporaryFile(suffix=f".{source_format}", delete=False) as infile:
+        infile.write(content)
+        input_path = infile.name
+    
+    output_path = input_path.rsplit(".", 1)[0] + ".ogg"
+    
+    try:
+        # Convert using ffmpeg
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", input_path,
+                "-c:a", "libopus", "-b:a", "64k",
+                output_path
+            ],
+            capture_output=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            raise Exception(f"ffmpeg conversion failed: {result.stderr.decode()}")
+        
+        with open(output_path, "rb") as f:
+            converted_content = f.read()
+        
+        return converted_content, "audio/ogg"
+    finally:
+        # Clean up temp files
+        if os.path.exists(input_path):
+            os.unlink(input_path)
+        if os.path.exists(output_path):
+            os.unlink(output_path)
+
+
+async def convert_audio_to_ogg(content: bytes, source_format: str = "webm") -> tuple[bytes, str]:
+    """Convert audio to OGG format (supported by WhatsApp) using ffmpeg via subprocess."""
+    import asyncio
+    return await asyncio.to_thread(_convert_audio_to_ogg_sync, content, source_format)
+
+
 @router.post("/upload-media", response_model=UploadMediaResponse)
 async def upload_whatsapp_media(
     file: UploadFile = File(...),
@@ -1099,6 +1150,8 @@ async def upload_whatsapp_media(
     Supported types: images (JPEG, PNG, GIF, WebP), videos (MP4, 3GPP),
     audio (OGG, MP3, AMR, AAC), documents (PDF)
     Max size: 16MB
+    
+    Note: audio/webm files are automatically converted to audio/ogg for WhatsApp compatibility.
     """
     from app.services.azure_storage_service import azure_storage_service
 
@@ -1127,10 +1180,22 @@ async def upload_whatsapp_media(
             detail=f"File too large. Maximum size: {MAX_MEDIA_SIZE // (1024*1024)}MB"
         )
 
+    # Convert webm audio to ogg (WhatsApp doesn't support webm)
+    original_filename = file.filename or "media"
+    if content_type == "audio/webm":
+        try:
+            content, content_type = await convert_audio_to_ogg(content, "webm")
+            # Update filename extension
+            if original_filename.endswith(".webm"):
+                original_filename = original_filename[:-5] + ".ogg"
+        except Exception as e:
+            logger.warning(f"Audio conversion failed, using original: {e}")
+            # Fall back to original content if conversion fails
+
     # Upload to Azure
     url = await azure_storage_service.upload_whatsapp_media(
         data=content,
-        filename=file.filename or "media",
+        filename=original_filename,
         content_type=content_type,
         dealership_id=current_user.dealership_id,
     )
@@ -1144,7 +1209,7 @@ async def upload_whatsapp_media(
     return UploadMediaResponse(
         url=url,
         content_type=content_type,
-        filename=file.filename or "media",
+        filename=original_filename,
     )
 
 

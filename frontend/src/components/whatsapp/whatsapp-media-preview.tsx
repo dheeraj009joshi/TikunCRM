@@ -29,10 +29,33 @@ export function WhatsAppMediaPreview({
 
   if (!mediaUrls || mediaUrls.length === 0) return null;
 
+  const getFilenameFromUrl = (originalUrl: string, fallbackExt: string): string => {
+    try {
+      const urlObj = new URL(originalUrl);
+      const pathname = urlObj.pathname;
+      const segments = pathname.split("/").filter(Boolean);
+      if (segments.length > 0) {
+        const lastSegment = segments[segments.length - 1];
+        const decoded = decodeURIComponent(lastSegment);
+        // Remove any UUID prefix if present (format: uuid_filename.ext)
+        const uuidPattern = /^[a-f0-9-]{36}_/i;
+        const cleaned = decoded.replace(uuidPattern, "");
+        if (cleaned && cleaned.includes(".")) {
+          return cleaned;
+        }
+      }
+    } catch {
+      // Fallback if URL parsing fails
+    }
+    return `whatsapp-media.${fallbackExt}`;
+  };
+
   const handleDownload = async (index: number) => {
     const url = getMediaProxyUrl(messageId, index);
     const contentType = mediaContentTypes[index] || "application/octet-stream";
     const extension = contentType.split("/")[1] || "bin";
+    const originalUrl = mediaUrls[index];
+    const filename = getFilenameFromUrl(originalUrl, extension);
     
     try {
       const response = await fetch(url, { credentials: "include" });
@@ -40,7 +63,7 @@ export function WhatsAppMediaPreview({
       const downloadUrl = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = downloadUrl;
-      a.download = `whatsapp-media-${index + 1}.${extension}`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -75,7 +98,7 @@ export function WhatsAppMediaPreview({
         "flex flex-wrap gap-1.5 mt-1.5",
         mediaUrls.length === 1 ? "max-w-[280px]" : "max-w-[300px]"
       )}>
-        {mediaUrls.map((_, index) => {
+        {mediaUrls.map((originalUrl, index) => {
           const contentType = mediaContentTypes[index] || "application/octet-stream";
           const category = getMediaCategory(contentType);
           const proxyUrl = getMediaProxyUrl(messageId, index);
@@ -90,6 +113,7 @@ export function WhatsAppMediaPreview({
               isSingle={mediaUrls.length === 1}
               onClick={() => openFullscreen(index)}
               onDownload={() => handleDownload(index)}
+              originalUrl={originalUrl}
             />
           );
         })}
@@ -333,6 +357,7 @@ interface MediaThumbnailProps {
   isSingle: boolean;
   onClick: () => void;
   onDownload: () => void;
+  originalUrl?: string; // Original media URL to extract filename from
 }
 
 function MediaThumbnail({
@@ -343,6 +368,7 @@ function MediaThumbnail({
   isSingle,
   onClick,
   onDownload,
+  originalUrl,
 }: MediaThumbnailProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -350,6 +376,32 @@ function MediaThumbnail({
   
   // Check if this is a pending/uploading media (optimistic update)
   const isPending = url.includes("pending") || url.includes("temp_");
+
+  // Extract filename from original URL
+  const getFilename = (): string => {
+    if (!originalUrl) return "File";
+    try {
+      // Try to get filename from URL path
+      const urlObj = new URL(originalUrl);
+      const pathname = urlObj.pathname;
+      // Remove query params and get last segment
+      const segments = pathname.split("/").filter(Boolean);
+      if (segments.length > 0) {
+        const lastSegment = segments[segments.length - 1];
+        // Decode URI component and clean up
+        const decoded = decodeURIComponent(lastSegment);
+        // Remove any UUID prefix if present (format: uuid_filename.ext)
+        const uuidPattern = /^[a-f0-9-]{36}_/i;
+        const cleaned = decoded.replace(uuidPattern, "");
+        if (cleaned && cleaned !== decoded.split(".").pop()) {
+          return cleaned;
+        }
+      }
+    } catch {
+      // Fallback if URL parsing fails
+    }
+    return "File";
+  };
 
   useEffect(() => {
     // Don't fetch if it's a pending media URL
@@ -483,20 +535,23 @@ function MediaThumbnail({
   }
 
   // Document
+  const filename = getFilename();
+  const fileExtension = contentType.split("/")[1]?.toUpperCase() || "FILE";
+  
   return (
     <div
       className={cn(
-        "rounded-lg p-3 flex items-center gap-3 cursor-pointer min-w-[200px]",
+        "rounded-lg p-3 flex items-center gap-3 cursor-pointer min-w-[200px] max-w-[280px]",
         isOutbound ? "bg-[#005c4b]" : "bg-[#1f2c34]"
       )}
       onClick={onDownload}
     >
-      <FileText className="h-10 w-10 text-[#00a884]" />
+      <FileText className="h-10 w-10 text-[#00a884] shrink-0" />
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-white truncate">Document</p>
-        <p className="text-xs text-[#8696a0]">{contentType}</p>
+        <p className="text-sm text-white truncate" title={filename}>{filename}</p>
+        <p className="text-xs text-[#8696a0]">{fileExtension}</p>
       </div>
-      <Download className="h-5 w-5 text-[#8696a0]" />
+      <Download className="h-5 w-5 text-[#8696a0] shrink-0" />
     </div>
   );
 }
