@@ -97,9 +97,12 @@ class SMSService:
         from_num = from_phone or effective.sms_from_number
 
         try:
+            import asyncio
             client = _twilio_client(effective.account_sid, effective.auth_token)
 
-            sms = client.messages.create(
+            # Run Twilio API call in thread pool to avoid blocking
+            sms = await asyncio.to_thread(
+                client.messages.create,
                 body=message[:1600],
                 from_=from_num,
                 to=formatted_to,

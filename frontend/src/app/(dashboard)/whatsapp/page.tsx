@@ -31,6 +31,8 @@ interface WsMessagePayload {
     body: string;
     status: string;
     created_at: string | null;
+    media_urls?: string[];
+    media_content_types?: string[];
   };
 }
 
@@ -161,6 +163,8 @@ export default function WhatsAppInboxPage() {
               direction: "inbound",
               created_at: createdAt,
               status: "received",
+              media_urls: (data.message as { media_urls?: string[] })?.media_urls || [],
+              media_content_types: (data.message as { media_content_types?: string[] })?.media_content_types || [],
             };
             // Increment unread only if not currently viewing this conversation
             if (selectedLeadId !== leadId) {
@@ -224,6 +228,8 @@ export default function WhatsAppInboxPage() {
               direction: "outbound",
               created_at: createdAt,
               status: data.message?.status || "sent",
+              media_urls: (data.message as { media_urls?: string[] })?.media_urls || [],
+              media_content_types: (data.message as { media_content_types?: string[] })?.media_content_types || [],
             };
             updated.splice(existingIdx, 1);
             return [conv, ...updated];

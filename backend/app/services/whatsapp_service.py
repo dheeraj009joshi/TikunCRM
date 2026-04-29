@@ -101,7 +101,9 @@ class WhatsAppService:
             if status_callback:
                 params["status_callback"] = status_callback
 
-            msg = client.messages.create(**params)
+            # Run Twilio API call in thread pool to avoid blocking
+            import asyncio
+            msg = await asyncio.to_thread(client.messages.create, **params)
 
             logger.info(f"WhatsApp sent to {to_e164}: SID={msg.sid}")
             return {
@@ -155,7 +157,9 @@ class WhatsAppService:
             if status_callback:
                 params["status_callback"] = status_callback
 
-            msg = client.messages.create(**params)
+            # Run Twilio API call in thread pool to avoid blocking
+            import asyncio
+            msg = await asyncio.to_thread(client.messages.create, **params)
 
             logger.info(f"WhatsApp template sent to {to_e164}: SID={msg.sid}")
             return {

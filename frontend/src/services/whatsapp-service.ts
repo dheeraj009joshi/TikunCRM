@@ -71,6 +71,8 @@ export interface WhatsAppConversationListItem {
     direction: string;
     created_at: string;
     status: string;
+    media_urls?: string[];
+    media_content_types?: string[];
   };
   unread_count: number;
 }

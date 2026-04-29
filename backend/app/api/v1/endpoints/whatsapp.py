@@ -1255,9 +1255,12 @@ async def send_whatsapp_media_to_lead(
     # Send via Twilio with MediaUrl
     try:
         from twilio.rest import Client
+        import asyncio
         client = Client(effective.account_sid, effective.auth_token)
 
-        message = client.messages.create(
+        # Run Twilio API call in thread pool to avoid blocking
+        message = await asyncio.to_thread(
+            client.messages.create,
             from_=f"whatsapp:{effective.whatsapp_from_number}",
             to=f"whatsapp:{lead.phone}",
             media_url=[request.media_url],
