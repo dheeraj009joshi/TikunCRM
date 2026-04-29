@@ -142,7 +142,9 @@ class CreateLeadFromUnknownRequest(BaseModel):
     phone_number: str = Field(..., description="The WhatsApp phone number")
     first_name: Optional[str] = Field(None, description="Customer first name")
     last_name: Optional[str] = Field(None, description="Customer last name")
+    email: Optional[str] = Field(None, description="Customer email")
     notes: Optional[str] = Field(None, description="Notes for the new lead")
+    assigned_to: Optional[UUID] = Field(None, description="Salesperson ID to assign the lead to")
 
 
 class CreateLeadFromUnknownResponse(BaseModel):
@@ -150,6 +152,7 @@ class CreateLeadFromUnknownResponse(BaseModel):
     lead_id: Optional[UUID] = None
     customer_id: Optional[UUID] = None
     message: Optional[str] = None
+    is_existing: bool = False
 
 
 class SessionWindowResponse(BaseModel):
@@ -773,10 +776,11 @@ async def create_lead_from_unknown(
     """Create a new lead from an unknown WhatsApp contact.
     
     This will:
-    1. Create a new Customer with the provided details
-    2. Create a new Lead linked to that customer
-    3. Link all existing messages from this number to the new lead
-    4. The conversation will then appear in the regular conversations list
+    1. Check if a lead already exists with this phone number
+    2. If exists, link messages to existing lead
+    3. If not, create a new Customer and Lead
+    4. Link all existing messages from this number to the lead
+    5. The conversation will then appear in the regular conversations list
     """
     if not current_user.dealership_id:
         raise HTTPException(
@@ -785,13 +789,57 @@ async def create_lead_from_unknown(
         )
     
     service = get_whatsapp_conversation_service(db)
+    
     try:
+        # Check for existing lead with this phone number
+        existing_lead = await service.find_lead_by_phone(request.phone_number)
+        if not existing_lead:
+            existing_lead = await service.find_lead_by_lead_phone_suffix(request.phone_number)
+        
+        if existing_lead and existing_lead.dealership_id == current_user.dealership_id:
+            # Link messages to existing lead
+            linked_count = await service.link_unknown_messages_to_lead(
+                phone_number=request.phone_number,
+                lead_id=existing_lead.id,
+                customer_id=existing_lead.customer_id,
+                dealership_id=current_user.dealership_id,
+            )
+            await db.commit()
+            
+            # Broadcast to refresh the UI
+            await ws_manager.broadcast_to_dealership(
+                str(current_user.dealership_id),
+                {
+                    "type": "lead:created_from_unknown",
+                    "payload": {
+                        "lead_id": str(existing_lead.id),
+                        "customer_id": str(existing_lead.customer_id),
+                        "phone_number": request.phone_number,
+                        "is_existing": True,
+                    }
+                }
+            )
+            
+            return CreateLeadFromUnknownResponse(
+                success=True,
+                lead_id=existing_lead.id,
+                customer_id=existing_lead.customer_id,
+                message=f"Linked {linked_count} messages to existing lead",
+                is_existing=True,
+            )
+        
+        # Create new lead
+        # Use current user as assigned_to if not specified
+        assigned_to = request.assigned_to or current_user.id
+        
         customer, lead = await service.create_lead_from_unknown(
             phone_number=request.phone_number,
             dealership_id=current_user.dealership_id,
             first_name=request.first_name,
             last_name=request.last_name,
+            email=request.email,
             notes=request.notes,
+            assigned_to=assigned_to,
         )
         await db.commit()
         
@@ -804,6 +852,7 @@ async def create_lead_from_unknown(
                     "lead_id": str(lead.id),
                     "customer_id": str(customer.id),
                     "phone_number": request.phone_number,
+                    "is_existing": False,
                 }
             }
         )
@@ -812,7 +861,8 @@ async def create_lead_from_unknown(
             success=True,
             lead_id=lead.id,
             customer_id=customer.id,
-            message=f"Lead created successfully"
+            message=f"Lead created successfully",
+            is_existing=False,
         )
     except Exception as e:
         logger.error(f"Failed to create lead from unknown: {e}", exc_info=True)

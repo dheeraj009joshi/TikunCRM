@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useSearchParams } from "next/navigation";
-import { MessageCircle, Loader2, RefreshCw, Search, UserPlus, User, UserX } from "lucide-react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { MessageCircle, Loader2, RefreshCw, Search, UserPlus, User, UserX, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   WhatsAppConversationList,
@@ -15,8 +15,10 @@ import {
   WhatsAppLeadSearchItem,
   UnknownConversationItem,
 } from "@/services/whatsapp-service";
+import { teamService, UserBrief } from "@/services/team-service";
 import { useWebSocketEvent } from "@/hooks/use-websocket";
 import { useToast } from "@/hooks/use-toast";
+import { useAuthStore } from "@/stores/auth-store";
 
 type TabType = "chats" | "unknown";
 
@@ -633,10 +635,17 @@ export default function WhatsAppInboxPage() {
             phoneNumber={selectedUnknownPhone}
             displayName={unknownConversations.find(c => c.phone_number === selectedUnknownPhone)?.display_name || selectedUnknownPhone}
             onBack={() => setSelectedUnknownPhone(null)}
-            onLeadCreated={() => {
+            onLeadCreated={(leadId) => {
               setSelectedUnknownPhone(null);
+              // Switch to Chats tab
+              setActiveTab("chats");
+              // Refresh both lists
               loadConversations({ silent: true });
               loadUnknownConversations({ silent: true });
+              // Select the new/existing lead in chats if we have the ID
+              if (leadId) {
+                setSelectedLeadId(leadId);
+              }
             }}
           />
         ) : (
@@ -661,11 +670,14 @@ interface UnknownConversationThreadProps {
   phoneNumber: string;
   displayName: string;
   onBack: () => void;
-  onLeadCreated: () => void;
+  onLeadCreated: (leadId?: string) => void;
 }
 
 function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCreated }: UnknownConversationThreadProps) {
   const { toast } = useToast();
+  const router = useRouter();
+  const { user: currentUser } = useAuthStore();
+  
   const [messages, setMessages] = useState<Array<{
     id: string;
     direction: string;
@@ -680,6 +692,12 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [notes, setNotes] = useState("");
+  const [assignedTo, setAssignedTo] = useState<string>("");
+  const [assignToMe, setAssignToMe] = useState(true);
+  const [users, setUsers] = useState<UserBrief[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
   const [messageText, setMessageText] = useState("");
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -687,6 +705,30 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
 
   // Normalize phone for comparison
   const normalizedPhone = phoneNumber.replace(/\D/g, "");
+  
+  // Fetch users for assignment dropdown
+  useEffect(() => {
+    const fetchUsers = async () => {
+      if (!currentUser?.dealership_id) return;
+      setLoadingUsers(true);
+      try {
+        const usersList = await teamService.listUsers({
+          dealership_id: currentUser.dealership_id,
+          is_active: true,
+        });
+        setUsers(usersList);
+        // Default to current user
+        if (currentUser?.id) {
+          setAssignedTo(currentUser.id);
+        }
+      } catch (err) {
+        console.error("Failed to fetch users:", err);
+      } finally {
+        setLoadingUsers(false);
+      }
+    };
+    fetchUsers();
+  }, [currentUser?.dealership_id, currentUser?.id]);
 
   useEffect(() => {
     loadMessages();
@@ -880,18 +922,39 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
 
     setCreating(true);
     try {
+      // Determine assignment: if "assign to me" is checked, use current user
+      const assigneeId = assignToMe && currentUser?.id ? currentUser.id : assignedTo || undefined;
+      
       const response = await whatsappService.createLeadFromUnknown({
         phone_number: phoneNumber,
         first_name: firstName.trim(),
         last_name: lastName.trim() || undefined,
+        email: email.trim() || undefined,
+        notes: notes.trim() || undefined,
+        assigned_to: assigneeId,
       });
       
-      if (response.success) {
+      if (response.success && response.lead_id) {
+        const isExisting = response.is_existing;
+        
         toast({
-          title: "Lead created",
-          description: `${firstName} has been added as a lead`,
+          title: isExisting ? "Linked to existing lead" : "Lead created",
+          description: isExisting 
+            ? `Messages linked to existing lead`
+            : `${firstName} has been added as a lead`,
+          action: (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push(`/leads/${response.lead_id}`)}
+              className="ml-2"
+            >
+              View Lead
+            </Button>
+          ),
         });
-        onLeadCreated();
+        
+        onLeadCreated(response.lead_id);
       }
     } catch (err) {
       console.error("Failed to create lead:", err);
@@ -939,37 +1002,117 @@ function UnknownConversationThread({ phoneNumber, displayName, onBack, onLeadCre
       {/* Create lead form overlay */}
       {showCreateForm && (
         <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-4">
+          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-semibold mb-4">Create Lead from {displayName}</h3>
             <div className="space-y-4">
+              {/* Name row */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    First Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#00a884]"
+                    placeholder="First name"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Last Name
+                  </label>
+                  <input
+                    type="text"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#00a884]"
+                    placeholder="Last name"
+                  />
+                </div>
+              </div>
+              
+              {/* Email */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  First Name *
+                  Email
                 </label>
                 <input
-                  type="text"
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#00a884]"
-                  placeholder="Enter first name"
+                  placeholder="customer@example.com"
                 />
               </div>
+              
+              {/* Phone (display only) */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Last Name
+                  Phone
                 </label>
-                <input
-                  type="text"
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#00a884]"
-                  placeholder="Enter last name"
+                <div className="w-full border rounded-lg px-3 py-2 bg-gray-50 text-gray-600">
+                  {phoneNumber}
+                </div>
+              </div>
+              
+              {/* Notes */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Notes
+                </label>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#00a884] resize-none"
+                  placeholder="Add any notes about this lead..."
+                  rows={2}
                 />
               </div>
-              <div className="text-sm text-gray-500">
-                Phone: {phoneNumber}
+              
+              {/* Assignment */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Assign to
+                </label>
+                <div className="space-y-2">
+                  {/* Assign to me checkbox */}
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <div 
+                      onClick={() => setAssignToMe(!assignToMe)}
+                      className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
+                        assignToMe 
+                          ? "bg-[#00a884] border-[#00a884]" 
+                          : "border-gray-300 hover:border-[#00a884]"
+                      }`}
+                    >
+                      {assignToMe && <Check className="h-3.5 w-3.5 text-white" />}
+                    </div>
+                    <span className="text-sm text-gray-700">Assign to me</span>
+                  </label>
+                  
+                  {/* User dropdown (shown when not assigning to self) */}
+                  {!assignToMe && (
+                    <select
+                      value={assignedTo}
+                      onChange={(e) => setAssignedTo(e.target.value)}
+                      className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#00a884]"
+                      disabled={loadingUsers}
+                    >
+                      <option value="">Select a salesperson...</option>
+                      {users.map((user) => (
+                        <option key={user.id} value={user.id}>
+                          {user.first_name} {user.last_name}
+                          {user.id === currentUser?.id ? " (me)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               </div>
             </div>
+            
             <div className="flex gap-3 mt-6">
               <Button
                 variant="outline"

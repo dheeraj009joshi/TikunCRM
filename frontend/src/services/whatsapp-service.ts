@@ -217,7 +217,9 @@ export interface CreateLeadFromUnknownRequest {
   phone_number: string;
   first_name?: string;
   last_name?: string;
+  email?: string;
   notes?: string;
+  assigned_to?: string;
 }
 
 export interface CreateLeadFromUnknownResponse {
@@ -225,6 +227,7 @@ export interface CreateLeadFromUnknownResponse {
   lead_id?: string;
   customer_id?: string;
   message?: string;
+  is_existing?: boolean;
 }
 
 class WhatsAppService {

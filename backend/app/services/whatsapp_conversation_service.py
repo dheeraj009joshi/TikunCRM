@@ -789,7 +789,9 @@ class WhatsAppConversationService:
         dealership_id: UUID,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
+        email: Optional[str] = None,
         notes: Optional[str] = None,
+        assigned_to: Optional[UUID] = None,
     ) -> Tuple[Customer, Lead]:
         """Create a new Customer and Lead from an unknown WhatsApp contact.
         
@@ -802,6 +804,7 @@ class WhatsAppConversationService:
         customer = Customer(
             first_name=first_name or display_phone,
             last_name=last_name,
+            email=email,
             phone=normalized[-10:] if len(normalized) >= 10 else normalized,
             whatsapp=phone_number,
         )
@@ -832,13 +835,38 @@ class WhatsAppConversationService:
             is_active=True,
             interest_score=50,
             notes=notes or f"Created from WhatsApp contact {phone_number}",
+            assigned_to=assigned_to,
         )
         self.db.add(lead)
         await self.db.flush()
         
         # Link all existing messages from this number to the new lead
+        linked_count = await self.link_unknown_messages_to_lead(
+            phone_number=phone_number,
+            lead_id=lead.id,
+            customer_id=customer.id,
+            dealership_id=dealership_id,
+        )
+        
+        logger.info(f"Created lead {lead.id} from unknown contact {phone_number}, linked {linked_count} messages")
+        
+        return customer, lead
+
+    async def link_unknown_messages_to_lead(
+        self,
+        phone_number: str,
+        lead_id: UUID,
+        customer_id: UUID,
+        dealership_id: UUID,
+    ) -> int:
+        """Link all unknown messages from a phone number to an existing lead.
+        
+        Returns the number of messages linked.
+        """
+        normalized = "".join(c for c in phone_number if c.isdigit())
         suffix = normalized[-10:] if len(normalized) >= 10 else normalized
-        update_query = (
+        
+        query = (
             select(WhatsAppLog)
             .where(
                 WhatsAppLog.lead_id.is_(None),
@@ -849,17 +877,17 @@ class WhatsAppConversationService:
                 )
             )
         )
-        result = await self.db.execute(update_query)
+        result = await self.db.execute(query)
         messages = result.scalars().all()
         
         for msg in messages:
-            msg.lead_id = lead.id
-            msg.customer_id = customer.id
+            msg.lead_id = lead_id
+            msg.customer_id = customer_id
         
         await self.db.flush()
-        logger.info(f"Created lead {lead.id} from unknown contact {phone_number}, linked {len(messages)} messages")
+        logger.info(f"Linked {len(messages)} messages from {phone_number} to lead {lead_id}")
         
-        return customer, lead
+        return len(messages)
 
 
 def get_whatsapp_conversation_service(db: AsyncSession) -> WhatsAppConversationService:
