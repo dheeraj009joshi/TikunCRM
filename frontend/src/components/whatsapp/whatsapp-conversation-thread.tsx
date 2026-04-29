@@ -104,6 +104,8 @@ export function WhatsAppConversationThread({
   const prevScrollHeightRef = useRef<number>(0);
   // Track item count for scroll behavior
   const prevItemCountRef = useRef(0);
+  // Track the last item's ID to detect if items were added at end (new) vs beginning (load more)
+  const lastItemIdRef = useRef<string | null>(null);
   // Track if user is at bottom (for showing jump to bottom button)
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [newMessageCount, setNewMessageCount] = useState(0);
@@ -205,6 +207,7 @@ export function WhatsAppConversationThread({
       setTimelineItems([]);
       setHasMore(false);
       prevItemCountRef.current = 0;
+      lastItemIdRef.current = null;
       setIsAtBottom(true);
       setNewMessageCount(0);
     }
@@ -459,36 +462,45 @@ export function WhatsAppConversationThread({
 
   // Scroll to bottom only for new messages (not when loading older ones at the top)
   useEffect(() => {
-    // Only scroll to bottom if items were added at the end (new message)
-    // Not when items were prepended (loading more)
     const prevCount = prevItemCountRef.current;
     const currentCount = timelineItems.length;
+    const prevLastId = lastItemIdRef.current;
+    const currentLastId = currentCount > 0 ? timelineItems[currentCount - 1]?.id : null;
+    
+    // Update refs for next comparison
+    prevItemCountRef.current = currentCount;
+    lastItemIdRef.current = currentLastId ?? null;
     
     if (currentCount > prevCount && prevCount > 0) {
-      // New message(s) added - check if we should auto-scroll or show badge
-      const container = scrollContainerRef.current;
-      const distanceFromBottom = container 
-        ? container.scrollHeight - container.scrollTop - container.clientHeight
-        : 0;
-      const wasAtBottom = distanceFromBottom < 150;
+      // Items were added - check if at END (new message) or BEGINNING (load more)
+      // If the last item ID changed, items were added at the end (new message)
+      const itemsAddedAtEnd = currentLastId !== prevLastId;
       
-      if (wasAtBottom) {
-        // User was at bottom - auto-scroll to new message
-        scrollToBottom(true);
-        setNewMessageCount(0);
-      } else {
-        // User is reading old messages - increment badge count
-        const newMessages = currentCount - prevCount;
-        setNewMessageCount(prev => prev + newMessages);
+      if (itemsAddedAtEnd) {
+        // New message(s) arrived at the bottom
+        const container = scrollContainerRef.current;
+        const distanceFromBottom = container 
+          ? container.scrollHeight - container.scrollTop - container.clientHeight
+          : 0;
+        const wasAtBottom = distanceFromBottom < 150;
+        
+        if (wasAtBottom) {
+          // User was at bottom - auto-scroll to new message
+          scrollToBottom(true);
+          setNewMessageCount(0);
+        } else {
+          // User is reading old messages - increment badge count
+          const newMessages = currentCount - prevCount;
+          setNewMessageCount(prev => prev + newMessages);
+        }
       }
+      // If items were added at beginning (load more), do nothing with badge
     } else if (prevCount === 0 && currentCount > 0) {
-      // Initial load - scroll to bottom
+      // Initial load - scroll to bottom, no badge
       scrollToBottom(true);
       setIsAtBottom(true);
       setNewMessageCount(0);
     }
-    
-    prevItemCountRef.current = currentCount;
   }, [timelineItems, scrollToBottom]);
 
   // Also scroll when initial load completes
