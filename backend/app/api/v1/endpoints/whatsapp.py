@@ -1105,11 +1105,16 @@ def _convert_audio_to_ogg_sync(content: bytes, source_format: str = "webm") -> t
     output_path = input_path.rsplit(".", 1)[0] + ".ogg"
     
     try:
-        # Convert using ffmpeg
+        # Convert using ffmpeg with WhatsApp-compatible settings
+        # WhatsApp requires: OGG container, Opus codec, 48000Hz sample rate, mono channel
         result = subprocess.run(
             [
                 "ffmpeg", "-y", "-i", input_path,
-                "-c:a", "libopus", "-b:a", "64k",
+                "-c:a", "libopus",
+                "-b:a", "64k",
+                "-ar", "48000",
+                "-ac", "1",
+                "-application", "voip",
                 output_path
             ],
             capture_output=True,
@@ -1117,7 +1122,19 @@ def _convert_audio_to_ogg_sync(content: bytes, source_format: str = "webm") -> t
         )
         
         if result.returncode != 0:
-            raise Exception(f"ffmpeg conversion failed: {result.stderr.decode()}")
+            stderr = result.stderr.decode() if result.stderr else "Unknown error"
+            logger.error(f"ffmpeg conversion failed: {stderr}")
+            raise Exception(f"ffmpeg conversion failed: {stderr}")
+        
+        # Verify output file exists and has content
+        if not os.path.exists(output_path):
+            raise Exception("ffmpeg did not create output file")
+        
+        output_size = os.path.getsize(output_path)
+        if output_size == 0:
+            raise Exception("ffmpeg created empty output file")
+        
+        logger.info(f"Audio conversion successful: {output_size} bytes")
         
         with open(output_path, "rb") as f:
             converted_content = f.read()
