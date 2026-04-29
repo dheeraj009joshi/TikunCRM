@@ -266,9 +266,28 @@ export function WhatsAppConversationThread({
           message: newMsg,
         };
         
-        // Dedupe: only add if not already present
+        // Check if there's a temp (optimistic) message to replace
         setTimelineItems((prev) => {
+          // Already have this exact message ID?
           if (prev.some((item) => item.id === newMsg.id)) return prev;
+          
+          // Find temp message with matching body (optimistic update we sent)
+          const tempIndex = prev.findIndex(
+            (item) =>
+              item.item_type === "message" &&
+              item.id.startsWith("temp_") &&
+              item.message?.direction === "outbound" &&
+              item.message?.body === newMsg.body
+          );
+          
+          if (tempIndex >= 0) {
+            // Replace temp message with real one
+            const updated = [...prev];
+            updated[tempIndex] = newItem;
+            return updated;
+          }
+          
+          // No temp to replace, add new
           return [...prev, newItem];
         });
       } else {

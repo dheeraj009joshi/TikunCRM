@@ -39,7 +39,7 @@ export function CallRecordingCard({ call }: CallRecordingCardProps) {
       setAudioError(false);
       try {
         // Use the proxy endpoint to get recording with auth
-        const response = await apiClient.get(`/voice/calls/${call.id}/recording/stream`, {
+        const response = await apiClient.get(`/voice/calls/${call.id}/recording`, {
           responseType: "blob",
         });
         if (cancelled) return;
@@ -129,7 +129,7 @@ export function CallRecordingCard({ call }: CallRecordingCardProps) {
       
       // If we don't have a blob URL yet, fetch it
       if (!downloadUrl) {
-        const response = await apiClient.get(`/voice/calls/${call.id}/recording/stream`, {
+        const response = await apiClient.get(`/voice/calls/${call.id}/recording`, {
           responseType: "blob",
         });
         const blob = new Blob([response.data], { type: "audio/wav" });

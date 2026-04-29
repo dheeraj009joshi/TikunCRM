@@ -632,25 +632,29 @@ async def stream_recording(
     if not call.recording_url:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No recording available")
 
-    if "api.twilio.com" in call.recording_url:
-        import httpx
-        try:
-            eff = await get_effective_twilio_config(db, call.dealership_id)
-            async with httpx.AsyncClient() as client:
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Twilio URLs require auth
+            if "api.twilio.com" in call.recording_url:
+                eff = await get_effective_twilio_config(db, call.dealership_id)
                 r = await client.get(
                     call.recording_url,
                     auth=(eff.account_sid, eff.auth_token),
                     follow_redirects=True,
                 )
-                r.raise_for_status()
-                media_type = r.headers.get("content-type", "audio/wav")
-                return Response(content=r.content, media_type=media_type)
-        except Exception as e:
-            logger.warning(f"Failed to fetch Twilio recording for {call_id}: {e}")
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to load recording")
-
-    # Azure or other: redirect not needed here; get_recording_url returns SAS for Azure
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Use recording-url endpoint for this recording")
+            else:
+                # Azure/public URLs - no auth needed
+                r = await client.get(
+                    call.recording_url,
+                    follow_redirects=True,
+                )
+            r.raise_for_status()
+            media_type = r.headers.get("content-type", "audio/wav")
+            return Response(content=r.content, media_type=media_type)
+    except Exception as e:
+        logger.warning(f"Failed to fetch recording for {call_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to load recording")
 
 
 # ============ Twilio Webhooks ============

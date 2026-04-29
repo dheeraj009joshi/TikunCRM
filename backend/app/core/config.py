@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = True
     # APScheduler (email sync, sheets sync, reminders, etc.). None = auto: off in development, on otherwise.
-    background_scheduler_enabled: Optional[bool] = None
+    background_scheduler_enabled: Optional[bool] = True
     
     # Server
     host: str = "0.0.0.0"

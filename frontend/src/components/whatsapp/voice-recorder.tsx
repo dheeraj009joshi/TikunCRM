@@ -42,6 +42,7 @@ export function VoiceRecorder({
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const recordedDurationRef = useRef(0);
+  const currentDurationRef = useRef(0); // Tracks current duration for closure safety
 
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -76,16 +77,18 @@ export function VoiceRecorder({
         const blob = new Blob(chunksRef.current, { type: mimeType });
         const url = URL.createObjectURL(blob);
         setAudioUrl(url);
-        recordedDurationRef.current = duration;
+        recordedDurationRef.current = currentDurationRef.current;
         setState("recorded");
       };
 
       mediaRecorder.start(100);
       setState("recording");
       setDuration(0);
+      currentDurationRef.current = 0;
 
       timerRef.current = setInterval(() => {
-        setDuration((d) => d + 1);
+        currentDurationRef.current += 1;
+        setDuration(currentDurationRef.current);
       }, 1000);
     } catch (error) {
       console.error("Failed to start recording:", error);
@@ -99,7 +102,7 @@ export function VoiceRecorder({
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && state === "recording") {
-      recordedDurationRef.current = duration;
+      recordedDurationRef.current = currentDurationRef.current;
       mediaRecorderRef.current.stop();
       streamRef.current?.getTracks().forEach((track) => track.stop());
       

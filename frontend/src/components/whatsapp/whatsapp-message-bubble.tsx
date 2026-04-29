@@ -24,18 +24,22 @@ export function WhatsAppMessageBubble({ message }: WhatsAppMessageBubbleProps) {
   const isSending = message.status === "sending";
 
   const getTick = () => {
-    if (message.status === "failed") {
+    if (message.status === "failed" || message.status === "undelivered") {
       return <AlertCircle className="h-3.5 w-3.5 text-red-400" />;
     }
-    if (message.status === "sending") {
+    if (message.status === "sending" || message.status === "queued") {
       return <Clock className="h-3.5 w-3.5 text-white/60" />;
     }
-    if (message.status === "delivered" || message.status === "read") {
-      return <CheckCheck className="h-3.5 w-3.5 text-blue-400" />;
+    if (message.status === "read") {
+      return <CheckCheck className="h-3.5 w-3.5 text-blue-400" />; // Blue for read
     }
-    if (message.status === "sent" || message.status === "queued") {
-      return <Check className="h-3.5 w-3.5 text-white/80" />;
+    if (message.status === "delivered") {
+      return <CheckCheck className="h-3.5 w-3.5 text-white/80" />; // Gray double-check for delivered
     }
+    if (message.status === "sent") {
+      return <Check className="h-3.5 w-3.5 text-white/80" />; // Single check for sent
+    }
+    // Default: single check
     return <Check className="h-3.5 w-3.5 text-white/80" />;
   };
 
