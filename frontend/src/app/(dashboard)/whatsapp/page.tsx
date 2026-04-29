@@ -134,8 +134,19 @@ export default function WhatsAppInboxPage() {
         const messageId = data.message?.id || data.message_id;
         const rawBody = data.message?.body || data.body_preview || "";
         const hasMedia = data.has_media || ((data.message as { media_urls?: string[] })?.media_urls?.length ?? 0) > 0;
-        // Show "[Photo]" or similar for media messages with no text
-        const body = rawBody || (hasMedia ? "[Photo]" : "");
+        // Determine media type from content types
+        const contentTypes = (data.message as { media_content_types?: string[] })?.media_content_types || [];
+        const firstContentType = contentTypes[0] || "";
+        let mediaLabel = "[Photo]";
+        if (firstContentType.startsWith("video/")) {
+          mediaLabel = "[Video]";
+        } else if (firstContentType.startsWith("audio/")) {
+          mediaLabel = "[Voice message]";
+        } else if (firstContentType === "application/pdf" || firstContentType.includes("document")) {
+          mediaLabel = "[Document]";
+        }
+        // Show appropriate label for media messages with no text
+        const body = rawBody || (hasMedia ? mediaLabel : "");
         const createdAt = data.message?.created_at || new Date().toISOString();
 
         setConversations((prev) => {
@@ -186,8 +197,19 @@ export default function WhatsAppInboxPage() {
         const messageId = data.message?.id || data.message_id;
         const rawBody = data.message?.body || data.body_preview || "";
         const hasMedia = data.has_media || ((data.message as { media_urls?: string[] })?.media_urls?.length ?? 0) > 0;
-        // Show "[Photo]" or similar for media messages with no text
-        const body = rawBody || (hasMedia ? "[Photo]" : "");
+        // Determine media type from content types
+        const contentTypes = (data.message as { media_content_types?: string[] })?.media_content_types || [];
+        const firstContentType = contentTypes[0] || "";
+        let mediaLabel = "[Photo]";
+        if (firstContentType.startsWith("video/")) {
+          mediaLabel = "[Video]";
+        } else if (firstContentType.startsWith("audio/")) {
+          mediaLabel = "[Voice message]";
+        } else if (firstContentType === "application/pdf" || firstContentType.includes("document")) {
+          mediaLabel = "[Document]";
+        }
+        // Show appropriate label for media messages with no text
+        const body = rawBody || (hasMedia ? mediaLabel : "");
         const createdAt = data.message?.created_at || new Date().toISOString();
 
         setConversations((prev) => {

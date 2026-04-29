@@ -548,6 +548,7 @@ async def send_whatsapp(
                             "message_id": str(wa_log.id),
                             "lead_id": str(wa_log.lead_id),
                             "body_preview": wa_log.body[:50] if wa_log.body else "",
+                            "has_media": bool(wa_log.media_urls),
                             # Full message object for instant UI updates
                             "message": {
                                 "id": str(wa_log.id),
@@ -562,6 +563,8 @@ async def send_whatsapp(
                                 "created_at": wa_log.created_at.isoformat() if wa_log.created_at else None,
                                 "sent_at": wa_log.sent_at.isoformat() if wa_log.sent_at else None,
                                 "delivered_at": wa_log.delivered_at.isoformat() if wa_log.delivered_at else None,
+                                "media_urls": wa_log.media_urls or [],
+                                "media_content_types": wa_log.media_content_types or [],
                             },
                         }
                     }
@@ -842,6 +845,7 @@ async def send_whatsapp_to_lead(
                             "message_id": str(wa_log.id),
                             "lead_id": str(lead.id),
                             "body_preview": wa_log.body[:50] if wa_log.body else "",
+                            "has_media": bool(wa_log.media_urls),
                             # Full message object for instant UI updates
                             "message": {
                                 "id": str(wa_log.id),
@@ -856,6 +860,8 @@ async def send_whatsapp_to_lead(
                                 "created_at": wa_log.created_at.isoformat() if wa_log.created_at else None,
                                 "sent_at": wa_log.sent_at.isoformat() if wa_log.sent_at else None,
                                 "delivered_at": wa_log.delivered_at.isoformat() if wa_log.delivered_at else None,
+                                "media_urls": wa_log.media_urls or [],
+                                "media_content_types": wa_log.media_content_types or [],
                             },
                         }
                     }
@@ -1190,7 +1196,7 @@ async def send_whatsapp_media_to_lead(
                 content_type = "image/jpeg"
             elif any(ext in url_lower for ext in [".mp4", ".3gpp"]):
                 content_type = "video/mp4"
-            elif any(ext in url_lower for ext in [".ogg", ".mp3", ".amr", ".aac"]):
+            elif any(ext in url_lower for ext in [".ogg", ".mp3", ".amr", ".aac", ".webm", ".wav"]):
                 content_type = "audio/ogg"
             else:
                 content_type = "application/octet-stream"

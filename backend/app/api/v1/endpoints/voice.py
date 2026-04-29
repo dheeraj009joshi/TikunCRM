@@ -922,6 +922,35 @@ async def handle_call_status(
                             }
                         }
                     )
+                
+                # Broadcast call:completed to dealership for real-time timeline updates
+                if call_log.dealership_id and call_log.lead_id:
+                    try:
+                        await ws_manager.broadcast_to_dealership(
+                            str(call_log.dealership_id),
+                            {
+                                "type": "call:completed",
+                                "payload": {
+                                    "call_log_id": str(call_log.id),
+                                    "lead_id": str(call_log.lead_id),
+                                    "call": {
+                                        "id": str(call_log.id),
+                                        "direction": call_log.direction.value if call_log.direction else "outbound",
+                                        "from_number": call_log.from_number,
+                                        "to_number": call_log.to_number,
+                                        "status": call_log.status.value if call_log.status else status.value,
+                                        "duration_seconds": call_log.duration_seconds,
+                                        "outcome": call_log.outcome,
+                                        "notes": call_log.notes,
+                                        "recording_url": call_log.recording_url,
+                                        "started_at": call_log.started_at.isoformat() if call_log.started_at else None,
+                                        "ended_at": call_log.ended_at.isoformat() if call_log.ended_at else None,
+                                    }
+                                }
+                            }
+                        )
+                    except Exception as e:
+                        logger.warning("call:completed broadcast failed: %s", e)
             
             # Send status update to user
             target_user_id = call_log.answered_by or call_log.user_id
@@ -988,6 +1017,24 @@ async def handle_recording_complete(
         call_log.recording_sid = recording_sid
         call_log.recording_duration_seconds = duration
         await db.commit()
+        
+        # Broadcast recording availability for real-time timeline updates
+        if call_log.dealership_id and call_log.lead_id:
+            try:
+                await ws_manager.broadcast_to_dealership(
+                    str(call_log.dealership_id),
+                    {
+                        "type": "call:recording_ready",
+                        "payload": {
+                            "call_log_id": str(call_log.id),
+                            "lead_id": str(call_log.lead_id),
+                            "recording_url": call_log.recording_url,
+                            "recording_duration_seconds": duration,
+                        }
+                    }
+                )
+            except Exception as e:
+                logger.warning("call:recording_ready broadcast failed: %s", e)
     
     # Queue background task for downloading from Twilio and uploading to Azure
     # This runs outside the request context with its own DB session

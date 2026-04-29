@@ -9,10 +9,12 @@ import {
   Play, 
   Pause,
   Download,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { CallLogItem } from "@/services/whatsapp-service";
+import apiClient from "@/lib/api-client";
 
 interface CallRecordingCardProps {
   call: CallLogItem;
@@ -22,7 +24,48 @@ export function CallRecordingCard({ call }: CallRecordingCardProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
+  const [audioBlobUrl, setAudioBlobUrl] = useState<string | null>(null);
+  const [loadingAudio, setLoadingAudio] = useState(false);
+  const [audioError, setAudioError] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Fetch recording via authenticated API proxy
+  useEffect(() => {
+    if (!call.recording_url || audioBlobUrl) return;
+
+    let cancelled = false;
+    const fetchRecording = async () => {
+      setLoadingAudio(true);
+      setAudioError(false);
+      try {
+        // Use the proxy endpoint to get recording with auth
+        const response = await apiClient.get(`/voice/calls/${call.id}/recording/stream`, {
+          responseType: "blob",
+        });
+        if (cancelled) return;
+        const blob = new Blob([response.data], { type: "audio/wav" });
+        const url = URL.createObjectURL(blob);
+        setAudioBlobUrl(url);
+      } catch (err) {
+        console.error("Failed to load recording:", err);
+        if (!cancelled) setAudioError(true);
+      } finally {
+        if (!cancelled) setLoadingAudio(false);
+      }
+    };
+
+    fetchRecording();
+    return () => {
+      cancelled = true;
+    };
+  }, [call.id, call.recording_url, audioBlobUrl]);
+
+  // Cleanup blob URL on unmount
+  useEffect(() => {
+    return () => {
+      if (audioBlobUrl) URL.revokeObjectURL(audioBlobUrl);
+    };
+  }, [audioBlobUrl]);
 
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
@@ -79,19 +122,31 @@ export function CallRecordingCard({ call }: CallRecordingCardProps) {
   };
 
   const handleDownload = async () => {
-    if (!call.recording_url) return;
+    if (!audioBlobUrl && !call.recording_url) return;
     
     try {
-      const response = await fetch(call.recording_url, { credentials: "include" });
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      let downloadUrl = audioBlobUrl;
+      
+      // If we don't have a blob URL yet, fetch it
+      if (!downloadUrl) {
+        const response = await apiClient.get(`/voice/calls/${call.id}/recording/stream`, {
+          responseType: "blob",
+        });
+        const blob = new Blob([response.data], { type: "audio/wav" });
+        downloadUrl = URL.createObjectURL(blob);
+      }
+
       const a = document.createElement("a");
-      a.href = url;
+      a.href = downloadUrl;
       a.download = `call-recording-${call.id}.wav`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
+      
+      // Only revoke if we created a new URL for download
+      if (!audioBlobUrl && downloadUrl) {
+        URL.revokeObjectURL(downloadUrl);
+      }
     } catch (error) {
       console.error("Download failed:", error);
     }
@@ -147,52 +202,63 @@ export function CallRecordingCard({ call }: CallRecordingCardProps) {
         {/* Recording player - WhatsApp style */}
         {call.recording_url && (
           <div className="flex items-center gap-2">
-            <audio ref={audioRef} src={call.recording_url} preload="metadata" />
+            {audioBlobUrl && <audio ref={audioRef} src={audioBlobUrl} preload="metadata" />}
             
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={togglePlayback}
-              className="h-10 w-10 rounded-full bg-[#00a884] hover:bg-[#00a884]/90 text-white shrink-0"
-            >
-              {isPlaying ? (
-                <Pause className="h-5 w-5 fill-current" />
-              ) : (
-                <Play className="h-5 w-5 fill-current ml-0.5" />
-              )}
-            </Button>
-            
-            {/* Progress bar - clickable */}
-            <div 
-              className="flex-1 h-1.5 bg-[#3b4a54] rounded-full cursor-pointer relative"
-              onClick={handleSeek}
-            >
-              <div 
-                className="h-full bg-[#00a884] rounded-full transition-all duration-100"
-                style={{ width: `${progress}%` }}
-              />
-              {/* Scrubber dot */}
-              {progress > 0 && (
+            {loadingAudio ? (
+              <div className="flex items-center justify-center h-10 w-full">
+                <Loader2 className="h-5 w-5 animate-spin text-[#8696a0]" />
+              </div>
+            ) : audioError ? (
+              <div className="text-xs text-red-400 py-2">Failed to load recording</div>
+            ) : (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={togglePlayback}
+                  disabled={!audioBlobUrl}
+                  className="h-10 w-10 rounded-full bg-[#00a884] hover:bg-[#00a884]/90 text-white shrink-0"
+                >
+                  {isPlaying ? (
+                    <Pause className="h-5 w-5 fill-current" />
+                  ) : (
+                    <Play className="h-5 w-5 fill-current ml-0.5" />
+                  )}
+                </Button>
+                
+                {/* Progress bar - clickable */}
                 <div 
-                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-[#00a884] rounded-full"
-                  style={{ left: `calc(${progress}% - 6px)` }}
-                />
-              )}
-            </div>
-            
-            <span className="text-xs text-[#8696a0] min-w-[36px] text-right tabular-nums">
-              {formatTime(displayTime)}
-            </span>
-            
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleDownload}
-              className="h-8 w-8 text-[#8696a0] hover:text-white hover:bg-transparent shrink-0"
-              title="Download"
-            >
-              <Download className="h-4 w-4" />
-            </Button>
+                  className="flex-1 h-1.5 bg-[#3b4a54] rounded-full cursor-pointer relative"
+                  onClick={handleSeek}
+                >
+                  <div 
+                    className="h-full bg-[#00a884] rounded-full transition-all duration-100"
+                    style={{ width: `${progress}%` }}
+                  />
+                  {/* Scrubber dot */}
+                  {progress > 0 && (
+                    <div 
+                      className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-[#00a884] rounded-full"
+                      style={{ left: `calc(${progress}% - 6px)` }}
+                    />
+                  )}
+                </div>
+                
+                <span className="text-xs text-[#8696a0] min-w-[36px] text-right tabular-nums">
+                  {formatTime(displayTime)}
+                </span>
+                
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleDownload}
+                  className="h-8 w-8 text-[#8696a0] hover:text-white hover:bg-transparent shrink-0"
+                  title="Download"
+                >
+                  <Download className="h-4 w-4" />
+                </Button>
+              </>
+            )}
           </div>
         )}
 

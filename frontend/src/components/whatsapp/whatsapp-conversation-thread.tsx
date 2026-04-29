@@ -279,6 +279,87 @@ export function WhatsAppConversationThread({
     [leadId, loadConversation]
   );
 
+  // Real-time call completed events - add call to timeline instantly
+  useWebSocketEvent<{
+    call_log_id: string;
+    lead_id: string;
+    call: {
+      id: string;
+      direction: string;
+      from_number: string;
+      to_number: string;
+      status: string;
+      duration_seconds: number | null;
+      outcome: string | null;
+      notes: string | null;
+      recording_url: string | null;
+      started_at: string | null;
+      ended_at: string | null;
+    };
+  }>(
+    "call:completed",
+    (data) => {
+      if (!data?.lead_id || String(data.lead_id) !== String(leadId)) return;
+      if (data.call) {
+        const newItem: TimelineItem = {
+          item_type: "call",
+          id: data.call.id,
+          created_at: data.call.started_at || new Date().toISOString(),
+          call: {
+            id: data.call.id,
+            direction: data.call.direction as "inbound" | "outbound",
+            from_number: data.call.from_number,
+            to_number: data.call.to_number,
+            status: data.call.status,
+            duration_seconds: data.call.duration_seconds ?? 0,
+            outcome: data.call.outcome,
+            notes: data.call.notes,
+            recording_url: data.call.recording_url,
+            recording_duration_seconds: null,
+            started_at: data.call.started_at ?? new Date().toISOString(),
+            answered_at: null,
+            ended_at: data.call.ended_at,
+          },
+        };
+        // Add to timeline if not already present
+        setTimelineItems((prev) => {
+          if (prev.some((item) => item.id === data.call.id)) return prev;
+          return [...prev, newItem];
+        });
+      }
+    },
+    [leadId]
+  );
+
+  // Real-time recording ready - update call with recording URL
+  useWebSocketEvent<{
+    call_log_id: string;
+    lead_id: string;
+    recording_url: string;
+    recording_duration_seconds: number;
+  }>(
+    "call:recording_ready",
+    (data) => {
+      if (!data?.lead_id || String(data.lead_id) !== String(leadId)) return;
+      // Update existing call item with recording URL
+      setTimelineItems((prev) =>
+        prev.map((item) =>
+          item.item_type === "call" && item.id === data.call_log_id && item.call
+            ? {
+                ...item,
+                call: {
+                  ...item.call,
+                  recording_url: data.recording_url,
+                  duration_seconds: data.recording_duration_seconds || item.call.duration_seconds,
+                },
+              }
+            : item
+        )
+      );
+    },
+    [leadId]
+  );
+
   // Scroll to bottom helper
   const scrollToBottom = useCallback((instant = false) => {
     if (!shouldScrollRef.current) return;
