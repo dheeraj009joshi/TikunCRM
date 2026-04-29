@@ -1200,7 +1200,9 @@ async def upload_whatsapp_media(
     # Convert unsupported audio formats to ogg (WhatsApp only supports ogg/opus, aac, mp3, amr)
     original_filename = file.filename or "media"
     audio_formats_to_convert = {"audio/webm", "audio/mp4", "audio/m4a", "audio/wav"}
+    logger.info(f"Upload media: content_type={content_type}, filename={original_filename}, size={len(content)} bytes")
     if content_type in audio_formats_to_convert:
+        logger.info(f"Audio conversion needed: {content_type} -> audio/ogg")
         try:
             # Determine source format from content type
             format_map = {
@@ -1210,7 +1212,9 @@ async def upload_whatsapp_media(
                 "audio/wav": "wav",
             }
             source_format = format_map.get(content_type, "mp4")
+            logger.info(f"Converting from {source_format} to ogg/opus...")
             content, content_type = await convert_audio_to_ogg(content, source_format)
+            logger.info(f"Conversion successful: new size={len(content)} bytes, new content_type={content_type}")
             # Update filename extension
             ext_to_remove = [".webm", ".mp4", ".m4a", ".wav"]
             for ext in ext_to_remove:
@@ -1218,7 +1222,7 @@ async def upload_whatsapp_media(
                     original_filename = original_filename[:-len(ext)] + ".ogg"
                     break
         except Exception as e:
-            logger.warning(f"Audio conversion failed, using original: {e}")
+            logger.error(f"Audio conversion FAILED: {e}")
             # Fall back to original content if conversion fails
 
     # Upload to Azure
@@ -1269,6 +1273,8 @@ async def send_whatsapp_media_to_lead(
             detail="WhatsApp is not configured"
         )
 
+    logger.info(f"Sending media to lead: url={request.media_url}, content_type={request.content_type}")
+
     # Send via Twilio with MediaUrl
     try:
         from twilio.rest import Client
@@ -1276,6 +1282,7 @@ async def send_whatsapp_media_to_lead(
         client = Client(effective.account_sid, effective.auth_token)
 
         # Run Twilio API call in thread pool to avoid blocking
+        logger.info(f"Calling Twilio messages.create with media_url={request.media_url}")
         message = await asyncio.to_thread(
             client.messages.create,
             from_=f"whatsapp:{effective.whatsapp_from_number}",
@@ -1283,6 +1290,7 @@ async def send_whatsapp_media_to_lead(
             media_url=[request.media_url],
             body=request.caption or "",
         )
+        logger.info(f"Twilio message created successfully: sid={message.sid}, status={message.status}")
 
         # Use content_type from request if provided, otherwise try to detect from URL
         if request.content_type:
