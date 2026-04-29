@@ -378,6 +378,23 @@ async def handle_incoming_whatsapp(
             )
         except Exception as e:
             logger.warning("whatsapp:received broadcast failed: %s", e, exc_info=True)
+    elif not wa_log.lead_id and wa_log.dealership_id:
+        # Unknown sender - broadcast to unknown tab
+        try:
+            await ws_manager.broadcast_to_dealership(
+                str(wa_log.dealership_id),
+                {
+                    "type": "whatsapp:unknown_received",
+                    "payload": {
+                        "message_id": str(wa_log.id),
+                        "from_number": from_number,
+                        "body_preview": body[:100] if body else "",
+                        "has_media": len(media_urls) > 0,
+                    },
+                },
+            )
+        except Exception as e:
+            logger.warning("whatsapp:unknown_received broadcast failed: %s", e, exc_info=True)
 
     if wa_log.lead_id and wa_log.user_id:
         try:

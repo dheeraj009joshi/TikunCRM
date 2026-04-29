@@ -124,6 +124,34 @@ class WhatsAppLeadSearchItem(BaseModel):
     lead_phone: Optional[str]
 
 
+# Unknown conversations models
+class UnknownConversationItem(BaseModel):
+    phone_number: str
+    display_name: str
+    last_message: dict
+    unread_count: int
+    dealership_id: Optional[str] = None
+
+
+class UnknownConversationsListResponse(BaseModel):
+    items: List[UnknownConversationItem]
+    total_unread: int
+
+
+class CreateLeadFromUnknownRequest(BaseModel):
+    phone_number: str = Field(..., description="The WhatsApp phone number")
+    first_name: Optional[str] = Field(None, description="Customer first name")
+    last_name: Optional[str] = Field(None, description="Customer last name")
+    notes: Optional[str] = Field(None, description="Notes for the new lead")
+
+
+class CreateLeadFromUnknownResponse(BaseModel):
+    success: bool
+    lead_id: Optional[UUID] = None
+    customer_id: Optional[UUID] = None
+    message: Optional[str] = None
+
+
 class SessionWindowResponse(BaseModel):
     within_window: bool
     last_inbound_at: Optional[datetime] = None
@@ -668,6 +696,130 @@ async def list_whatsapp_conversations(
         items=[WhatsAppConversationListItem(**c) for c in conversations],
         total_unread=total_unread
     )
+
+
+# ==================== Unknown Conversations ====================
+
+@router.get("/unknown", response_model=UnknownConversationsListResponse)
+async def list_unknown_conversations(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """List WhatsApp conversations from unknown numbers (not linked to any lead).
+    
+    These are messages from numbers that don't match any existing customer/lead.
+    Users can review these and optionally create leads from them.
+    """
+    service = get_whatsapp_conversation_service(db)
+    dealership_id = current_user.dealership_id
+    
+    conversations = await service.get_unknown_conversations_list(
+        dealership_id=dealership_id,
+        limit=limit,
+        offset=offset
+    )
+    total_unread = await service.get_unknown_unread_count(
+        dealership_id=dealership_id
+    )
+    return UnknownConversationsListResponse(
+        items=[UnknownConversationItem(**c) for c in conversations],
+        total_unread=total_unread
+    )
+
+
+@router.get("/unknown/{phone_number}/messages")
+async def get_unknown_conversation_messages(
+    phone_number: str,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all messages for an unknown conversation by phone number."""
+    service = get_whatsapp_conversation_service(db)
+    messages = await service.get_unknown_conversation_messages(
+        phone_number=phone_number,
+        dealership_id=current_user.dealership_id,
+        limit=limit,
+        offset=offset
+    )
+    return {"messages": messages, "phone_number": phone_number}
+
+
+@router.post("/unknown/{phone_number}/mark-read")
+async def mark_unknown_conversation_read(
+    phone_number: str,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Mark all messages from an unknown phone number as read."""
+    service = get_whatsapp_conversation_service(db)
+    count = await service.mark_unknown_conversation_as_read(
+        phone_number=phone_number,
+        dealership_id=current_user.dealership_id
+    )
+    await db.commit()
+    return {"success": True, "messages_marked": count}
+
+
+@router.post("/unknown/create-lead", response_model=CreateLeadFromUnknownResponse)
+async def create_lead_from_unknown(
+    request: CreateLeadFromUnknownRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Create a new lead from an unknown WhatsApp contact.
+    
+    This will:
+    1. Create a new Customer with the provided details
+    2. Create a new Lead linked to that customer
+    3. Link all existing messages from this number to the new lead
+    4. The conversation will then appear in the regular conversations list
+    """
+    if not current_user.dealership_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User must belong to a dealership"
+        )
+    
+    service = get_whatsapp_conversation_service(db)
+    try:
+        customer, lead = await service.create_lead_from_unknown(
+            phone_number=request.phone_number,
+            dealership_id=current_user.dealership_id,
+            first_name=request.first_name,
+            last_name=request.last_name,
+            notes=request.notes,
+        )
+        await db.commit()
+        
+        # Broadcast to refresh the UI
+        await ws_manager.broadcast_to_dealership(
+            str(current_user.dealership_id),
+            {
+                "type": "lead:created_from_unknown",
+                "payload": {
+                    "lead_id": str(lead.id),
+                    "customer_id": str(customer.id),
+                    "phone_number": request.phone_number,
+                }
+            }
+        )
+        
+        return CreateLeadFromUnknownResponse(
+            success=True,
+            lead_id=lead.id,
+            customer_id=customer.id,
+            message=f"Lead created successfully"
+        )
+    except Exception as e:
+        logger.error(f"Failed to create lead from unknown: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
 
 
 @router.get("/conversations/{lead_id}", response_model=WhatsAppConversationResponse)

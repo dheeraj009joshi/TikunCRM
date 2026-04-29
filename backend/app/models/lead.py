@@ -41,6 +41,8 @@ class LeadSource(str, Enum):
     WEBSITE = "website"
     REFERRAL = "referral"
     WALK_IN = "walk_in"
+    WHATSAPP_INBOUND = "whatsapp_inbound"
+    SMS_INBOUND = "sms_inbound"
 
 
 class Lead(Base):

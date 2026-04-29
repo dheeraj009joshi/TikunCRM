@@ -191,6 +191,42 @@ export interface TimelineResponse {
   has_more: boolean;
 }
 
+// Unknown conversations types
+export interface UnknownConversationItem {
+  phone_number: string;
+  display_name: string;
+  last_message: {
+    id: string;
+    body: string;
+    direction: string;
+    created_at: string;
+    status: string;
+    media_urls?: string[];
+    media_content_types?: string[];
+  };
+  unread_count: number;
+  dealership_id: string | null;
+}
+
+export interface UnknownConversationsListResponse {
+  items: UnknownConversationItem[];
+  total_unread: number;
+}
+
+export interface CreateLeadFromUnknownRequest {
+  phone_number: string;
+  first_name?: string;
+  last_name?: string;
+  notes?: string;
+}
+
+export interface CreateLeadFromUnknownResponse {
+  success: boolean;
+  lead_id?: string;
+  customer_id?: string;
+  message?: string;
+}
+
 class WhatsAppService {
   async getConfig(): Promise<WhatsAppConfig> {
     const response = await apiClient.get<WhatsAppConfig>("/whatsapp/config");
@@ -347,6 +383,49 @@ class WhatsAppService {
     const response = await apiClient.get<TimelineResponse>(
       `/whatsapp/conversations/${leadId}/timeline`,
       { params: { limit } }
+    );
+    return response.data;
+  }
+
+  // ==================== Unknown Conversations ====================
+
+  /** List unknown WhatsApp conversations (not linked to any lead) */
+  async listUnknownConversations(params?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<UnknownConversationsListResponse> {
+    const response = await apiClient.get<UnknownConversationsListResponse>(
+      "/whatsapp/unknown",
+      { params }
+    );
+    return response.data;
+  }
+
+  /** Get messages for an unknown conversation by phone number */
+  async getUnknownConversationMessages(
+    phoneNumber: string,
+    params?: { limit?: number; offset?: number }
+  ): Promise<{ messages: WhatsAppMessage[]; phone_number: string }> {
+    const response = await apiClient.get<{ messages: WhatsAppMessage[]; phone_number: string }>(
+      `/whatsapp/unknown/${encodeURIComponent(phoneNumber)}/messages`,
+      { params }
+    );
+    return response.data;
+  }
+
+  /** Mark all messages from an unknown phone number as read */
+  async markUnknownConversationRead(phoneNumber: string): Promise<{ success: boolean; messages_marked: number }> {
+    const response = await apiClient.post<{ success: boolean; messages_marked: number }>(
+      `/whatsapp/unknown/${encodeURIComponent(phoneNumber)}/mark-read`
+    );
+    return response.data;
+  }
+
+  /** Create a lead from an unknown WhatsApp contact */
+  async createLeadFromUnknown(data: CreateLeadFromUnknownRequest): Promise<CreateLeadFromUnknownResponse> {
+    const response = await apiClient.post<CreateLeadFromUnknownResponse>(
+      "/whatsapp/unknown/create-lead",
+      data
     );
     return response.data;
   }

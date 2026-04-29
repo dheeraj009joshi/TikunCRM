@@ -159,14 +159,18 @@ class SMSConversationService:
         """
         Process incoming SMS webhook and store message.
         Conversations are at customer level; we set customer_id and optionally lead_id.
+        Messages from unknown numbers are stored and can be viewed/converted later.
         """
         customer = await self.find_customer_by_phone(from_number)
         lead = await self.find_lead_by_phone(from_number) if customer else None
+        
+        dealership_id = (lead.dealership_id if lead else None) or resolved_dealership_id
+        
+        if lead is None:
+            logger.info(f"Unknown SMS sender {from_number} - message stored for review")
+        
         customer_id = customer.id if customer else None
         lead_id = lead.id if lead else None
-        dealership_id = lead.dealership_id if lead else None
-        if resolved_dealership_id:
-            dealership_id = dealership_id or resolved_dealership_id
         user_id = lead.assigned_to if lead else None
 
         # Create SMS log (customer_id for thread; lead_id for context/notification)
@@ -185,10 +189,10 @@ class SMSConversationService:
             received_at=utc_now(),
             is_read=False
         )
-        
+
         self.db.add(sms_log)
         await self.db.flush()
-        
+
         # Log activity
         if lead:
             await self._log_sms_activity(
@@ -196,7 +200,7 @@ class SMSConversationService:
                 ActivityType.SMS_RECEIVED,
                 f"SMS received from {from_number}"
             )
-        
+
         return sms_log
     
     async def update_delivery_status(
