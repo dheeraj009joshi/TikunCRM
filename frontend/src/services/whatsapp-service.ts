@@ -153,6 +153,7 @@ export interface UploadMediaResponse {
 
 export interface SendMediaRequest {
   media_url: string;
+  content_type?: string;
   caption?: string;
 }
 
@@ -319,11 +320,12 @@ class WhatsAppService {
   async sendMediaToLead(
     leadId: string,
     mediaUrl: string,
+    contentType?: string,
     caption?: string
   ): Promise<SendWhatsAppResponse> {
     const response = await apiClient.post<SendWhatsAppResponse>(
       `/whatsapp/conversations/${leadId}/send-media`,
-      { media_url: mediaUrl, caption }
+      { media_url: mediaUrl, content_type: contentType, caption }
     );
     return response.data;
   }

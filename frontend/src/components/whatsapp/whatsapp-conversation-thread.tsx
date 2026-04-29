@@ -16,6 +16,7 @@ import {
 } from "@/services/whatsapp-service";
 import { useToast } from "@/hooks/use-toast";
 import { useWebSocketEvent } from "@/hooks/use-websocket";
+import { useCallLeadOptional } from "@/contexts/call-lead-context";
 import {
   Dialog,
   DialogContent,
@@ -85,6 +86,7 @@ export function WhatsAppConversationThread({
   onMessageSent,
 }: WhatsAppConversationThreadProps) {
   const { toast } = useToast();
+  const callLeadCtx = useCallLeadOptional();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState<WhatsAppMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -389,7 +391,7 @@ export function WhatsAppConversationThread({
   }
 
   return (
-    <div className="flex flex-col h-full bg-[#0b141a]">
+    <div className="flex flex-col h-full w-full bg-[#0b141a]">
       {/* Header - WhatsApp style dark bar */}
       <div className="flex items-center gap-3 px-4 py-3 bg-[#202c33] border-b border-[#2a3942]">
         {onBack && (
@@ -408,12 +410,17 @@ export function WhatsAppConversationThread({
             <p className="text-xs text-[#8696a0] truncate">{leadPhone}</p>
           )}
         </div>
-        {leadPhone && (
+        {leadPhone && callLeadCtx && (
           <Button
             variant="ghost"
             size="icon"
             onClick={() => {
-              window.open(`/voice?call=${encodeURIComponent(leadPhone)}&lead_id=${leadId}`, "_blank");
+              callLeadCtx.setCallLead({
+                phone: leadPhone,
+                leadId: leadId,
+                leadName: leadName,
+              });
+              toast({ title: "Opening softphone...", description: `Calling ${leadName}` });
             }}
             className="text-[#8696a0] hover:text-[#e9edef] hover:bg-white/10"
             title="Call lead"
@@ -458,18 +465,16 @@ export function WhatsAppConversationThread({
       </div>
 
       {/* Composer - dark bar */}
-      <div className="border-t border-[#2a3942] bg-[#202c33] p-2 flex flex-col gap-2">
+      <div className="border-t border-[#2a3942] bg-[#202c33] px-2 py-2">
         {!sessionWindowLoading && !freeFormAllowed && (
           <div
-            className="mx-1 rounded-md border border-[#3b4a54] bg-[#0b141a]/80 px-3 py-2 text-xs text-[#8696a0]"
+            className="mb-2 rounded-md border border-[#3b4a54] bg-[#0b141a]/80 px-3 py-2 text-xs text-[#8696a0]"
             role="status"
           >
-            The 24-hour messaging window is closed (no inbound message from this contact in the
-            last 24 hours). Meta only allows approved templates until they reply. Send one with the
-            green button beside the input.
+            24-hour window closed. Use template to message.
           </div>
         )}
-        <div className="flex items-end gap-2 min-h-[52px] min-w-0">
+        <div className="flex items-center gap-1.5">
           <MediaUploadButton
             leadId={leadId}
             disabled={sessionWindowLoading}
@@ -477,31 +482,31 @@ export function WhatsAppConversationThread({
           />
           <Button
             type="button"
-            variant={freeFormAllowed && !sessionWindowLoading ? "outline" : "default"}
-            size="sm"
+            variant="ghost"
+            size="icon"
             className={cn(
-              "h-10 shrink-0 px-3",
+              "h-9 w-9 shrink-0 rounded-full",
               freeFormAllowed && !sessionWindowLoading
-                ? "border-[#3b4a54] bg-[#2a3942] text-[#e9edef] shadow-sm hover:bg-[#3b4a54] hover:text-[#e9edef]"
+                ? "text-[#8696a0] hover:text-white hover:bg-[#3b4a54]"
                 : "bg-[#00a884] hover:bg-[#00a884]/90 text-white"
             )}
             onClick={() => setTemplateModalOpen(true)}
+            title="Send template"
           >
-            <FileText className="h-4 w-4 sm:mr-1" />
-            <span className="hidden sm:inline">Use template</span>
+            <FileText className="h-5 w-5" />
           </Button>
-          <div className="flex-1 min-w-0 rounded-lg border border-[#2a3942] bg-[#2a3942]/50 overflow-hidden">
+          <div className="flex-1 min-w-0">
             <MessageComposer
               onSend={handleSend}
               disabled={sessionWindowLoading || !freeFormAllowed}
               placeholder={
                 sessionWindowLoading
-                  ? "Checking messaging window…"
+                  ? "Checking..."
                   : freeFormAllowed
                     ? "Message"
-                    : "Templates only until they reply…"
+                    : "Use template..."
               }
-              className="border-0 bg-transparent p-1.5 gap-1.5 [&_textarea]:min-h-[40px] [&_textarea]:rounded-lg [&_textarea]:border-[#3b4a54] [&_textarea]:bg-[#2a3942] [&_textarea]:text-[#e9edef] [&_textarea]:placeholder:text-[#8696a0] [&_button]:h-10 [&_button]:w-10 [&_button]:rounded-full [&_button]:bg-[#00a884] [&_button]:hover:bg-[#00a884]/90 [&_button]:text-white [&_button]:shrink-0"
+              className="border-0 bg-transparent p-0 gap-1.5 [&_textarea]:min-h-[36px] [&_textarea]:max-h-[120px] [&_textarea]:rounded-2xl [&_textarea]:border-0 [&_textarea]:bg-[#2a3942] [&_textarea]:text-[#e9edef] [&_textarea]:placeholder:text-[#8696a0] [&_textarea]:px-3 [&_textarea]:py-2 [&_button]:h-9 [&_button]:w-9 [&_button]:rounded-full [&_button]:bg-[#00a884] [&_button]:hover:bg-[#00a884]/90 [&_button]:text-white [&_button]:shrink-0"
             />
           </div>
           <VoiceRecorder

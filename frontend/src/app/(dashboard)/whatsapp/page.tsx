@@ -293,7 +293,7 @@ export default function WhatsAppInboxPage() {
     >
       {/* Left panel - WhatsApp desktop style: green header + search + chat list */}
       <div
-        className={`flex flex-col w-full md:w-[400px] shrink-0 flex-shrink-0 ${
+        className={`flex flex-col w-full md:w-[320px] lg:w-[360px] xl:w-[400px] border-r border-[#d1d7db] shrink-0 ${
           selectedLeadId ? "hidden md:flex" : "flex"
         }`}
       >

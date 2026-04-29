@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Paperclip, X, Image, Video, Mic, FileText, Loader2, Send } from "lucide-react";
+import { Paperclip, X, Image, Video, Mic, FileText, Loader2, Send, Camera, File } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,11 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { whatsappService, getMediaCategory } from "@/services/whatsapp-service";
 import { useToast } from "@/hooks/use-toast";
 
@@ -28,22 +33,22 @@ const ACCEPTED_TYPES = {
   document: "application/pdf",
 };
 
-const ALL_ACCEPTED = Object.values(ACCEPTED_TYPES).join(",");
-
 export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUploadButtonProps) {
   const { toast } = useToast();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const documentInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [caption, setCaption] = useState("");
   const [uploading, setUploading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    // Validate file size (16MB max)
     if (file.size > 16 * 1024 * 1024) {
       toast({
         title: "File too large",
@@ -53,7 +58,6 @@ export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUpload
       return;
     }
 
-    // Create preview URL for images and videos
     const category = getMediaCategory(file.type);
     if (category === "image" || category === "video") {
       const url = URL.createObjectURL(file);
@@ -65,17 +69,16 @@ export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUpload
     setSelectedFile(file);
     setCaption("");
     setDialogOpen(true);
+    setMenuOpen(false);
     
-    // Reset the input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
+    // Reset inputs
+    if (photoInputRef.current) photoInputRef.current.value = "";
+    if (videoInputRef.current) videoInputRef.current.value = "";
+    if (documentInputRef.current) documentInputRef.current.value = "";
   };
 
   const handleClose = () => {
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-    }
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
     setSelectedFile(null);
     setPreviewUrl(null);
     setCaption("");
@@ -87,13 +90,11 @@ export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUpload
 
     setUploading(true);
     try {
-      // Upload file to Azure
       const uploadResult = await whatsappService.uploadMedia(selectedFile);
-
-      // Send via WhatsApp
       const sendResult = await whatsappService.sendMediaToLead(
         leadId,
         uploadResult.url,
+        uploadResult.content_type,
         caption || undefined
       );
 
@@ -131,26 +132,85 @@ export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUpload
     }
   };
 
+  const menuItems = [
+    {
+      icon: <Image className="h-5 w-5" />,
+      label: "Photos",
+      color: "bg-purple-500",
+      onClick: () => photoInputRef.current?.click(),
+    },
+    {
+      icon: <Video className="h-5 w-5" />,
+      label: "Videos",
+      color: "bg-pink-500",
+      onClick: () => videoInputRef.current?.click(),
+    },
+    {
+      icon: <File className="h-5 w-5" />,
+      label: "Document",
+      color: "bg-blue-500",
+      onClick: () => documentInputRef.current?.click(),
+    },
+  ];
+
   return (
     <>
       <input
-        ref={fileInputRef}
+        ref={photoInputRef}
         type="file"
-        accept={ALL_ACCEPTED}
+        accept={ACCEPTED_TYPES.image}
         onChange={handleFileSelect}
         className="hidden"
       />
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        disabled={disabled}
-        onClick={() => fileInputRef.current?.click()}
-        className="h-10 w-10 shrink-0 text-[#8696a0] hover:text-white hover:bg-[#3b4a54]"
-        title="Attach media"
-      >
-        <Paperclip className="h-5 w-5" />
-      </Button>
+      <input
+        ref={videoInputRef}
+        type="file"
+        accept={ACCEPTED_TYPES.video}
+        onChange={handleFileSelect}
+        className="hidden"
+      />
+      <input
+        ref={documentInputRef}
+        type="file"
+        accept={ACCEPTED_TYPES.document}
+        onChange={handleFileSelect}
+        className="hidden"
+      />
+
+      <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            disabled={disabled}
+            className="h-9 w-9 shrink-0 text-[#8696a0] hover:text-white hover:bg-[#3b4a54] rounded-full"
+            title="Attach"
+          >
+            <Paperclip className="h-5 w-5" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          side="top"
+          align="start"
+          className="w-auto p-2 bg-[#233138] border-[#3b4a54] shadow-xl"
+        >
+          <div className="flex flex-col gap-1">
+            {menuItems.map((item, index) => (
+              <button
+                key={index}
+                onClick={item.onClick}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[#3b4a54] transition-colors text-left"
+              >
+                <div className={cn("p-2 rounded-full text-white", item.color)}>
+                  {item.icon}
+                </div>
+                <span className="text-sm text-[#e9edef]">{item.label}</span>
+              </button>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
 
       <Dialog open={dialogOpen} onOpenChange={(open) => !open && handleClose()}>
         <DialogContent className="bg-[#202c33] border-[#2a3942] text-[#e9edef] max-w-md">
@@ -162,7 +222,6 @@ export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUpload
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* Preview */}
             {selectedFile && (
               <div className="relative rounded-lg overflow-hidden bg-[#0b141a]">
                 {previewUrl && getMediaCategory(selectedFile.type) === "image" && (
@@ -200,7 +259,6 @@ export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUpload
                   </div>
                 )}
 
-                {/* File info overlay */}
                 <div className="absolute bottom-0 left-0 right-0 bg-black/50 px-3 py-2 flex items-center justify-between">
                   <span className="text-xs text-white truncate max-w-[200px]">
                     {selectedFile.name}
@@ -212,7 +270,6 @@ export function MediaUploadButton({ leadId, disabled, onMediaSent }: MediaUpload
               </div>
             )}
 
-            {/* Caption input */}
             <div className="space-y-2">
               <label className="text-sm text-[#8696a0]">Caption (optional)</label>
               <Input

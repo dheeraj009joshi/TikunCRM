@@ -1011,6 +1011,7 @@ class UploadMediaResponse(BaseModel):
 
 class SendMediaRequest(BaseModel):
     media_url: str = Field(..., description="Public URL of media (after upload)")
+    content_type: Optional[str] = Field(None, description="MIME type of the media (e.g., image/jpeg)")
     caption: Optional[str] = Field(None, max_length=1024, description="Optional caption")
 
 
@@ -1111,16 +1112,19 @@ async def send_whatsapp_media_to_lead(
             body=request.caption or "",
         )
 
-        # Determine content type from URL extension
-        url_lower = request.media_url.lower()
-        if any(ext in url_lower for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"]):
-            content_type = "image/jpeg"
-        elif any(ext in url_lower for ext in [".mp4", ".3gpp"]):
-            content_type = "video/mp4"
-        elif any(ext in url_lower for ext in [".ogg", ".mp3", ".amr", ".aac"]):
-            content_type = "audio/ogg"
+        # Use content_type from request if provided, otherwise try to detect from URL
+        if request.content_type:
+            content_type = request.content_type
         else:
-            content_type = "application/octet-stream"
+            url_lower = request.media_url.lower()
+            if any(ext in url_lower for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"]):
+                content_type = "image/jpeg"
+            elif any(ext in url_lower for ext in [".mp4", ".3gpp"]):
+                content_type = "video/mp4"
+            elif any(ext in url_lower for ext in [".ogg", ".mp3", ".amr", ".aac"]):
+                content_type = "audio/ogg"
+            else:
+                content_type = "application/octet-stream"
 
         # Create log entry
         wa_log = WhatsAppLog(

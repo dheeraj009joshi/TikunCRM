@@ -190,10 +190,11 @@ export function VoiceRecorder({ leadId, disabled, onVoiceSent }: VoiceRecorderPr
       // Upload to Azure
       const uploadResult = await whatsappService.uploadMedia(file);
 
-      // Send via WhatsApp
+      // Send via WhatsApp with proper content type
       const sendResult = await whatsappService.sendMediaToLead(
         leadId,
-        uploadResult.url
+        uploadResult.url,
+        uploadResult.content_type
       );
 
       if (sendResult.success) {
@@ -247,7 +248,7 @@ export function VoiceRecorder({ leadId, disabled, onVoiceSent }: VoiceRecorderPr
         size="icon"
         disabled={disabled}
         onClick={startRecording}
-        className="h-10 w-10 shrink-0 text-[#8696a0] hover:text-white hover:bg-[#3b4a54]"
+        className="h-9 w-9 shrink-0 text-[#8696a0] hover:text-white hover:bg-[#3b4a54] rounded-full"
         title="Record voice message"
       >
         <Mic className="h-5 w-5" />

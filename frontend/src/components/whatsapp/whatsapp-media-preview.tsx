@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Play, Download, FileText, X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Play, Download, FileText, X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getMediaProxyUrl, getMediaCategory } from "@/services/whatsapp-service";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import {
   Dialog,
   DialogContent,
 } from "@/components/ui/dialog";
+import apiClient from "@/lib/api-client";
 
 interface WhatsAppMediaPreviewProps {
   messageId: string;
@@ -204,7 +205,40 @@ function MediaThumbnail({
   onClick,
   onDownload,
 }: MediaThumbnailProps) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    
+    const fetchMedia = async () => {
+      try {
+        setLoading(true);
+        setError(false);
+        const response = await apiClient.get(url, { 
+          responseType: "blob",
+        });
+        if (cancelled) return;
+        const blob = new Blob([response.data], { type: contentType });
+        objectUrl = URL.createObjectURL(blob);
+        setBlobUrl(objectUrl);
+      } catch (err) {
+        console.error("Failed to fetch media:", err);
+        if (!cancelled) setError(true);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    fetchMedia();
+    
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [url, contentType]);
 
   const thumbnailClass = cn(
     "relative rounded-lg overflow-hidden cursor-pointer group",
@@ -215,13 +249,17 @@ function MediaThumbnail({
   if (category === "image") {
     return (
       <div className={thumbnailClass} onClick={onClick}>
-        {error ? (
+        {loading ? (
+          <div className="w-full h-32 flex items-center justify-center text-[#8696a0]">
+            <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
+        ) : error || !blobUrl ? (
           <div className="w-full h-32 flex items-center justify-center text-[#8696a0]">
             <FileText className="h-8 w-8" />
           </div>
         ) : (
           <img
-            src={url}
+            src={blobUrl}
             alt="Media"
             className={cn(
               "object-cover",
@@ -244,20 +282,32 @@ function MediaThumbnail({
   if (category === "video") {
     return (
       <div className={thumbnailClass} onClick={onClick}>
-        <video
-          src={url}
-          className={cn(
-            "object-cover",
-            isSingle ? "w-full max-h-[300px]" : "w-full h-full"
-          )}
-          muted
-          playsInline
-        />
-        <div className="absolute inset-0 flex items-center justify-center bg-black/30">
-          <div className="p-3 rounded-full bg-white/90">
-            <Play className="h-6 w-6 text-[#00a884] fill-current" />
+        {loading ? (
+          <div className="w-full h-32 flex items-center justify-center text-[#8696a0]">
+            <Loader2 className="h-6 w-6 animate-spin" />
           </div>
-        </div>
+        ) : error || !blobUrl ? (
+          <div className="w-full h-32 flex items-center justify-center text-[#8696a0]">
+            <FileText className="h-8 w-8" />
+          </div>
+        ) : (
+          <>
+            <video
+              src={blobUrl}
+              className={cn(
+                "object-cover",
+                isSingle ? "w-full max-h-[300px]" : "w-full h-full"
+              )}
+              muted
+              playsInline
+            />
+            <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+              <div className="p-3 rounded-full bg-white/90">
+                <Play className="h-6 w-6 text-[#00a884] fill-current" />
+              </div>
+            </div>
+          </>
+        )}
         <button
           className="absolute top-2 right-2 p-1.5 rounded-full bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity"
           onClick={(e) => { e.stopPropagation(); onDownload(); }}
@@ -274,12 +324,18 @@ function MediaThumbnail({
         "rounded-lg p-3 min-w-[200px]",
         isOutbound ? "bg-[#005c4b]" : "bg-[#1f2c34]"
       )}>
-        <audio
-          src={url}
-          controls
-          className="w-full h-10"
-          style={{ filter: "invert(1)" }}
-        />
+        {loading ? (
+          <div className="flex items-center justify-center h-10">
+            <Loader2 className="h-5 w-5 animate-spin text-[#8696a0]" />
+          </div>
+        ) : (
+          <audio
+            src={blobUrl || url}
+            controls
+            className="w-full h-10"
+            style={{ filter: "invert(1)" }}
+          />
+        )}
         <button
           className="mt-2 flex items-center gap-1 text-xs text-[#8696a0] hover:text-white transition-colors"
           onClick={onDownload}
@@ -317,12 +373,49 @@ interface FullscreenMediaProps {
 }
 
 function FullscreenMedia({ url, contentType, zoom }: FullscreenMediaProps) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const category = getMediaCategory(contentType);
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    
+    const fetchMedia = async () => {
+      try {
+        setLoading(true);
+        const response = await apiClient.get(url, { responseType: "blob" });
+        if (cancelled) return;
+        const blob = new Blob([response.data], { type: contentType });
+        objectUrl = URL.createObjectURL(blob);
+        setBlobUrl(objectUrl);
+      } catch (err) {
+        console.error("Failed to fetch fullscreen media:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    fetchMedia();
+    
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [url, contentType]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[200px]">
+        <Loader2 className="h-10 w-10 animate-spin text-[#00a884]" />
+      </div>
+    );
+  }
 
   if (category === "image") {
     return (
       <img
-        src={url}
+        src={blobUrl || ""}
         alt="Media"
         className="max-w-full max-h-[85vh] object-contain transition-transform duration-200"
         style={{ transform: `scale(${zoom})` }}
@@ -333,7 +426,7 @@ function FullscreenMedia({ url, contentType, zoom }: FullscreenMediaProps) {
   if (category === "video") {
     return (
       <video
-        src={url}
+        src={blobUrl || ""}
         controls
         autoPlay
         className="max-w-full max-h-[85vh]"
@@ -344,7 +437,7 @@ function FullscreenMedia({ url, contentType, zoom }: FullscreenMediaProps) {
   if (category === "audio") {
     return (
       <div className="p-8 bg-[#1f2c34] rounded-lg">
-        <audio src={url} controls autoPlay className="w-[400px]" />
+        <audio src={blobUrl || ""} controls autoPlay className="w-[400px]" />
       </div>
     );
   }
