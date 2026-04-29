@@ -4,14 +4,22 @@ import { useState, useRef, KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Send, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface MessageComposerProps {
   onSend: (message: string) => Promise<void>;
   disabled?: boolean;
   placeholder?: string;
+  /** Merged onto the root row (e.g. WhatsApp dark composer). */
+  className?: string;
 }
 
-export function MessageComposer({ onSend, disabled, placeholder = "Type a message..." }: MessageComposerProps) {
+export function MessageComposer({
+  onSend,
+  disabled,
+  placeholder = "Type a message...",
+  className,
+}: MessageComposerProps) {
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -52,7 +60,12 @@ export function MessageComposer({ onSend, disabled, placeholder = "Type a messag
   };
   
   return (
-    <div className="flex items-end gap-2 p-4 border-t bg-background">
+    <div
+      className={cn(
+        "flex items-end gap-2 p-4 border-t bg-background",
+        className
+      )}
+    >
       <Textarea
         ref={textareaRef}
         value={message}

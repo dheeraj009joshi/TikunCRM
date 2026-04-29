@@ -54,9 +54,10 @@ class WebSocketService {
 
             this.ws.onmessage = (event) => {
                 try {
-                    const message: WebSocketMessage = JSON.parse(event.data);
+                    const message: WebSocketMessage & { payload?: unknown } = JSON.parse(event.data);
                     console.log("[WS] Received:", message.type);
-                    this.emit(message.type, message.data);
+                    const payload = message.data !== undefined ? message.data : message.payload;
+                    this.emit(message.type, payload);
                 } catch (e) {
                     // Handle non-JSON messages (like pong)
                     if (event.data === "pong") {

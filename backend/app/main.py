@@ -74,8 +74,12 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"Starting {settings.app_name} in {settings.app_env} mode")
     
-    # Only one worker should run the scheduler
-    if try_acquire_scheduler_lock():
+    # Only one worker should run the scheduler (optional in development — see settings.run_background_scheduler)
+    if not settings.run_background_scheduler:
+        logger.info(
+            "Background scheduler disabled (APP_ENV=development by default; set BACKGROUND_SCHEDULER_ENABLED=true to enable)"
+        )
+    elif try_acquire_scheduler_lock():
         try:
             setup_scheduler()
             start_scheduler()

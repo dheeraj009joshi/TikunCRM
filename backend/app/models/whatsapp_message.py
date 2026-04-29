@@ -128,12 +128,12 @@ class WhatsAppMessage(Base):
     
     # Phone numbers
     phone_number: Mapped[str] = mapped_column(
-        String(20),
+        String(32),
         nullable=False,
         index=True
     )
-    from_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    to_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    from_number: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    to_number: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     
     # Message content
     direction: Mapped[WhatsAppDirection] = mapped_column(

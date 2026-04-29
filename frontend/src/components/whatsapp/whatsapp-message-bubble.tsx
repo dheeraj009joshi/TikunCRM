@@ -10,8 +10,13 @@ interface WhatsAppMessageBubbleProps {
 }
 
 /** WhatsApp-style bubble: green for sent, light gray for received; tail; timestamp + ticks */
+function isTemplateLogBody(body: string | undefined): boolean {
+  return Boolean(body?.trimStart().startsWith("[Template "));
+}
+
 export function WhatsAppMessageBubble({ message }: WhatsAppMessageBubbleProps) {
   const isOutbound = message.direction === "outbound";
+  const isTemplateStub = isTemplateLogBody(message.body);
 
   const getTick = () => {
     if (message.status === "delivered" || message.status === "read") {
@@ -39,7 +44,21 @@ export function WhatsAppMessageBubble({ message }: WhatsAppMessageBubbleProps) {
             : "bg-[#202c33] text-[#e9edef] rounded-bl-[4px] rounded-br-lg"
         )}
       >
-        <p className="text-sm whitespace-pre-wrap break-words">{message.body}</p>
+        {isTemplateStub ? (
+          <div className="space-y-0.5">
+            <p className="text-sm font-medium">WhatsApp template</p>
+            <p
+              className={cn(
+                "text-[11px] leading-snug whitespace-pre-wrap break-all",
+                isOutbound ? "text-white/65" : "text-[#8696a0]"
+              )}
+            >
+              {message.body}
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm whitespace-pre-wrap break-words">{message.body}</p>
+        )}
         <div
           className={cn(
             "flex items-center gap-1.5 mt-0.5 justify-end",

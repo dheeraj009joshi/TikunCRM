@@ -1,36 +1,64 @@
 """
 Application Configuration using Pydantic Settings
+
+Loads variables from ``backend/.env`` (resolved from this file, not the process cwd),
+then optional ``.env`` in the current working directory for local overrides.
+Also loads into ``os.environ`` so libraries that read the environment directly see values.
 """
 from functools import lru_cache
-from typing import List
+from pathlib import Path
+from typing import List, Optional
 
+from dotenv import load_dotenv
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# backend/ directory (parent of app/)
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_BACKEND_ENV = _BACKEND_ROOT / ".env"
+_CWD_ENV = Path.cwd() / ".env"
+
+if _BACKEND_ENV.is_file():
+    load_dotenv(_BACKEND_ENV, override=False)
+if _CWD_ENV.is_file() and _CWD_ENV.resolve() != _BACKEND_ENV.resolve():
+    load_dotenv(_CWD_ENV, override=False)
+
+# Pydantic still merges env_file with os.environ; point at backend/.env explicitly
+_ENV_FILE_FOR_SETTINGS = str(_BACKEND_ENV) if _BACKEND_ENV.is_file() else str(_CWD_ENV) if _CWD_ENV.is_file() else ".env"
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables"""
+    """Application settings loaded from environment variables and .env files"""
     
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILE_FOR_SETTINGS,
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore"
+        extra="ignore",
     )
     
     # Application
     app_name: str = "TikunCRM"
     app_env: str = "development"
     debug: bool = True
+    # APScheduler (email sync, sheets sync, reminders, etc.). None = auto: off in development, on otherwise.
+    background_scheduler_enabled: Optional[bool] = None
     
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
     
     # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/leedscrm"
+    database_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("DATABASE_URL", "DATABASE_URL_33"),
+    )
     
-    # JWT Settings
-    secret_key: str = "your-super-secret-key-change-in-production"
+    # JWT Settings (.env may use SECRET_KEY or JWT_SECRET)
+    secret_key: str = Field(
+        default="your-super-secret-key-change-in-production",
+        validation_alias=AliasChoices("SECRET_KEY", "JWT_SECRET"),
+    )
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 43200  # 30 days (1 month)
     refresh_token_expire_days: int = 60  # 60 days (2 months) to allow refresh
@@ -192,6 +220,18 @@ class Settings(BaseSettings):
     def is_push_configured(self) -> bool:
         """Check if push notifications are configured (FCM only)"""
         return self.is_fcm_configured
+
+    @property
+    def run_background_scheduler(self) -> bool:
+        """
+        Whether to start APScheduler in this process.
+        Default: disabled for development/local to avoid competing with API requests on one DB.
+        Set BACKGROUND_SCHEDULER_ENABLED=true to run scheduled jobs locally, or false in prod to disable.
+        """
+        if self.background_scheduler_enabled is not None:
+            return self.background_scheduler_enabled
+        env = (self.app_env or "").lower()
+        return env not in ("development", "dev", "local", "test")
 
 
 @lru_cache()

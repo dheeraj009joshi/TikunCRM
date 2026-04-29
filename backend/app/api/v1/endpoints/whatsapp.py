@@ -2,7 +2,7 @@
 WhatsApp API Endpoints - Conversation-style messaging (WhatsApp-like)
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, List, Dict
 from uuid import UUID
 
@@ -14,7 +14,6 @@ from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.permissions import UserRole
-from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
 from app.models.lead import Lead
@@ -467,6 +466,25 @@ async def send_whatsapp(
             dealership_id=current_user.dealership_id,
         )
     else:
+        if request.lead_id:
+            lead_result = await db.execute(select(Lead).where(Lead.id == request.lead_id))
+            lead_for_window = lead_result.scalar_one_or_none()
+            if not lead_for_window:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
+            if current_user.role == UserRole.SALESPERSON and lead_for_window.assigned_to != current_user.id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+            if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+                if current_user.dealership_id and lead_for_window.dealership_id != current_user.dealership_id:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+            if not await service.is_within_whatsapp_session_window(request.lead_id):
+                return SendWhatsAppResponse(
+                    success=False,
+                    error=(
+                        "Outside the 24-hour WhatsApp session window. "
+                        "Send a template message instead."
+                    ),
+                    error_code="OUTSIDE_SESSION_WINDOW",
+                )
         success, wa_log, error = await service.send_whatsapp(
             to_number=request.to_number,
             body=request.body or "",
@@ -592,12 +610,7 @@ async def get_whatsapp_session_window(
         if current_user.dealership_id and lead.dealership_id != current_user.dealership_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     service = get_whatsapp_conversation_service(db)
-    last_inbound_at = await service.get_last_inbound_at(lead_id)
-    now = utc_now()
-    within_window = (
-        last_inbound_at is not None
-        and (now - last_inbound_at) <= timedelta(hours=24)
-    )
+    within_window, last_inbound_at = await service.get_session_window_state(lead_id)
     return SessionWindowResponse(within_window=within_window, last_inbound_at=last_inbound_at)
 
 
@@ -630,6 +643,15 @@ async def send_whatsapp_to_lead(
             dealership_id=lead.dealership_id,
         )
     else:
+        if not await service.is_within_whatsapp_session_window(lead_id):
+            return SendWhatsAppResponse(
+                success=False,
+                error=(
+                    "Outside the 24-hour WhatsApp session window. "
+                    "Send a template message instead."
+                ),
+                error_code="OUTSIDE_SESSION_WINDOW",
+            )
         success, wa_log, error = await service.send_whatsapp(
             to_number=lead.phone,
             body=request.body or "",

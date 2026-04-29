@@ -13,7 +13,10 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.timezone import utc_now
-from app.services.dealership_twilio_config_service import get_effective_twilio_config
+from app.services.dealership_twilio_config_service import (
+    get_effective_twilio_config,
+    normalize_twilio_to_number,
+)
 from app.models.whatsapp_log import WhatsAppLog, WhatsAppDirection, WhatsAppStatus
 from app.models.lead import Lead
 from app.models.customer import Customer
@@ -58,6 +61,20 @@ class WhatsAppConversationService:
         )
         return result.scalar_one_or_none()
 
+    async def find_lead_by_lead_phone_suffix(self, phone: str) -> Optional[Lead]:
+        """Match `Lead.phone` by last 10 digits when customer record does not match (common CRM setup)."""
+        normalized = "".join(c for c in phone if c.isdigit())
+        if len(normalized) < 10:
+            return None
+        suffix = normalized[-10:]
+        result = await self.db.execute(
+            select(Lead)
+            .where(Lead.phone.isnot(None), Lead.phone.ilike(f"%{suffix}%"))
+            .order_by(Lead.updated_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def send_whatsapp(
         self,
         to_number: str,
@@ -85,15 +102,24 @@ class WhatsAppConversationService:
                 lead_id = lead.id
                 customer_id = lead.customer_id
                 dealership_id = dealership_id or lead.dealership_id
-            else:
-                customer = await self.find_customer_by_phone(formatted)
-                if customer:
-                    customer_id = customer.id
+        if not lead:
+            lead = await self.find_lead_by_lead_phone_suffix(formatted)
+            if lead:
+                lead_id = lead.id
+                customer_id = lead.customer_id
+                dealership_id = dealership_id or lead.dealership_id
+        if not lead:
+            customer = await self.find_customer_by_phone(formatted)
+            if customer:
+                customer_id = customer.id
 
         effective = await get_effective_twilio_config(self.db, dealership_id)
         if not effective.is_whatsapp_ready():
             return False, None, "WhatsApp not configured for this dealership"
 
+        wa_from = normalize_twilio_to_number(effective.whatsapp_from_number)
+        if not wa_from:
+            wa_from = (effective.whatsapp_from_number or "").strip()
         wa_log = WhatsAppLog(
             customer_id=customer_id,
             lead_id=lead_id,
@@ -101,7 +127,7 @@ class WhatsAppConversationService:
             dealership_id=dealership_id,
             twilio_message_sid=f"pending_{uuid_module.uuid4().hex}",
             direction=WhatsAppDirection.OUTBOUND,
-            from_number=effective.whatsapp_from_number,
+            from_number=wa_from,
             to_number=formatted,
             body=body,
             status=WhatsAppStatus.QUEUED,
@@ -161,16 +187,25 @@ class WhatsAppConversationService:
                 lead_id = lead.id
                 customer_id = lead.customer_id
                 dealership_id = dealership_id or lead.dealership_id
-            else:
-                customer = await self.find_customer_by_phone(formatted)
-                if customer:
-                    customer_id = customer.id
+        if not lead:
+            lead = await self.find_lead_by_lead_phone_suffix(formatted)
+            if lead:
+                lead_id = lead.id
+                customer_id = lead.customer_id
+                dealership_id = dealership_id or lead.dealership_id
+        if not lead:
+            customer = await self.find_customer_by_phone(formatted)
+            if customer:
+                customer_id = customer.id
 
         effective = await get_effective_twilio_config(self.db, dealership_id)
         if not effective.is_whatsapp_ready():
             return False, None, "WhatsApp not configured for this dealership"
 
         body_display = f"[Template {content_sid[:12]}...]" if len(content_sid) > 12 else f"[Template {content_sid}]"
+        wa_from = normalize_twilio_to_number(effective.whatsapp_from_number)
+        if not wa_from:
+            wa_from = (effective.whatsapp_from_number or "").strip()
         wa_log = WhatsAppLog(
             customer_id=customer_id,
             lead_id=lead_id,
@@ -178,7 +213,7 @@ class WhatsAppConversationService:
             dealership_id=dealership_id,
             twilio_message_sid=f"pending_{uuid_module.uuid4().hex}",
             direction=WhatsAppDirection.OUTBOUND,
-            from_number=effective.whatsapp_from_number,
+            from_number=wa_from,
             to_number=formatted,
             body=body_display,
             status=WhatsAppStatus.QUEUED,
@@ -223,7 +258,11 @@ class WhatsAppConversationService:
         """Process incoming WhatsApp webhook."""
         customer = await self.find_customer_by_phone(from_number)
         lead = await self.find_lead_by_phone(from_number) if customer else None
-        customer_id = customer.id if customer else None
+        if lead is None:
+            lead = await self.find_lead_by_lead_phone_suffix(from_number)
+        customer_id = (lead.customer_id if lead and lead.customer_id else None) or (
+            customer.id if customer else None
+        )
         lead_id = lead.id if lead else None
         dealership_id = lead.dealership_id if lead else None
         if resolved_dealership_id:
@@ -354,8 +393,24 @@ class WhatsAppConversationService:
             q = q.where(WhatsAppLog.lead_id == lead_id)
         q = q.order_by(WhatsAppLog.created_at.desc()).limit(1)
         res = await self.db.execute(q)
-        row = res.scalar_one_or_none()
-        return row[0] if row else None
+        return res.scalar_one_or_none()
+
+    async def get_session_window_state(
+        self, lead_id: UUID
+    ) -> Tuple[bool, Optional[datetime]]:
+        """Whether the lead is in the 24h session window, plus last inbound time (single DB read)."""
+        last_inbound_at = await self.get_last_inbound_at(lead_id)
+        now = utc_now()
+        within_window = (
+            last_inbound_at is not None
+            and (now - last_inbound_at) <= timedelta(hours=24)
+        )
+        return within_window, last_inbound_at
+
+    async def is_within_whatsapp_session_window(self, lead_id: UUID) -> bool:
+        """True if free-form (session) messages are allowed for this lead per last inbound + 24h."""
+        within, _ = await self.get_session_window_state(lead_id)
+        return within
 
     async def get_conversations_list(
         self,

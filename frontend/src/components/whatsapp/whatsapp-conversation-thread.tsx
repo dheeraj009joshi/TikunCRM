@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { format, isToday, isYesterday } from "date-fns";
 import { Loader2, ArrowLeft, FileText } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { WhatsAppMessageBubble } from "./whatsapp-message-bubble";
 import { MessageComposer } from "@/components/sms/message-composer";
@@ -29,6 +30,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+/** Radix Select must not use empty string as a value. */
+const TEMPLATE_SELECT_NONE = "__none__";
+
 interface WhatsAppConversationThreadProps {
   leadId: string;
   leadName: string;
@@ -54,6 +58,22 @@ export function WhatsAppConversationThread({
   const [selectedTemplate, setSelectedTemplate] = useState<WhatsAppTemplateItem | null>(null);
   const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({});
   const [sendingTemplate, setSendingTemplate] = useState(false);
+  const [sessionWindow, setSessionWindow] = useState<{
+    within_window: boolean;
+    last_inbound_at: string | null;
+  } | null>(null);
+
+  const loadSessionWindow = useCallback(async () => {
+    try {
+      const sw = await whatsappService.getSessionWindow(leadId);
+      setSessionWindow({
+        within_window: sw.within_window,
+        last_inbound_at: sw.last_inbound_at ?? null,
+      });
+    } catch {
+      setSessionWindow({ within_window: false, last_inbound_at: null });
+    }
+  }, [leadId]);
 
   const loadConversation = useCallback(async () => {
     try {
@@ -75,8 +95,16 @@ export function WhatsAppConversationThread({
   }, [leadId, toast]);
 
   useEffect(() => {
-    loadConversation();
+    setSessionWindow(null);
+  }, [leadId]);
+
+  useEffect(() => {
+    void loadConversation();
   }, [loadConversation]);
+
+  useEffect(() => {
+    void loadSessionWindow();
+  }, [leadId, loadSessionWindow]);
 
   // When Twilio sends delivery status (delivered/read), refresh so ticks update
   useWebSocketEvent<{ message_id: string; lead_id: string; status: string }>(
@@ -89,11 +117,37 @@ export function WhatsAppConversationThread({
     [leadId, loadConversation]
   );
 
+  useWebSocketEvent<{ lead_id?: string }>(
+    "whatsapp:received",
+    (data) => {
+      if (data?.lead_id === leadId) {
+        void loadConversation();
+        void loadSessionWindow();
+      }
+    },
+    [leadId, loadConversation, loadSessionWindow]
+  );
+
+  useWebSocketEvent<{ lead_id?: string }>(
+    "whatsapp:sent",
+    (data) => {
+      if (data?.lead_id === leadId) {
+        void loadConversation();
+        void loadSessionWindow();
+      }
+    },
+    [leadId, loadConversation, loadSessionWindow]
+  );
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  const freeFormAllowed =
+    sessionWindow !== null && sessionWindow.within_window;
+
   const handleSend = async (body: string) => {
+    if (!freeFormAllowed) return;
     try {
       const result = await whatsappService.sendToLead(leadId, body, leadPhone ?? undefined);
       if (result.success && result.message_id) {
@@ -112,12 +166,15 @@ export function WhatsAppConversationThread({
           delivered_at: null,
         };
         setMessages((prev) => [...prev, newMessage]);
+        void loadSessionWindow();
         onMessageSent?.();
       } else {
-        const is63016 =
+        const isOutsideWindow =
+          result.error_code === "OUTSIDE_SESSION_WINDOW" ||
           result.error_code === "63016" ||
           (result.error?.includes("63016") ?? false);
-        if (is63016) {
+        if (isOutsideWindow) {
+          void loadSessionWindow();
           toast({
             title: "Outside 24-hour window",
             description:
@@ -180,7 +237,8 @@ export function WhatsAppConversationThread({
         setTemplateModalOpen(false);
         setSelectedTemplate(null);
         setTemplateVariables({});
-        loadConversation();
+        await loadConversation();
+        await loadSessionWindow();
         onMessageSent?.();
       } else {
         toast({
@@ -199,6 +257,8 @@ export function WhatsAppConversationThread({
       setSendingTemplate(false);
     }
   };
+
+  const sessionWindowLoading = sessionWindow === null;
 
   const groupedMessages = messages.reduce((groups, message) => {
     const date = new Date(message.created_at);
@@ -255,8 +315,12 @@ export function WhatsAppConversationThread({
         }}
       >
         {messages.length === 0 ? (
-          <div className="text-center text-[#8696a0] py-8">
-            No messages yet. Send a message to start the conversation.
+          <div className="text-center text-[#8696a0] py-8 px-4">
+            {sessionWindowLoading
+              ? "No messages yet."
+              : freeFormAllowed
+                ? "No messages yet. Send a message to start the conversation."
+                : "No messages yet. Send an approved WhatsApp template to start the conversation, or wait for the contact to message you."}
           </div>
         ) : (
           Object.entries(groupedMessages).map(([date, msgs]) => (
@@ -279,44 +343,75 @@ export function WhatsAppConversationThread({
 
       {/* Composer - dark bar */}
       <div className="border-t border-[#2a3942] bg-[#202c33] p-2 flex flex-col gap-2">
-        <div className="flex gap-2 items-center">
+        {!sessionWindowLoading && !freeFormAllowed && (
+          <div
+            className="mx-1 rounded-md border border-[#3b4a54] bg-[#0b141a]/80 px-3 py-2 text-xs text-[#8696a0]"
+            role="status"
+          >
+            The 24-hour messaging window is closed (no inbound message from this contact in the
+            last 24 hours). Meta only allows approved templates until they reply. Send one with the
+            green button beside the input.
+          </div>
+        )}
+        <div className="flex items-end gap-2 min-h-[52px] min-w-0">
           <Button
             type="button"
-            variant="outline"
+            variant={freeFormAllowed && !sessionWindowLoading ? "outline" : "default"}
             size="sm"
-            className="border-[#2a3942] text-[#e9edef] hover:bg-white/10"
+            className={cn(
+              "h-10 shrink-0 px-3",
+              freeFormAllowed && !sessionWindowLoading
+                ? "border-[#3b4a54] bg-[#2a3942] text-[#e9edef] shadow-sm hover:bg-[#3b4a54] hover:text-[#e9edef]"
+                : "bg-[#00a884] hover:bg-[#00a884]/90 text-white"
+            )}
             onClick={() => setTemplateModalOpen(true)}
           >
-            <FileText className="h-4 w-4 mr-1" />
-            Use template
+            <FileText className="h-4 w-4 sm:mr-1" />
+            <span className="hidden sm:inline">Use template</span>
           </Button>
+          <div className="flex-1 min-w-0 rounded-lg border border-[#2a3942] bg-[#2a3942]/50 overflow-hidden">
+            <MessageComposer
+              onSend={handleSend}
+              disabled={sessionWindowLoading || !freeFormAllowed}
+              placeholder={
+                sessionWindowLoading
+                  ? "Checking messaging window…"
+                  : freeFormAllowed
+                    ? "Message"
+                    : "Templates only until they reply…"
+              }
+              className="border-0 bg-transparent p-1.5 gap-1.5 [&_textarea]:min-h-[40px] [&_textarea]:rounded-lg [&_textarea]:border-[#3b4a54] [&_textarea]:bg-[#2a3942] [&_textarea]:text-[#e9edef] [&_textarea]:placeholder:text-[#8696a0] [&_button]:h-10 [&_button]:w-10 [&_button]:rounded-full [&_button]:bg-[#00a884] [&_button]:hover:bg-[#00a884]/90 [&_button]:text-white [&_button]:shrink-0"
+            />
+          </div>
         </div>
-        <MessageComposer
-          onSend={handleSend}
-          placeholder="Message"
-        />
       </div>
 
       <Dialog open={templateModalOpen} onOpenChange={setTemplateModalOpen}>
-        <DialogContent className="bg-[#202c33] border-[#2a3942] text-[#e9edef] max-w-md">
-          <DialogHeader>
+        <DialogContent className="bg-[#202c33] border-[#2a3942] text-[#e9edef] max-w-md w-[min(100%,calc(100vw-2rem))] max-h-[min(90vh,720px)] overflow-y-auto overflow-x-hidden gap-4 p-6 pr-12 sm:pr-14">
+          <DialogHeader className="pr-2 shrink-0">
             <DialogTitle className="text-[#e9edef]">Send WhatsApp template</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div>
+          <div className="space-y-4 min-w-0">
+            <div className="min-w-0 space-y-2">
               <Label className="text-[#8696a0]">Template</Label>
               <Select
-                value={selectedTemplate?.id ?? ""}
+                value={selectedTemplate?.id ?? TEMPLATE_SELECT_NONE}
                 onValueChange={(id) => {
+                  if (id === TEMPLATE_SELECT_NONE) {
+                    setSelectedTemplate(null);
+                    setTemplateVariables({});
+                    return;
+                  }
                   const t = templates.find((x) => x.id === id) ?? null;
                   setSelectedTemplate(t);
                   setTemplateVariables({});
                 }}
               >
-                <SelectTrigger className="bg-[#2a3942] border-[#2a3942] text-[#e9edef]">
+                <SelectTrigger className="w-full min-w-0 max-w-full bg-[#2a3942] border-[#3b4a54] text-[#e9edef]">
                   <SelectValue placeholder="Select a template..." />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value={TEMPLATE_SELECT_NONE}>Select a template…</SelectItem>
                   {templates.map((t) => (
                     <SelectItem key={t.id} value={t.id}>
                       {t.name}
@@ -349,18 +444,20 @@ export function WhatsAppConversationThread({
                   ))}
                 </div>
               )}
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:flex-wrap shrink-0">
               <Button
+                type="button"
                 variant="outline"
                 onClick={() => setTemplateModalOpen(false)}
-                className="border-[#2a3942] text-[#e9edef]"
+                className="w-full sm:w-auto shrink-0 border-[#3b4a54] bg-[#2a3942] text-[#e9edef] hover:bg-[#3b4a54] hover:text-[#e9edef]"
               >
                 Cancel
               </Button>
               <Button
+                type="button"
                 onClick={handleSendTemplate}
                 disabled={!selectedTemplate || sendingTemplate}
-                className="bg-[#00a884] hover:bg-[#00a884]/90 text-white"
+                className="w-full sm:w-auto shrink-0 bg-[#00a884] hover:bg-[#00a884]/90 text-white"
               >
                 {sendingTemplate ? "Sending…" : "Send template"}
               </Button>

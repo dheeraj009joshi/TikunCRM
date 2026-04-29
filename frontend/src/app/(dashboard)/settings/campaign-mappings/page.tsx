@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import {
     Pencil,
     Loader2,
@@ -60,6 +61,7 @@ export default function CampaignMappingsPage() {
     const [selectedTemplateId, setSelectedTemplateId] = React.useState<string>("")
     const [autoSendEnabled, setAutoSendEnabled] = React.useState(false)
     const [isSavingWhatsApp, setIsSavingWhatsApp] = React.useState(false)
+    const [templatesLoadError, setTemplatesLoadError] = React.useState<string | null>(null)
     
     const { isSuperAdmin, isDealershipAdmin, isDealershipOwner } = useRole()
     const canEdit = isSuperAdmin || isDealershipAdmin || isDealershipOwner
@@ -82,11 +84,18 @@ export default function CampaignMappingsPage() {
     }, [toast])
 
     const loadTemplates = React.useCallback(async () => {
+        setTemplatesLoadError(null)
         try {
             const data = await whatsappService.listTemplates()
             setTemplates(data)
-        } catch (error) {
+        } catch (error: unknown) {
             console.error("Failed to load WhatsApp templates:", error)
+            const msg =
+                error && typeof error === "object" && "response" in error
+                    ? String((error as { response?: { data?: { detail?: string } } }).response?.data?.detail)
+                    : ""
+            setTemplatesLoadError(msg || "Could not load templates from the server.")
+            setTemplates([])
         }
     }, [])
 
@@ -410,8 +419,8 @@ export default function CampaignMappingsPage() {
 
             {/* WhatsApp Template Dialog */}
             <Dialog open={whatsappDialogOpen} onOpenChange={setWhatsappDialogOpen}>
-                <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
+                <DialogContent className="sm:max-w-md w-[min(100%,calc(100vw-2rem))] max-h-[min(90vh,840px)] overflow-y-auto overflow-x-hidden gap-4 p-6 pr-12 sm:pr-14">
+                    <DialogHeader className="pr-2 shrink-0">
                         <DialogTitle className="flex items-center gap-2">
                             <MessageSquare className="h-5 w-5 text-green-600" />
                             WhatsApp Template Settings
@@ -421,8 +430,8 @@ export default function CampaignMappingsPage() {
                         </DialogDescription>
                     </DialogHeader>
                     
-                    <div className="space-y-4 py-4">
-                        <div className="space-y-2">
+                    <div className="space-y-4 py-2 min-w-0">
+                        <div className="space-y-2 min-w-0">
                             <Label htmlFor="template">WhatsApp Template</Label>
                             <Select
                                 value={selectedTemplateId ? selectedTemplateId : NO_WHATSAPP_TEMPLATE}
@@ -430,7 +439,7 @@ export default function CampaignMappingsPage() {
                                     setSelectedTemplateId(v === NO_WHATSAPP_TEMPLATE ? "" : v)
                                 }
                             >
-                                <SelectTrigger id="template">
+                                <SelectTrigger id="template" className="w-full max-w-full min-w-0">
                                     <SelectValue placeholder="Select a template..." />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -448,26 +457,54 @@ export default function CampaignMappingsPage() {
                             <p className="text-xs text-muted-foreground">
                                 Select a pre-approved WhatsApp template to use for this campaign.
                             </p>
+                            {templatesLoadError && (
+                                <p className="text-xs text-destructive flex items-center gap-1">
+                                    <AlertCircle className="h-3 w-3 shrink-0" />
+                                    {templatesLoadError}
+                                </p>
+                            )}
+                            {!templatesLoadError && templates.length === 0 && (
+                                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+                                    <p className="font-medium">No templates in the database yet</p>
+                                    <p className="mt-1 text-amber-900/90 dark:text-amber-100/90">
+                                        Templates must be created in the CRM (they mirror your Twilio Content
+                                        SIDs). Add one under{" "}
+                                        <Link
+                                            href="/settings/whatsapp-templates"
+                                            className="underline font-medium text-amber-950 dark:text-amber-50"
+                                            onClick={() => setWhatsappDialogOpen(false)}
+                                        >
+                                            Settings → WhatsApp Templates
+                                        </Link>
+                                        , or ask a Super Admin to add a global template.
+                                    </p>
+                                </div>
+                            )}
                         </div>
 
-                        <div className="flex items-center justify-between space-x-2 pt-2 border-t">
-                            <div className="space-y-0.5">
-                                <Label htmlFor="auto-send" className="flex items-center gap-2">
-                                    <Zap className="h-4 w-4 text-yellow-500" />
-                                    Auto-send on new leads
-                                </Label>
-                                <p className="text-xs text-muted-foreground">
-                                    Automatically send the template when a new lead matches this campaign.
-                                </p>
+                        <div className="rounded-lg border border-border bg-muted/20 p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                                <div className="space-y-0.5 min-w-0 flex-1">
+                                    <Label htmlFor="auto-send" className="flex items-center gap-2">
+                                        <Zap className="h-4 w-4 shrink-0 text-yellow-500" />
+                                        Auto-send on new leads
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Automatically send the template when a new lead matches this campaign.
+                                    </p>
+                                </div>
+                                <div className="flex shrink-0 items-center sm:pl-2">
+                                    <Switch
+                                        id="auto-send"
+                                        checked={autoSendEnabled}
+                                        onCheckedChange={setAutoSendEnabled}
+                                        disabled={
+                                            !selectedTemplateId ||
+                                            selectedTemplateId === NO_WHATSAPP_TEMPLATE
+                                        }
+                                    />
+                                </div>
                             </div>
-                            <Switch
-                                id="auto-send"
-                                checked={autoSendEnabled}
-                                onCheckedChange={setAutoSendEnabled}
-                                disabled={
-                                    !selectedTemplateId || selectedTemplateId === NO_WHATSAPP_TEMPLATE
-                                }
-                            />
                         </div>
 
                         {autoSendEnabled &&
@@ -479,14 +516,18 @@ export default function CampaignMappingsPage() {
                         )}
                     </div>
 
-                    <DialogFooter>
-                        <Button variant="outline" onClick={closeWhatsAppDialog}>
+                    <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:gap-2 shrink-0 sm:space-x-0">
+                        <Button
+                            variant="outline"
+                            className="w-full sm:w-auto shrink-0"
+                            onClick={closeWhatsAppDialog}
+                        >
                             Cancel
                         </Button>
                         <Button
                             onClick={saveWhatsAppSettings}
                             disabled={isSavingWhatsApp}
-                            className="bg-green-600 hover:bg-green-700"
+                            className="w-full sm:w-auto shrink-0 bg-green-600 hover:bg-green-700"
                         >
                             {isSavingWhatsApp ? (
                                 <Loader2 className="h-4 w-4 animate-spin mr-2" />

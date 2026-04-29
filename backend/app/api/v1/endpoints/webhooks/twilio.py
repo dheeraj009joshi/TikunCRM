@@ -206,9 +206,9 @@ async def handle_incoming_whatsapp(
     )
     await db.commit()
 
-    if wa_log.lead_id and wa_log.user_id:
-        await ws_manager.send_to_user(
-            str(wa_log.user_id),
+    if wa_log.lead_id and wa_log.dealership_id:
+        await ws_manager.broadcast_to_dealership(
+            str(wa_log.dealership_id),
             {
                 "type": "whatsapp:received",
                 "payload": {
@@ -216,10 +216,12 @@ async def handle_incoming_whatsapp(
                     "lead_id": str(wa_log.lead_id),
                     "from_number": from_number,
                     "body_preview": body[:100] if body else "",
-                    "has_media": len(media_urls) > 0
-                }
-            }
+                    "has_media": len(media_urls) > 0,
+                },
+            },
         )
+
+    if wa_log.lead_id and wa_log.user_id:
         notification_service = NotificationService(db)
         result = await db.execute(
             select(Lead).options(selectinload(Lead.customer)).where(Lead.id == wa_log.lead_id)

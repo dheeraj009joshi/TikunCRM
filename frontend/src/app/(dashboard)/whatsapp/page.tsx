@@ -131,6 +131,11 @@ export default function WhatsAppInboxPage() {
   const displayLeadName = selectedConversation?.lead_name ?? selectedLeadInfo?.leadName ?? "";
   const displayLeadPhone = selectedConversation?.lead_phone ?? selectedLeadInfo?.leadPhone ?? null;
 
+  const newChatHits = leadSearchResults.filter(
+    (l) => !conversations.some((c) => c.lead_id === l.lead_id)
+  );
+  const showStartNewChatSection = leadSearchLoading || newChatHits.length > 0;
+
   if (configLoading) {
     return (
       <div className="flex items-center justify-center h-[calc(100vh-200px)]">
@@ -227,7 +232,7 @@ export default function WhatsAppInboxPage() {
           ) : (
             <>
               {/* New chat: leads matching search (from customers/leads, not just existing chats) */}
-              {(leadSearchLoading || leadSearchResults.filter((l) => !conversations.some((c) => c.lead_id === l.lead_id)).length > 0) && (
+              {showStartNewChatSection && (
                 <div className="border-b border-[#e9edef] bg-white">
                   <p className="px-4 py-2 text-xs font-medium text-[#667781] uppercase tracking-wide">
                     Start new chat
@@ -237,9 +242,7 @@ export default function WhatsAppInboxPage() {
                       <Loader2 className="h-5 w-5 animate-spin text-[#8696a0]" />
                     </div>
                   ) : (
-                    leadSearchResults
-                      .filter((lead) => !conversations.some((c) => c.lead_id === lead.lead_id))
-                      .map((lead) => (
+                    newChatHits.map((lead) => (
                       <button
                         key={lead.lead_id}
                         type="button"
@@ -269,6 +272,9 @@ export default function WhatsAppInboxPage() {
                 selectedLeadId={selectedLeadId || undefined}
                 onSelect={handleSelect}
                 searchQuery={searchQuery}
+                hideEmptyStateForNewChatSearch={
+                  showStartNewChatSection && conversations.length === 0
+                }
               />
             </>
           )}

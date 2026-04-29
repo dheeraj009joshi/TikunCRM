@@ -80,15 +80,41 @@ class EffectiveTwilioConfig:
 
 
 def _merge(row: Optional[DealershipTwilioConfig], s: Settings) -> EffectiveTwilioConfig:
-    account_sid = (row.account_sid if row else None) or s.twilio_account_sid or ""
-    auth_token = ""
-    if row:
-        auth_token = row.auth_token or ""
-    if not auth_token:
-        auth_token = s.twilio_auth_token or ""
+    # If the DB auth token was encrypted with another SECRET_KEY, decrypt returns "" while
+    # ciphertext is still present. Using env auth_token with DB account_sid / sender
+    # numbers causes Twilio 21212 (From not on account). Prefer a matched env bundle.
+    auth_decrypt_failed = bool(
+        row
+        and getattr(row, "_auth_token", None)
+        and not (row.auth_token or "").strip()
+    )
+    use_env_twilio_core = bool(
+        auth_decrypt_failed
+        and (s.twilio_account_sid or "").strip()
+        and (s.twilio_auth_token or "").strip()
+    )
+    if use_env_twilio_core:
+        logger.warning(
+            "Dealership Twilio auth_token could not be decrypted; using "
+            "TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and env phone numbers when set "
+            "so credentials match the configured senders."
+        )
 
-    sms_from = (row.sms_from_number if row else None) or s.twilio_phone_number or ""
-    wa_from = (row.whatsapp_from_number if row else None) or s.twilio_whatsapp_number or ""
+    if use_env_twilio_core:
+        account_sid = (s.twilio_account_sid or "").strip()
+        auth_token = (s.twilio_auth_token or "").strip()
+        sms_from = (s.twilio_phone_number or (row.sms_from_number if row else None) or "").strip()
+        wa_from = (s.twilio_whatsapp_number or (row.whatsapp_from_number if row else None) or "").strip()
+    else:
+        account_sid = (row.account_sid if row else None) or s.twilio_account_sid or ""
+        auth_token = ""
+        if row:
+            auth_token = row.auth_token or ""
+        if not auth_token:
+            auth_token = s.twilio_auth_token or ""
+
+        sms_from = (row.sms_from_number if row else None) or s.twilio_phone_number or ""
+        wa_from = (row.whatsapp_from_number if row else None) or s.twilio_whatsapp_number or ""
     voice_caller = (row.voice_caller_id_number if row else None) or s.twilio_phone_number or ""
 
     sms_enabled_flag = (

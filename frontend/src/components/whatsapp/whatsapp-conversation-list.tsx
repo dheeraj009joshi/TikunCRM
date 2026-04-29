@@ -18,6 +18,11 @@ interface WhatsAppConversationListProps {
   selectedLeadId?: string;
   onSelect: (leadId: string) => void;
   searchQuery?: string;
+  /**
+   * When there are no existing chats but the parent is showing “Start new chat” search hits,
+   * hide the large empty placeholder so the list area does not duplicate empty UI.
+   */
+  hideEmptyStateForNewChatSearch?: boolean;
 }
 
 export function WhatsAppConversationList({
@@ -25,6 +30,7 @@ export function WhatsAppConversationList({
   selectedLeadId,
   onSelect,
   searchQuery = "",
+  hideEmptyStateForNewChatSearch = false,
 }: WhatsAppConversationListProps) {
   const formatTime = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -45,6 +51,23 @@ export function WhatsAppConversationList({
   }, [conversations, searchQuery]);
 
   if (conversations.length === 0) {
+    if (hideEmptyStateForNewChatSearch) {
+      return null;
+    }
+    if (searchQuery.trim().length >= 2) {
+      return (
+        <div
+          className="px-4 py-8 text-center text-sm max-w-sm mx-auto"
+          style={{ color: WA_TEXT_SECONDARY }}
+        >
+          <p>No existing chats match this search.</p>
+          <p className="mt-2 text-xs opacity-90">
+            Try another name or number, or choose a lead under &quot;Start new chat&quot; when
+            results appear.
+          </p>
+        </div>
+      );
+    }
     return (
       <div
         className="flex flex-col items-center justify-center min-h-[200px] text-center p-6"

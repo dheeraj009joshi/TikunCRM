@@ -119,8 +119,8 @@ class WhatsAppLog(Base):
         nullable=False,
         index=True
     )
-    from_number: Mapped[str] = mapped_column(String(20), nullable=False)
-    to_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    from_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    to_number: Mapped[str] = mapped_column(String(32), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     media_urls: Mapped[dict] = mapped_column(
         JSONB,

@@ -5,9 +5,17 @@ import logging
 from typing import Optional, Dict, Any
 
 from app.core.config import settings
-from app.services.dealership_twilio_config_service import EffectiveTwilioConfig
+from app.services.dealership_twilio_config_service import (
+    EffectiveTwilioConfig,
+    normalize_twilio_to_number,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _whatsapp_e164(raw: Optional[str]) -> str:
+    """Strip optional whatsapp: URI prefix; Twilio expects bare E.164 after we add whatsapp:."""
+    return normalize_twilio_to_number(raw or "").strip()
 
 
 def _twilio_client(account_sid: str, auth_token: str):
@@ -74,19 +82,28 @@ class WhatsAppService:
 
         try:
             client = _twilio_client(effective.account_sid, effective.auth_token)
-            from_number = from_phone or effective.whatsapp_from_number
+            from_e164 = _whatsapp_e164(from_phone or effective.whatsapp_from_number)
+            to_e164 = _whatsapp_e164(to_phone)
+            if not from_e164:
+                print("WhatsApp From number: <not set>", flush=True)
+                return {
+                    "success": False,
+                    "error": "WhatsApp sender number is not configured",
+                    "message_sid": None,
+                }
 
+            print(f"WhatsApp From number: whatsapp:{from_e164}", flush=True)
             params = {
                 "body": message,
-                "from_": f"whatsapp:{from_number}",
-                "to": f"whatsapp:{to_phone}",
+                "from_": f"whatsapp:{from_e164}",
+                "to": f"whatsapp:{to_e164}",
             }
             if status_callback:
                 params["status_callback"] = status_callback
 
             msg = client.messages.create(**params)
 
-            logger.info(f"WhatsApp sent to {to_phone}: SID={msg.sid}")
+            logger.info(f"WhatsApp sent to {to_e164}: SID={msg.sid}")
             return {
                 "success": True,
                 "message_sid": msg.sid,
@@ -95,11 +112,7 @@ class WhatsAppService:
 
         except Exception as e:
             logger.error(f"Failed to send WhatsApp to {to_phone}: {e}")
-            return {
-                "success": False,
-                "message_sid": None,
-                "error": str(e),
-            }
+            return _twilio_send_error_result(e)
 
     async def send_whatsapp_template(
         self,
@@ -120,12 +133,21 @@ class WhatsAppService:
 
         try:
             client = _twilio_client(effective.account_sid, effective.auth_token)
-            from_number = from_phone or effective.whatsapp_from_number
+            from_e164 = _whatsapp_e164(from_phone or effective.whatsapp_from_number)
+            to_e164 = _whatsapp_e164(to_phone)
+            if not from_e164:
+                print("WhatsApp From number: <not set>", flush=True)
+                return {
+                    "success": False,
+                    "error": "WhatsApp sender number is not configured",
+                    "message_sid": None,
+                }
 
+            print(f"WhatsApp From number: whatsapp:{from_e164}", flush=True)
             params = {
                 "content_sid": content_sid,
-                "from_": f"whatsapp:{from_number}",
-                "to": f"whatsapp:{to_phone}",
+                "from_": f"whatsapp:{from_e164}",
+                "to": f"whatsapp:{to_e164}",
             }
             if content_variables:
                 import json
@@ -135,7 +157,7 @@ class WhatsAppService:
 
             msg = client.messages.create(**params)
 
-            logger.info(f"WhatsApp template sent to {to_phone}: SID={msg.sid}")
+            logger.info(f"WhatsApp template sent to {to_e164}: SID={msg.sid}")
             return {
                 "success": True,
                 "message_sid": msg.sid,
@@ -144,11 +166,26 @@ class WhatsAppService:
 
         except Exception as e:
             logger.error(f"Failed to send WhatsApp template to {to_phone}: {e}")
-            return {
-                "success": False,
-                "message_sid": None,
-                "error": str(e),
-            }
+            return _twilio_send_error_result(e)
+
+
+def _twilio_send_error_result(exc: Exception) -> Dict[str, Any]:
+    code: Optional[str] = None
+    try:
+        from twilio.base.exceptions import TwilioRestException
+
+        if isinstance(exc, TwilioRestException) and exc.code is not None:
+            code = str(exc.code)
+    except ImportError:
+        pass
+    msg = str(exc)
+    if code == "21212":
+        msg += (
+            " Check Twilio Console: the sender must be a WhatsApp-enabled number on this "
+            "same Twilio account. If you use a copied database, fix SECRET_KEY and re-save "
+            "Twilio credentials in Settings, or set TWILIO_* in .env so account and sender match."
+        )
+    return {"success": False, "message_sid": None, "error": msg, "error_code": code}
 
 
 whatsapp_service = WhatsAppService()
