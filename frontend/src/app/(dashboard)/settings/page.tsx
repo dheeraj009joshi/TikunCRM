@@ -86,9 +86,9 @@ const settingsSections: SettingSection[] = [
         adminOnly: true,
     },
     {
-        title: "Campaign Display Names",
-        description: "Customize how campaign names are displayed for your leads",
-        href: "/settings/campaign-names",
+        title: "Campaign mappings",
+        description: "Sheet campaign display names and WhatsApp template per campaign",
+        href: "/settings/campaign-mappings",
         icon: Tag,
         adminOnly: true,
     },

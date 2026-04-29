@@ -43,6 +43,9 @@ import {
 } from "@/services/sync-source-service"
 import { whatsappService, WhatsAppTemplateItem } from "@/services/whatsapp-service"
 
+/** Radix Select rejects empty string as SelectItem value — use this sentinel for "no template". */
+const NO_WHATSAPP_TEMPLATE = "__none__"
+
 export default function CampaignMappingsPage() {
     const [mappings, setMappings] = React.useState<DealershipCampaignMappingResponse[]>([])
     const [templates, setTemplates] = React.useState<WhatsAppTemplateItem[]>([])
@@ -141,8 +144,8 @@ export default function CampaignMappingsPage() {
 
     const openWhatsAppDialog = (mapping: DealershipCampaignMappingResponse) => {
         setSelectedMapping(mapping)
-        setSelectedTemplateId(mapping.whatsapp_template_id || "")
-        setAutoSendEnabled(mapping.whatsapp_auto_send || false)
+        setSelectedTemplateId(mapping.whatsapp_template_id ?? "")
+        setAutoSendEnabled(Boolean(mapping.whatsapp_auto_send))
         setWhatsappDialogOpen(true)
     }
 
@@ -158,8 +161,12 @@ export default function CampaignMappingsPage() {
         
         setIsSavingWhatsApp(true)
         try {
+            const templateId =
+                selectedTemplateId && selectedTemplateId !== NO_WHATSAPP_TEMPLATE
+                    ? selectedTemplateId
+                    : null
             await updateCampaignWhatsAppTemplate(selectedMapping.id, {
-                whatsapp_template_id: selectedTemplateId || null,
+                whatsapp_template_id: templateId,
                 whatsapp_auto_send: autoSendEnabled,
             })
             toast({
@@ -220,9 +227,9 @@ export default function CampaignMappingsPage() {
     return (
         <div className="space-y-6 max-w-3xl">
             <div>
-                <h1 className="text-2xl font-bold tracking-tight">Campaign Display Names</h1>
+                <h1 className="text-2xl font-bold tracking-tight">Campaign mappings</h1>
                 <p className="text-muted-foreground">
-                    Customize how campaign names appear in the frontend for your dealership&apos;s leads.
+                    Edit display names for each sheet campaign and assign WhatsApp templates (green icon per row).
                 </p>
             </div>
 
@@ -337,7 +344,7 @@ export default function CampaignMappingsPage() {
                                                             <span className="text-xs">
                                                                 Template: <span className="font-medium">{mapping.whatsapp_template.name}</span>
                                                             </span>
-                                                            {mapping.whatsapp_auto_send && (
+                                                            {Boolean(mapping.whatsapp_auto_send) && (
                                                                 <Badge variant="outline" className="text-[10px] bg-green-50 text-green-700 border-green-200">
                                                                     <Zap className="h-2.5 w-2.5 mr-0.5" />
                                                                     Auto-send
@@ -418,14 +425,16 @@ export default function CampaignMappingsPage() {
                         <div className="space-y-2">
                             <Label htmlFor="template">WhatsApp Template</Label>
                             <Select
-                                value={selectedTemplateId}
-                                onValueChange={setSelectedTemplateId}
+                                value={selectedTemplateId ? selectedTemplateId : NO_WHATSAPP_TEMPLATE}
+                                onValueChange={(v) =>
+                                    setSelectedTemplateId(v === NO_WHATSAPP_TEMPLATE ? "" : v)
+                                }
                             >
                                 <SelectTrigger id="template">
                                     <SelectValue placeholder="Select a template..." />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="">No template</SelectItem>
+                                    <SelectItem value={NO_WHATSAPP_TEMPLATE}>No template</SelectItem>
                                     {templates.map((template) => (
                                         <SelectItem key={template.id} value={template.id}>
                                             {template.name}
@@ -455,11 +464,14 @@ export default function CampaignMappingsPage() {
                                 id="auto-send"
                                 checked={autoSendEnabled}
                                 onCheckedChange={setAutoSendEnabled}
-                                disabled={!selectedTemplateId}
+                                disabled={
+                                    !selectedTemplateId || selectedTemplateId === NO_WHATSAPP_TEMPLATE
+                                }
                             />
                         </div>
 
-                        {autoSendEnabled && !selectedTemplateId && (
+                        {autoSendEnabled &&
+                            (!selectedTemplateId || selectedTemplateId === NO_WHATSAPP_TEMPLATE) && (
                             <p className="text-xs text-orange-600 flex items-center gap-1">
                                 <AlertCircle className="h-3 w-3" />
                                 Select a template to enable auto-send.
