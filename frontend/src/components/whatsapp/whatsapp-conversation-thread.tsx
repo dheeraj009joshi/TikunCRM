@@ -107,6 +107,7 @@ export function WhatsAppConversationThread({
     within_window: boolean;
     last_inbound_at: string | null;
   } | null>(null);
+  const [isVoiceRecording, setIsVoiceRecording] = useState(false);
 
   const loadSessionWindow = useCallback(async () => {
     try {
@@ -706,93 +707,99 @@ export function WhatsAppConversationThread({
           </div>
         )}
         <div className="flex items-center gap-1.5">
-          <MediaUploadButton
-            leadId={leadId}
-            disabled={sessionWindowLoading}
-            onMediaSent={loadConversation}
-            onOptimisticSend={(tempId, contentType, caption) => {
-              const optimisticMessage: WhatsAppMessage = {
-                id: tempId,
-                lead_id: leadId,
-                user_id: null,
-                direction: "outbound",
-                from_number: "",
-                to_number: leadPhone || "",
-                body: caption || "",
-                status: "sending",
-                is_read: true,
-                created_at: new Date().toISOString(),
-                sent_at: null,
-                delivered_at: null,
-                media_urls: ["media-pending"],
-                media_content_types: [contentType],
-              };
-              setTimelineItems((prev) => [...prev, {
-                item_type: "message",
-                id: tempId,
-                created_at: optimisticMessage.created_at,
-                message: optimisticMessage,
-              }]);
-            }}
-            onSendSuccess={(tempId, realId) => {
-              sentMessageIdsRef.current.add(realId);
-              setTimelineItems((prev) =>
-                prev.map((item) =>
-                  item.id === tempId
-                    ? {
-                        ...item,
-                        id: realId,
-                        message: item.message
-                          ? { ...item.message, id: realId, status: "sent", sent_at: new Date().toISOString() }
-                          : undefined,
-                      }
-                    : item
-                )
-              );
-            }}
-            onSendFailed={(tempId) => {
-              setTimelineItems((prev) =>
-                prev.map((item) =>
-                  item.id === tempId && item.message
-                    ? { ...item, message: { ...item.message, status: "failed" } }
-                    : item
-                )
-              );
-            }}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className={cn(
-              "h-9 w-9 shrink-0 rounded-full",
-              freeFormAllowed && !sessionWindowLoading
-                ? "text-[#8696a0] hover:text-white hover:bg-[#3b4a54]"
-                : "bg-[#00a884] hover:bg-[#00a884]/90 text-white"
-            )}
-            onClick={() => setTemplateModalOpen(true)}
-            title="Send template"
-          >
-            <FileText className="h-5 w-5" />
-          </Button>
-          <div className="flex-1 min-w-0">
-            <MessageComposer
-              onSend={handleSend}
-              disabled={sessionWindowLoading || !freeFormAllowed}
-              placeholder={
-                sessionWindowLoading
-                  ? "Checking..."
-                  : freeFormAllowed
-                    ? "Message"
-                    : "Use template..."
-              }
-              className="border-0 bg-transparent p-0 gap-1.5 [&_textarea]:min-h-[36px] [&_textarea]:max-h-[120px] [&_textarea]:rounded-2xl [&_textarea]:border-0 [&_textarea]:bg-[#2a3942] [&_textarea]:text-[#e9edef] [&_textarea]:placeholder:text-[#8696a0] [&_textarea]:px-3 [&_textarea]:py-2 [&_button]:h-9 [&_button]:w-9 [&_button]:rounded-full [&_button]:bg-[#00a884] [&_button]:hover:bg-[#00a884]/90 [&_button]:text-white [&_button]:shrink-0"
-            />
-          </div>
+          {/* Hide other inputs when voice recording is active */}
+          {!isVoiceRecording && (
+            <>
+              <MediaUploadButton
+                leadId={leadId}
+                disabled={sessionWindowLoading}
+                onMediaSent={loadConversation}
+                onOptimisticSend={(tempId, contentType, caption) => {
+                  const optimisticMessage: WhatsAppMessage = {
+                    id: tempId,
+                    lead_id: leadId,
+                    user_id: null,
+                    direction: "outbound",
+                    from_number: "",
+                    to_number: leadPhone || "",
+                    body: caption || "",
+                    status: "sending",
+                    is_read: true,
+                    created_at: new Date().toISOString(),
+                    sent_at: null,
+                    delivered_at: null,
+                    media_urls: ["media-pending"],
+                    media_content_types: [contentType],
+                  };
+                  setTimelineItems((prev) => [...prev, {
+                    item_type: "message",
+                    id: tempId,
+                    created_at: optimisticMessage.created_at,
+                    message: optimisticMessage,
+                  }]);
+                }}
+                onSendSuccess={(tempId, realId) => {
+                  sentMessageIdsRef.current.add(realId);
+                  setTimelineItems((prev) =>
+                    prev.map((item) =>
+                      item.id === tempId
+                        ? {
+                            ...item,
+                            id: realId,
+                            message: item.message
+                              ? { ...item.message, id: realId, status: "sent", sent_at: new Date().toISOString() }
+                              : undefined,
+                          }
+                        : item
+                    )
+                  );
+                }}
+                onSendFailed={(tempId) => {
+                  setTimelineItems((prev) =>
+                    prev.map((item) =>
+                      item.id === tempId && item.message
+                        ? { ...item, message: { ...item.message, status: "failed" } }
+                        : item
+                    )
+                  );
+                }}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  "h-9 w-9 shrink-0 rounded-full",
+                  freeFormAllowed && !sessionWindowLoading
+                    ? "text-[#8696a0] hover:text-white hover:bg-[#3b4a54]"
+                    : "bg-[#00a884] hover:bg-[#00a884]/90 text-white"
+                )}
+                onClick={() => setTemplateModalOpen(true)}
+                title="Send template"
+              >
+                <FileText className="h-5 w-5" />
+              </Button>
+              <div className="flex-1 min-w-0">
+                <MessageComposer
+                  onSend={handleSend}
+                  disabled={sessionWindowLoading || !freeFormAllowed}
+                  placeholder={
+                    sessionWindowLoading
+                      ? "Checking..."
+                      : freeFormAllowed
+                        ? "Message"
+                        : "Use template..."
+                  }
+                  className="border-0 bg-transparent p-0 gap-1.5 [&_textarea]:min-h-[36px] [&_textarea]:max-h-[120px] [&_textarea]:rounded-2xl [&_textarea]:border-0 [&_textarea]:bg-[#2a3942] [&_textarea]:text-[#e9edef] [&_textarea]:placeholder:text-[#8696a0] [&_textarea]:px-3 [&_textarea]:py-2 [&_button]:h-9 [&_button]:w-9 [&_button]:rounded-full [&_button]:bg-[#00a884] [&_button]:hover:bg-[#00a884]/90 [&_button]:text-white [&_button]:shrink-0"
+                />
+              </div>
+            </>
+          )}
           <VoiceRecorder
             leadId={leadId}
             disabled={sessionWindowLoading}
             onVoiceSent={loadConversation}
+            onRecordingStateChange={setIsVoiceRecording}
             onOptimisticSend={(tempId, duration) => {
               // Add optimistic voice message immediately
               const optimisticMessage: WhatsAppMessage = {

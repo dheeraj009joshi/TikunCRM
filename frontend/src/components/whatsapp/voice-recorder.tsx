@@ -17,6 +17,8 @@ interface VoiceRecorderProps {
   onSendSuccess?: (tempId: string, realId: string) => void;
   /** Called when send fails */
   onSendFailed?: (tempId: string) => void;
+  /** Called when recording state changes (to show/hide other UI) */
+  onRecordingStateChange?: (isRecording: boolean) => void;
 }
 
 type RecordingState = "idle" | "recording" | "recorded";
@@ -28,6 +30,7 @@ export function VoiceRecorder({
   onOptimisticSend,
   onSendSuccess,
   onSendFailed,
+  onRecordingStateChange,
 }: VoiceRecorderProps) {
   const { toast } = useToast();
   const [state, setState] = useState<RecordingState>("idle");
@@ -51,6 +54,11 @@ export function VoiceRecorder({
   };
 
   const generateTempId = () => `temp_voice_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+  // Notify parent when recording state changes
+  useEffect(() => {
+    onRecordingStateChange?.(state !== "idle");
+  }, [state, onRecordingStateChange]);
 
   const startRecording = async () => {
     try {
@@ -321,10 +329,10 @@ export function VoiceRecorder({
             variant="ghost"
             size="icon"
             onClick={handleSend}
-            className="h-7 w-7 bg-[#00a884] hover:bg-[#00a884]/90 text-white rounded-full p-0"
-            title="Send"
+            className="h-9 w-9 bg-[#00a884] hover:bg-[#00a884]/90 text-white rounded-full flex items-center justify-center"
+            title="Send voice message"
           >
-            <Send className="h-3.5 w-3.5" />
+            <Send className="h-4 w-4" />
           </Button>
         </>
       )}
