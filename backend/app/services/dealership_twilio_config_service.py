@@ -188,16 +188,46 @@ async def find_dealership_id_by_inbound_to(
 ) -> Optional[UUID]:
     """
     Match Twilio inbound SMS/WhatsApp To address to a dealership's configured numbers.
+    Falls back to checking global settings if no dealership-specific match is found.
     """
     to_key = digits_last10(normalize_twilio_to_number(to_raw))
     if len(to_key) < 10:
         return None
 
+    # First, try to match against dealership-specific configurations
     result = await db.execute(select(DealershipTwilioConfig))
-    for cfg in result.scalars().all():
+    configs = list(result.scalars().all())
+    
+    for cfg in configs:
         for num in (cfg.sms_from_number, cfg.whatsapp_from_number):
             if num and digits_last10(num) == to_key:
                 return cfg.dealership_id
+    
+    # No dealership-specific match found. Check if "To" matches global settings.
+    global_wa = digits_last10(settings.twilio_whatsapp_number or "")
+    global_sms = digits_last10(settings.twilio_phone_number or "")
+    
+    if to_key and (to_key == global_wa or to_key == global_sms):
+        # The message is to the global Twilio number.
+        # Return the first dealership that has a Twilio config,
+        # or query for any dealership if no configs exist.
+        if configs:
+            return configs[0].dealership_id
+        
+        # No dealership configs exist - try to find any dealership
+        from app.models.dealership import Dealership
+        dealership_result = await db.execute(
+            select(Dealership).order_by(Dealership.created_at.asc()).limit(1)
+        )
+        dealership = dealership_result.scalar_one_or_none()
+        if dealership:
+            logger.info(
+                "Using first dealership %s for inbound message to global number %s",
+                dealership.id,
+                to_raw,
+            )
+            return dealership.id
+    
     return None
 
 

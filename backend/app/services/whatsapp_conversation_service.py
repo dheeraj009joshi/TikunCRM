@@ -91,25 +91,30 @@ class WhatsAppConversationService:
 
         lead = None
         customer_id = None
+        
+        # If lead_id is explicitly provided, look it up
         if lead_id:
             r = await self.db.execute(select(Lead).where(Lead.id == lead_id))
             lead = r.scalar_one_or_none()
             if lead:
                 customer_id = lead.customer_id
                 dealership_id = dealership_id or lead.dealership_id
-        if not lead:
+        
+        # Only try to find a lead by phone if we don't have a dealership_id yet
+        # (i.e., we're not explicitly sending to an unknown contact)
+        if not lead and not dealership_id:
             lead = await self.find_lead_by_phone(formatted)
             if lead:
                 lead_id = lead.id
                 customer_id = lead.customer_id
-                dealership_id = dealership_id or lead.dealership_id
-        if not lead:
+                dealership_id = lead.dealership_id
+        if not lead and not dealership_id:
             lead = await self.find_lead_by_lead_phone_suffix(formatted)
             if lead:
                 lead_id = lead.id
                 customer_id = lead.customer_id
-                dealership_id = dealership_id or lead.dealership_id
-        if not lead:
+                dealership_id = lead.dealership_id
+        if not lead and not dealership_id:
             customer = await self.find_customer_by_phone(formatted)
             if customer:
                 customer_id = customer.id
@@ -177,25 +182,30 @@ class WhatsAppConversationService:
 
         lead = None
         customer_id = None
+        
+        # If lead_id is explicitly provided, look it up
         if lead_id:
             r = await self.db.execute(select(Lead).where(Lead.id == lead_id))
             lead = r.scalar_one_or_none()
             if lead:
                 customer_id = lead.customer_id
                 dealership_id = dealership_id or lead.dealership_id
-        if not lead:
+        
+        # Only try to find a lead by phone if we don't have a dealership_id yet
+        # (i.e., we're not explicitly sending to an unknown contact)
+        if not lead and not dealership_id:
             lead = await self.find_lead_by_phone(formatted)
             if lead:
                 lead_id = lead.id
                 customer_id = lead.customer_id
-                dealership_id = dealership_id or lead.dealership_id
-        if not lead:
+                dealership_id = lead.dealership_id
+        if not lead and not dealership_id:
             lead = await self.find_lead_by_lead_phone_suffix(formatted)
             if lead:
                 lead_id = lead.id
                 customer_id = lead.customer_id
-                dealership_id = dealership_id or lead.dealership_id
-        if not lead:
+                dealership_id = lead.dealership_id
+        if not lead and not dealership_id:
             customer = await self.find_customer_by_phone(formatted)
             if customer:
                 customer_id = customer.id
