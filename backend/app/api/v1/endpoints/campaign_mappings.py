@@ -24,8 +24,11 @@ from app.models.user import User
 from app.schemas.campaign_mapping import (
     CampaignMappingDisplayNameUpdate,
     CampaignMappingForDealership,
+    CampaignWhatsAppTemplateUpdate,
     DealershipCampaignMappingList,
+    WhatsAppTemplateBrief,
 )
+from app.models.whatsapp_template import WhatsAppTemplate
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -75,6 +78,36 @@ def get_dealership_admin_or_higher():
     return _check_role
 
 
+def _build_mapping_response(
+    m: CampaignMapping,
+    lead_count: int,
+) -> CampaignMappingForDealership:
+    """Build a CampaignMappingForDealership response with WhatsApp template info."""
+    wa_template_brief = None
+    if m.whatsapp_template:
+        wa_template_brief = WhatsAppTemplateBrief(
+            id=m.whatsapp_template.id,
+            content_sid=m.whatsapp_template.content_sid,
+            name=m.whatsapp_template.name,
+            variable_names=m.whatsapp_template.variable_names or [],
+        )
+    
+    return CampaignMappingForDealership(
+        id=m.id,
+        sync_source_id=m.sync_source_id,
+        sync_source_name=m.sync_source.name if m.sync_source else "Unknown",
+        match_pattern=m.match_pattern,
+        match_type=m.match_type,
+        display_name=m.display_name,
+        is_active=m.is_active,
+        leads_matched=lead_count,
+        updated_at=m.updated_at,
+        whatsapp_template_id=m.whatsapp_template_id,
+        whatsapp_template=wa_template_brief,
+        whatsapp_auto_send=m.whatsapp_auto_send,
+    )
+
+
 @router.get("/", response_model=DealershipCampaignMappingList)
 async def list_my_campaign_mappings(
     db: AsyncSession = Depends(get_db),
@@ -93,6 +126,7 @@ async def list_my_campaign_mappings(
         ).options(
             selectinload(CampaignMapping.sync_source),
             selectinload(CampaignMapping.dealership),
+            selectinload(CampaignMapping.whatsapp_template),
         ).order_by(CampaignMapping.sync_source_id, CampaignMapping.priority)
         
         result = await db.execute(query)
@@ -102,19 +136,7 @@ async def list_my_campaign_mappings(
         mapping_ids = {m.id for m in mappings}
         lead_counts = await get_lead_counts_by_mapping(db, mapping_ids)
         
-        items = []
-        for m in mappings:
-            items.append(CampaignMappingForDealership(
-                id=m.id,
-                sync_source_id=m.sync_source_id,
-                sync_source_name=m.sync_source.name if m.sync_source else "Unknown",
-                match_pattern=m.match_pattern,
-                match_type=m.match_type,
-                display_name=m.display_name,
-                is_active=m.is_active,
-                leads_matched=lead_counts.get(m.id, 0),
-                updated_at=m.updated_at,
-            ))
+        items = [_build_mapping_response(m, lead_counts.get(m.id, 0)) for m in mappings]
         
         return DealershipCampaignMappingList(
             dealership_id=UUID("00000000-0000-0000-0000-000000000000"),
@@ -156,6 +178,7 @@ async def list_my_campaign_mappings(
         )
     ).options(
         selectinload(CampaignMapping.sync_source),
+        selectinload(CampaignMapping.whatsapp_template),
     ).order_by(CampaignMapping.sync_source_id, CampaignMapping.priority)
     
     result = await db.execute(query)
@@ -165,19 +188,7 @@ async def list_my_campaign_mappings(
     mapping_ids = {m.id for m in mappings}
     lead_counts = await get_lead_counts_by_mapping(db, mapping_ids)
     
-    items = []
-    for m in mappings:
-        items.append(CampaignMappingForDealership(
-            id=m.id,
-            sync_source_id=m.sync_source_id,
-            sync_source_name=m.sync_source.name if m.sync_source else "Unknown",
-            match_pattern=m.match_pattern,
-            match_type=m.match_type,
-            display_name=m.display_name,
-            is_active=m.is_active,
-            leads_matched=lead_counts.get(m.id, 0),
-            updated_at=m.updated_at,
-        ))
+    items = [_build_mapping_response(m, lead_counts.get(m.id, 0)) for m in mappings]
     
     return DealershipCampaignMappingList(
         dealership_id=dealership.id,
@@ -201,11 +212,12 @@ async def update_campaign_display_name(
     - Super Admin: can update any mapping
     - Dealership Owner/Admin: can only update mappings assigned to their dealership
     """
-    # Get the mapping with its sync source
+    # Get the mapping with its sync source and whatsapp template
     query = select(CampaignMapping).where(
         CampaignMapping.id == mapping_id
     ).options(
         selectinload(CampaignMapping.sync_source),
+        selectinload(CampaignMapping.whatsapp_template),
     )
     
     result = await db.execute(query)
@@ -252,17 +264,7 @@ async def update_campaign_display_name(
     # Get actual lead count dynamically
     lead_counts = await get_lead_counts_by_mapping(db, {mapping.id})
     
-    return CampaignMappingForDealership(
-        id=mapping.id,
-        sync_source_id=mapping.sync_source_id,
-        sync_source_name=mapping.sync_source.name if mapping.sync_source else "Unknown",
-        match_pattern=mapping.match_pattern,
-        match_type=mapping.match_type,
-        display_name=mapping.display_name,
-        is_active=mapping.is_active,
-        leads_matched=lead_counts.get(mapping.id, 0),
-        updated_at=mapping.updated_at,
-    )
+    return _build_mapping_response(mapping, lead_counts.get(mapping.id, 0))
 
 
 @router.get("/{mapping_id}", response_model=CampaignMappingForDealership)
@@ -281,6 +283,7 @@ async def get_campaign_mapping(
         CampaignMapping.id == mapping_id
     ).options(
         selectinload(CampaignMapping.sync_source),
+        selectinload(CampaignMapping.whatsapp_template),
     )
     
     result = await db.execute(query)
@@ -314,14 +317,116 @@ async def get_campaign_mapping(
     # Get actual lead count dynamically
     lead_counts = await get_lead_counts_by_mapping(db, {mapping.id})
     
-    return CampaignMappingForDealership(
-        id=mapping.id,
-        sync_source_id=mapping.sync_source_id,
-        sync_source_name=mapping.sync_source.name if mapping.sync_source else "Unknown",
-        match_pattern=mapping.match_pattern,
-        match_type=mapping.match_type,
-        display_name=mapping.display_name,
-        is_active=mapping.is_active,
-        leads_matched=lead_counts.get(mapping.id, 0),
-        updated_at=mapping.updated_at,
+    return _build_mapping_response(mapping, lead_counts.get(mapping.id, 0))
+
+
+@router.patch("/{mapping_id}/whatsapp-template", response_model=CampaignMappingForDealership)
+async def update_campaign_whatsapp_template(
+    mapping_id: UUID,
+    *,
+    db: AsyncSession = Depends(get_db),
+    update_in: CampaignWhatsAppTemplateUpdate,
+    current_user: User = Depends(get_dealership_admin_or_higher()),
+) -> Any:
+    """
+    Update WhatsApp template assignment for a campaign mapping.
+    
+    - Super Admin: can update any mapping
+    - Dealership Owner/Admin: can only update mappings assigned to their dealership
+    
+    Set whatsapp_template_id to null to remove template assignment.
+    Set whatsapp_auto_send to true to auto-send template when new leads match this campaign.
+    """
+    # Get the mapping with its sync source
+    query = select(CampaignMapping).where(
+        CampaignMapping.id == mapping_id
+    ).options(
+        selectinload(CampaignMapping.sync_source),
+        selectinload(CampaignMapping.whatsapp_template),
     )
+    
+    result = await db.execute(query)
+    mapping = result.scalar_one_or_none()
+    
+    if not mapping:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Campaign mapping not found"
+        )
+    
+    # Check permission
+    if current_user.role != UserRole.SUPER_ADMIN:
+        if not current_user.dealership_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User is not assigned to a dealership"
+            )
+        
+        # Check if mapping belongs to user's dealership
+        mapping_dealership_id = mapping.dealership_id
+        if mapping_dealership_id is None and mapping.sync_source:
+            mapping_dealership_id = mapping.sync_source.default_dealership_id
+        
+        if mapping_dealership_id != current_user.dealership_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only update mappings assigned to your dealership"
+            )
+    
+    # Validate template exists and is accessible if provided
+    if update_in.whatsapp_template_id is not None:
+        template_result = await db.execute(
+            select(WhatsAppTemplate).where(WhatsAppTemplate.id == update_in.whatsapp_template_id)
+        )
+        template = template_result.scalar_one_or_none()
+        
+        if not template:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="WhatsApp template not found"
+            )
+        
+        # Check template is accessible (global or same dealership)
+        if template.dealership_id is not None:
+            effective_dealership = mapping.dealership_id
+            if effective_dealership is None and mapping.sync_source:
+                effective_dealership = mapping.sync_source.default_dealership_id
+            
+            if template.dealership_id != effective_dealership:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Cannot use a template from another dealership"
+                )
+    
+    # Update fields
+    old_template_id = mapping.whatsapp_template_id
+    old_auto_send = mapping.whatsapp_auto_send
+    
+    mapping.whatsapp_template_id = update_in.whatsapp_template_id
+    mapping.whatsapp_auto_send = update_in.whatsapp_auto_send
+    mapping.updated_by = current_user.id
+    
+    await db.commit()
+    
+    # Reload with template relationship
+    await db.refresh(mapping)
+    query = select(CampaignMapping).where(
+        CampaignMapping.id == mapping_id
+    ).options(
+        selectinload(CampaignMapping.sync_source),
+        selectinload(CampaignMapping.whatsapp_template),
+    )
+    result = await db.execute(query)
+    mapping = result.scalar_one()
+    
+    logger.info(
+        f"Campaign WhatsApp template updated: mapping={mapping_id} "
+        f"template={old_template_id}->{mapping.whatsapp_template_id} "
+        f"auto_send={old_auto_send}->{mapping.whatsapp_auto_send} "
+        f"by {current_user.email}"
+    )
+    
+    # Get actual lead count dynamically
+    lead_counts = await get_lead_counts_by_mapping(db, {mapping.id})
+    
+    return _build_mapping_response(mapping, lead_counts.get(mapping.id, 0))

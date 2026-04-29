@@ -691,6 +691,18 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                             await maybe_enqueue_ai_outbound(session, lead.id)
                         except Exception as e:
                             logger.error(f"Failed to enqueue AI outbound for sheet lead {lead.id}: {e}")
+                        
+                        # WhatsApp auto-send for campaigns with auto_send enabled
+                        try:
+                            matched_mapping = next(
+                                (ld.get("matched_mapping") for ld in parsed_leads if ld.get("external_id") == lead.external_id),
+                                None
+                            )
+                            if matched_mapping and matched_mapping.whatsapp_auto_send:
+                                from app.tasks.whatsapp_tasks import send_campaign_whatsapp_for_lead
+                                await send_campaign_whatsapp_for_lead(session, lead.id, matched_mapping)
+                        except Exception as e:
+                            logger.warning(f"Failed to auto-send WhatsApp for lead {lead.id}: {e}")
                     
                     try:
                         from app.services.notification_service import emit_badges_refresh

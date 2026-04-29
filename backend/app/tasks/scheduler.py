@@ -124,6 +124,17 @@ def setup_scheduler():
         max_instances=1,
     )
     
+    # WhatsApp bulk send processing - runs every 2 minutes
+    from app.tasks.whatsapp_tasks import run_process_pending_bulk_sends
+    scheduler.add_job(
+        run_process_pending_bulk_sends,
+        trigger=IntervalTrigger(minutes=2, start_date=datetime.now() + timedelta(seconds=100)),
+        id="whatsapp_bulk_sends",
+        name="Process pending WhatsApp bulk sends",
+        replace_existing=True,
+        max_instances=1,
+    )
+    
     logger.info("Background scheduler configured (tasks staggered to prevent blocking):")
     logger.info("  - IMAP email sync (every 2 minutes, offset: 0s)")
     logger.info("  - Google Sheets lead sync (every 2 minutes, offset: 40s)")
@@ -132,6 +143,7 @@ def setup_scheduler():
     logger.info("  - Appointment reminders (every 5 minutes)")
     logger.info("  - Follow-up reminders (every 15 minutes)")
     logger.info("  - Missed appointment detection (every 30 minutes)")
+    logger.info("  - WhatsApp bulk sends (every 2 minutes, offset: 100s)")
 
 
 def start_scheduler():

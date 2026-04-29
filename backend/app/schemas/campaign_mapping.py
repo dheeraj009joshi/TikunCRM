@@ -98,6 +98,17 @@ class CampaignMappingList(BaseModel):
     total: int
 
 
+class WhatsAppTemplateBrief(BaseModel):
+    """Brief WhatsApp template info for campaign mapping responses"""
+    id: UUID
+    content_sid: str
+    name: str
+    variable_names: List[str] = []
+
+    class Config:
+        from_attributes = True
+
+
 class CampaignMappingForDealership(BaseModel):
     """Campaign mapping view for Dealership Admin/Owner"""
     id: UUID
@@ -109,6 +120,10 @@ class CampaignMappingForDealership(BaseModel):
     is_active: bool
     leads_matched: int
     updated_at: Optional[datetime] = None
+    # WhatsApp campaign fields
+    whatsapp_template_id: Optional[UUID] = None
+    whatsapp_template: Optional[WhatsAppTemplateBrief] = None
+    whatsapp_auto_send: bool = False
     
     class Config:
         from_attributes = True
@@ -120,3 +135,9 @@ class DealershipCampaignMappingList(BaseModel):
     dealership_name: str
     items: List[CampaignMappingForDealership]
     total: int
+
+
+class CampaignWhatsAppTemplateUpdate(BaseModel):
+    """Schema for updating WhatsApp template assignment for a campaign"""
+    whatsapp_template_id: Optional[UUID] = Field(None, description="WhatsApp template ID (null to remove)")
+    whatsapp_auto_send: bool = Field(False, description="Auto-send template when new lead matches")

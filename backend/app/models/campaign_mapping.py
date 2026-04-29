@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from app.models.lead_sync_source import LeadSyncSource
     from app.models.dealership import Dealership
     from app.models.user import User
+    from app.models.whatsapp_template import WhatsAppTemplate
 
 
 class MatchType(str, Enum):
@@ -91,6 +92,19 @@ class CampaignMapping(Base):
         Boolean, default=True, nullable=False
     )
 
+    # WhatsApp template assignment for campaign outreach
+    whatsapp_template_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("whatsapp_templates.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Default WhatsApp template for leads in this campaign"
+    )
+    whatsapp_auto_send: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False,
+        comment="Auto-send WhatsApp template when new lead matches this campaign"
+    )
+
     # Statistics
     leads_matched: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False,
@@ -136,6 +150,11 @@ class CampaignMapping(Base):
     updater: Mapped[Optional["User"]] = relationship(
         "User",
         foreign_keys=[updated_by],
+        lazy="selectin"
+    )
+    whatsapp_template: Mapped[Optional["WhatsAppTemplate"]] = relationship(
+        "WhatsAppTemplate",
+        foreign_keys=[whatsapp_template_id],
         lazy="selectin"
     )
 

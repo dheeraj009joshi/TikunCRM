@@ -21,6 +21,9 @@ from app.models.lead import Lead
 from app.models.customer import Customer
 from app.models.whatsapp_log import WhatsAppLog, WhatsAppDirection
 from app.models.whatsapp_template import WhatsAppTemplate
+from app.models.whatsapp_message import WhatsAppBulkSend
+from app.models.campaign_mapping import CampaignMapping
+from app.models.lead_campaign import LeadCampaign
 from app.services.whatsapp_conversation_service import get_whatsapp_conversation_service
 from app.services.dealership_twilio_config_service import get_effective_twilio_config
 from app.core.websocket_manager import ws_manager
@@ -125,10 +128,25 @@ class WhatsAppTemplateItem(BaseModel):
     content_sid: str
     name: str
     variable_names: List[str]
+    dealership_id: Optional[UUID] = None
 
 
 class WhatsAppTemplatesListResponse(BaseModel):
     items: List[WhatsAppTemplateItem]
+
+
+class CreateWhatsAppTemplateRequest(BaseModel):
+    content_sid: str = Field(..., min_length=1, max_length=64, description="Twilio Content SID (e.g., HX...)")
+    name: str = Field(..., min_length=1, max_length=255, description="Template display name")
+    variable_names: List[str] = Field(default_factory=list, description="Variable placeholder keys e.g. ['1', '2']")
+    dealership_id: Optional[UUID] = Field(None, description="Dealership ID (null for global template)")
+
+
+class UpdateWhatsAppTemplateRequest(BaseModel):
+    content_sid: Optional[str] = Field(None, min_length=1, max_length=64)
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    variable_names: Optional[List[str]] = None
+    dealership_id: Optional[UUID] = None
 
 
 @router.get("/leads/search", response_model=List[WhatsAppLeadSearchItem])
@@ -205,10 +223,225 @@ async def list_whatsapp_templates(
                 content_sid=t.content_sid,
                 name=t.name,
                 variable_names=t.variable_names or [],
+                dealership_id=t.dealership_id,
             )
             for t in templates
         ]
     )
+
+
+@router.post("/templates", response_model=WhatsAppTemplateItem, status_code=status.HTTP_201_CREATED)
+async def create_whatsapp_template(
+    request: CreateWhatsAppTemplateRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Create a new WhatsApp template. Admin/Owner only.
+    - Super Admin can create global templates (dealership_id=null) or for any dealership
+    - Dealership Admin/Owner can only create templates for their own dealership
+    """
+    if current_user.role == UserRole.SALESPERSON:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can create templates"
+        )
+
+    # Check permissions for dealership_id
+    if current_user.role != UserRole.SUPER_ADMIN:
+        if request.dealership_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only super admin can create global templates"
+            )
+        if request.dealership_id != current_user.dealership_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot create templates for other dealerships"
+            )
+
+    # Check if content_sid already exists
+    existing = await db.execute(
+        select(WhatsAppTemplate).where(WhatsAppTemplate.content_sid == request.content_sid)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Template with content_sid {request.content_sid} already exists"
+        )
+
+    template = WhatsAppTemplate(
+        content_sid=request.content_sid,
+        name=request.name,
+        variable_names=request.variable_names,
+        dealership_id=request.dealership_id,
+    )
+    db.add(template)
+    await db.commit()
+    await db.refresh(template)
+
+    logger.info(f"WhatsApp template created: {template.id} by user {current_user.id}")
+
+    return WhatsAppTemplateItem(
+        id=template.id,
+        content_sid=template.content_sid,
+        name=template.name,
+        variable_names=template.variable_names or [],
+        dealership_id=template.dealership_id,
+    )
+
+
+@router.get("/templates/{template_id}", response_model=WhatsAppTemplateItem)
+async def get_whatsapp_template(
+    template_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a single WhatsApp template by ID."""
+    result = await db.execute(
+        select(WhatsAppTemplate).where(WhatsAppTemplate.id == template_id)
+    )
+    template = result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+
+    # Check access - user can see global templates or their dealership's templates
+    if template.dealership_id is not None:
+        if current_user.role != UserRole.SUPER_ADMIN and template.dealership_id != current_user.dealership_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    return WhatsAppTemplateItem(
+        id=template.id,
+        content_sid=template.content_sid,
+        name=template.name,
+        variable_names=template.variable_names or [],
+        dealership_id=template.dealership_id,
+    )
+
+
+@router.put("/templates/{template_id}", response_model=WhatsAppTemplateItem)
+async def update_whatsapp_template(
+    template_id: UUID,
+    request: UpdateWhatsAppTemplateRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Update a WhatsApp template. Admin/Owner only.
+    - Super Admin can update any template
+    - Dealership Admin/Owner can only update their dealership's templates
+    """
+    if current_user.role == UserRole.SALESPERSON:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can update templates"
+        )
+
+    result = await db.execute(
+        select(WhatsAppTemplate).where(WhatsAppTemplate.id == template_id)
+    )
+    template = result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+
+    # Check permissions
+    if current_user.role != UserRole.SUPER_ADMIN:
+        if template.dealership_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only super admin can update global templates"
+            )
+        if template.dealership_id != current_user.dealership_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot update templates from other dealerships"
+            )
+
+    # Check content_sid uniqueness if changing
+    if request.content_sid and request.content_sid != template.content_sid:
+        existing = await db.execute(
+            select(WhatsAppTemplate).where(
+                WhatsAppTemplate.content_sid == request.content_sid,
+                WhatsAppTemplate.id != template_id
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Template with content_sid {request.content_sid} already exists"
+            )
+        template.content_sid = request.content_sid
+
+    if request.name is not None:
+        template.name = request.name
+    if request.variable_names is not None:
+        template.variable_names = request.variable_names
+    if request.dealership_id is not None:
+        # Only super admin can change dealership assignment
+        if current_user.role != UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only super admin can change template dealership"
+            )
+        template.dealership_id = request.dealership_id
+
+    await db.commit()
+    await db.refresh(template)
+
+    logger.info(f"WhatsApp template updated: {template.id} by user {current_user.id}")
+
+    return WhatsAppTemplateItem(
+        id=template.id,
+        content_sid=template.content_sid,
+        name=template.name,
+        variable_names=template.variable_names or [],
+        dealership_id=template.dealership_id,
+    )
+
+
+@router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_whatsapp_template(
+    template_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Delete a WhatsApp template. Admin/Owner only.
+    - Super Admin can delete any template
+    - Dealership Admin/Owner can only delete their dealership's templates
+    """
+    if current_user.role == UserRole.SALESPERSON:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can delete templates"
+        )
+
+    result = await db.execute(
+        select(WhatsAppTemplate).where(WhatsAppTemplate.id == template_id)
+    )
+    template = result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+
+    # Check permissions
+    if current_user.role != UserRole.SUPER_ADMIN:
+        if template.dealership_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only super admin can delete global templates"
+            )
+        if template.dealership_id != current_user.dealership_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot delete templates from other dealerships"
+            )
+
+    await db.delete(template)
+    await db.commit()
+
+    logger.info(f"WhatsApp template deleted: {template_id} by user {current_user.id}")
+
+    return None
 
 
 @router.post("/send", response_model=SendWhatsAppResponse)
@@ -490,3 +723,232 @@ async def get_whatsapp_unread_count(
         dealership_id = current_user.dealership_id
     count = await service.get_unread_count(user_id=user_id, dealership_id=dealership_id)
     return WhatsAppUnreadCountResponse(count=count)
+
+
+# ======================= BULK SEND =======================
+
+class BulkSendRequest(BaseModel):
+    """Request to send WhatsApp template to multiple leads."""
+    campaign_mapping_id: Optional[UUID] = Field(None, description="Filter leads by campaign mapping ID")
+    lead_ids: Optional[List[UUID]] = Field(None, description="Explicit list of lead IDs (max 500)")
+    content_sid: str = Field(..., description="Twilio Content SID for the template")
+    content_variables: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Template variables - use {{lead_name}}, {{first_name}}, etc. for dynamic values"
+    )
+    name: Optional[str] = Field(None, max_length=255, description="Optional name for this bulk send")
+
+    @model_validator(mode="after")
+    def validate_target(self):
+        if not self.campaign_mapping_id and not self.lead_ids:
+            raise ValueError("Provide either campaign_mapping_id or lead_ids")
+        if self.lead_ids and len(self.lead_ids) > 500:
+            raise ValueError("Maximum 500 leads per bulk send")
+        return self
+
+
+class BulkSendResponse(BaseModel):
+    """Response from bulk send initiation."""
+    id: UUID
+    status: str
+    total_recipients: int
+    message: str
+
+
+class BulkSendStatusResponse(BaseModel):
+    """Status of a bulk send operation."""
+    id: UUID
+    name: Optional[str]
+    status: str
+    total_recipients: int
+    sent_count: int
+    delivered_count: int
+    failed_count: int
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+    created_at: datetime
+
+
+@router.post("/bulk-send", response_model=BulkSendResponse)
+async def initiate_bulk_send(
+    request: BulkSendRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Initiate a bulk WhatsApp template send to leads.
+    
+    - Admin/Owner only
+    - Provide either campaign_mapping_id (sends to all leads in that campaign) or explicit lead_ids
+    - content_variables can include placeholders like {{first_name}}, {{lead_name}} which will be replaced per-lead
+    
+    The actual sends are queued and processed in the background.
+    """
+    if current_user.role == UserRole.SALESPERSON:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can initiate bulk sends"
+        )
+
+    # Verify template exists
+    template_result = await db.execute(
+        select(WhatsAppTemplate).where(WhatsAppTemplate.content_sid == request.content_sid)
+    )
+    template = template_result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Template with content_sid {request.content_sid} not found"
+        )
+
+    # Build lead query
+    lead_query = select(Lead).where(Lead.phone.isnot(None), Lead.phone != "")
+
+    # Filter by dealership for non-super-admins
+    if current_user.role != UserRole.SUPER_ADMIN:
+        if not current_user.dealership_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User not assigned to a dealership"
+            )
+        lead_query = lead_query.where(Lead.dealership_id == current_user.dealership_id)
+
+    if request.lead_ids:
+        lead_query = lead_query.where(Lead.id.in_(request.lead_ids))
+    elif request.campaign_mapping_id:
+        # Get leads matching this campaign mapping
+        lead_query = lead_query.where(
+            or_(
+                Lead.campaign_mapping_id == request.campaign_mapping_id,
+                Lead.id.in_(
+                    select(LeadCampaign.lead_id).where(
+                        LeadCampaign.campaign_mapping_id == request.campaign_mapping_id
+                    )
+                )
+            )
+        )
+
+    # Count leads
+    from sqlalchemy import func as sql_func
+    count_result = await db.execute(
+        select(sql_func.count()).select_from(lead_query.subquery())
+    )
+    total_recipients = count_result.scalar() or 0
+
+    if total_recipients == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No leads found matching criteria with valid phone numbers"
+        )
+
+    # Create bulk send record
+    bulk_send = WhatsAppBulkSend(
+        user_id=current_user.id,
+        dealership_id=current_user.dealership_id,
+        name=request.name or f"Bulk send - {template.name}",
+        message_template=request.content_sid,
+        filter_criteria={
+            "campaign_mapping_id": str(request.campaign_mapping_id) if request.campaign_mapping_id else None,
+            "lead_ids": [str(lid) for lid in request.lead_ids] if request.lead_ids else None,
+            "content_variables": request.content_variables,
+        },
+        total_recipients=total_recipients,
+        status="pending",
+    )
+    db.add(bulk_send)
+    await db.commit()
+    await db.refresh(bulk_send)
+
+    logger.info(
+        f"Bulk WhatsApp send created: {bulk_send.id} by {current_user.email} "
+        f"template={request.content_sid} recipients={total_recipients}"
+    )
+
+    # TODO: Queue background task to process the bulk send
+    # For now, we just create the record - Phase 4 will add the actual sending
+
+    return BulkSendResponse(
+        id=bulk_send.id,
+        status=bulk_send.status,
+        total_recipients=total_recipients,
+        message=f"Bulk send queued for {total_recipients} recipients",
+    )
+
+
+@router.get("/bulk-sends", response_model=List[BulkSendStatusResponse])
+async def list_bulk_sends(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List bulk send operations for the current user's dealership."""
+    if current_user.role == UserRole.SALESPERSON:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can view bulk sends"
+        )
+
+    query = select(WhatsAppBulkSend).order_by(WhatsAppBulkSend.created_at.desc())
+
+    if current_user.role != UserRole.SUPER_ADMIN:
+        query = query.where(WhatsAppBulkSend.dealership_id == current_user.dealership_id)
+
+    query = query.limit(limit).offset(offset)
+    result = await db.execute(query)
+    bulk_sends = result.scalars().all()
+
+    return [
+        BulkSendStatusResponse(
+            id=bs.id,
+            name=bs.name,
+            status=bs.status,
+            total_recipients=bs.total_recipients,
+            sent_count=bs.sent_count,
+            delivered_count=bs.delivered_count,
+            failed_count=bs.failed_count,
+            started_at=bs.started_at,
+            completed_at=bs.completed_at,
+            created_at=bs.created_at,
+        )
+        for bs in bulk_sends
+    ]
+
+
+@router.get("/bulk-sends/{bulk_send_id}", response_model=BulkSendStatusResponse)
+async def get_bulk_send_status(
+    bulk_send_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get status of a specific bulk send operation."""
+    if current_user.role == UserRole.SALESPERSON:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can view bulk sends"
+        )
+
+    result = await db.execute(
+        select(WhatsAppBulkSend).where(WhatsAppBulkSend.id == bulk_send_id)
+    )
+    bulk_send = result.scalar_one_or_none()
+
+    if not bulk_send:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bulk send not found")
+
+    if current_user.role != UserRole.SUPER_ADMIN:
+        if bulk_send.dealership_id != current_user.dealership_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    return BulkSendStatusResponse(
+        id=bulk_send.id,
+        name=bulk_send.name,
+        status=bulk_send.status,
+        total_recipients=bulk_send.total_recipients,
+        sent_count=bulk_send.sent_count,
+        delivered_count=bulk_send.delivered_count,
+        failed_count=bulk_send.failed_count,
+        started_at=bulk_send.started_at,
+        completed_at=bulk_send.completed_at,
+        created_at=bulk_send.created_at,
+    )
