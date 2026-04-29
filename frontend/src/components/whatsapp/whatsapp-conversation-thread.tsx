@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { format, isToday, isYesterday } from "date-fns";
-import { Loader2, ArrowLeft, FileText, Phone } from "lucide-react";
+import { Loader2, ArrowLeft, FileText, Phone, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { WhatsAppMessageBubble } from "./whatsapp-message-bubble";
@@ -93,11 +93,20 @@ export function WhatsAppConversationThread({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [timelineItems, setTimelineItems] = useState<TimelineItem[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const previousLeadIdRef = useRef<string | null>(null);
   const shouldScrollRef = useRef(true);
   // Track message IDs we sent ourselves to prevent WebSocket duplicates
   const sentMessageIdsRef = useRef<Set<string>>(new Set());
+  // Track scroll position for maintaining position when loading more
+  const prevScrollHeightRef = useRef<number>(0);
+  // Track item count for scroll behavior
+  const prevItemCountRef = useRef(0);
+  // Track if user is at bottom (for showing jump to bottom button)
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [newMessageCount, setNewMessageCount] = useState(0);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [templates, setTemplates] = useState<WhatsAppTemplateItem[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<WhatsAppTemplateItem | null>(null);
@@ -127,8 +136,9 @@ export function WhatsAppConversationThread({
       if (!silent) {
         setError(null);
       }
-      const timeline = await whatsappService.getTimeline(leadId);
+      const timeline = await whatsappService.getTimeline(leadId, 50);
       setTimelineItems(timeline.items);
+      setHasMore(timeline.has_more);
     } catch (err) {
       console.error(err);
       if (!silent) {
@@ -144,6 +154,47 @@ export function WhatsAppConversationThread({
     }
   }, [leadId, toast]);
 
+  // Load older messages when scrolling to top
+  const loadMoreMessages = useCallback(async () => {
+    if (loadingMore || !hasMore || timelineItems.length === 0) return;
+    
+    // Get the oldest item's timestamp as cursor
+    const oldestItem = timelineItems[0];
+    if (!oldestItem) return;
+    
+    setLoadingMore(true);
+    
+    // Save current scroll height to maintain position after loading
+    if (scrollContainerRef.current) {
+      prevScrollHeightRef.current = scrollContainerRef.current.scrollHeight;
+    }
+    
+    try {
+      const timeline = await whatsappService.getTimeline(leadId, 50, oldestItem.created_at);
+      
+      if (timeline.items.length > 0) {
+        // Prepend older messages
+        setTimelineItems(prev => [...timeline.items, ...prev]);
+        setHasMore(timeline.has_more);
+        
+        // Restore scroll position after DOM update
+        requestAnimationFrame(() => {
+          if (scrollContainerRef.current) {
+            const newScrollHeight = scrollContainerRef.current.scrollHeight;
+            const heightDiff = newScrollHeight - prevScrollHeightRef.current;
+            scrollContainerRef.current.scrollTop = heightDiff;
+          }
+        });
+      } else {
+        setHasMore(false);
+      }
+    } catch (err) {
+      console.error("Failed to load more messages:", err);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [leadId, loadingMore, hasMore, timelineItems]);
+
   // When leadId changes, reset state and load new conversation instantly
   useEffect(() => {
     const isNewLead = previousLeadIdRef.current !== null && previousLeadIdRef.current !== leadId;
@@ -152,8 +203,13 @@ export function WhatsAppConversationThread({
     // Clear old data when switching leads for a clean slate
     if (isNewLead) {
       setTimelineItems([]);
+      setHasMore(false);
+      prevItemCountRef.current = 0;
+      setIsAtBottom(true);
+      setNewMessageCount(0);
     }
     setSessionWindow(null);
+    setInitialLoading(true);
     void loadConversation();
   }, [leadId, loadConversation]);
 
@@ -391,10 +447,49 @@ export function WhatsAppConversationThread({
     });
   }, []);
 
-  // Scroll to bottom when timeline items change
+  // Jump to bottom (user clicked the floating button)
+  const handleJumpToBottom = useCallback(() => {
+    setNewMessageCount(0);
+    setIsAtBottom(true);
+    messagesEndRef.current?.scrollIntoView({ 
+      behavior: "smooth",
+      block: "end"
+    });
+  }, []);
+
+  // Scroll to bottom only for new messages (not when loading older ones at the top)
   useEffect(() => {
-    scrollToBottom(true);
-  }, [timelineItems.length, scrollToBottom]);
+    // Only scroll to bottom if items were added at the end (new message)
+    // Not when items were prepended (loading more)
+    const prevCount = prevItemCountRef.current;
+    const currentCount = timelineItems.length;
+    
+    if (currentCount > prevCount && prevCount > 0) {
+      // New message(s) added - check if we should auto-scroll or show badge
+      const container = scrollContainerRef.current;
+      const distanceFromBottom = container 
+        ? container.scrollHeight - container.scrollTop - container.clientHeight
+        : 0;
+      const wasAtBottom = distanceFromBottom < 150;
+      
+      if (wasAtBottom) {
+        // User was at bottom - auto-scroll to new message
+        scrollToBottom(true);
+        setNewMessageCount(0);
+      } else {
+        // User is reading old messages - increment badge count
+        const newMessages = currentCount - prevCount;
+        setNewMessageCount(prev => prev + newMessages);
+      }
+    } else if (prevCount === 0 && currentCount > 0) {
+      // Initial load - scroll to bottom
+      scrollToBottom(true);
+      setIsAtBottom(true);
+      setNewMessageCount(0);
+    }
+    
+    prevItemCountRef.current = currentCount;
+  }, [timelineItems, scrollToBottom]);
 
   // Also scroll when initial load completes
   useEffect(() => {
@@ -402,6 +497,32 @@ export function WhatsAppConversationThread({
       setTimeout(() => scrollToBottom(true), 100);
     }
   }, [initialLoading, scrollToBottom]);
+
+  // Infinite scroll - load more when scrolling to top & track if at bottom
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      // Trigger load more when scrolled near the top (within 100px)
+      if (container.scrollTop < 100 && hasMore && !loadingMore && !initialLoading) {
+        loadMoreMessages();
+      }
+      
+      // Track if user is at bottom (within 150px)
+      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      const atBottom = distanceFromBottom < 150;
+      setIsAtBottom(atBottom);
+      
+      // Reset new message count when user scrolls to bottom
+      if (atBottom) {
+        setNewMessageCount(0);
+      }
+    };
+
+    container.addEventListener("scroll", handleScroll);
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, [hasMore, loadingMore, initialLoading, loadMoreMessages]);
 
   const freeFormAllowed =
     sessionWindow !== null && sessionWindow.within_window;
@@ -658,13 +779,28 @@ export function WhatsAppConversationThread({
         )}
       </div>
 
-      {/* Messages area - WhatsApp chat background */}
-      <div
-        className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#0b141a]"
-        style={{
-          backgroundImage: "url(\"data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2317222d' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E\")",
-        }}
-      >
+      {/* Messages area wrapper - for floating button positioning */}
+      <div className="flex-1 relative min-h-0">
+        {/* Scrollable messages area - WhatsApp chat background */}
+        <div
+          ref={scrollContainerRef}
+          className="absolute inset-0 overflow-y-auto p-4 space-y-4 bg-[#0b141a]"
+          style={{
+            backgroundImage: "url(\"data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2317222d' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E\")",
+          }}
+        >
+        {/* Loading indicator for older messages */}
+        {loadingMore && (
+          <div className="flex justify-center py-2">
+            <Loader2 className="h-5 w-5 animate-spin text-[#8696a0]" />
+          </div>
+        )}
+        {/* "Load more" indicator when there are older messages */}
+        {hasMore && !loadingMore && timelineItems.length > 0 && (
+          <div className="text-center py-2">
+            <span className="text-xs text-[#8696a0]">↑ Scroll up for older messages</span>
+          </div>
+        )}
         {timelineItems.length === 0 ? (
           <div className="text-center text-[#8696a0] py-8 px-4">
             {sessionWindowLoading
@@ -694,6 +830,23 @@ export function WhatsAppConversationThread({
           ))
         )}
         <div ref={messagesEndRef} />
+        </div>
+        
+        {/* Jump to bottom floating button */}
+        {!isAtBottom && (
+          <button
+            onClick={handleJumpToBottom}
+            className="absolute bottom-4 right-4 h-10 w-10 rounded-full bg-[#202c33] border border-[#3b4a54] shadow-lg flex items-center justify-center hover:bg-[#2a3942] transition-all z-10"
+            title="Jump to bottom"
+          >
+            <ChevronDown className="h-5 w-5 text-[#8696a0]" />
+            {newMessageCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1.5 bg-[#00a884] text-white text-xs font-medium rounded-full flex items-center justify-center">
+                {newMessageCount > 99 ? "99+" : newMessageCount}
+              </span>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Composer - dark bar */}

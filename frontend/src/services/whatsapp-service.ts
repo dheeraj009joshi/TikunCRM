@@ -379,10 +379,14 @@ class WhatsAppService {
   }
 
   /** Get unified timeline of messages and calls */
-  async getTimeline(leadId: string, limit = 50): Promise<TimelineResponse> {
+  async getTimeline(leadId: string, limit = 50, before?: string): Promise<TimelineResponse> {
+    const params: { limit: number; before?: string } = { limit };
+    if (before) {
+      params.before = before;
+    }
     const response = await apiClient.get<TimelineResponse>(
       `/whatsapp/conversations/${leadId}/timeline`,
-      { params: { limit } }
+      { params }
     );
     return response.data;
   }

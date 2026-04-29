@@ -896,12 +896,17 @@ async def get_whatsapp_session_window(
 async def get_whatsapp_timeline(
     lead_id: UUID,
     limit: int = Query(50, ge=1, le=100),
+    before: Optional[datetime] = Query(None, description="Load messages before this timestamp (for pagination)"),
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Get a unified timeline of WhatsApp messages and voice calls for a lead.
-    Items are sorted by timestamp, newest first.
+    Items are sorted by timestamp, oldest first for display.
+    
+    Pagination: Use `before` parameter to load older messages.
+    - First load: no `before` param, returns most recent messages
+    - Load more: pass the `created_at` of the oldest message as `before`
     """
     result = await db.execute(
         select(Lead).options(selectinload(Lead.customer)).where(Lead.id == lead_id)
@@ -915,27 +920,25 @@ async def get_whatsapp_timeline(
         if current_user.dealership_id and lead.dealership_id != current_user.dealership_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    # Fetch WhatsApp messages
-    msg_result = await db.execute(
-        select(WhatsAppLog)
-        .where(WhatsAppLog.lead_id == lead_id)
-        .order_by(WhatsAppLog.created_at.desc())
-        .limit(limit)
-    )
-    messages = msg_result.scalars().all()
+    # Fetch WhatsApp messages - get messages BEFORE the cursor (older messages)
+    msg_query = select(WhatsAppLog).where(WhatsAppLog.lead_id == lead_id)
+    if before:
+        msg_query = msg_query.where(WhatsAppLog.created_at < before)
+    msg_query = msg_query.order_by(WhatsAppLog.created_at.desc()).limit(limit + 1)  # +1 to check has_more
+    msg_result = await db.execute(msg_query)
+    messages = list(msg_result.scalars().all())
 
-    # Fetch call logs
-    call_result = await db.execute(
-        select(CallLog)
-        .where(CallLog.lead_id == lead_id)
-        .order_by(CallLog.started_at.desc())
-        .limit(limit)
-    )
-    calls = call_result.scalars().all()
+    # Fetch call logs - same pagination
+    call_query = select(CallLog).where(CallLog.lead_id == lead_id)
+    if before:
+        call_query = call_query.where(CallLog.started_at < before)
+    call_query = call_query.order_by(CallLog.started_at.desc()).limit(limit + 1)
+    call_result = await db.execute(call_query)
+    calls = list(call_result.scalars().all())
 
-    # Build timeline items
+    # Build timeline items from messages
     timeline_items: List[TimelineItem] = []
-
+    
     for msg in messages:
         timeline_items.append(TimelineItem(
             item_type="message",
@@ -981,20 +984,28 @@ async def get_whatsapp_timeline(
             ),
         ))
 
-    # Sort by created_at descending, then reverse for oldest-first display
-    timeline_items.sort(key=lambda x: x.created_at, reverse=False)
+    # Sort by created_at descending (newest first) for pagination logic
+    timeline_items.sort(key=lambda x: x.created_at, reverse=True)
+    
+    # Check if there are more items (we fetched limit+1)
+    has_more = len(timeline_items) > limit
+    
+    # Trim to limit and reverse for oldest-first display
+    display_items = timeline_items[:limit]
+    display_items.reverse()  # Now oldest first for chat display
 
-    # Mark messages as read
-    service = get_whatsapp_conversation_service(db)
-    await service.mark_conversation_as_read(lead_id)
-    await db.commit()
+    # Mark messages as read (only on initial load, not pagination)
+    if not before:
+        service = get_whatsapp_conversation_service(db)
+        await service.mark_conversation_as_read(lead_id)
+        await db.commit()
 
     return TimelineResponse(
         lead_id=lead.id,
         lead_name=f"{lead.first_name} {lead.last_name or ''}".strip(),
         lead_phone=lead.phone,
-        items=timeline_items[-limit:],
-        has_more=len(timeline_items) > limit,
+        items=display_items,
+        has_more=has_more,
     )
 
 
