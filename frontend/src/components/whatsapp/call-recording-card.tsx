@@ -1,16 +1,14 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { format } from "date-fns";
 import { 
-  Phone, 
   PhoneIncoming, 
   PhoneOutgoing, 
   PhoneMissed, 
   Play, 
   Pause,
   Download,
-  Clock
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -22,43 +20,36 @@ interface CallRecordingCardProps {
 
 export function CallRecordingCard({ call }: CallRecordingCardProps) {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  const formatDuration = (seconds: number): string => {
-    if (seconds < 60) return `${seconds}s`;
+  const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
+    const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
   const getCallIcon = () => {
     if (call.status === "no-answer" || call.status === "failed" || call.status === "canceled") {
-      return <PhoneMissed className="h-5 w-5 text-red-400" />;
+      return <PhoneMissed className="h-4 w-4" />;
     }
     if (call.direction === "inbound") {
-      return <PhoneIncoming className="h-5 w-5 text-[#00a884]" />;
+      return <PhoneIncoming className="h-4 w-4" />;
     }
-    return <PhoneOutgoing className="h-5 w-5 text-[#00a884]" />;
+    return <PhoneOutgoing className="h-4 w-4" />;
   };
 
   const getCallTitle = () => {
-    if (call.status === "no-answer") return "Missed call";
+    if (call.status === "no-answer") return "Missed voice call";
     if (call.status === "failed") return "Failed call";
     if (call.status === "canceled") return "Canceled call";
     if (call.status === "busy") return "Busy";
-    if (call.direction === "inbound") return "Incoming call";
-    return "Outgoing call";
+    if (call.direction === "inbound") return "Voice call";
+    return "Voice call";
   };
 
-  const getStatusColor = () => {
-    if (["no-answer", "failed", "canceled"].includes(call.status)) {
-      return "text-red-400";
-    }
-    if (call.status === "completed") {
-      return "text-[#00a884]";
-    }
-    return "text-[#8696a0]";
-  };
+  const isMissed = ["no-answer", "failed", "canceled"].includes(call.status);
 
   const togglePlayback = () => {
     if (!audioRef.current) return;
@@ -69,6 +60,22 @@ export function CallRecordingCard({ call }: CallRecordingCardProps) {
       audioRef.current.play();
     }
     setIsPlaying(!isPlaying);
+  };
+
+  const handleTimeUpdate = () => {
+    if (!audioRef.current) return;
+    const audio = audioRef.current;
+    const progressPercent = (audio.currentTime / audio.duration) * 100;
+    setProgress(progressPercent);
+    setCurrentTime(audio.currentTime);
+  };
+
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!audioRef.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const percent = clickX / rect.width;
+    audioRef.current.currentTime = percent * audioRef.current.duration;
   };
 
   const handleDownload = async () => {
@@ -90,81 +97,113 @@ export function CallRecordingCard({ call }: CallRecordingCardProps) {
     }
   };
 
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    
+    const handleEnded = () => {
+      setIsPlaying(false);
+      setProgress(0);
+      setCurrentTime(0);
+    };
+    
+    audio.addEventListener("ended", handleEnded);
+    audio.addEventListener("timeupdate", handleTimeUpdate);
+    
+    return () => {
+      audio.removeEventListener("ended", handleEnded);
+      audio.removeEventListener("timeupdate", handleTimeUpdate);
+    };
+  }, []);
+
+  const duration = call.recording_duration_seconds || call.duration_seconds || 0;
+  const displayTime = isPlaying || progress > 0 ? currentTime : duration;
+
   return (
-    <div className="flex justify-center py-2">
-      <div className="bg-[#182229] border border-[#2a3942] rounded-lg px-4 py-3 max-w-[85%] min-w-[240px]">
-        {/* Header */}
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-full bg-[#2a3942]">
+    <div className="flex justify-center py-1">
+      <div className={cn(
+        "rounded-xl px-3 py-2 min-w-[280px] max-w-[380px] w-full",
+        isMissed ? "bg-[#1a1a1a]" : "bg-[#202c33]"
+      )}>
+        {/* Call info row */}
+        <div className="flex items-center gap-2 mb-2">
+          <span className={cn(
+            "flex items-center gap-1.5 text-sm",
+            isMissed ? "text-red-400" : "text-[#00a884]"
+          )}>
             {getCallIcon()}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className={cn("text-sm font-medium", getStatusColor())}>
-              {getCallTitle()}
-            </p>
-            <div className="flex items-center gap-2 text-xs text-[#8696a0]">
-              <Clock className="h-3 w-3" />
-              <span>{format(new Date(call.started_at), "h:mm a")}</span>
-              {call.duration_seconds > 0 && (
-                <>
-                  <span className="text-[#3b4a54]">|</span>
-                  <span>{formatDuration(call.duration_seconds)}</span>
-                </>
-              )}
-            </div>
-          </div>
+            {getCallTitle()}
+          </span>
+          <span className="text-xs text-[#8696a0]">
+            {format(new Date(call.started_at), "h:mm a")}
+          </span>
+          {call.duration_seconds > 0 && (
+            <span className="text-xs text-[#8696a0]">
+              | {formatTime(call.duration_seconds)}
+            </span>
+          )}
         </div>
 
-        {/* Recording player */}
+        {/* Recording player - WhatsApp style */}
         {call.recording_url && (
-          <div className="mt-3 flex items-center gap-2 bg-[#2a3942] rounded-lg p-2">
-            {call.recording_url && (
-              <audio
-                ref={audioRef}
-                src={call.recording_url}
-                onEnded={() => setIsPlaying(false)}
-              />
-            )}
+          <div className="flex items-center gap-2">
+            <audio ref={audioRef} src={call.recording_url} preload="metadata" />
+            
             <Button
               variant="ghost"
               size="icon"
               onClick={togglePlayback}
-              className="h-8 w-8 rounded-full bg-[#00a884] hover:bg-[#00a884]/90 text-white"
+              className="h-10 w-10 rounded-full bg-[#00a884] hover:bg-[#00a884]/90 text-white shrink-0"
             >
               {isPlaying ? (
-                <Pause className="h-4 w-4" />
+                <Pause className="h-5 w-5 fill-current" />
               ) : (
-                <Play className="h-4 w-4" />
+                <Play className="h-5 w-5 fill-current ml-0.5" />
               )}
             </Button>
-            <div className="flex-1 h-1 bg-[#3b4a54] rounded">
-              <div className="h-full bg-[#00a884] rounded" style={{ width: "0%" }} />
+            
+            {/* Progress bar - clickable */}
+            <div 
+              className="flex-1 h-1.5 bg-[#3b4a54] rounded-full cursor-pointer relative"
+              onClick={handleSeek}
+            >
+              <div 
+                className="h-full bg-[#00a884] rounded-full transition-all duration-100"
+                style={{ width: `${progress}%` }}
+              />
+              {/* Scrubber dot */}
+              {progress > 0 && (
+                <div 
+                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-[#00a884] rounded-full"
+                  style={{ left: `calc(${progress}% - 6px)` }}
+                />
+              )}
             </div>
-            {call.recording_duration_seconds && (
-              <span className="text-xs text-[#8696a0] min-w-[40px] text-right">
-                {formatDuration(call.recording_duration_seconds)}
-              </span>
-            )}
+            
+            <span className="text-xs text-[#8696a0] min-w-[36px] text-right tabular-nums">
+              {formatTime(displayTime)}
+            </span>
+            
             <Button
               variant="ghost"
               size="icon"
               onClick={handleDownload}
-              className="h-8 w-8 text-[#8696a0] hover:text-white hover:bg-[#3b4a54]"
-              title="Download recording"
+              className="h-8 w-8 text-[#8696a0] hover:text-white hover:bg-transparent shrink-0"
+              title="Download"
             >
               <Download className="h-4 w-4" />
             </Button>
           </div>
         )}
 
-        {/* Notes */}
+        {/* Notes if any */}
         {call.notes && (
           <p className="mt-2 text-xs text-[#8696a0] italic">
-            Note: {call.notes}
+            {call.notes}
           </p>
         )}
 
-        {/* Outcome badge */}
+        {/* Outcome badge if any */}
         {call.outcome && (
           <div className="mt-2">
             <span className={cn(

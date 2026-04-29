@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Play, Download, FileText, X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2 } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Play, Pause, Download, FileText, X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getMediaProxyUrl, getMediaCategory } from "@/services/whatsapp-service";
 import { Button } from "@/components/ui/button";
@@ -186,6 +186,137 @@ export function WhatsAppMediaPreview({
   );
 }
 
+interface AudioPlayerProps {
+  url: string | null;
+  loading: boolean;
+  isOutbound: boolean;
+  onDownload: () => void;
+}
+
+function AudioPlayer({ url, loading, isOutbound, onDownload }: AudioPlayerProps) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  const formatTime = (seconds: number): string => {
+    if (!isFinite(seconds) || isNaN(seconds)) return "0:00";
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const togglePlayback = () => {
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play();
+    }
+    setIsPlaying(!isPlaying);
+  };
+
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!audioRef.current || !isFinite(audioRef.current.duration)) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const percent = clickX / rect.width;
+    audioRef.current.currentTime = percent * audioRef.current.duration;
+  };
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleTimeUpdate = () => {
+      if (!isFinite(audio.duration)) return;
+      setProgress((audio.currentTime / audio.duration) * 100);
+      setCurrentTime(audio.currentTime);
+    };
+
+    const handleLoadedMetadata = () => {
+      if (isFinite(audio.duration)) {
+        setDuration(audio.duration);
+      }
+    };
+
+    const handleEnded = () => {
+      setIsPlaying(false);
+      setProgress(0);
+      setCurrentTime(0);
+    };
+
+    audio.addEventListener("timeupdate", handleTimeUpdate);
+    audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+    audio.addEventListener("ended", handleEnded);
+
+    return () => {
+      audio.removeEventListener("timeupdate", handleTimeUpdate);
+      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      audio.removeEventListener("ended", handleEnded);
+    };
+  }, [url]);
+
+  const displayTime = isPlaying || progress > 0 ? currentTime : duration;
+
+  return (
+    <div className={cn(
+      "rounded-2xl py-2 px-3 min-w-[240px] max-w-[320px]",
+      isOutbound ? "bg-[#005c4b]" : "bg-[#1f2c34]"
+    )}>
+      {loading ? (
+        <div className="flex items-center justify-center h-12">
+          <Loader2 className="h-5 w-5 animate-spin text-[#8696a0]" />
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          {url && <audio ref={audioRef} src={url} preload="metadata" />}
+          
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={togglePlayback}
+            disabled={!url}
+            className="h-10 w-10 rounded-full bg-white/10 hover:bg-white/20 text-white shrink-0"
+          >
+            {isPlaying ? (
+              <Pause className="h-5 w-5 fill-current" />
+            ) : (
+              <Play className="h-5 w-5 fill-current ml-0.5" />
+            )}
+          </Button>
+          
+          <div className="flex-1 flex flex-col gap-1">
+            {/* Progress bar */}
+            <div 
+              className="h-1 bg-white/20 rounded-full cursor-pointer relative"
+              onClick={handleSeek}
+            >
+              <div 
+                className="h-full bg-white/70 rounded-full transition-all duration-100"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            {/* Time */}
+            <span className="text-xs text-white/70 tabular-nums">
+              {formatTime(displayTime)}
+            </span>
+          </div>
+          
+          <button
+            onClick={onDownload}
+            className="p-1.5 text-white/60 hover:text-white transition-colors"
+            title="Download"
+          >
+            <Download className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface MediaThumbnailProps {
   url: string;
   contentType: string;
@@ -320,30 +451,12 @@ function MediaThumbnail({
 
   if (category === "audio") {
     return (
-      <div className={cn(
-        "rounded-lg p-3 min-w-[200px]",
-        isOutbound ? "bg-[#005c4b]" : "bg-[#1f2c34]"
-      )}>
-        {loading ? (
-          <div className="flex items-center justify-center h-10">
-            <Loader2 className="h-5 w-5 animate-spin text-[#8696a0]" />
-          </div>
-        ) : (
-          <audio
-            src={blobUrl || url}
-            controls
-            className="w-full h-10"
-            style={{ filter: "invert(1)" }}
-          />
-        )}
-        <button
-          className="mt-2 flex items-center gap-1 text-xs text-[#8696a0] hover:text-white transition-colors"
-          onClick={onDownload}
-        >
-          <Download className="h-3 w-3" />
-          Download
-        </button>
-      </div>
+      <AudioPlayer
+        url={blobUrl || url}
+        loading={loading}
+        isOutbound={isOutbound}
+        onDownload={onDownload}
+      />
     );
   }
 

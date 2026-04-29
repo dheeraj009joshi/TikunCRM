@@ -90,10 +90,12 @@ export function WhatsAppConversationThread({
   const { toast } = useToast();
   const callLeadCtx = useCallLeadOptional();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [timelineItems, setTimelineItems] = useState<TimelineItem[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const previousLeadIdRef = useRef<string | null>(null);
+  const shouldScrollRef = useRef(true);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [templates, setTemplates] = useState<WhatsAppTemplateItem[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<WhatsAppTemplateItem | null>(null);
@@ -266,70 +268,130 @@ export function WhatsAppConversationThread({
     [leadId, loadConversation]
   );
 
+  // Scroll to bottom helper
+  const scrollToBottom = useCallback((instant = false) => {
+    if (!shouldScrollRef.current) return;
+    requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ 
+        behavior: instant ? "instant" : "smooth",
+        block: "end"
+      });
+    });
+  }, []);
+
+  // Scroll to bottom when timeline items change
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [timelineItems]);
+    scrollToBottom(true);
+  }, [timelineItems.length, scrollToBottom]);
+
+  // Also scroll when initial load completes
+  useEffect(() => {
+    if (!initialLoading && timelineItems.length > 0) {
+      setTimeout(() => scrollToBottom(true), 100);
+    }
+  }, [initialLoading, scrollToBottom]);
 
   const freeFormAllowed =
     sessionWindow !== null && sessionWindow.within_window;
 
+  // Generate temporary ID for optimistic updates
+  const generateTempId = () => `temp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
   const handleSend = async (body: string) => {
     if (!freeFormAllowed) return;
-    try {
-      const result = await whatsappService.sendToLead(leadId, body, leadPhone ?? undefined);
-      if (result.success && result.message_id) {
-        const newMessage: WhatsAppMessage = {
-          id: result.message_id,
-          lead_id: leadId,
-          user_id: null,
-          direction: "outbound",
-          from_number: "",
-          to_number: leadPhone || "",
-          body,
-          status: "sent",
-          is_read: true,
-          created_at: new Date().toISOString(),
-          sent_at: new Date().toISOString(),
-          delivered_at: null,
-        };
-        const newItem: TimelineItem = {
-          item_type: "message",
-          id: newMessage.id,
-          created_at: newMessage.created_at,
-          message: newMessage,
-        };
-        setTimelineItems((prev) => [...prev, newItem]);
-        void loadSessionWindow();
-        onMessageSent?.();
-      } else {
-        const isOutsideWindow =
-          result.error_code === "OUTSIDE_SESSION_WINDOW" ||
-          result.error_code === "63016" ||
-          (result.error?.includes("63016") ?? false);
-        if (isOutsideWindow) {
+    
+    // Create optimistic message IMMEDIATELY
+    const tempId = generateTempId();
+    const optimisticMessage: WhatsAppMessage = {
+      id: tempId,
+      lead_id: leadId,
+      user_id: null,
+      direction: "outbound",
+      from_number: "",
+      to_number: leadPhone || "",
+      body,
+      status: "sending",
+      is_read: true,
+      created_at: new Date().toISOString(),
+      sent_at: null,
+      delivered_at: null,
+    };
+    const optimisticItem: TimelineItem = {
+      item_type: "message",
+      id: tempId,
+      created_at: optimisticMessage.created_at,
+      message: optimisticMessage,
+    };
+    
+    // Add to UI INSTANTLY - no await
+    setTimelineItems((prev) => [...prev, optimisticItem]);
+    
+    // Send via API in background (don't await)
+    whatsappService.sendToLead(leadId, body, leadPhone ?? undefined)
+      .then((result) => {
+        if (result.success && result.message_id) {
+          // Replace temp message with real one
+          setTimelineItems((prev) =>
+            prev.map((item) =>
+              item.id === tempId
+                ? {
+                    ...item,
+                    id: result.message_id!,
+                    message: item.message
+                      ? { ...item.message, id: result.message_id!, status: "sent", sent_at: new Date().toISOString() }
+                      : undefined,
+                  }
+                : item
+            )
+          );
           void loadSessionWindow();
-          toast({
-            title: "Outside 24-hour window",
-            description:
-              "Cannot send free-form message. Use a template to start the conversation.",
-            variant: "destructive",
-          });
-          setTemplateModalOpen(true);
+          onMessageSent?.();
         } else {
-          toast({
-            title: "Failed to send",
-            description: result.error || "Could not send message",
-            variant: "destructive",
-          });
+          // Mark as failed
+          setTimelineItems((prev) =>
+            prev.map((item) =>
+              item.id === tempId && item.message
+                ? { ...item, message: { ...item.message, status: "failed" } }
+                : item
+            )
+          );
+          
+          const isOutsideWindow =
+            result.error_code === "OUTSIDE_SESSION_WINDOW" ||
+            result.error_code === "63016" ||
+            (result.error?.includes("63016") ?? false);
+          if (isOutsideWindow) {
+            setTimelineItems((prev) => prev.filter((item) => item.id !== tempId));
+            void loadSessionWindow();
+            toast({
+              title: "Outside 24-hour window",
+              description: "Cannot send free-form message. Use a template.",
+              variant: "destructive",
+            });
+            setTemplateModalOpen(true);
+          } else {
+            toast({
+              title: "Failed to send",
+              description: result.error || "Could not send message",
+              variant: "destructive",
+            });
+          }
         }
-      }
-    } catch (err) {
-      toast({
-        title: "Error",
-        description: "Failed to send message",
-        variant: "destructive",
+      })
+      .catch(() => {
+        setTimelineItems((prev) =>
+          prev.map((item) =>
+            item.id === tempId && item.message
+              ? { ...item, message: { ...item.message, status: "failed" } }
+              : item
+          )
+        );
+        toast({
+          title: "Error",
+          description: "Failed to send message",
+          variant: "destructive",
+        });
       });
-    }
   };
 
   const loadTemplates = useCallback(async () => {

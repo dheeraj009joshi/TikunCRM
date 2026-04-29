@@ -1,7 +1,7 @@
 "use client";
 
 import { format } from "date-fns";
-import { Check, CheckCheck } from "lucide-react";
+import { Check, CheckCheck, Clock, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { WhatsAppMessage } from "@/services/whatsapp-service";
 import { WhatsAppMediaPreview } from "./whatsapp-media-preview";
@@ -20,12 +20,20 @@ export function WhatsAppMessageBubble({ message }: WhatsAppMessageBubbleProps) {
   const isTemplateStub = isTemplateLogBody(message.body);
   const hasMedia = (message.media_urls?.length ?? 0) > 0;
   const hasText = message.body && message.body.trim().length > 0;
+  const isFailed = message.status === "failed";
+  const isSending = message.status === "sending";
 
   const getTick = () => {
+    if (message.status === "failed") {
+      return <AlertCircle className="h-3.5 w-3.5 text-red-400" />;
+    }
+    if (message.status === "sending") {
+      return <Clock className="h-3.5 w-3.5 text-white/60" />;
+    }
     if (message.status === "delivered" || message.status === "read") {
       return <CheckCheck className="h-3.5 w-3.5 text-blue-400" />;
     }
-    if (message.status === "sent" || message.status === "queued" || message.status === "sending") {
+    if (message.status === "sent" || message.status === "queued") {
       return <Check className="h-3.5 w-3.5 text-white/80" />;
     }
     return <Check className="h-3.5 w-3.5 text-white/80" />;

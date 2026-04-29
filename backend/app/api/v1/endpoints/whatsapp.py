@@ -1099,7 +1099,11 @@ async def upload_whatsapp_media(
             detail="Media storage not configured"
         )
 
-    content_type = file.content_type or "application/octet-stream"
+    # Get content type and extract base type (without parameters like codecs)
+    raw_content_type = file.content_type or "application/octet-stream"
+    # Extract base MIME type (e.g., "audio/webm;codecs=opus" -> "audio/webm")
+    content_type = raw_content_type.split(";")[0].strip()
+    
     if content_type not in ALLOWED_MEDIA_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
