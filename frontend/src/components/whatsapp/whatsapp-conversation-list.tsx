@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { format, isToday, isYesterday } from "date-fns";
-import { MessageCircle, User } from "lucide-react";
+import { MessageCircle, User, Image, Video, Mic, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { WhatsAppConversationListItem } from "@/services/whatsapp-service";
 
@@ -126,13 +126,49 @@ export function WhatsAppConversationList({
             </div>
             <div className="flex items-center justify-between gap-2 mt-0.5">
               <p
-                className="text-sm truncate flex-1 min-w-0"
+                className="text-sm truncate flex-1 min-w-0 flex items-center gap-1"
                 style={{ color: WA_TEXT_SECONDARY }}
               >
                 {conv.last_message.direction === "outbound" && (
                   <span style={{ color: WA_TEXT_SECONDARY }}>You: </span>
                 )}
-                {conv.last_message.body}
+                {(() => {
+                  const body = conv.last_message.body;
+                  // Check if it's a media placeholder
+                  if (!body || body === "[Photo]" || body === "[Media]") {
+                    return (
+                      <>
+                        <Image className="h-4 w-4 inline-block" />
+                        <span>Photo</span>
+                      </>
+                    );
+                  }
+                  if (body === "[Video]") {
+                    return (
+                      <>
+                        <Video className="h-4 w-4 inline-block" />
+                        <span>Video</span>
+                      </>
+                    );
+                  }
+                  if (body === "[Voice message]" || body === "[Audio]") {
+                    return (
+                      <>
+                        <Mic className="h-4 w-4 inline-block" />
+                        <span>Voice message</span>
+                      </>
+                    );
+                  }
+                  if (body === "[Document]") {
+                    return (
+                      <>
+                        <FileText className="h-4 w-4 inline-block" />
+                        <span>Document</span>
+                      </>
+                    );
+                  }
+                  return body;
+                })()}
               </p>
               {conv.unread_count > 0 && (
                 <span

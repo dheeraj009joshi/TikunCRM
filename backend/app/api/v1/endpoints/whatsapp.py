@@ -936,28 +936,90 @@ async def get_whatsapp_media(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
     
     media_url = media_urls[media_index]
-    content_type = media_types[media_index] if media_index < len(media_types) else "application/octet-stream"
+    stored_content_type = media_types[media_index] if media_index < len(media_types) else ""
     
-    # Get Twilio credentials for authentication
-    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+    # Try to guess content type from URL extension if not stored properly
+    def guess_content_type_from_url(url: str) -> str:
+        url_lower = url.lower().split("?")[0]  # Remove query params
+        ext_map = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            ".gif": "image/gif", ".webp": "image/webp",
+            ".mp4": "video/mp4", ".3gpp": "video/3gpp", ".3gp": "video/3gpp",
+            ".ogg": "audio/ogg", ".mp3": "audio/mpeg", ".amr": "audio/amr",
+            ".aac": "audio/aac", ".opus": "audio/ogg",
+            ".pdf": "application/pdf",
+        }
+        for ext, mime in ext_map.items():
+            if url_lower.endswith(ext):
+                return mime
+        return ""
+    
+    # Determine content type: stored > guessed from URL > fallback
+    content_type = stored_content_type
+    if not content_type or content_type == "application/octet-stream":
+        guessed = guess_content_type_from_url(media_url)
+        if guessed:
+            content_type = guessed
+            logger.info(f"Guessed content-type from URL extension: {content_type}")
+        else:
+            content_type = "application/octet-stream"
+    
+    # Determine if this is a Twilio URL (needs auth) or Azure/public URL (no auth)
+    is_twilio_url = "twilio.com" in media_url or "api.twilio.com" in media_url
     
     async def stream_media():
-        async with httpx.AsyncClient() as client:
-            # Twilio media URLs require Basic auth with account SID and auth token
-            auth = (effective.account_sid, effective.auth_token) if effective.account_sid and effective.auth_token else None
-            async with client.stream("GET", media_url, auth=auth, follow_redirects=True) as response:
-                if response.status_code != 200:
-                    logger.warning(f"Failed to fetch Twilio media: {response.status_code}")
-                    return
-                async for chunk in response.aiter_bytes(chunk_size=8192):
-                    yield chunk
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            auth = None
+            if is_twilio_url:
+                # Twilio media URLs require Basic auth with account SID and auth token
+                effective = await get_effective_twilio_config(db, current_user.dealership_id)
+                if effective.account_sid and effective.auth_token:
+                    auth = (effective.account_sid, effective.auth_token)
+            
+            try:
+                async with client.stream("GET", media_url, auth=auth, follow_redirects=True) as response:
+                    if response.status_code != 200:
+                        logger.warning(f"Failed to fetch media (status {response.status_code}): {media_url[:100]}")
+                        return
+                    
+                    # Try to get actual content type from response if we don't have it
+                    actual_content_type = response.headers.get("content-type", content_type)
+                    if content_type == "application/octet-stream" and actual_content_type != "application/octet-stream":
+                        # Update our knowledge but we can't change the response headers at this point
+                        logger.info(f"Media has actual content-type: {actual_content_type}")
+                    
+                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                        yield chunk
+            except Exception as e:
+                logger.error(f"Error streaming media: {e}")
+                return
+    
+    # For better content type detection, try to get it from response headers
+    # by doing a HEAD request first for non-octet-stream types
+    final_content_type = content_type
+    if content_type == "application/octet-stream":
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                auth = None
+                if is_twilio_url:
+                    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+                    if effective.account_sid and effective.auth_token:
+                        auth = (effective.account_sid, effective.auth_token)
+                head_response = await client.head(media_url, auth=auth, follow_redirects=True)
+                if head_response.status_code == 200:
+                    detected = head_response.headers.get("content-type", "").split(";")[0].strip()
+                    if detected and detected != "application/octet-stream":
+                        final_content_type = detected
+                        logger.info(f"Detected content-type from HEAD: {final_content_type}")
+        except Exception as e:
+            logger.debug(f"HEAD request failed, using stored content-type: {e}")
     
     return StreamingResponse(
         stream_media(),
-        media_type=content_type,
+        media_type=final_content_type,
         headers={
             "Cache-Control": "private, max-age=3600",
-            "Content-Disposition": f"inline",
+            "Content-Disposition": "inline",
         }
     )
 
@@ -997,7 +1059,7 @@ async def get_whatsapp_unread_count(
 ALLOWED_MEDIA_TYPES = {
     "image/jpeg", "image/png", "image/gif", "image/webp",
     "video/mp4", "video/3gpp",
-    "audio/ogg", "audio/mpeg", "audio/amr", "audio/aac",
+    "audio/ogg", "audio/mpeg", "audio/amr", "audio/aac", "audio/webm", "audio/wav",
     "application/pdf",
 }
 MAX_MEDIA_SIZE = 16 * 1024 * 1024  # 16MB
@@ -1158,6 +1220,7 @@ async def send_whatsapp_media_to_lead(
                             "message_id": str(wa_log.id),
                             "lead_id": str(lead.id),
                             "body_preview": request.caption[:50] if request.caption else "[Media]",
+                            "has_media": True,
                             "message": {
                                 "id": str(wa_log.id),
                                 "lead_id": str(wa_log.lead_id),

@@ -178,14 +178,17 @@ export function VoiceRecorder({ leadId, disabled, onVoiceSent }: VoiceRecorderPr
   };
 
   const handleSend = async () => {
-    if (!audioUrl) return;
+    if (!audioUrl || chunksRef.current.length === 0) return;
 
     setState("sending");
     try {
-      // Convert blob to file
-      const response = await fetch(audioUrl);
-      const blob = await response.blob();
-      const file = new File([blob], "voice-message.ogg", { type: "audio/ogg" });
+      // Get the actual mime type used during recording
+      const mimeType = mediaRecorderRef.current?.mimeType || "audio/webm";
+      const extension = mimeType.includes("ogg") ? "ogg" : mimeType.includes("webm") ? "webm" : "wav";
+      
+      // Create blob from chunks with correct type
+      const blob = new Blob(chunksRef.current, { type: mimeType });
+      const file = new File([blob], `voice-message.${extension}`, { type: mimeType });
 
       // Upload to Azure
       const uploadResult = await whatsappService.uploadMedia(file);

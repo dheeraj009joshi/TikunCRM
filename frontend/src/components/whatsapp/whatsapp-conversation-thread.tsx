@@ -8,10 +8,12 @@ import { Button } from "@/components/ui/button";
 import { WhatsAppMessageBubble } from "./whatsapp-message-bubble";
 import { MediaUploadButton } from "./media-upload-button";
 import { VoiceRecorder } from "./voice-recorder";
+import { CallRecordingCard } from "./call-recording-card";
 import { MessageComposer } from "@/components/sms/message-composer";
 import {
   WhatsAppMessage,
   WhatsAppTemplateItem,
+  TimelineItem,
   whatsappService,
 } from "@/services/whatsapp-service";
 import { useToast } from "@/hooks/use-toast";
@@ -88,9 +90,10 @@ export function WhatsAppConversationThread({
   const { toast } = useToast();
   const callLeadCtx = useCallLeadOptional();
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [messages, setMessages] = useState<WhatsAppMessage[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [timelineItems, setTimelineItems] = useState<TimelineItem[]>([]);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const previousLeadIdRef = useRef<string | null>(null);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [templates, setTemplates] = useState<WhatsAppTemplateItem[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<WhatsAppTemplateItem | null>(null);
@@ -117,11 +120,10 @@ export function WhatsAppConversationThread({
     const silent = opts?.silent === true;
     try {
       if (!silent) {
-        setLoading(true);
         setError(null);
       }
-      const conversation = await whatsappService.getConversation(leadId);
-      setMessages(conversation.messages);
+      const timeline = await whatsappService.getTimeline(leadId);
+      setTimelineItems(timeline.items);
     } catch (err) {
       console.error(err);
       if (!silent) {
@@ -133,17 +135,22 @@ export function WhatsAppConversationThread({
         });
       }
     } finally {
-      if (!silent) setLoading(false);
+      setInitialLoading(false);
     }
   }, [leadId, toast]);
 
+  // When leadId changes, reset state and load new conversation instantly
   useEffect(() => {
+    const isNewLead = previousLeadIdRef.current !== null && previousLeadIdRef.current !== leadId;
+    previousLeadIdRef.current = leadId;
+    
+    // Clear old data when switching leads for a clean slate
+    if (isNewLead) {
+      setTimelineItems([]);
+    }
     setSessionWindow(null);
-  }, [leadId]);
-
-  useEffect(() => {
     void loadConversation();
-  }, [loadConversation]);
+  }, [leadId, loadConversation]);
 
   useEffect(() => {
     void loadSessionWindow();
@@ -155,15 +162,18 @@ export function WhatsAppConversationThread({
     (data) => {
       if (!data?.lead_id || String(data.lead_id) !== String(leadId)) return;
       // Update the message status in local state instantly
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === data.message_id
+      setTimelineItems((prev) =>
+        prev.map((item) =>
+          item.item_type === "message" && item.message?.id === data.message_id
             ? {
-                ...msg,
-                status: data.status,
-                delivered_at: data.delivered_at ?? msg.delivered_at,
+                ...item,
+                message: {
+                  ...item.message,
+                  status: data.status,
+                  delivered_at: data.delivered_at ?? item.message.delivered_at,
+                },
               }
-            : msg
+            : item
         )
       );
     },
@@ -193,10 +203,16 @@ export function WhatsAppConversationThread({
           media_urls: data.message.media_urls || [],
           media_content_types: data.message.media_content_types || [],
         };
+        const newItem: TimelineItem = {
+          item_type: "message",
+          id: newMsg.id,
+          created_at: newMsg.created_at,
+          message: newMsg,
+        };
         // Dedupe: only add if not already present
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === newMsg.id)) return prev;
-          return [...prev, newMsg];
+        setTimelineItems((prev) => {
+          if (prev.some((item) => item.id === newMsg.id)) return prev;
+          return [...prev, newItem];
         });
         // Refresh session window since inbound message extends it
         void loadSessionWindow();
@@ -231,10 +247,16 @@ export function WhatsAppConversationThread({
           media_urls: data.message.media_urls || [],
           media_content_types: data.message.media_content_types || [],
         };
+        const newItem: TimelineItem = {
+          item_type: "message",
+          id: newMsg.id,
+          created_at: newMsg.created_at,
+          message: newMsg,
+        };
         // Dedupe: only add if not already present (handles optimistic updates)
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === newMsg.id)) return prev;
-          return [...prev, newMsg];
+        setTimelineItems((prev) => {
+          if (prev.some((item) => item.id === newMsg.id)) return prev;
+          return [...prev, newItem];
         });
       } else {
         // Fallback
@@ -246,7 +268,7 @@ export function WhatsAppConversationThread({
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [timelineItems]);
 
   const freeFormAllowed =
     sessionWindow !== null && sessionWindow.within_window;
@@ -270,7 +292,13 @@ export function WhatsAppConversationThread({
           sent_at: new Date().toISOString(),
           delivered_at: null,
         };
-        setMessages((prev) => [...prev, newMessage]);
+        const newItem: TimelineItem = {
+          item_type: "message",
+          id: newMessage.id,
+          created_at: newMessage.created_at,
+          message: newMessage,
+        };
+        setTimelineItems((prev) => [...prev, newItem]);
         void loadSessionWindow();
         onMessageSent?.();
       } else {
@@ -365,18 +393,40 @@ export function WhatsAppConversationThread({
 
   const sessionWindowLoading = sessionWindow === null;
 
-  const groupedMessages = messages.reduce((groups, message) => {
-    const date = new Date(message.created_at);
+  // Group timeline items by date
+  const groupedItems = timelineItems.reduce((groups, item) => {
+    const date = new Date(item.created_at);
     const dateKey = isToday(date) ? "Today" : isYesterday(date) ? "Yesterday" : format(date, "MMMM d, yyyy");
     if (!groups[dateKey]) groups[dateKey] = [];
-    groups[dateKey].push(message);
+    groups[dateKey].push(item);
     return groups;
-  }, {} as Record<string, WhatsAppMessage[]>);
+  }, {} as Record<string, TimelineItem[]>);
 
-  if (loading) {
+  // Only show full loading spinner on very first load
+  if (initialLoading && timelineItems.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <div className="flex flex-col h-full w-full bg-[#0b141a]">
+        {/* Header placeholder */}
+        <div className="flex items-center gap-3 px-4 py-3 bg-[#202c33] border-b border-[#2a3942]">
+          {onBack && (
+            <Button variant="ghost" size="icon" onClick={onBack} className="text-[#e9edef] hover:bg-white/10">
+              <ArrowLeft className="h-5 w-5" />
+            </Button>
+          )}
+          <div className="h-10 w-10 rounded-full bg-[#00a884]/30 flex items-center justify-center shrink-0">
+            <span className="text-lg font-medium text-[#e9edef]">
+              {leadName.charAt(0).toUpperCase()}
+            </span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="font-semibold text-[#e9edef] truncate">{leadName}</h2>
+            {leadPhone && <p className="text-xs text-[#8696a0] truncate">{leadPhone}</p>}
+          </div>
+        </div>
+        {/* Loading area */}
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-[#8696a0]" />
+        </div>
       </div>
     );
   }
@@ -437,7 +487,7 @@ export function WhatsAppConversationThread({
           backgroundImage: "url(\"data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2317222d' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E\")",
         }}
       >
-        {messages.length === 0 ? (
+        {timelineItems.length === 0 ? (
           <div className="text-center text-[#8696a0] py-8 px-4">
             {sessionWindowLoading
               ? "No messages yet."
@@ -446,7 +496,7 @@ export function WhatsAppConversationThread({
                 : "No messages yet. Send an approved WhatsApp template to start the conversation, or wait for the contact to message you."}
           </div>
         ) : (
-          Object.entries(groupedMessages).map(([date, msgs]) => (
+          Object.entries(groupedItems).map(([date, items]) => (
             <div key={date}>
               <div className="flex items-center gap-4 my-4">
                 <div className="flex-1 h-px bg-[#2a3942]" />
@@ -454,8 +504,12 @@ export function WhatsAppConversationThread({
                 <div className="flex-1 h-px bg-[#2a3942]" />
               </div>
               <div className="space-y-1.5">
-                {msgs.map((message) => (
-                  <WhatsAppMessageBubble key={message.id} message={message} />
+                {items.map((item) => (
+                  item.item_type === "message" && item.message ? (
+                    <WhatsAppMessageBubble key={item.id} message={item.message} />
+                  ) : item.item_type === "call" && item.call ? (
+                    <CallRecordingCard key={item.id} call={item.call} />
+                  ) : null
                 ))}
               </div>
             </div>

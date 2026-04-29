@@ -132,7 +132,10 @@ export default function WhatsAppInboxPage() {
         if (!config?.whatsapp_enabled || !data?.lead_id) return;
         const leadId = data.lead_id;
         const messageId = data.message?.id || data.message_id;
-        const body = data.message?.body || data.body_preview || "";
+        const rawBody = data.message?.body || data.body_preview || "";
+        const hasMedia = data.has_media || ((data.message as { media_urls?: string[] })?.media_urls?.length ?? 0) > 0;
+        // Show "[Photo]" or similar for media messages with no text
+        const body = rawBody || (hasMedia ? "[Photo]" : "");
         const createdAt = data.message?.created_at || new Date().toISOString();
 
         setConversations((prev) => {
@@ -166,15 +169,11 @@ export default function WhatsAppInboxPage() {
           setTotalUnread((prev) => prev + 1);
         }
 
-        // Show toast notification
-        toast({
-          title: "New WhatsApp",
-          description: body.slice(0, 50) || "New message received",
-        });
+        // No toast on WhatsApp page - user can see updates in real-time
       },
-      [config?.whatsapp_enabled, selectedLeadId, loadConversations, toast]
+      [config?.whatsapp_enabled, selectedLeadId, loadConversations]
     ),
-    [config?.whatsapp_enabled, selectedLeadId, loadConversations, toast]
+    [config?.whatsapp_enabled, selectedLeadId, loadConversations]
   );
 
   // Real-time: sent message - update conversation list instantly
@@ -185,7 +184,10 @@ export default function WhatsAppInboxPage() {
         if (!config?.whatsapp_enabled || !data?.lead_id) return;
         const leadId = data.lead_id;
         const messageId = data.message?.id || data.message_id;
-        const body = data.message?.body || data.body_preview || "";
+        const rawBody = data.message?.body || data.body_preview || "";
+        const hasMedia = data.has_media || ((data.message as { media_urls?: string[] })?.media_urls?.length ?? 0) > 0;
+        // Show "[Photo]" or similar for media messages with no text
+        const body = rawBody || (hasMedia ? "[Photo]" : "");
         const createdAt = data.message?.created_at || new Date().toISOString();
 
         setConversations((prev) => {

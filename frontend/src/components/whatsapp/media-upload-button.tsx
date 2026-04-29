@@ -29,7 +29,7 @@ interface MediaUploadButtonProps {
 const ACCEPTED_TYPES = {
   image: "image/jpeg,image/png,image/gif,image/webp",
   video: "video/mp4,video/3gpp",
-  audio: "audio/ogg,audio/mpeg,audio/amr,audio/aac",
+  audio: "audio/ogg,audio/mpeg,audio/amr,audio/aac,audio/webm,audio/wav",
   document: "application/pdf",
 };
 
