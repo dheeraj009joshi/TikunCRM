@@ -387,12 +387,15 @@ class WhatsAppConversationService:
         
         normalized = "".join(c for c in phone_number if c.isdigit())
         phone_suffix = normalized[-10:] if len(normalized) >= 10 else normalized
+        # Store full phone with country code (e.g., +918619474696)
+        full_phone = phone_number if phone_number.startswith("+") else f"+{normalized}"
         display_phone = self._format_phone_display(phone_number)
         
         # First, double-check for existing customer (race condition protection)
         existing_customer = await self.db.execute(
             select(Customer).where(
                 or_(
+                    Customer.phone == full_phone,
                     Customer.phone == phone_suffix,
                     Customer.phone.ilike(f"%{phone_suffix}"),
                     Customer.whatsapp == phone_number,
@@ -407,7 +410,7 @@ class WhatsAppConversationService:
                 customer = Customer(
                     first_name=display_phone,
                     last_name=None,
-                    phone=phone_suffix,
+                    phone=full_phone,  # Save full number with country code
                     whatsapp=phone_number,
                 )
                 self.db.add(customer)
@@ -419,6 +422,7 @@ class WhatsAppConversationService:
                 existing_customer = await self.db.execute(
                     select(Customer).where(
                         or_(
+                            Customer.phone == full_phone,
                             Customer.phone == phone_suffix,
                             Customer.phone.ilike(f"%{phone_suffix}"),
                         )
