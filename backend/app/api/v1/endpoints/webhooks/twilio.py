@@ -473,6 +473,7 @@ async def handle_incoming_whatsapp(
             logger.warning("whatsapp:unknown_received broadcast failed: %s", e, exc_info=True)
 
     # Send notification for new leads (to all dealership users since unassigned)
+    # Use separate try-except with rollback to ensure notification failures don't affect message storage
     if is_new_lead and new_lead and wa_log.dealership_id:
         try:
             notification_service = NotificationService(db)
@@ -505,7 +506,8 @@ async def handle_incoming_whatsapp(
                 )
             await db.commit()
         except Exception as e:
-            logger.warning("WhatsApp new lead notification failed: %s", e, exc_info=True)
+            await db.rollback()  # Rollback to reset session state
+            logger.warning("WhatsApp new lead notification failed (message already stored): %s", e, exc_info=True)
 
     if wa_log.lead_id and wa_log.user_id and not is_new_lead:
         try:
@@ -532,6 +534,7 @@ async def handle_incoming_whatsapp(
             )
             await db.commit()
         except Exception as e:
+            await db.rollback()  # Rollback to reset session state
             logger.warning("WhatsApp incoming notification failed (message already stored): %s", e, exc_info=True)
 
     return Response(
