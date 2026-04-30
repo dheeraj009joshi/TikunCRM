@@ -308,13 +308,19 @@ class WhatsAppConversationService:
         if lead is None and dealership_id:
             logger.info(f"Auto-creating lead for unknown WhatsApp sender {from_number}")
             try:
-                customer, lead = await self._auto_create_lead_from_whatsapp(
+                customer, found_lead = await self._auto_create_lead_from_whatsapp(
                     phone_number=from_number,
                     dealership_id=dealership_id,
                 )
-                is_new_lead = True
-                new_lead = lead
-                logger.info(f"Auto-created lead {lead.id} for WhatsApp sender {from_number}")
+                lead = found_lead
+                # Check if this lead was just created (within last 5 seconds) to determine if truly new
+                from datetime import timedelta
+                if lead.created_at and (utc_now() - lead.created_at) < timedelta(seconds=5):
+                    is_new_lead = True
+                    new_lead = lead
+                    logger.info(f"Auto-created lead {lead.id} for WhatsApp sender {from_number}")
+                else:
+                    logger.info(f"Found existing lead {lead.id} for WhatsApp sender {from_number}")
             except Exception as e:
                 logger.error(f"Failed to auto-create lead for {from_number}: {e}", exc_info=True)
                 # Continue without lead - message will still be saved
@@ -374,19 +380,66 @@ class WhatsAppConversationService:
         - Source = WHATSAPP_INBOUND
         - No assignment (goes to Unassigned Pool)
         - Default pipeline stage
+        
+        Handles race conditions where customer may be created by concurrent request.
         """
+        from sqlalchemy.exc import IntegrityError
+        
         normalized = "".join(c for c in phone_number if c.isdigit())
+        phone_suffix = normalized[-10:] if len(normalized) >= 10 else normalized
         display_phone = self._format_phone_display(phone_number)
         
-        # Create customer with phone as placeholder name
-        customer = Customer(
-            first_name=display_phone,
-            last_name=None,
-            phone=normalized[-10:] if len(normalized) >= 10 else normalized,
-            whatsapp=phone_number,
+        # First, double-check for existing customer (race condition protection)
+        existing_customer = await self.db.execute(
+            select(Customer).where(
+                or_(
+                    Customer.phone == phone_suffix,
+                    Customer.phone.ilike(f"%{phone_suffix}"),
+                    Customer.whatsapp == phone_number,
+                )
+            ).limit(1)
         )
-        self.db.add(customer)
-        await self.db.flush()
+        customer = existing_customer.scalar_one_or_none()
+        
+        if not customer:
+            # Try to create customer, handle race condition with IntegrityError
+            try:
+                customer = Customer(
+                    first_name=display_phone,
+                    last_name=None,
+                    phone=phone_suffix,
+                    whatsapp=phone_number,
+                )
+                self.db.add(customer)
+                await self.db.flush()
+            except IntegrityError:
+                # Race condition - another request created the customer
+                await self.db.rollback()
+                # Re-query for the customer that was just created
+                existing_customer = await self.db.execute(
+                    select(Customer).where(
+                        or_(
+                            Customer.phone == phone_suffix,
+                            Customer.phone.ilike(f"%{phone_suffix}"),
+                        )
+                    ).limit(1)
+                )
+                customer = existing_customer.scalar_one_or_none()
+                if not customer:
+                    raise RuntimeError(f"Could not find or create customer for {phone_number}")
+        
+        # Check if a lead already exists for this customer in this dealership
+        existing_lead = await self.db.execute(
+            select(Lead).where(
+                Lead.customer_id == customer.id,
+                Lead.dealership_id == dealership_id,
+            ).order_by(Lead.updated_at.desc()).limit(1)
+        )
+        lead = existing_lead.scalar_one_or_none()
+        
+        if lead:
+            # Lead already exists, return it (not a new lead)
+            return customer, lead
         
         # Get default stage for this dealership
         try:
