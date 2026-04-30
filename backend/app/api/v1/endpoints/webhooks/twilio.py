@@ -27,6 +27,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("/debug/ping")
+async def webhook_debug_ping():
+    """Simple ping endpoint to verify webhook routing works."""
+    return {"status": "ok", "message": "Twilio webhook router is accessible"}
+
+
+@router.post("/debug/echo", response_class=PlainTextResponse)
+async def webhook_debug_echo(request: Request):
+    """Echo incoming webhook data for debugging."""
+    form_data = await request.form()
+    data = dict(form_data)
+    logger.info(f"DEBUG WEBHOOK ECHO: {data}")
+    return f"Received: {data}"
+
+
 async def transfer_twilio_media_to_azure(
     twilio_urls: List[str],
     content_types: List[str],
@@ -346,21 +361,30 @@ async def handle_incoming_whatsapp(
             media_urls = twilio_media_urls
             media_content_types = twilio_content_types
 
-    service = get_whatsapp_conversation_service(db)
-    wa_log, is_new_lead, new_lead = await service.receive_whatsapp(
-        message_sid=message_sid,
-        from_number=from_number,
-        to_number=to_number,
-        body=body,
-        media_urls=media_urls,
-        media_content_types=media_content_types,
-        resolved_dealership_id=resolved_dealership_id,
-    )
-    await db.commit()
-    logger.info(
-        "Incoming WhatsApp stored: id=%s direction=inbound sid=%s lead_id=%s is_new_lead=%s",
-        wa_log.id, wa_log.twilio_message_sid, wa_log.lead_id, is_new_lead
-    )
+    try:
+        service = get_whatsapp_conversation_service(db)
+        wa_log, is_new_lead, new_lead = await service.receive_whatsapp(
+            message_sid=message_sid,
+            from_number=from_number,
+            to_number=to_number,
+            body=body,
+            media_urls=media_urls,
+            media_content_types=media_content_types,
+            resolved_dealership_id=resolved_dealership_id,
+        )
+        await db.commit()
+        logger.info(
+            "Incoming WhatsApp stored: id=%s direction=inbound sid=%s lead_id=%s is_new_lead=%s",
+            wa_log.id, wa_log.twilio_message_sid, wa_log.lead_id, is_new_lead
+        )
+    except Exception as e:
+        logger.error(
+            "CRITICAL: Failed to process incoming WhatsApp from=%s to=%s sid=%s error=%s",
+            from_number, to_number, message_sid, str(e),
+            exc_info=True
+        )
+        # Still return 200 to Twilio to avoid retries, but log the error
+        return "Error logged"
 
     # Broadcast new lead creation event if auto-created
     if is_new_lead and new_lead and wa_log.dealership_id:
