@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { format, isToday, isYesterday } from "date-fns";
-import { Loader2, ArrowLeft, FileText, Phone, ChevronDown } from "lucide-react";
+import { Loader2, ArrowLeft, FileText, Phone, ChevronDown, Pencil, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { WhatsAppMessageBubble } from "./whatsapp-message-bubble";
@@ -16,6 +17,7 @@ import {
   TimelineItem,
   whatsappService,
 } from "@/services/whatsapp-service";
+import { LeadService } from "@/services/lead-service";
 import { useToast } from "@/hooks/use-toast";
 import { useWebSocketEvent } from "@/hooks/use-websocket";
 import { useCallLeadOptional } from "@/contexts/call-lead-context";
@@ -88,6 +90,7 @@ export function WhatsAppConversationThread({
   onMessageSent,
 }: WhatsAppConversationThreadProps) {
   const { toast } = useToast();
+  const router = useRouter();
   const callLeadCtx = useCallLeadOptional();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -119,6 +122,25 @@ export function WhatsAppConversationThread({
     last_inbound_at: string | null;
   } | null>(null);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
+
+  // Lead edit modal state
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editForm, setEditForm] = useState({
+    first_name: "",
+    last_name: "",
+    phone: "",
+    email: "",
+  });
+  const [savingEdit, setSavingEdit] = useState(false);
+  // Local state for current lead name/phone (updated after edit)
+  const [currentLeadName, setCurrentLeadName] = useState(leadName);
+  const [currentLeadPhone, setCurrentLeadPhone] = useState(leadPhone);
+
+  // Update local state when props change
+  useEffect(() => {
+    setCurrentLeadName(leadName);
+    setCurrentLeadPhone(leadPhone);
+  }, [leadName, leadPhone]);
 
   const loadSessionWindow = useCallback(async () => {
     try {
@@ -704,6 +726,78 @@ export function WhatsAppConversationThread({
 
   const sessionWindowLoading = sessionWindow === null;
 
+  // Open lead edit modal and load current values
+  const handleOpenEditModal = useCallback(async () => {
+    try {
+      const lead = await LeadService.getLead(leadId);
+      setEditForm({
+        first_name: lead.customer?.first_name || "",
+        last_name: lead.customer?.last_name || "",
+        phone: lead.customer?.phone || "",
+        email: lead.customer?.email || "",
+      });
+      setEditModalOpen(true);
+    } catch (err) {
+      console.error("Failed to load lead details:", err);
+      toast({
+        title: "Could not load lead details",
+        description: "Please try again",
+        variant: "destructive",
+      });
+    }
+  }, [leadId, toast]);
+
+  // Save lead edit changes
+  const handleSaveEdit = async () => {
+    if (!editForm.first_name.trim()) {
+      toast({
+        title: "Name required",
+        description: "Please enter at least a first name",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSavingEdit(true);
+    try {
+      await LeadService.updateLead(leadId, {
+        customer: {
+          first_name: editForm.first_name.trim(),
+          last_name: editForm.last_name.trim() || undefined,
+          phone: editForm.phone.trim() || undefined,
+          email: editForm.email.trim() || undefined,
+        },
+      });
+      
+      // Update local state
+      const newName = [editForm.first_name.trim(), editForm.last_name.trim()].filter(Boolean).join(" ");
+      setCurrentLeadName(newName);
+      if (editForm.phone.trim()) {
+        setCurrentLeadPhone(editForm.phone.trim());
+      }
+      
+      setEditModalOpen(false);
+      toast({ title: "Lead updated" });
+      
+      // Notify parent to refresh conversation list
+      onMessageSent?.();
+    } catch (err) {
+      console.error("Failed to update lead:", err);
+      toast({
+        title: "Failed to save",
+        description: "Please try again",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  // Navigate to full lead details page
+  const handleViewLeadDetails = () => {
+    router.push(`/leads/${leadId}`);
+  };
+
   // Group timeline items by date
   const groupedItems = timelineItems.reduce((groups, item) => {
     const date = new Date(item.created_at);
@@ -756,32 +850,41 @@ export function WhatsAppConversationThread({
       {/* Header - WhatsApp style dark bar */}
       <div className="flex items-center gap-3 px-4 py-3 bg-[#202c33] border-b border-[#2a3942]">
         {onBack && (
-          <Button variant="ghost" size="icon" onClick={onBack} className="text-[#e9edef] hover:bg-white/10">
+          <Button variant="ghost" size="icon" onClick={onBack} className="text-[#e9edef] hover:bg-white/10 md:hidden">
             <ArrowLeft className="h-5 w-5" />
           </Button>
         )}
-        <div className="h-10 w-10 rounded-full bg-[#00a884]/30 flex items-center justify-center shrink-0">
-          <span className="text-lg font-medium text-[#e9edef]">
-            {leadName.charAt(0).toUpperCase()}
-          </span>
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="font-semibold text-[#e9edef] truncate">{leadName}</h2>
-          {leadPhone && (
-            <p className="text-xs text-[#8696a0] truncate">{leadPhone}</p>
-          )}
-        </div>
-        {leadPhone && callLeadCtx && (
+        {/* Clickable contact info - opens edit modal */}
+        <button
+          type="button"
+          onClick={handleOpenEditModal}
+          className="flex items-center gap-3 min-w-0 flex-1 text-left hover:bg-white/5 rounded-lg px-2 py-1 -mx-2 transition-colors"
+        >
+          <div className="h-10 w-10 rounded-full bg-[#00a884]/30 flex items-center justify-center shrink-0">
+            <span className="text-lg font-medium text-[#e9edef]">
+              {(currentLeadName || leadName).charAt(0).toUpperCase()}
+            </span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="font-semibold text-[#e9edef] truncate">{currentLeadName || leadName}</h2>
+            {(currentLeadPhone || leadPhone) && (
+              <p className="text-xs text-[#8696a0] truncate">{currentLeadPhone || leadPhone}</p>
+            )}
+          </div>
+          <Pencil className="h-4 w-4 text-[#8696a0] shrink-0" />
+        </button>
+        {/* Call button */}
+        {(currentLeadPhone || leadPhone) && callLeadCtx && (
           <Button
             variant="ghost"
             size="icon"
             onClick={() => {
               callLeadCtx.setCallLead({
-                phone: leadPhone,
+                phone: currentLeadPhone || leadPhone || "",
                 leadId: leadId,
-                leadName: leadName,
+                leadName: currentLeadName || leadName,
               });
-              toast({ title: "Opening softphone...", description: `Calling ${leadName}` });
+              toast({ title: "Opening softphone...", description: `Calling ${currentLeadName || leadName}` });
             }}
             className="text-[#8696a0] hover:text-[#e9edef] hover:bg-white/10"
             title="Call lead"
@@ -1093,6 +1196,75 @@ export function WhatsAppConversationThread({
                 className="w-full sm:w-auto shrink-0 bg-[#00a884] hover:bg-[#00a884]/90 text-white"
               >
                 {sendingTemplate ? "Sending…" : "Send template"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Lead Edit Modal */}
+      <Dialog open={editModalOpen} onOpenChange={setEditModalOpen}>
+        <DialogContent className="bg-[#202c33] border-[#2a3942] text-[#e9edef] max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-[#e9edef]">Edit Contact</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-[#8696a0]">First Name *</Label>
+                <Input
+                  className="bg-[#2a3942] border-[#3b4a54] text-[#e9edef]"
+                  value={editForm.first_name}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, first_name: e.target.value }))}
+                  placeholder="First name"
+                />
+              </div>
+              <div>
+                <Label className="text-[#8696a0]">Last Name</Label>
+                <Input
+                  className="bg-[#2a3942] border-[#3b4a54] text-[#e9edef]"
+                  value={editForm.last_name}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, last_name: e.target.value }))}
+                  placeholder="Last name"
+                />
+              </div>
+            </div>
+            <div>
+              <Label className="text-[#8696a0]">Phone</Label>
+              <Input
+                className="bg-[#2a3942] border-[#3b4a54] text-[#e9edef]"
+                value={editForm.phone}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, phone: e.target.value }))}
+                placeholder="+1 (555) 123-4567"
+              />
+            </div>
+            <div>
+              <Label className="text-[#8696a0]">Email</Label>
+              <Input
+                className="bg-[#2a3942] border-[#3b4a54] text-[#e9edef]"
+                type="email"
+                value={editForm.email}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, email: e.target.value }))}
+                placeholder="contact@example.com"
+              />
+            </div>
+            <div className="flex flex-col gap-2 pt-2">
+              <Button
+                type="button"
+                onClick={handleSaveEdit}
+                disabled={savingEdit}
+                className="w-full bg-[#00a884] hover:bg-[#00a884]/90 text-white"
+              >
+                {savingEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Changes"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleViewLeadDetails}
+                className="w-full border-[#3b4a54] bg-[#2a3942] text-[#e9edef] hover:bg-[#3b4a54] hover:text-[#e9edef]"
+              >
+                <ExternalLink className="h-4 w-4 mr-2" />
+                View Full Details
               </Button>
             </div>
           </div>

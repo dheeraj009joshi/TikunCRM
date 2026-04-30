@@ -257,7 +257,8 @@ async def search_leads_for_whatsapp(
         WhatsAppLeadSearchItem(
             lead_id=str(lead.id),
             lead_name=f"{(lead.customer.first_name if lead.customer else '')} {(lead.customer.last_name or '')}".strip(),
-            lead_phone=lead.customer.phone if lead.customer else None,
+            # Use whatsapp field (full E.164) if available, otherwise phone
+            lead_phone=lead.customer.whatsapp or lead.customer.phone if lead.customer else None,
         )
         for lead in leads
     ]
@@ -1001,10 +1002,12 @@ async def get_whatsapp_conversation(
     messages = await service.get_conversation(lead_id=lead_id, limit=limit, before=before)
     await service.mark_conversation_as_read(lead_id)
     await db.commit()
+    # Use whatsapp field (full E.164) if available, otherwise phone
+    lead_whatsapp = lead.customer.whatsapp if lead.customer else None
     return WhatsAppConversationResponse(
         lead_id=lead.id,
         lead_name=f"{lead.first_name} {lead.last_name or ''}".strip(),
-        lead_phone=lead.phone,
+        lead_phone=lead_whatsapp or lead.phone,
         messages=[
             WhatsAppMessageResponse(
                 id=msg.id,
@@ -1156,10 +1159,12 @@ async def get_whatsapp_timeline(
         await service.mark_conversation_as_read(lead_id)
         await db.commit()
 
+    # Use whatsapp field (full E.164) if available, otherwise phone
+    lead_whatsapp = lead.customer.whatsapp if lead.customer else None
     return TimelineResponse(
         lead_id=lead.id,
         lead_name=f"{lead.first_name} {lead.last_name or ''}".strip(),
-        lead_phone=lead.phone,
+        lead_phone=lead_whatsapp or lead.phone,
         items=display_items,
         has_more=has_more,
     )

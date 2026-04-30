@@ -560,6 +560,7 @@ class WhatsAppConversationService:
                 Customer.first_name,
                 Customer.last_name,
                 Customer.phone,
+                Customer.whatsapp,
                 func.count().filter(
                     and_(
                         WhatsAppLog.is_read == False,
@@ -588,12 +589,14 @@ class WhatsAppConversationService:
         rows = result.all()
         conversations = []
         for row in rows:
-            wa, first_name, last_name, phone, unread_count = row
+            wa, first_name, last_name, phone, whatsapp, unread_count = row
+            # Use whatsapp field (full E.164) if available, otherwise phone
+            lead_phone = whatsapp or phone
             conversations.append({
                 "lead_id": str(wa.lead_id),
                 "customer_id": str(wa.customer_id) if wa.customer_id else None,
                 "lead_name": f"{first_name or ''} {last_name or ''}".strip() or "Unknown",
-                "lead_phone": phone,
+                "lead_phone": lead_phone,
                 "last_message": {
                     "id": str(wa.id),
                     "body": wa.body,
