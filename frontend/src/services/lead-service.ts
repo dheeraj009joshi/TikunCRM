@@ -172,6 +172,32 @@ export interface CampaignFilterOption {
     sync_source_name?: string | null;
 }
 
+/** Data for updating a lead - customer fields are at top level (not nested) */
+export interface LeadUpdateData {
+    // Lead-specific fields
+    notes?: string;
+    meta_data?: Record<string, unknown>;
+    interested_in?: string;
+    budget_range?: string;
+    secondary_customer_id?: string | null;
+    // Customer contact fields (updates associated customer)
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+    phone?: string;
+    alternate_phone?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    postal_code?: string;
+    country?: string;
+    company?: string;
+    job_title?: string;
+    date_of_birth?: string;
+    preferred_contact_method?: string;
+    preferred_contact_time?: string;
+}
+
 export const LeadService = {
     async listLeads(params: LeadListParams = {}): Promise<LeadListResponse> {
         const response = await apiClient.get(`${LEADS_PREFIX}/`, { params });
@@ -228,7 +254,7 @@ export const LeadService = {
         return response.data;
     },
 
-    async updateLead(id: string, data: Partial<Lead>): Promise<Lead> {
+    async updateLead(id: string, data: LeadUpdateData): Promise<Lead> {
         const response = await apiClient.patch(`${LEADS_PREFIX}/${id}`, data);
         return response.data;
     },

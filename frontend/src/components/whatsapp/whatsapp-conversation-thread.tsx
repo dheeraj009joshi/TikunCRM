@@ -760,13 +760,12 @@ export function WhatsAppConversationThread({
 
     setSavingEdit(true);
     try {
+      // Backend expects customer fields directly on the body, not nested
       await LeadService.updateLead(leadId, {
-        customer: {
-          first_name: editForm.first_name.trim(),
-          last_name: editForm.last_name.trim() || undefined,
-          phone: editForm.phone.trim() || undefined,
-          email: editForm.email.trim() || undefined,
-        },
+        first_name: editForm.first_name.trim(),
+        last_name: editForm.last_name.trim() || undefined,
+        phone: editForm.phone.trim() || undefined,
+        email: editForm.email.trim() || undefined,
       });
       
       // Update local state
