@@ -313,6 +313,22 @@ async def handle_incoming_whatsapp(
         len(twilio_media_urls),
     )
     resolved_dealership_id = await find_dealership_id_by_inbound_to(db, to_raw)
+    
+    # If no dealership found, try to get first dealership as fallback
+    if not resolved_dealership_id:
+        logger.warning(f"No dealership found for To number: {to_raw}. Trying fallback.")
+        from app.models.dealership import Dealership
+        fallback_result = await db.execute(
+            select(Dealership).order_by(Dealership.created_at.asc()).limit(1)
+        )
+        fallback_dealership = fallback_result.scalar_one_or_none()
+        if fallback_dealership:
+            resolved_dealership_id = fallback_dealership.id
+            logger.info(f"Using fallback dealership: {resolved_dealership_id}")
+        else:
+            logger.error("No dealerships found in database! Unknown messages won't be visible.")
+    
+    logger.info(f"Resolved dealership_id for incoming WhatsApp: {resolved_dealership_id}")
 
     # Transfer media from Twilio to Azure Blob storage
     media_urls = twilio_media_urls
@@ -331,7 +347,7 @@ async def handle_incoming_whatsapp(
             media_content_types = twilio_content_types
 
     service = get_whatsapp_conversation_service(db)
-    wa_log = await service.receive_whatsapp(
+    wa_log, is_new_lead, new_lead = await service.receive_whatsapp(
         message_sid=message_sid,
         from_number=from_number,
         to_number=to_number,
@@ -341,11 +357,36 @@ async def handle_incoming_whatsapp(
         resolved_dealership_id=resolved_dealership_id,
     )
     await db.commit()
-    logger.info("Incoming WhatsApp stored: id=%s direction=inbound sid=%s", wa_log.id, wa_log.twilio_message_sid)
+    logger.info(
+        "Incoming WhatsApp stored: id=%s direction=inbound sid=%s lead_id=%s is_new_lead=%s",
+        wa_log.id, wa_log.twilio_message_sid, wa_log.lead_id, is_new_lead
+    )
 
+    # Broadcast new lead creation event if auto-created
+    if is_new_lead and new_lead and wa_log.dealership_id:
+        try:
+            # Broadcast lead:created event for unassigned pool and conversation list
+            await ws_manager.broadcast_to_dealership(
+                str(wa_log.dealership_id),
+                {
+                    "type": "lead:created",
+                    "payload": {
+                        "lead_id": str(new_lead.id),
+                        "customer_id": str(new_lead.customer_id),
+                        "phone": from_number,
+                        "source": "whatsapp_inbound",
+                        "assigned_to": None,  # Unassigned
+                        "is_whatsapp_lead": True,
+                    },
+                },
+            )
+            logger.info(f"Broadcast lead:created for new WhatsApp lead {new_lead.id}")
+        except Exception as e:
+            logger.warning("lead:created broadcast failed: %s", e, exc_info=True)
+
+    # Broadcast whatsapp:received for the message
     if wa_log.lead_id and wa_log.dealership_id:
         try:
-            # Include full message for instant local updates on frontend
             await ws_manager.broadcast_to_dealership(
                 str(wa_log.dealership_id),
                 {
@@ -356,7 +397,7 @@ async def handle_incoming_whatsapp(
                         "from_number": from_number,
                         "body_preview": body[:100] if body else "",
                         "has_media": len(media_urls) > 0,
-                        # Full message object for instant UI updates
+                        "is_new_lead": is_new_lead,
                         "message": {
                             "id": str(wa_log.id),
                             "lead_id": str(wa_log.lead_id),
@@ -379,7 +420,7 @@ async def handle_incoming_whatsapp(
         except Exception as e:
             logger.warning("whatsapp:received broadcast failed: %s", e, exc_info=True)
     elif not wa_log.lead_id and wa_log.dealership_id:
-        # Unknown sender - broadcast to unknown tab
+        # Fallback: If lead creation failed, broadcast to unknown tab
         try:
             await ws_manager.broadcast_to_dealership(
                 str(wa_log.dealership_id),
@@ -407,7 +448,42 @@ async def handle_incoming_whatsapp(
         except Exception as e:
             logger.warning("whatsapp:unknown_received broadcast failed: %s", e, exc_info=True)
 
-    if wa_log.lead_id and wa_log.user_id:
+    # Send notification for new leads (to all dealership users since unassigned)
+    if is_new_lead and new_lead and wa_log.dealership_id:
+        try:
+            notification_service = NotificationService(db)
+            # Notify dealership admins/owners about new unassigned lead
+            from app.models.user import User, UserRole
+            admin_query = select(User).where(
+                User.dealership_id == wa_log.dealership_id,
+                User.is_active == True,
+                User.role.in_([UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER])
+            )
+            admin_result = await db.execute(admin_query)
+            admins = admin_result.scalars().all()
+            
+            for admin in admins:
+                await notification_service.create_notification(
+                    user_id=admin.id,
+                    title="New WhatsApp Lead",
+                    message=f"New lead from {from_number}: {body[:50]}..." if len(body) > 50 else f"New lead from {from_number}: {body}",
+                    link=f"/leads/{new_lead.id}?tab=whatsapp",
+                    notification_type="whatsapp_new_lead",
+                    meta_data={
+                        "lead_id": str(new_lead.id),
+                        "message_id": str(wa_log.id),
+                        "from_number": from_number,
+                        "is_new_lead": True,
+                    },
+                    send_push=True,
+                    send_email=False,
+                    send_sms=False
+                )
+            await db.commit()
+        except Exception as e:
+            logger.warning("WhatsApp new lead notification failed: %s", e, exc_info=True)
+
+    if wa_log.lead_id and wa_log.user_id and not is_new_lead:
         try:
             notification_service = NotificationService(db)
             result = await db.execute(

@@ -321,6 +321,31 @@ export default function WhatsAppInboxPage() {
     [config?.whatsapp_enabled]
   );
 
+  // Real-time: new lead created from WhatsApp - refresh conversations list
+  useWebSocketEvent<{
+    lead_id: string;
+    customer_id: string;
+    phone: string;
+    source: string;
+    is_whatsapp_lead: boolean;
+  }>(
+    "lead:created",
+    useCallback(
+      (data) => {
+        if (!config?.whatsapp_enabled) return;
+        // Only refresh for WhatsApp leads
+        if (data.is_whatsapp_lead) {
+          // Refresh the chats list to show the new lead
+          loadConversations({ silent: true });
+          // Also refresh unknown list in case we need to remove from there
+          loadUnknownConversations({ silent: true });
+        }
+      },
+      [config?.whatsapp_enabled, loadConversations, loadUnknownConversations]
+    ),
+    [config?.whatsapp_enabled]
+  );
+
   const handleSelect = (leadId: string) => {
     setSelectedLeadId(leadId);
     setSelectedLeadInfo(null);

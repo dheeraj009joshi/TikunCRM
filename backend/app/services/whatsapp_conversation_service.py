@@ -270,11 +270,13 @@ class WhatsAppConversationService:
         media_urls: Optional[List[str]] = None,
         media_content_types: Optional[List[str]] = None,
         resolved_dealership_id: Optional[UUID] = None,
-    ) -> WhatsAppLog:
+    ) -> Tuple[WhatsAppLog, bool, Optional[Lead]]:
         """Process incoming WhatsApp webhook.
         
-        Messages from unknown numbers are stored with lead_id=None and appear
-        in the "Unknown" conversations tab for review.
+        Auto-creates a lead for unknown contacts if a dealership is resolved.
+        
+        Returns:
+            Tuple of (WhatsAppLog, is_new_lead, lead_or_none)
         """
         body = str(body or "")
         sid = (message_sid or "").strip()
@@ -288,7 +290,8 @@ class WhatsAppConversationService:
             prev = existing.scalar_one_or_none()
             if prev is not None:
                 logger.info("Duplicate Twilio webhook for sid=%s; returning existing log id=%s", sid, prev.id)
-                return prev
+                # Return existing with is_new_lead=False
+                return prev, False, None
 
         # Try to find existing customer/lead
         customer = await self.find_customer_by_phone(from_number)
@@ -297,10 +300,23 @@ class WhatsAppConversationService:
             lead = await self.find_lead_by_lead_phone_suffix(from_number)
         
         dealership_id = (lead.dealership_id if lead else None) or resolved_dealership_id
+        is_new_lead = False
+        new_lead = None
         
-        # Log unknown sender for visibility
-        if lead is None:
-            logger.info(f"Unknown WhatsApp sender {from_number} - message will appear in Unknown tab")
+        # Auto-create lead for unknown sender if we have a dealership
+        if lead is None and dealership_id:
+            logger.info(f"Auto-creating lead for unknown WhatsApp sender {from_number}")
+            try:
+                customer, lead = await self._auto_create_lead_from_whatsapp(
+                    phone_number=from_number,
+                    dealership_id=dealership_id,
+                )
+                is_new_lead = True
+                new_lead = lead
+                logger.info(f"Auto-created lead {lead.id} for WhatsApp sender {from_number}")
+            except Exception as e:
+                logger.error(f"Failed to auto-create lead for {from_number}: {e}", exc_info=True)
+                # Continue without lead - message will still be saved
         
         customer_id = (lead.customer_id if lead and lead.customer_id else None) or (
             customer.id if customer else None
@@ -326,6 +342,7 @@ class WhatsAppConversationService:
         )
         self.db.add(wa_log)
         await self.db.flush()
+        
         if lead:
             try:
                 async with self.db.begin_nested():
@@ -341,7 +358,65 @@ class WhatsAppConversationService:
                     e,
                     exc_info=True,
                 )
-        return wa_log
+        
+        return wa_log, is_new_lead, new_lead
+
+    async def _auto_create_lead_from_whatsapp(
+        self,
+        phone_number: str,
+        dealership_id: UUID,
+    ) -> Tuple[Customer, Lead]:
+        """Auto-create a Customer and Lead from an incoming WhatsApp message.
+        
+        The lead is created with:
+        - Phone number as placeholder name
+        - Source = WHATSAPP_INBOUND
+        - No assignment (goes to Unassigned Pool)
+        - Default pipeline stage
+        """
+        normalized = "".join(c for c in phone_number if c.isdigit())
+        display_phone = self._format_phone_display(phone_number)
+        
+        # Create customer with phone as placeholder name
+        customer = Customer(
+            first_name=display_phone,
+            last_name=None,
+            phone=normalized[-10:] if len(normalized) >= 10 else normalized,
+            whatsapp=phone_number,
+        )
+        self.db.add(customer)
+        await self.db.flush()
+        
+        # Get default stage for this dealership
+        try:
+            default_stage = await LeadStageService.get_default_stage(self.db, dealership_id)
+        except RuntimeError:
+            from app.models.lead_stage import LeadStage
+            result = await self.db.execute(
+                select(LeadStage)
+                .where(LeadStage.dealership_id == dealership_id)
+                .order_by(LeadStage.position)
+                .limit(1)
+            )
+            default_stage = result.scalar_one_or_none()
+            if not default_stage:
+                raise RuntimeError(f"No lead stages found for dealership {dealership_id}")
+        
+        # Create lead - unassigned so it goes to pool
+        lead = Lead(
+            customer_id=customer.id,
+            dealership_id=dealership_id,
+            stage_id=default_stage.id,
+            source=LeadSource.WHATSAPP_INBOUND,
+            is_active=True,
+            interest_score=50,
+            assigned_to=None,  # Goes to Unassigned Pool
+            notes=f"Auto-created from WhatsApp inbound message",
+        )
+        self.db.add(lead)
+        await self.db.flush()
+        
+        return customer, lead
 
     async def update_delivery_status(
         self,
@@ -608,71 +683,61 @@ class WhatsAppConversationService:
     ) -> List[Dict[str, Any]]:
         """List WhatsApp conversations from unknown numbers (no lead_id).
         
-        Groups messages by from_number and returns the latest message for each.
+        Groups messages by contact phone number (from_number for inbound, to_number for outbound)
+        and returns the latest message for each conversation.
         """
-        # Subquery to get the latest message per from_number where lead_id is NULL
-        subq = (
-            select(
-                WhatsAppLog.from_number,
-                func.max(WhatsAppLog.created_at).label("last_message_at")
-            )
-            .where(
-                WhatsAppLog.lead_id.is_(None),
-                WhatsAppLog.direction == literal_column("'inbound'::whatsappdirection")
-            )
-            .group_by(WhatsAppLog.from_number)
-        )
+        # We need to find unique phone numbers that have messages with lead_id=NULL
+        # For inbound messages, the contact's phone is in from_number
+        # For outbound messages, the contact's phone is in to_number
+        
+        # Get all unknown messages
+        base_query = select(WhatsAppLog).where(WhatsAppLog.lead_id.is_(None))
         if dealership_id:
-            subq = subq.where(WhatsAppLog.dealership_id == dealership_id)
-        subq = subq.subquery()
+            base_query = base_query.where(WhatsAppLog.dealership_id == dealership_id)
         
-        # Main query to get full message details
-        query = (
-            select(
-                WhatsAppLog,
-                func.count().filter(
-                    WhatsAppLog.is_read == False
-                ).over(partition_by=WhatsAppLog.from_number).label("unread_count")
-            )
-            .join(subq, and_(
-                WhatsAppLog.from_number == subq.c.from_number,
-                WhatsAppLog.created_at == subq.c.last_message_at
-            ))
-            .where(
-                WhatsAppLog.lead_id.is_(None),
-                WhatsAppLog.direction == literal_column("'inbound'::whatsappdirection")
-            )
-        )
-        if dealership_id:
-            query = query.where(WhatsAppLog.dealership_id == dealership_id)
+        result = await self.db.execute(base_query.order_by(WhatsAppLog.created_at.desc()))
+        all_messages = result.scalars().all()
         
-        query = query.order_by(WhatsAppLog.created_at.desc()).offset(offset).limit(limit)
-        result = await self.db.execute(query)
-        rows = result.all()
+        # Group by contact phone number
+        conversations_map: Dict[str, Dict[str, Any]] = {}
         
-        conversations = []
-        for row in rows:
-            wa, unread_count = row
-            # Format phone number for display
-            phone = wa.from_number
-            display_name = self._format_phone_display(phone)
+        for msg in all_messages:
+            # Determine the contact's phone number based on direction
+            if msg.direction == WhatsAppDirection.INBOUND:
+                contact_phone = msg.from_number
+            else:
+                contact_phone = msg.to_number
             
-            conversations.append({
-                "phone_number": phone,
-                "display_name": display_name,
-                "last_message": {
-                    "id": str(wa.id),
-                    "body": wa.body,
-                    "direction": wa.direction.value,
-                    "created_at": wa.created_at.isoformat(),
-                    "status": wa.status.value,
-                    "media_urls": wa.media_urls or [],
-                    "media_content_types": wa.media_content_types or [],
-                },
-                "unread_count": unread_count,
-                "dealership_id": str(wa.dealership_id) if wa.dealership_id else None,
-            })
-        return conversations
+            # Normalize phone for grouping
+            normalized = "".join(c for c in contact_phone if c.isdigit())
+            phone_key = normalized[-10:] if len(normalized) >= 10 else normalized
+            
+            if phone_key not in conversations_map:
+                # First (newest) message for this contact
+                unread = 1 if (msg.direction == WhatsAppDirection.INBOUND and not msg.is_read) else 0
+                conversations_map[phone_key] = {
+                    "phone_number": contact_phone,
+                    "display_name": self._format_phone_display(contact_phone),
+                    "last_message": {
+                        "id": str(msg.id),
+                        "body": msg.body,
+                        "direction": msg.direction.value,
+                        "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                        "status": msg.status.value if msg.status else "unknown",
+                        "media_urls": msg.media_urls or [],
+                        "media_content_types": msg.media_content_types or [],
+                    },
+                    "unread_count": unread,
+                    "dealership_id": str(msg.dealership_id) if msg.dealership_id else None,
+                }
+            else:
+                # Count unread for this contact
+                if msg.direction == WhatsAppDirection.INBOUND and not msg.is_read:
+                    conversations_map[phone_key]["unread_count"] += 1
+        
+        # Convert to list and apply limit/offset
+        conversations = list(conversations_map.values())
+        return conversations[offset:offset + limit]
     
     def _format_phone_display(self, phone: str) -> str:
         """Format phone number for display (e.g., +1 (555) 123-4567)."""
