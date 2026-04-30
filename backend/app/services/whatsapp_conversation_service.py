@@ -63,14 +63,15 @@ class WhatsAppConversationService:
         return result.scalar_one_or_none()
 
     async def find_lead_by_lead_phone_suffix(self, phone: str) -> Optional[Lead]:
-        """Match `Lead.phone` by last 10 digits when customer record does not match (common CRM setup)."""
+        """Match Lead via Customer.phone by last 10 digits when customer record does not match (common CRM setup)."""
         normalized = "".join(c for c in phone if c.isdigit())
         if len(normalized) < 10:
             return None
         suffix = normalized[-10:]
         result = await self.db.execute(
             select(Lead)
-            .where(Lead.phone.isnot(None), Lead.phone.ilike(f"%{suffix}%"))
+            .join(Customer, Lead.customer_id == Customer.id)
+            .where(Customer.phone.isnot(None), Customer.phone.ilike(f"%{suffix}%"))
             .order_by(Lead.updated_at.desc())
             .limit(1)
         )
