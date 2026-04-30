@@ -12,7 +12,7 @@ from typing import Sequence, Union
 from alembic import op
 
 revision: str = "at_add_leadsource_inbound"
-down_revision: Union[str, None] = "ar_whatsapp_received_activity"
+down_revision: Union[str, None] = "as_whatsapp_media_types"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
