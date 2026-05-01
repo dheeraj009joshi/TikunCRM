@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification import Notification, NotificationType
@@ -139,6 +139,15 @@ class NotificationService:
         
         # Send WebSocket event for real-time updates
         try:
+            # Get unread count for this user to include in the event
+            from sqlalchemy import func
+            unread_query = select(func.count()).select_from(Notification).where(
+                Notification.user_id == user_id,
+                Notification.is_read == False
+            )
+            unread_result = await self.db.execute(unread_query)
+            unread_count = unread_result.scalar() or 0
+            
             await ws_manager.send_to_user(
                 str(user_id),
                 {
@@ -153,6 +162,7 @@ class NotificationService:
                         "related_type": related_type,
                         "is_read": False,
                         "created_at": notification.created_at.isoformat(),
+                        "unread_count": unread_count,
                     }
                 }
             )
@@ -835,10 +845,12 @@ async def notify_lead_multi_campaign_background(
 
 # Standalone WebSocket event helpers (can be used without NotificationService instance)
 
-async def emit_lead_updated(lead_id: str, dealership_id: Optional[str], update_type: str, data: dict):
+async def emit_lead_updated(lead_id: str, dealership_id: Optional[str], update_type: str, data: dict, db: Optional[AsyncSession] = None):
     """
     Emit a lead update event to all users who might be viewing this lead.
     Also triggers badges:refresh and stats:refresh so sidebar and dashboard update in real time.
+    
+    If db is provided, includes badge counts in the stats:refresh event.
     """
     try:
         message = {
@@ -854,7 +866,7 @@ async def emit_lead_updated(lead_id: str, dealership_id: Optional[str], update_t
         else:
             await ws_manager.broadcast_all(message)
         await emit_badges_refresh(unassigned=True)
-        await emit_stats_refresh(dealership_id)
+        await emit_stats_refresh(dealership_id, db=db)
     except Exception as e:
         logger.warning(f"Failed to emit lead:updated WebSocket event: {e}")
 
@@ -898,10 +910,12 @@ async def emit_badges_refresh(unassigned: bool = False, notifications: bool = Fa
         logger.warning(f"Failed to emit badges:refresh WebSocket event: {e}")
 
 
-async def emit_lead_created(lead_id: str, dealership_id: Optional[str], lead_data: dict):
+async def emit_lead_created(lead_id: str, dealership_id: Optional[str], lead_data: dict, db: Optional[AsyncSession] = None):
     """
     Emit a lead created event when a new lead is added.
     Used by Google Sheets sync and manual lead creation.
+    
+    If db is provided, includes badge counts in the stats:refresh event.
     """
     try:
         message = {
@@ -921,22 +935,79 @@ async def emit_lead_created(lead_id: str, dealership_id: Optional[str], lead_dat
             await ws_manager.broadcast_all(message)
         
         # Also trigger stats refresh for dashboards
-        await emit_stats_refresh(dealership_id)
+        await emit_stats_refresh(dealership_id, db=db)
     except Exception as e:
         logger.warning(f"Failed to emit lead:created WebSocket event: {e}")
 
 
-async def emit_stats_refresh(dealership_id: Optional[str] = None):
+async def emit_stats_refresh(dealership_id: Optional[str] = None, db: Optional[AsyncSession] = None):
     """
     Emit a stats refresh event when dashboard stats should be updated.
     Broadcast to ALL connected clients so admins (who may have no dealership_id in JWT) also receive and can refetch.
+    
+    If db is provided, includes badge counts in the event for direct frontend updates.
     """
     try:
+        badge_counts = {}
+        
+        # Calculate badge counts if database session is provided
+        if db and dealership_id:
+            try:
+                from app.models.lead import Lead, LeadStage
+                from app.models.appointment import Appointment
+                from app.models.follow_up import FollowUp
+                from sqlalchemy import and_
+                
+                # Unassigned count for dealership
+                unassigned_query = select(func.count()).select_from(Lead).where(
+                    Lead.dealership_id == UUID(dealership_id),
+                    Lead.assigned_to == None
+                )
+                unassigned_result = await db.execute(unassigned_query)
+                badge_counts["unassigned"] = unassigned_result.scalar() or 0
+                
+                # Manager review count for dealership
+                mr_stage_query = select(LeadStage.id).where(LeadStage.name == "manager_review")
+                mr_stage_result = await db.execute(mr_stage_query)
+                mr_stage_id = mr_stage_result.scalar_one_or_none()
+                if mr_stage_id:
+                    mr_query = select(func.count()).select_from(Lead).where(
+                        Lead.dealership_id == UUID(dealership_id),
+                        Lead.stage_id == mr_stage_id
+                    )
+                    mr_result = await db.execute(mr_query)
+                    badge_counts["managerReview"] = mr_result.scalar() or 0
+                else:
+                    badge_counts["managerReview"] = 0
+                
+                # Appointments today for dealership
+                today = datetime.utcnow().date()
+                appointments_query = select(func.count()).select_from(Appointment).where(
+                    Appointment.dealership_id == UUID(dealership_id),
+                    func.date(Appointment.scheduled_time) == today
+                )
+                appointments_result = await db.execute(appointments_query)
+                badge_counts["appointments"] = appointments_result.scalar() or 0
+                
+                # Overdue follow-ups for dealership
+                now = datetime.utcnow()
+                overdue_query = select(func.count()).select_from(FollowUp).where(
+                    FollowUp.dealership_id == UUID(dealership_id),
+                    FollowUp.due_datetime < now,
+                    FollowUp.status == "pending"
+                )
+                overdue_result = await db.execute(overdue_query)
+                badge_counts["followUps"] = overdue_result.scalar() or 0
+                
+            except Exception as e:
+                logger.warning(f"Failed to calculate badge counts for stats:refresh: {e}")
+        
         message = {
             "type": "stats:refresh",
             "data": {
                 "dealership_id": dealership_id,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
+                **badge_counts
             }
         }
         await ws_manager.broadcast_all(message)
@@ -944,10 +1015,12 @@ async def emit_stats_refresh(dealership_id: Optional[str] = None):
         logger.warning(f"Failed to emit stats:refresh WebSocket event: {e}")
 
 
-async def emit_showroom_update(dealership_id: str, action: str, data: dict):
+async def emit_showroom_update(dealership_id: str, action: str, data: dict, db: Optional[AsyncSession] = None):
     """
     Emit a showroom update event for real-time dashboard updates.
     Broadcast to ALL connected clients so admins (who may have no dealership_id in JWT) see correct "customers in dealership" count.
+    
+    If db is provided, includes badge counts in the stats:refresh event.
     """
     try:
         message = {
@@ -960,6 +1033,6 @@ async def emit_showroom_update(dealership_id: str, action: str, data: dict):
             }
         }
         await ws_manager.broadcast_all(message)
-        await emit_stats_refresh(dealership_id)
+        await emit_stats_refresh(dealership_id, db=db)
     except Exception as e:
         logger.warning(f"Failed to emit showroom:update WebSocket event: {e}")

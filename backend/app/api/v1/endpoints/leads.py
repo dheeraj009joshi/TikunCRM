@@ -1625,7 +1625,7 @@ async def update_lead_stage(
             str(lead.dealership_id) if lead.dealership_id else None,
             {"type": "stage_changed", "performer_name": performer_name, "old_stage": old_stage_name, "new_stage": new_stage.display_name, "timestamp": utc_now().isoformat()},
         )
-        await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None)
+        await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None, db=db)
     except Exception as e:
         logger.error(f"Failed to emit WebSocket events: {e}")
 
@@ -2196,7 +2196,7 @@ async def bulk_assign_leads_to_dealership(
     try:
         from app.services.notification_service import emit_badges_refresh, emit_stats_refresh
         await emit_badges_refresh(unassigned=True)
-        await emit_stats_refresh(str(assignment_in.dealership_id))
+        await emit_stats_refresh(str(assignment_in.dealership_id), db=db)
     except Exception:
         pass
 
@@ -2964,7 +2964,7 @@ async def delete_lead(
     try:
         from app.services.notification_service import emit_badges_refresh, emit_stats_refresh
         await emit_badges_refresh(unassigned=True)
-        await emit_stats_refresh(dealership_id_str)
+        await emit_stats_refresh(dealership_id_str, db=db)
     except Exception:
         pass
 

@@ -343,12 +343,26 @@ export function Sidebar() {
         return () => window.removeEventListener("leads-crm:badges-refresh" as any, handler as any)
     }, [refetchBadgeCounts])
 
-    // Listen for real-time notification events via WebSocket – refetch count so numbers stay in sync
-    const handleNewNotification = React.useCallback(() => {
-        refetchBadgeCounts({ notifications: true })
+    // Listen for real-time notification events via WebSocket – update badge directly
+    const handleNewNotification = React.useCallback((data: { unread_count?: number }) => {
+        if (typeof data?.unread_count === "number") {
+            // Use the unread count directly from WebSocket event
+            setBadgeCounts(prev => ({ ...prev, notifications: data.unread_count! }))
+        } else {
+            // Fallback to API if unread_count not in event
+            refetchBadgeCounts({ notifications: true })
+        }
     }, [refetchBadgeCounts])
     
     useNotificationEvents(handleNewNotification)
+    
+    // Listen for notification:read events to update badge when notifications are read
+    const handleNotificationRead = React.useCallback((data: { unread_count?: number }) => {
+        if (typeof data?.unread_count === "number") {
+            setBadgeCounts(prev => ({ ...prev, notifications: data.unread_count! }))
+        }
+    }, [])
+    useWebSocketEvent("notification:read", handleNotificationRead, [handleNotificationRead])
     
     // Listen for lead assignment events (updates unassigned pool count via WebSocket)
     const handleLeadUpdate = React.useCallback((data: any) => {
@@ -374,8 +388,32 @@ export function Sidebar() {
     useBadgesRefresh(handleBadgesRefresh)
     
     // When stats refresh (lead/appointment/follow-up/showroom changes), update all sidebar counts via WebSocket
-    const handleStatsRefresh = React.useCallback((_data: { dealership_id?: string; timestamp?: string }) => {
-        refetchBadgeCounts({ unassigned: true, managerReview: true, appointments: true, followUps: true })
+    const handleStatsRefresh = React.useCallback((data: { 
+        dealership_id?: string; 
+        timestamp?: string;
+        unassigned?: number;
+        managerReview?: number;
+        appointments?: number;
+        followUps?: number;
+    }) => {
+        // If counts are provided in the event, use them directly
+        const hasDirectCounts = typeof data.unassigned === "number" || 
+                                typeof data.managerReview === "number" ||
+                                typeof data.appointments === "number" ||
+                                typeof data.followUps === "number"
+        
+        if (hasDirectCounts) {
+            setBadgeCounts(prev => ({
+                ...prev,
+                ...(typeof data.unassigned === "number" ? { unassigned: data.unassigned } : {}),
+                ...(typeof data.managerReview === "number" ? { managerReview: data.managerReview } : {}),
+                ...(typeof data.appointments === "number" ? { appointments: data.appointments } : {}),
+                ...(typeof data.followUps === "number" ? { followUps: data.followUps } : {}),
+            }))
+        } else {
+            // Fallback to API refetch if counts not in event
+            refetchBadgeCounts({ unassigned: true, managerReview: true, appointments: true, followUps: true })
+        }
     }, [refetchBadgeCounts])
     useStatsRefresh(handleStatsRefresh)
 
@@ -389,7 +427,7 @@ export function Sidebar() {
             refetchBadgeCounts({ whatsapp: true })
         }
     }, [refetchBadgeCounts])
-    useWebSocketEvent("whatsapp:received", handleWhatsAppReceived, [])
+    useWebSocketEvent("whatsapp:received", handleWhatsAppReceived, [handleWhatsAppReceived])
 
     // Listen for WhatsApp read events to update badge when messages are read
     const handleWhatsAppRead = React.useCallback((data: { total_unread?: number }) => {
@@ -397,7 +435,7 @@ export function Sidebar() {
             setBadgeCounts(prev => ({ ...prev, whatsappUnread: data.total_unread! }))
         }
     }, [])
-    useWebSocketEvent("whatsapp:read", handleWhatsAppRead, [])
+    useWebSocketEvent("whatsapp:read", handleWhatsAppRead, [handleWhatsAppRead])
     
     // Expand Conversations when on WhatsApp, SMS, or Calls
     const isConversationsActive = pathname === "/whatsapp" || pathname === "/sms" || pathname === "/calls"

@@ -358,7 +358,7 @@ async def schedule_follow_up(
     await db.commit()
     
     try:
-        await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None)
+        await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None, db=db)
     except Exception:
         pass
     
@@ -448,7 +448,7 @@ async def complete_follow_up(
     await db.commit()
     
     try:
-        await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None)
+        await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None, db=db)
     except Exception:
         pass
     
@@ -547,7 +547,7 @@ async def update_follow_up(
         await db.commit()
         
         try:
-            await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None)
+            await emit_stats_refresh(str(lead.dealership_id) if lead.dealership_id else None, db=db)
         except Exception:
             pass
     

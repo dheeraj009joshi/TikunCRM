@@ -7,7 +7,7 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 

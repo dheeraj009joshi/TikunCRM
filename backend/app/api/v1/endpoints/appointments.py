@@ -173,9 +173,9 @@ async def create_appointment(
         )
     
     await db.commit()
-    
+
     try:
-        await emit_stats_refresh(str(dealership_id) if dealership_id else None)
+        await emit_stats_refresh(str(dealership_id) if dealership_id else None, db=db)
     except Exception as e:
         logger.warning(f"Failed to emit stats:refresh for new appointment: {e}")
     
@@ -542,9 +542,9 @@ async def update_appointment(
         setattr(appointment, field, value)
     
     await db.commit()
-    
+
     try:
-        await emit_stats_refresh(str(appointment.dealership_id) if appointment.dealership_id else None)
+        await emit_stats_refresh(str(appointment.dealership_id) if appointment.dealership_id else None, db=db)
     except Exception as e:
         logger.warning(f"Failed to emit stats:refresh for updated appointment: {e}")
     
@@ -616,9 +616,9 @@ async def complete_appointment(
         )
     
     await db.commit()
-    
+
     try:
-        await emit_stats_refresh(str(appointment.dealership_id) if appointment.dealership_id else None)
+        await emit_stats_refresh(str(appointment.dealership_id) if appointment.dealership_id else None, db=db)
     except Exception as e:
         logger.warning(f"Failed to emit stats:refresh for completed appointment: {e}")
     

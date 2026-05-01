@@ -20,6 +20,10 @@ from app.schemas.notification import (
     NotificationStats,
 )
 from app.services.notification_display import notification_to_response
+from app.core.websocket_manager import ws_manager
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -182,6 +186,28 @@ async def mark_notification_read(
         notification.read_at = utc_now()
         await db.commit()
         await db.refresh(notification)
+        
+        # Broadcast updated unread count via WebSocket
+        try:
+            unread_query = select(func.count()).select_from(Notification).where(
+                Notification.user_id == current_user.id,
+                Notification.is_read == False
+            )
+            unread_result = await db.execute(unread_query)
+            unread_count = unread_result.scalar() or 0
+            
+            await ws_manager.send_to_user(
+                str(current_user.id),
+                {
+                    "type": "notification:read",
+                    "data": {
+                        "notification_id": str(notification_id),
+                        "unread_count": unread_count,
+                    }
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send notification:read WebSocket event: {e}")
 
     return notification_to_response(notification)
 
@@ -210,6 +236,28 @@ async def mark_notifications_read(
     result = await db.execute(stmt)
     await db.commit()
     
+    # Broadcast updated unread count via WebSocket
+    try:
+        unread_query = select(func.count()).select_from(Notification).where(
+            Notification.user_id == current_user.id,
+            Notification.is_read == False
+        )
+        unread_result = await db.execute(unread_query)
+        unread_count = unread_result.scalar() or 0
+        
+        await ws_manager.send_to_user(
+            str(current_user.id),
+            {
+                "type": "notification:read",
+                "data": {
+                    "marked_count": result.rowcount,
+                    "unread_count": unread_count,
+                }
+            }
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send notification:read WebSocket event: {e}")
+    
     return {"marked_count": result.rowcount}
 
 
@@ -234,6 +282,21 @@ async def mark_all_notifications_read(
     
     result = await db.execute(stmt)
     await db.commit()
+    
+    # Broadcast updated unread count via WebSocket (will be 0 after mark-all-read)
+    try:
+        await ws_manager.send_to_user(
+            str(current_user.id),
+            {
+                "type": "notification:read",
+                "data": {
+                    "marked_count": result.rowcount,
+                    "unread_count": 0,  # All notifications are now read
+                }
+            }
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send notification:read WebSocket event: {e}")
     
     return {"marked_count": result.rowcount}
 
