@@ -486,6 +486,8 @@ async def handle_incoming_whatsapp(
             lead = lead_result.scalar_one_or_none()
             lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() if lead else "Unknown"
             
+            from app.models.notification import NotificationType
+            
             if lead and lead.assigned_to:
                 # Lead is assigned - notify only the assigned salesperson
                 await notification_service.create_notification(
@@ -493,7 +495,7 @@ async def handle_incoming_whatsapp(
                     title="New WhatsApp Message",
                     message=f"Message from {lead_name}: {body[:50]}..." if len(body) > 50 else f"Message from {lead_name}: {body}",
                     link=f"/whatsapp?lead={wa_log.lead_id}",
-                    notification_type="WHATSAPP_RECEIVED",
+                    notification_type=NotificationType.WHATSAPP_RECEIVED,
                     meta_data={
                         "lead_id": str(wa_log.lead_id),
                         "message_id": str(wa_log.id),
@@ -514,13 +516,14 @@ async def handle_incoming_whatsapp(
                 users = users_result.scalars().all()
                 
                 notification_title = "New WhatsApp Lead" if is_new_lead else "New WhatsApp Message (Unassigned)"
+                notif_type = NotificationType.WHATSAPP_NEW_LEAD if is_new_lead else NotificationType.WHATSAPP_RECEIVED
                 for user in users:
                     await notification_service.create_notification(
                         user_id=user.id,
                         title=notification_title,
                         message=f"Message from {from_number}: {body[:50]}..." if len(body) > 50 else f"Message from {from_number}: {body}",
                         link=f"/whatsapp?lead={wa_log.lead_id}",
-                        notification_type="WHATSAPP_NEW_LEAD" if is_new_lead else "WHATSAPP_RECEIVED",
+                        notification_type=notif_type,
                         meta_data={
                             "lead_id": str(wa_log.lead_id),
                             "message_id": str(wa_log.id),

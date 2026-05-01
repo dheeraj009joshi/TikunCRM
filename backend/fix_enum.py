@@ -17,5 +17,19 @@ async def fix_enum():
     await engine.dispose()
     print("SUCCESS: All enum values added!")
 
+async def fix_old_notifications():
+    """Delete notifications with old lowercase enum values that can't be read."""
+    engine = create_async_engine(settings.database_url)
+    async with engine.begin() as conn:
+        # Delete notifications with the old lowercase enum values
+        # These can't be read by SQLAlchemy since they don't match the Python enum
+        result = await conn.execute(text("""
+            DELETE FROM notifications 
+            WHERE type::text IN ('whatsapp_new_lead', 'whatsapp_received')
+        """))
+        print(f"Deleted {result.rowcount} notifications with old enum values")
+    await engine.dispose()
+
 if __name__ == "__main__":
     asyncio.run(fix_enum())
+    asyncio.run(fix_old_notifications())
