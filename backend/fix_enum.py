@@ -11,8 +11,9 @@ async def fix_enum():
         # Fix leadsource enum
         await conn.execute(text("ALTER TYPE leadsource ADD VALUE IF NOT EXISTS 'whatsapp_inbound'"))
         await conn.execute(text("ALTER TYPE leadsource ADD VALUE IF NOT EXISTS 'sms_inbound'"))
-        # Fix notificationtype enum
-        await conn.execute(text("ALTER TYPE notificationtype ADD VALUE IF NOT EXISTS 'whatsapp_new_lead'"))
+        # Fix notificationtype enum (uppercase to match Python enum)
+        await conn.execute(text("ALTER TYPE notificationtype ADD VALUE IF NOT EXISTS 'WHATSAPP_NEW_LEAD'"))
+        await conn.execute(text("ALTER TYPE notificationtype ADD VALUE IF NOT EXISTS 'WHATSAPP_RECEIVED'"))
     await engine.dispose()
     print("SUCCESS: All enum values added!")
 

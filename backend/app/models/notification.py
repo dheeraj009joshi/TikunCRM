@@ -33,6 +33,8 @@ class NotificationType(str, Enum):
     ADMIN_REMINDER = "ADMIN_REMINDER"      # Admin reminder to salesperson
     SKATE_ALERT = "SKATE_ALERT"            # Another salesperson tried to act on assigned lead
     LEAD_MULTI_CAMPAIGN = "LEAD_MULTI_CAMPAIGN"  # Lead found in another campaign
+    WHATSAPP_NEW_LEAD = "WHATSAPP_NEW_LEAD"  # New WhatsApp conversation from unknown number
+    WHATSAPP_RECEIVED = "WHATSAPP_RECEIVED"  # WhatsApp message received
 
 
 class Notification(Base):

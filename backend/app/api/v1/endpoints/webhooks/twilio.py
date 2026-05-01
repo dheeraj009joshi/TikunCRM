@@ -493,7 +493,7 @@ async def handle_incoming_whatsapp(
                     title="New WhatsApp Message",
                     message=f"Message from {lead_name}: {body[:50]}..." if len(body) > 50 else f"Message from {lead_name}: {body}",
                     link=f"/whatsapp?lead={wa_log.lead_id}",
-                    notification_type="whatsapp_received",
+                    notification_type="WHATSAPP_RECEIVED",
                     meta_data={
                         "lead_id": str(wa_log.lead_id),
                         "message_id": str(wa_log.id),
@@ -520,7 +520,7 @@ async def handle_incoming_whatsapp(
                         title=notification_title,
                         message=f"Message from {from_number}: {body[:50]}..." if len(body) > 50 else f"Message from {from_number}: {body}",
                         link=f"/whatsapp?lead={wa_log.lead_id}",
-                        notification_type="whatsapp_new_lead" if is_new_lead else "whatsapp_received",
+                        notification_type="WHATSAPP_NEW_LEAD" if is_new_lead else "WHATSAPP_RECEIVED",
                         meta_data={
                             "lead_id": str(wa_log.lead_id),
                             "message_id": str(wa_log.id),
