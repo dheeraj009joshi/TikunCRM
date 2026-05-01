@@ -411,6 +411,16 @@ async def handle_incoming_whatsapp(
     # Broadcast whatsapp:received for the message
     if wa_log.lead_id and wa_log.dealership_id:
         try:
+            # Get total unread count for the dealership to include in broadcast
+            from app.models.whatsapp_log import WhatsAppLog, WhatsAppDirection
+            unread_query = select(func.count()).select_from(WhatsAppLog).where(
+                WhatsAppLog.dealership_id == wa_log.dealership_id,
+                WhatsAppLog.direction == WhatsAppDirection.INBOUND,
+                WhatsAppLog.is_read == False
+            )
+            unread_result = await db.execute(unread_query)
+            total_unread = unread_result.scalar() or 0
+            
             await ws_manager.broadcast_to_dealership(
                 str(wa_log.dealership_id),
                 {
@@ -422,6 +432,7 @@ async def handle_incoming_whatsapp(
                         "body_preview": body[:100] if body else "",
                         "has_media": len(media_urls) > 0,
                         "is_new_lead": is_new_lead,
+                        "total_unread": total_unread,
                         "message": {
                             "id": str(wa_log.id),
                             "lead_id": str(wa_log.lead_id),
@@ -502,11 +513,12 @@ async def handle_incoming_whatsapp(
                         "from_number": from_number,
                     },
                     send_push=True,
-                    send_email=False,
+                    send_email=True,
                     send_sms=False
                 )
             else:
                 # Lead is unassigned - notify ALL salespeople, admins, and owners in the dealership
+                import asyncio
                 users_query = select(User).where(
                     User.dealership_id == wa_log.dealership_id,
                     User.is_active == True,
@@ -517,11 +529,14 @@ async def handle_incoming_whatsapp(
                 
                 notification_title = "New WhatsApp Lead" if is_new_lead else "New WhatsApp Message (Unassigned)"
                 notif_type = NotificationType.WHATSAPP_NEW_LEAD if is_new_lead else NotificationType.WHATSAPP_RECEIVED
-                for user in users:
-                    await notification_service.create_notification(
+                notification_message = f"Message from {from_number}: {body[:50]}..." if len(body) > 50 else f"Message from {from_number}: {body}"
+                
+                # Send notifications to all users in parallel for better performance
+                notification_tasks = [
+                    notification_service.create_notification(
                         user_id=user.id,
                         title=notification_title,
-                        message=f"Message from {from_number}: {body[:50]}..." if len(body) > 50 else f"Message from {from_number}: {body}",
+                        message=notification_message,
                         link=f"/whatsapp?lead={wa_log.lead_id}",
                         notification_type=notif_type,
                         meta_data={
@@ -532,9 +547,12 @@ async def handle_incoming_whatsapp(
                             "is_unassigned": True,
                         },
                         send_push=True,
-                        send_email=False,
+                        send_email=True,
                         send_sms=False
                     )
+                    for user in users
+                ]
+                await asyncio.gather(*notification_tasks, return_exceptions=True)
             await db.commit()
         except Exception as e:
             await db.rollback()  # Rollback to reset session state

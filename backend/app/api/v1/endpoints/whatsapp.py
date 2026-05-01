@@ -1158,6 +1158,31 @@ async def get_whatsapp_timeline(
         service = get_whatsapp_conversation_service(db)
         await service.mark_conversation_as_read(lead_id)
         await db.commit()
+        
+        # Broadcast updated unread count via WebSocket
+        if lead.dealership_id:
+            try:
+                from sqlalchemy import func
+                unread_query = select(func.count()).select_from(WhatsAppLog).where(
+                    WhatsAppLog.dealership_id == lead.dealership_id,
+                    WhatsAppLog.direction == WhatsAppDirection.INBOUND,
+                    WhatsAppLog.is_read == False
+                )
+                unread_result = await db.execute(unread_query)
+                total_unread = unread_result.scalar() or 0
+                
+                await ws_manager.broadcast_to_dealership(
+                    str(lead.dealership_id),
+                    {
+                        "type": "whatsapp:read",
+                        "payload": {
+                            "lead_id": str(lead_id),
+                            "total_unread": total_unread,
+                        },
+                    },
+                )
+            except Exception as e:
+                logger.warning("whatsapp:read broadcast failed: %s", e)
 
     # Use whatsapp field (full E.164) if available, otherwise phone
     lead_whatsapp = lead.customer.whatsapp if lead.customer else None

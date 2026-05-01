@@ -379,11 +379,25 @@ export function Sidebar() {
     }, [refetchBadgeCounts])
     useStatsRefresh(handleStatsRefresh)
 
-    // Listen for WhatsApp messages to update unread badge
-    const handleWhatsAppReceived = React.useCallback(() => {
-        refetchBadgeCounts({ whatsapp: true })
+    // Listen for WhatsApp messages to update unread badge directly from WebSocket
+    const handleWhatsAppReceived = React.useCallback((data: { total_unread?: number }) => {
+        if (typeof data?.total_unread === "number") {
+            // Use the unread count directly from WebSocket event
+            setBadgeCounts(prev => ({ ...prev, whatsappUnread: data.total_unread! }))
+        } else {
+            // Fallback to API if total_unread not in event
+            refetchBadgeCounts({ whatsapp: true })
+        }
     }, [refetchBadgeCounts])
     useWebSocketEvent("whatsapp:received", handleWhatsAppReceived, [])
+
+    // Listen for WhatsApp read events to update badge when messages are read
+    const handleWhatsAppRead = React.useCallback((data: { total_unread?: number }) => {
+        if (typeof data?.total_unread === "number") {
+            setBadgeCounts(prev => ({ ...prev, whatsappUnread: data.total_unread! }))
+        }
+    }, [])
+    useWebSocketEvent("whatsapp:read", handleWhatsAppRead, [])
     
     // Expand Conversations when on WhatsApp, SMS, or Calls
     const isConversationsActive = pathname === "/whatsapp" || pathname === "/sms" || pathname === "/calls"
@@ -421,13 +435,18 @@ export function Sidebar() {
                     }
                     return child
                 })
-                // Also show badge on parent if any child has unread
                 const totalChildBadge = badgeCounts.whatsappUnread
-                return { ...item, children: updatedChildren, badge: totalChildBadge > 0 ? totalChildBadge : undefined }
+                const isExpanded = expandedGroup === item.name
+                // Show badge on parent only when collapsed, on children when expanded
+                return { 
+                    ...item, 
+                    children: updatedChildren, 
+                    badge: (!isExpanded && totalChildBadge > 0) ? totalChildBadge : undefined 
+                }
             }
             return item
         })
-    }, [role, badgeCounts])
+    }, [role, badgeCounts, expandedGroup])
 
     const handleLogout = () => {
         logout()
