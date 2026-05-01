@@ -1,6 +1,7 @@
 """
 Twilio Webhooks - SMS and WhatsApp incoming and status updates
 """
+import asyncio
 import logging
 from typing import Optional, List, Tuple
 from uuid import UUID
@@ -11,7 +12,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.database import get_db
+from app.db.database import get_db, async_session_maker
 from app.services.sms_conversation_service import get_sms_conversation_service
 from app.services.whatsapp_conversation_service import get_whatsapp_conversation_service
 from app.services.dealership_twilio_config_service import (
@@ -23,6 +24,59 @@ from app.core.config import settings
 from app.models.lead import Lead
 
 logger = logging.getLogger(__name__)
+
+# Delay before sending WhatsApp email notifications (3 minutes)
+WHATSAPP_EMAIL_DELAY_SECONDS = 180
+
+
+async def send_delayed_whatsapp_email(
+    message_id: UUID,
+    user_id: UUID,
+    title: str,
+    message: str,
+    link: str,
+    notification_type_value: str,
+    meta_data: dict
+):
+    """
+    Background task to send WhatsApp email notification after a delay.
+    Only sends if the message is still unread after the delay.
+    """
+    try:
+        # Wait for the delay period
+        await asyncio.sleep(WHATSAPP_EMAIL_DELAY_SECONDS)
+        
+        # Check if message is still unread using a fresh database session
+        async with async_session_maker() as db:
+            from app.models.whatsapp_log import WhatsAppLog
+            result = await db.execute(
+                select(WhatsAppLog.is_read).where(WhatsAppLog.id == message_id)
+            )
+            is_read = result.scalar_one_or_none()
+            
+            # Only send email if message is still unread
+            if is_read is False:
+                from app.models.notification import NotificationType
+                notification_service = NotificationService(db)
+                
+                # Create a notification with email only (push already sent)
+                await notification_service.create_notification(
+                    user_id=user_id,
+                    title=title,
+                    message=message,
+                    link=link,
+                    notification_type=NotificationType(notification_type_value),
+                    meta_data={**meta_data, "delayed_email": True},
+                    send_push=False,  # Push already sent immediately
+                    send_email=True,
+                    send_sms=False
+                )
+                await db.commit()
+                logger.info(f"Sent delayed WhatsApp email for message {message_id} to user {user_id}")
+            else:
+                logger.debug(f"Skipping delayed email for message {message_id} - already read")
+    except Exception as e:
+        logger.warning(f"Failed to send delayed WhatsApp email for message {message_id}: {e}")
 
 router = APIRouter()
 
@@ -501,24 +555,40 @@ async def handle_incoming_whatsapp(
             
             if lead and lead.assigned_to:
                 # Lead is assigned - notify only the assigned salesperson
+                # Send push immediately, schedule delayed email (only if unread after 3 min)
+                notif_title = "New WhatsApp Message"
+                notif_message = f"Message from {lead_name}: {body[:50]}..." if len(body) > 50 else f"Message from {lead_name}: {body}"
+                notif_link = f"/whatsapp?lead={wa_log.lead_id}"
+                notif_meta = {
+                    "lead_id": str(wa_log.lead_id),
+                    "message_id": str(wa_log.id),
+                    "from_number": from_number,
+                }
+                
                 await notification_service.create_notification(
                     user_id=lead.assigned_to,
-                    title="New WhatsApp Message",
-                    message=f"Message from {lead_name}: {body[:50]}..." if len(body) > 50 else f"Message from {lead_name}: {body}",
-                    link=f"/whatsapp?lead={wa_log.lead_id}",
+                    title=notif_title,
+                    message=notif_message,
+                    link=notif_link,
                     notification_type=NotificationType.WHATSAPP_RECEIVED,
-                    meta_data={
-                        "lead_id": str(wa_log.lead_id),
-                        "message_id": str(wa_log.id),
-                        "from_number": from_number,
-                    },
+                    meta_data=notif_meta,
                     send_push=True,
-                    send_email=True,
+                    send_email=False,  # Don't send email immediately
                     send_sms=False
                 )
+                
+                # Schedule delayed email (only sent if message still unread after 3 minutes)
+                asyncio.create_task(send_delayed_whatsapp_email(
+                    message_id=wa_log.id,
+                    user_id=lead.assigned_to,
+                    title=notif_title,
+                    message=notif_message,
+                    link=notif_link,
+                    notification_type_value=NotificationType.WHATSAPP_RECEIVED.value,
+                    meta_data=notif_meta
+                ))
             else:
                 # Lead is unassigned - notify ALL salespeople, admins, and owners in the dealership
-                import asyncio
                 users_query = select(User).where(
                     User.dealership_id == wa_log.dealership_id,
                     User.is_active == True,
@@ -530,14 +600,15 @@ async def handle_incoming_whatsapp(
                 notification_title = "New WhatsApp Lead" if is_new_lead else "New WhatsApp Message (Unassigned)"
                 notif_type = NotificationType.WHATSAPP_NEW_LEAD if is_new_lead else NotificationType.WHATSAPP_RECEIVED
                 notification_message = f"Message from {from_number}: {body[:50]}..." if len(body) > 50 else f"Message from {from_number}: {body}"
+                notif_link = f"/whatsapp?lead={wa_log.lead_id}"
                 
-                # Send notifications to all users in parallel for better performance
+                # Send push notifications to all users in parallel (no email immediately)
                 notification_tasks = [
                     notification_service.create_notification(
                         user_id=user.id,
                         title=notification_title,
                         message=notification_message,
-                        link=f"/whatsapp?lead={wa_log.lead_id}",
+                        link=notif_link,
                         notification_type=notif_type,
                         meta_data={
                             "lead_id": str(wa_log.lead_id),
@@ -547,11 +618,29 @@ async def handle_incoming_whatsapp(
                             "is_unassigned": True,
                         },
                         send_push=True,
-                        send_email=True,
+                        send_email=False,  # Don't send email immediately
                         send_sms=False
                     )
                     for user in users
                 ]
+                
+                # Schedule delayed emails for all users (only sent if message still unread after 3 minutes)
+                for user in users:
+                    asyncio.create_task(send_delayed_whatsapp_email(
+                        message_id=wa_log.id,
+                        user_id=user.id,
+                        title=notification_title,
+                        message=notification_message,
+                        link=notif_link,
+                        notification_type_value=notif_type.value,
+                        meta_data={
+                            "lead_id": str(wa_log.lead_id),
+                            "message_id": str(wa_log.id),
+                            "from_number": from_number,
+                            "is_new_lead": is_new_lead,
+                            "is_unassigned": True,
+                        }
+                    ))
                 await asyncio.gather(*notification_tasks, return_exceptions=True)
             await db.commit()
         except Exception as e:

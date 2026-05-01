@@ -1022,12 +1022,13 @@ async def get_whatsapp_conversation(
                     str(lead.dealership_id),
                     {
                         "type": "whatsapp:read",
-                        "payload": {
+                        "data": {
                             "lead_id": str(lead_id),
                             "total_unread": total_unread,
                         },
                     },
                 )
+                logger.info(f"Broadcast whatsapp:read with total_unread={total_unread} for lead {lead_id}")
             except Exception as e:
                 logger.warning("whatsapp:read broadcast failed: %s", e)
     
@@ -1204,12 +1205,13 @@ async def get_whatsapp_timeline(
                     str(lead.dealership_id),
                     {
                         "type": "whatsapp:read",
-                        "payload": {
+                        "data": {
                             "lead_id": str(lead_id),
                             "total_unread": total_unread,
                         },
                     },
                 )
+                logger.info(f"Broadcast whatsapp:read with total_unread={total_unread} for lead {lead_id}")
             except Exception as e:
                 logger.warning("whatsapp:read broadcast failed: %s", e)
 
@@ -1240,6 +1242,19 @@ async def send_whatsapp_to_lead(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Lead has no phone number"
         )
+    
+    # Auto-assign lead to salesperson when they reply to an unassigned lead
+    # Only for SALESPERSON role, not for ADMIN/OWNER (they must manually assign)
+    lead_was_assigned = False
+    if (
+        lead.assigned_to is None 
+        and current_user.role == UserRole.SALESPERSON
+    ):
+        lead.assigned_to = current_user.id
+        lead_was_assigned = True
+        logger.info(f"Auto-assigned lead {lead_id} to salesperson {current_user.id} on WhatsApp reply")
+    
+    # Salespersons can only message leads assigned to them (after auto-assign check)
     if current_user.role == UserRole.SALESPERSON and lead.assigned_to != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     service = get_whatsapp_conversation_service(db)
@@ -1305,6 +1320,21 @@ async def send_whatsapp_to_lead(
                 )
             except Exception as e:
                 logger.warning("whatsapp:sent broadcast failed: %s", e)
+        
+        # Broadcast lead assignment if auto-assigned
+        if lead_was_assigned and lead.dealership_id:
+            try:
+                from app.services.notification_service import emit_lead_updated, emit_badges_refresh
+                await emit_lead_updated(
+                    str(lead.id),
+                    str(lead.dealership_id),
+                    "assigned",
+                    {"assigned_to": str(current_user.id), "assigned_by": "auto_whatsapp_reply"}
+                )
+                await emit_badges_refresh(unassigned=True)
+            except Exception as e:
+                logger.warning("lead:updated broadcast for auto-assign failed: %s", e)
+        
         return SendWhatsAppResponse(success=True, message_id=wa_log.id)
     return SendWhatsAppResponse(
         success=False,
