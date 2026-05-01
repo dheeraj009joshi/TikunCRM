@@ -2539,7 +2539,7 @@ async def view_lead_stip_document(
         raise HTTPException(status_code=404, detail="Document not found or not accessible")
     if not app_settings.is_azure_stips_configured:
         raise HTTPException(status_code=503, detail="Stips storage is not configured")
-    url = azure_storage_service.get_stip_document_secure_url(blob_path, expiry_hours=1)
+    url = azure_storage_service.get_stip_document_secure_url(blob_path, expiry_hours=24000)
     if not url:
         raise HTTPException(status_code=503, detail="Could not generate view URL")
     return StipDocumentViewUrl(url=url)

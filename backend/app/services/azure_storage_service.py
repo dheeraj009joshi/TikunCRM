@@ -353,8 +353,8 @@ class AzureStorageService:
             logger.error(f"Failed to upload stip document: {e}")
             raise
 
-    def get_stip_document_secure_url(self, blob_path: str, expiry_hours: int = 1) -> str:
-        """Generate a SAS URL for viewing a Stips document."""
+    def get_stip_document_secure_url(self, blob_path: str, expiry_hours: int = 24000) -> str:
+        """Generate a SAS URL for viewing a Stips document (default ~1000 days)."""
         if not settings.is_azure_stips_configured:
             return ""
         try:
