@@ -36,7 +36,7 @@ import {
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
 import { useRole, getRoleDisplayName } from "@/hooks/use-role"
-import { useNotificationEvents, useLeadUpdateEvents, useBadgesRefresh, useStatsRefresh } from "@/hooks/use-websocket"
+import { useNotificationEvents, useLeadUpdateEvents, useBadgesRefresh, useStatsRefresh, useWebSocketEvent } from "@/hooks/use-websocket"
 import { useSidebarOptional } from "@/contexts/sidebar-context"
 import { UserAvatar } from "@/components/ui/avatar"
 import { Badge, getRoleVariant } from "@/components/ui/badge"
@@ -188,6 +188,7 @@ interface BadgeCounts {
     unassigned: number
     managerReview: number
     notifications: number
+    whatsappUnread: number
 }
 
 export function Sidebar() {
@@ -202,7 +203,8 @@ export function Sidebar() {
         followUps: 0,
         unassigned: 0,
         managerReview: 0,
-        notifications: 0
+        notifications: 0,
+        whatsappUnread: 0
     })
     
     // Fetch badge counts
@@ -260,13 +262,23 @@ export function Sidebar() {
                 } catch {
                     unreadNotifications = 0
                 }
+
+                // Fetch WhatsApp unread count
+                let whatsappUnreadCount = 0
+                try {
+                    const waConversations = await apiClient.get("/whatsapp/conversations")
+                    whatsappUnreadCount = waConversations.data?.total_unread || 0
+                } catch {
+                    whatsappUnreadCount = 0
+                }
                 
                 setBadgeCounts({
                     appointments: appointmentsToday,
                     followUps: overdueFollowUps,
                     unassigned: unassignedCount,
                     managerReview: managerReviewCount,
-                    notifications: unreadNotifications
+                    notifications: unreadNotifications,
+                    whatsappUnread: whatsappUnreadCount
                 })
             } catch (error) {
                 console.error("Failed to fetch badge counts:", error)
@@ -280,7 +292,7 @@ export function Sidebar() {
     }, [user, role])
     
     // Refetch specific badge counts (used by WebSocket handlers)
-    const refetchBadgeCounts = React.useCallback((which: { unassigned?: boolean; managerReview?: boolean; notifications?: boolean; appointments?: boolean; followUps?: boolean }) => {
+    const refetchBadgeCounts = React.useCallback((which: { unassigned?: boolean; managerReview?: boolean; notifications?: boolean; appointments?: boolean; followUps?: boolean; whatsapp?: boolean }) => {
         if (which.unassigned) {
             LeadService.listLeads({ pool: "unassigned", page_size: 1 })
                 .then(res => setBadgeCounts(prev => ({ ...prev, unassigned: res.total })))
@@ -309,6 +321,11 @@ export function Sidebar() {
         if (which.followUps) {
             FollowUpService.listFollowUps({ overdue: true })
                 .then(res => setBadgeCounts(prev => ({ ...prev, followUps: res.total || res.items.length })))
+                .catch(() => {})
+        }
+        if (which.whatsapp) {
+            apiClient.get("/whatsapp/conversations")
+                .then(res => setBadgeCounts(prev => ({ ...prev, whatsappUnread: res.data?.total_unread ?? 0 })))
                 .catch(() => {})
         }
     }, [])
@@ -361,6 +378,12 @@ export function Sidebar() {
         refetchBadgeCounts({ unassigned: true, managerReview: true, appointments: true, followUps: true })
     }, [refetchBadgeCounts])
     useStatsRefresh(handleStatsRefresh)
+
+    // Listen for WhatsApp messages to update unread badge
+    const handleWhatsAppReceived = React.useCallback(() => {
+        refetchBadgeCounts({ whatsapp: true })
+    }, [refetchBadgeCounts])
+    useWebSocketEvent("whatsapp:received", handleWhatsAppReceived, [])
     
     // Expand Conversations when on WhatsApp, SMS, or Calls
     const isConversationsActive = pathname === "/whatsapp" || pathname === "/sms" || pathname === "/calls"
@@ -389,6 +412,18 @@ export function Sidebar() {
             }
             if (!item.children && item.href === "/notifications" && badgeCounts.notifications > 0) {
                 return { ...item, badge: badgeCounts.notifications }
+            }
+            // Handle child items (e.g., WhatsApp in Conversations group)
+            if (item.children) {
+                const updatedChildren = item.children.map(child => {
+                    if (child.href === "/whatsapp" && badgeCounts.whatsappUnread > 0) {
+                        return { ...child, badge: badgeCounts.whatsappUnread }
+                    }
+                    return child
+                })
+                // Also show badge on parent if any child has unread
+                const totalChildBadge = badgeCounts.whatsappUnread
+                return { ...item, children: updatedChildren, badge: totalChildBadge > 0 ? totalChildBadge : undefined }
             }
             return item
         })
@@ -522,12 +557,19 @@ export function Sidebar() {
                                                         key={child.href}
                                                         href={child.href}
                                                         className={cn(
-                                                            "flex items-center rounded-md py-1.5 pl-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
+                                                            "flex items-center justify-between rounded-md py-1.5 pl-2 pr-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
                                                             active ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground"
                                                         )}
                                                     >
-                                                        <child.icon className="h-3.5 w-3.5 shrink-0 mr-2 text-muted-foreground" />
-                                                        <span className="truncate">{child.name}</span>
+                                                        <div className="flex items-center min-w-0">
+                                                            <child.icon className="h-3.5 w-3.5 shrink-0 mr-2 text-muted-foreground" />
+                                                            <span className="truncate">{child.name}</span>
+                                                        </div>
+                                                        {(child as any).badge > 0 && (
+                                                            <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-bold text-white">
+                                                                {(child as any).badge}
+                                                            </span>
+                                                        )}
                                                     </Link>
                                                 )
                                             })}

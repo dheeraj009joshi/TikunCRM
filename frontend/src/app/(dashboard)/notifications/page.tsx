@@ -19,6 +19,7 @@ import {
     Filter,
     X,
     Layers,
+    MessageCircle,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 
@@ -74,6 +75,8 @@ const typeIcons: Record<NotificationType, React.ComponentType<{ className?: stri
     admin_reminder: Bell,
     skate_alert: AlertTriangle,
     lead_multi_campaign: Layers,
+    whatsapp_new_lead: MessageCircle,
+    whatsapp_received: MessageCircle,
 }
 
 // Color mapping for notification types
@@ -91,6 +94,8 @@ const typeColors: Record<NotificationType, string> = {
     admin_reminder: "text-indigo-500 bg-indigo-100 dark:bg-indigo-900/30",
     skate_alert: "text-amber-500 bg-amber-100 dark:bg-amber-900/30",
     lead_multi_campaign: "text-yellow-600 bg-yellow-100 dark:bg-yellow-900/30",
+    whatsapp_new_lead: "text-emerald-500 bg-emerald-100 dark:bg-emerald-900/30",
+    whatsapp_received: "text-emerald-500 bg-emerald-100 dark:bg-emerald-900/30",
 }
 
 // Type labels
@@ -108,6 +113,8 @@ const typeLabels: Record<NotificationType, string> = {
     admin_reminder: "Admin Reminder",
     skate_alert: "SKATE Alert",
     lead_multi_campaign: "Duplicate lead",
+    whatsapp_new_lead: "WhatsApp Lead",
+    whatsapp_received: "WhatsApp Message",
 }
 
 export default function NotificationsPage() {

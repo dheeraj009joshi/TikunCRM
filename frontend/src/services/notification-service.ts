@@ -7,6 +7,8 @@ export type NotificationType =
     | "lead_updated"
     | "follow_up_due"
     | "follow_up_overdue"
+    | "whatsapp_new_lead"
+    | "whatsapp_received"
     | "system"
     | "mention"
     | "appointment_reminder"
@@ -64,6 +66,8 @@ export const NOTIFICATION_TYPE_INFO: Record<string, { label: string; color: stri
     admin_reminder: { label: "Admin Reminder", color: "indigo", icon: "bell" },
     skate_alert: { label: "SKATE Alert", color: "amber", icon: "alert-triangle" },
     lead_multi_campaign: { label: "Duplicate lead", color: "yellow", icon: "layers" },
+    whatsapp_new_lead: { label: "WhatsApp Lead", color: "emerald", icon: "message-circle" },
+    whatsapp_received: { label: "WhatsApp", color: "emerald", icon: "message-circle" },
 };
 
 /** Normalize API notification type (may be uppercase) for display lookup */

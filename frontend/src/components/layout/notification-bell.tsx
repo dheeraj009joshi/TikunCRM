@@ -16,6 +16,7 @@ import {
     CheckCheck,
     Loader2,
     Layers,
+    MessageCircle,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
@@ -52,6 +53,8 @@ const typeIcons: Record<NotificationType, React.ComponentType<{ className?: stri
     admin_reminder: Bell,
     skate_alert: AlertTriangle,
     lead_multi_campaign: Layers,
+    whatsapp_new_lead: MessageCircle,
+    whatsapp_received: MessageCircle,
 }
 
 // Color mapping for notification types
@@ -69,6 +72,8 @@ const typeColors: Record<NotificationType, string> = {
     admin_reminder: "text-indigo-500 bg-indigo-100",
     skate_alert: "text-amber-500 bg-amber-100",
     lead_multi_campaign: "text-yellow-600 bg-yellow-100",
+    whatsapp_new_lead: "text-emerald-500 bg-emerald-100",
+    whatsapp_received: "text-emerald-500 bg-emerald-100",
 }
 
 export function NotificationBell() {
