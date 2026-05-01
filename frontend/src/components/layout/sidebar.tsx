@@ -387,33 +387,9 @@ export function Sidebar() {
     
     useBadgesRefresh(handleBadgesRefresh)
     
-    // When stats refresh (lead/appointment/follow-up/showroom changes), update all sidebar counts via WebSocket
-    const handleStatsRefresh = React.useCallback((data: { 
-        dealership_id?: string; 
-        timestamp?: string;
-        unassigned?: number;
-        managerReview?: number;
-        appointments?: number;
-        followUps?: number;
-    }) => {
-        // If counts are provided in the event, use them directly
-        const hasDirectCounts = typeof data.unassigned === "number" || 
-                                typeof data.managerReview === "number" ||
-                                typeof data.appointments === "number" ||
-                                typeof data.followUps === "number"
-        
-        if (hasDirectCounts) {
-            setBadgeCounts(prev => ({
-                ...prev,
-                ...(typeof data.unassigned === "number" ? { unassigned: data.unassigned } : {}),
-                ...(typeof data.managerReview === "number" ? { managerReview: data.managerReview } : {}),
-                ...(typeof data.appointments === "number" ? { appointments: data.appointments } : {}),
-                ...(typeof data.followUps === "number" ? { followUps: data.followUps } : {}),
-            }))
-        } else {
-            // Fallback to API refetch if counts not in event
-            refetchBadgeCounts({ unassigned: true, managerReview: true, appointments: true, followUps: true })
-        }
+    // When stats refresh (lead/appointment/follow-up/showroom changes), refetch sidebar counts
+    const handleStatsRefresh = React.useCallback((_data: { dealership_id?: string; timestamp?: string }) => {
+        refetchBadgeCounts({ unassigned: true, managerReview: true, appointments: true, followUps: true })
     }, [refetchBadgeCounts])
     useStatsRefresh(handleStatsRefresh)
 

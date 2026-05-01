@@ -20,7 +20,7 @@ import {
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
-import { useNotificationEvents } from "@/hooks/use-websocket"
+import { useNotificationEvents, useWebSocketEvent } from "@/hooks/use-websocket"
 import { formatRelativeTimeInTimezone } from "@/utils/timezone"
 
 import { Button } from "@/components/ui/button"
@@ -145,11 +145,23 @@ export function NotificationBell() {
                 ...prev,
             ].slice(0, 10) // Keep only 10 most recent
         })
-        // Increment unread count
-        setUnreadCount(prev => prev + 1)
+        // Use unread_count from event if available, otherwise increment
+        if (typeof notification.unread_count === "number") {
+            setUnreadCount(notification.unread_count)
+        } else {
+            setUnreadCount(prev => prev + 1)
+        }
     }, [])
     
     useNotificationEvents(handleNewNotification)
+    
+    // Listen for notification:read events to update badge when notifications are read elsewhere
+    const handleNotificationRead = React.useCallback((data: { unread_count?: number }) => {
+        if (typeof data?.unread_count === "number") {
+            setUnreadCount(data.unread_count)
+        }
+    }, [])
+    useWebSocketEvent("notification:read", handleNotificationRead, [handleNotificationRead])
     
     // Fetch notifications when popover opens
     React.useEffect(() => {
