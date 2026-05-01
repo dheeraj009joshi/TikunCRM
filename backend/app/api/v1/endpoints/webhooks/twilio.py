@@ -472,70 +472,70 @@ async def handle_incoming_whatsapp(
         except Exception as e:
             logger.warning("whatsapp:unknown_received broadcast failed: %s", e, exc_info=True)
 
-    # Send notification for new leads (to all dealership users since unassigned)
+    # Send notifications for WhatsApp messages
     # Use separate try-except with rollback to ensure notification failures don't affect message storage
-    if is_new_lead and new_lead and wa_log.dealership_id:
+    if wa_log.dealership_id and wa_log.lead_id:
         try:
             notification_service = NotificationService(db)
-            # Notify dealership admins/owners about new unassigned lead
             from app.models.user import User, UserRole
-            admin_query = select(User).where(
-                User.dealership_id == wa_log.dealership_id,
-                User.is_active == True,
-                User.role.in_([UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER])
-            )
-            admin_result = await db.execute(admin_query)
-            admins = admin_result.scalars().all()
             
-            for admin in admins:
+            # Get the lead to check assignment status
+            lead_result = await db.execute(
+                select(Lead).options(selectinload(Lead.customer)).where(Lead.id == wa_log.lead_id)
+            )
+            lead = lead_result.scalar_one_or_none()
+            lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() if lead else "Unknown"
+            
+            if lead and lead.assigned_to:
+                # Lead is assigned - notify only the assigned salesperson
                 await notification_service.create_notification(
-                    user_id=admin.id,
-                    title="New WhatsApp Lead",
-                    message=f"New lead from {from_number}: {body[:50]}..." if len(body) > 50 else f"New lead from {from_number}: {body}",
-                    link=f"/leads/{new_lead.id}?tab=whatsapp",
-                    notification_type="whatsapp_new_lead",
+                    user_id=lead.assigned_to,
+                    title="New WhatsApp Message",
+                    message=f"Message from {lead_name}: {body[:50]}..." if len(body) > 50 else f"Message from {lead_name}: {body}",
+                    link=f"/whatsapp?lead={wa_log.lead_id}",
+                    notification_type="whatsapp_received",
                     meta_data={
-                        "lead_id": str(new_lead.id),
+                        "lead_id": str(wa_log.lead_id),
                         "message_id": str(wa_log.id),
                         "from_number": from_number,
-                        "is_new_lead": True,
                     },
                     send_push=True,
                     send_email=False,
                     send_sms=False
                 )
+            else:
+                # Lead is unassigned - notify ALL salespeople, admins, and owners in the dealership
+                users_query = select(User).where(
+                    User.dealership_id == wa_log.dealership_id,
+                    User.is_active == True,
+                    User.role.in_([UserRole.SALESPERSON, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER])
+                )
+                users_result = await db.execute(users_query)
+                users = users_result.scalars().all()
+                
+                notification_title = "New WhatsApp Lead" if is_new_lead else "New WhatsApp Message (Unassigned)"
+                for user in users:
+                    await notification_service.create_notification(
+                        user_id=user.id,
+                        title=notification_title,
+                        message=f"Message from {from_number}: {body[:50]}..." if len(body) > 50 else f"Message from {from_number}: {body}",
+                        link=f"/whatsapp?lead={wa_log.lead_id}",
+                        notification_type="whatsapp_new_lead" if is_new_lead else "whatsapp_received",
+                        meta_data={
+                            "lead_id": str(wa_log.lead_id),
+                            "message_id": str(wa_log.id),
+                            "from_number": from_number,
+                            "is_new_lead": is_new_lead,
+                            "is_unassigned": True,
+                        },
+                        send_push=True,
+                        send_email=False,
+                        send_sms=False
+                    )
             await db.commit()
         except Exception as e:
             await db.rollback()  # Rollback to reset session state
-            logger.warning("WhatsApp new lead notification failed (message already stored): %s", e, exc_info=True)
-
-    if wa_log.lead_id and wa_log.user_id and not is_new_lead:
-        try:
-            notification_service = NotificationService(db)
-            result = await db.execute(
-                select(Lead).options(selectinload(Lead.customer)).where(Lead.id == wa_log.lead_id)
-            )
-            lead = result.scalar_one_or_none()
-            lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() if lead else "Unknown"
-            await notification_service.create_notification(
-                user_id=wa_log.user_id,
-                title="New WhatsApp",
-                message=f"Message from {lead_name}: {body[:50]}..." if len(body) > 50 else f"Message from {lead_name}: {body}",
-                link=f"/leads/{wa_log.lead_id}?tab=whatsapp",
-                notification_type="whatsapp_received",
-                meta_data={
-                    "lead_id": str(wa_log.lead_id),
-                    "message_id": str(wa_log.id),
-                    "from_number": from_number
-                },
-                send_push=True,
-                send_email=False,
-                send_sms=False
-            )
-            await db.commit()
-        except Exception as e:
-            await db.rollback()  # Rollback to reset session state
-            logger.warning("WhatsApp incoming notification failed (message already stored): %s", e, exc_info=True)
+            logger.warning("WhatsApp notification failed (message already stored): %s", e, exc_info=True)
 
     return Response(
         content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
@@ -568,6 +568,10 @@ async def handle_whatsapp_status(
         error_message=error_message,
     )
 
+    # Commit first to ensure data is persisted before broadcasting
+    await db.commit()
+    
+    # Then broadcast the status update
     if wa_log and wa_log.lead_id and wa_log.dealership_id:
         try:
             await ws_manager.broadcast_to_dealership(
@@ -586,5 +590,4 @@ async def handle_whatsapp_status(
         except Exception as e:
             logger.warning("whatsapp:status broadcast failed: %s", e, exc_info=True)
 
-    await db.commit()
     return {"status": "ok"}

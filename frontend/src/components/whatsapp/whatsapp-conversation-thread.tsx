@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { format, isToday, isYesterday } from "date-fns";
-import { Loader2, ArrowLeft, FileText, Phone, ChevronDown, Pencil, ExternalLink } from "lucide-react";
+import { Loader2, ArrowLeft, FileText, Phone, ChevronDown, Pencil, ExternalLink, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { WhatsAppMessageBubble } from "./whatsapp-message-bubble";
@@ -21,6 +21,7 @@ import { LeadService } from "@/services/lead-service";
 import { useToast } from "@/hooks/use-toast";
 import { useWebSocketEvent } from "@/hooks/use-websocket";
 import { useCallLeadOptional } from "@/contexts/call-lead-context";
+import { useAuthStore } from "@/stores/auth-store";
 import {
   Dialog,
   DialogContent,
@@ -136,11 +137,55 @@ export function WhatsAppConversationThread({
   const [currentLeadName, setCurrentLeadName] = useState(leadName);
   const [currentLeadPhone, setCurrentLeadPhone] = useState(leadPhone);
 
+  // Lead assignment state
+  const { user: currentUser } = useAuthStore();
+  const [leadAssignedTo, setLeadAssignedTo] = useState<string | null>(null);
+  const [assigningToMe, setAssigningToMe] = useState(false);
+
   // Update local state when props change
   useEffect(() => {
     setCurrentLeadName(leadName);
     setCurrentLeadPhone(leadPhone);
   }, [leadName, leadPhone]);
+
+  // Load lead assignment status
+  const loadLeadAssignment = useCallback(async () => {
+    try {
+      const lead = await LeadService.getLead(leadId);
+      setLeadAssignedTo(lead.assigned_to || null);
+    } catch (err) {
+      console.error("Failed to load lead assignment:", err);
+    }
+  }, [leadId]);
+
+  useEffect(() => {
+    loadLeadAssignment();
+  }, [loadLeadAssignment]);
+
+  // Handle "Assign to me" click
+  const handleAssignToMe = async () => {
+    if (!currentUser?.id || assigningToMe) return;
+    
+    setAssigningToMe(true);
+    try {
+      await LeadService.assignToSalesperson(leadId, currentUser.id);
+      setLeadAssignedTo(currentUser.id);
+      toast({ title: "Lead assigned to you" });
+      onMessageSent?.(); // Refresh parent list
+    } catch (err) {
+      console.error("Failed to assign lead:", err);
+      toast({
+        title: "Failed to assign",
+        description: "Please try again",
+        variant: "destructive",
+      });
+    } finally {
+      setAssigningToMe(false);
+    }
+  };
+
+  const isUnassigned = !leadAssignedTo;
+  const isAssignedToMe = leadAssignedTo === currentUser?.id;
 
   const loadSessionWindow = useCallback(async () => {
     try {
@@ -245,24 +290,48 @@ export function WhatsAppConversationThread({
   // Real-time status updates (delivered/read ticks) - update locally, no API call
   useWebSocketEvent<WsStatusPayload>(
     "whatsapp:status",
-    (data) => {
+    useCallback((data) => {
       if (!data?.lead_id || String(data.lead_id) !== String(leadId)) return;
-      // Update the message status in local state instantly
-      setTimelineItems((prev) =>
-        prev.map((item) =>
-          item.item_type === "message" && item.message?.id === data.message_id
-            ? {
+      
+      // Use functional update to ensure we always work with latest state
+      setTimelineItems((prev) => {
+        // First, check if we already have this message
+        const hasMessage = prev.some(
+          (item) => item.item_type === "message" && item.message?.id === data.message_id
+        );
+        
+        if (!hasMessage) {
+          // Message not found - might still have temp ID, skip for now
+          // The status will be updated when the message is properly added
+          return prev;
+        }
+        
+        return prev.map((item) => {
+          if (item.item_type !== "message" || !item.message) return item;
+          
+          // Match by message ID
+          if (item.message.id === data.message_id) {
+            // Only update if the new status is "newer" (avoid downgrade)
+            const statusOrder = ["queued", "sending", "sent", "delivered", "read", "failed", "undelivered"];
+            const currentIdx = statusOrder.indexOf(item.message.status);
+            const newIdx = statusOrder.indexOf(data.status);
+            
+            // Allow update if new status is higher priority or it's a failure status
+            if (newIdx > currentIdx || data.status === "failed" || data.status === "undelivered") {
+              return {
                 ...item,
                 message: {
                   ...item.message,
                   status: data.status,
                   delivered_at: data.delivered_at ?? item.message.delivered_at,
                 },
-              }
-            : item
-        )
-      );
-    },
+              };
+            }
+          }
+          return item;
+        });
+      });
+    }, [leadId]),
     [leadId]
   );
 
@@ -872,6 +941,24 @@ export function WhatsAppConversationThread({
           </div>
           <Pencil className="h-4 w-4 text-[#8696a0] shrink-0" />
         </button>
+        {/* Assign to me button - show only for unassigned leads */}
+        {isUnassigned && (
+          <Button
+            onClick={handleAssignToMe}
+            disabled={assigningToMe}
+            className="bg-[#00a884] hover:bg-[#00a884]/90 text-white text-sm px-3 py-1 h-8"
+            title="Assign this lead to yourself"
+          >
+            {assigningToMe ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <>
+                <UserPlus className="h-4 w-4 mr-1" />
+                Assign to me
+              </>
+            )}
+          </Button>
+        )}
         {/* Call button */}
         {(currentLeadPhone || leadPhone) && callLeadCtx && (
           <Button
