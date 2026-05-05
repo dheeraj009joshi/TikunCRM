@@ -3,3 +3,46 @@
 docs/**
 # Backup of nested .git (backend/frontend were submodules; do not commit)
 **/.git.bak
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# SSL certificates
+certbot/conf/
+nginx/ssl/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+.cache/
+*.log
+npm-debug.log*
+
+# Docker
+*.tar
+
+# Misc
+*.bak
+*.tmp
+.coverage
+htmlcov/
