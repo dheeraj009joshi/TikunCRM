@@ -5,7 +5,8 @@ import { useRouter, usePathname } from "next/navigation"
 import { useAuthStore } from "@/stores/auth-store"
 import { Loader2 } from "lucide-react"
 
-const PUBLIC_PATHS = ["/", "/login", "/signup", "/forgot-password", "/reset-password"]
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password"]
+const LANDING_PAGE_PATH = "/"
 const CHANGE_PASSWORD_PATH = "/change-password"
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -14,7 +15,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     const pathname = usePathname()
     const [isInitialized, setIsInitialized] = React.useState(false)
 
-    const isPublicPath = PUBLIC_PATHS.some(path => pathname.startsWith(path))
+    const isLandingPage = pathname === LANDING_PAGE_PATH
+    const isPublicPath = isLandingPage || PUBLIC_PATHS.some(path => pathname.startsWith(path))
     const isChangePasswordPath = pathname.startsWith(CHANGE_PASSWORD_PATH)
 
     React.useEffect(() => {
@@ -40,8 +42,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                     return
                 }
                 
-                // Already authenticated from Zustand persist
-                if (isPublicPath) {
+                // Already authenticated - redirect from auth pages (not landing page)
+                const isAuthPage = PUBLIC_PATHS.some(path => pathname.startsWith(path))
+                if (isAuthPage) {
                     router.replace('/dashboard')
                 }
                 setIsInitialized(true)
@@ -68,7 +71,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                         return
                     }
                     
-                    if (isPublicPath) {
+                    // Redirect from auth pages (not landing page)
+                    const isAuthPage = PUBLIC_PATHS.some(path => pathname.startsWith(path))
+                    if (isAuthPage) {
                         router.replace('/dashboard')
                     }
                 } else {
@@ -103,7 +108,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                                         return
                                     }
                                     
-                                    if (isPublicPath) {
+                                    // Redirect from auth pages (not landing page)
+                                    const isAuthPageRefresh = PUBLIC_PATHS.some(path => pathname.startsWith(path))
+                                    if (isAuthPageRefresh) {
                                         router.replace('/dashboard')
                                     }
                                     setIsInitialized(true)
