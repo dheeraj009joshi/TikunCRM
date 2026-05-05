@@ -5,7 +5,7 @@ import { useRouter, usePathname } from "next/navigation"
 import { useAuthStore } from "@/stores/auth-store"
 import { Loader2 } from "lucide-react"
 
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password"]
+const PUBLIC_PATHS = ["/", "/login", "/signup", "/forgot-password", "/reset-password"]
 const CHANGE_PASSWORD_PATH = "/change-password"
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
