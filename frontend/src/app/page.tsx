@@ -253,20 +253,15 @@ export default function LandingPage() {
             <div className="relative mx-auto max-w-5xl">
               <div className="absolute -inset-4 bg-gradient-to-r from-primary/20 via-accent/20 to-primary/20 rounded-2xl blur-2xl opacity-50" />
               <div className="relative rounded-xl border bg-card shadow-2xl overflow-hidden">
-                <div className="relative">
-                  <Image
-                    src="/dashboard-preview.png"
-                    alt="TikunCRM Dashboard"
-                    width={1600}
-                    height={900}
-                    className="w-full h-auto"
-                    priority
-                  />
-                  {/* Privacy overlay for phone numbers */}
-                  <div className="absolute inset-0 pointer-events-none">
-                    <div className="absolute top-[73%] left-[12%] w-[8%] h-[3%] bg-card/80 backdrop-blur-sm rounded" />
-                  </div>
-                </div>
+                <Image
+                  src="/dashboard-preview.png"
+                  alt="TikunCRM Dashboard"
+                  width={1600}
+                  height={900}
+                  className="w-full h-auto"
+                  priority
+                  unoptimized
+                />
               </div>
             </div>
           </motion.div>
@@ -447,7 +442,6 @@ export default function LandingPage() {
                         animate={{ opacity: 1, x: 0 }}
                         exit={{ opacity: 0, x: -20 }}
                         transition={{ duration: 0.3 }}
-                        className="relative"
                       >
                         <Image
                           src={screenshots[activeScreenshot].image}
@@ -455,32 +449,8 @@ export default function LandingPage() {
                           width={1200}
                           height={700}
                           className="w-full h-auto"
+                          unoptimized
                         />
-                        {/* Privacy blur overlays */}
-                        <div className="absolute inset-0 pointer-events-none">
-                          {activeScreenshot === 0 && (
-                            <>
-                              {/* Blur phone numbers in leads list */}
-                              <div className="absolute top-[28%] left-[8%] w-[7%] h-[4%] bg-card/90 backdrop-blur-md rounded" />
-                              <div className="absolute top-[38%] left-[8%] w-[7%] h-[4%] bg-card/90 backdrop-blur-md rounded" />
-                              <div className="absolute top-[48%] left-[8%] w-[7%] h-[4%] bg-card/90 backdrop-blur-md rounded" />
-                              <div className="absolute top-[58%] left-[8%] w-[7%] h-[4%] bg-card/90 backdrop-blur-md rounded" />
-                              <div className="absolute top-[68%] left-[8%] w-[7%] h-[4%] bg-card/90 backdrop-blur-md rounded" />
-                            </>
-                          )}
-                          {activeScreenshot === 1 && (
-                            <>
-                              {/* Blur phone number in lead detail */}
-                              <div className="absolute top-[87%] left-[22%] w-[10%] h-[3%] bg-card/90 backdrop-blur-md rounded" />
-                            </>
-                          )}
-                          {activeScreenshot === 2 && (
-                            <>
-                              {/* Blur phone numbers in WhatsApp */}
-                              <div className="absolute top-[5%] left-[38%] w-[8%] h-[3%] bg-card/90 backdrop-blur-md rounded" />
-                            </>
-                          )}
-                        </div>
                       </motion.div>
                     </AnimatePresence>
                   </div>

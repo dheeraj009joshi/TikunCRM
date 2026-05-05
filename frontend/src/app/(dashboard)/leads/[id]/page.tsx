@@ -527,6 +527,7 @@ export default function LeadDetailsPage() {
         interested_in: "",
         budget_range: "",
         notes: "",
+        downpayment: "",
     })
 
     // Voice: in-app call opens softphone when enabled (refetch per lead so production gets fresh config)
@@ -1862,6 +1863,7 @@ export default function LeadDetailsPage() {
     
     const handleEditStart = () => {
         if (!lead) return
+        const meta = (lead as Lead).meta_data as Record<string, unknown> | undefined
         setEditForm({
             first_name: lead.customer?.first_name || "",
             last_name: lead.customer?.last_name || "",
@@ -1881,6 +1883,7 @@ export default function LeadDetailsPage() {
             interested_in: lead.interested_in || "",
             budget_range: lead.budget_range || "",
             notes: lead.notes || "",
+            downpayment: meta?.downpayment != null ? String(meta.downpayment) : "",
         })
         setIsEditingDetails(true)
     }
@@ -1893,7 +1896,7 @@ export default function LeadDetailsPage() {
         if (!lead) return
         setIsSavingDetails(true)
         try {
-            const updateData: Partial<typeof editForm> = {}
+            const updateData: Record<string, unknown> = {}
             // Only include fields that changed
             if (editForm.first_name !== (lead.customer?.first_name || "")) updateData.first_name = editForm.first_name
             if (editForm.last_name !== (lead.customer?.last_name || "")) updateData.last_name = editForm.last_name || undefined
@@ -1914,14 +1917,29 @@ export default function LeadDetailsPage() {
             if (editForm.budget_range !== (lead.budget_range || "")) updateData.budget_range = editForm.budget_range || undefined
             if (editForm.notes !== (lead.notes || "")) updateData.notes = editForm.notes || undefined
             
+            // Handle downpayment in meta_data
+            const currentMeta = (lead as Lead).meta_data as Record<string, unknown> || {}
+            const currentDownpayment = currentMeta.downpayment != null ? String(currentMeta.downpayment) : ""
+            if (editForm.downpayment !== currentDownpayment) {
+                updateData.meta_data = {
+                    ...currentMeta,
+                    downpayment: editForm.downpayment || undefined,
+                }
+            }
+
             if (Object.keys(updateData).length > 0) {
-                await LeadService.updateLead(lead.id, updateData)
+                await LeadService.updateLead(lead.id, updateData as any)
                 await fetchLead()
-                fetchActivities() // Refresh to show update activity
+                fetchActivities()
+                toast({ title: "Lead updated", description: "Contact information has been saved." })
+            } else {
+                toast({ title: "No changes", description: "No changes were made to the lead." })
             }
             setIsEditingDetails(false)
         } catch (error) {
             console.error("Failed to update lead:", error)
+            const errorMsg = error instanceof Error ? error.message : "Could not save changes"
+            toast({ title: "Update failed", description: errorMsg, variant: "destructive" })
         } finally {
             setIsSavingDetails(false)
         }
@@ -2257,6 +2275,18 @@ export default function LeadDetailsPage() {
                                         <LocalTime date={lead.created_at} />
                                     </span>
                             </div>
+                                {(() => {
+                                    const meta = (lead as Lead).meta_data as Record<string, unknown> | undefined
+                                    const downpayment = meta?.downpayment != null ? String(meta.downpayment) : null
+                                    return downpayment ? (
+                                        <div className="flex justify-between items-center text-sm">
+                                            <span className="text-muted-foreground flex items-center gap-2">
+                                                <DollarSign className="h-4 w-4" /> Down Payment
+                                            </span>
+                                            <span className="font-medium text-emerald-600 dark:text-emerald-400">{downpayment}</span>
+                                        </div>
+                                    ) : null
+                                })()}
                                 {lead.last_contacted_at && (
                                     <div className="flex justify-between items-center text-sm">
                                         <span className="text-muted-foreground flex items-center gap-2">
@@ -2784,6 +2814,15 @@ export default function LeadDetailsPage() {
                                                     className="h-8 text-sm"
                                                 />
                                             </div>
+                                        </div>
+                                        <div className="mt-2">
+                                            <Label className="text-xs">Down Payment</Label>
+                                            <Input
+                                                value={editForm.downpayment}
+                                                onChange={(e) => setEditForm(prev => ({ ...prev, downpayment: e.target.value }))}
+                                                placeholder="e.g., $5,000"
+                                                className="h-8 text-sm"
+                                            />
                                         </div>
                                     </div>
 

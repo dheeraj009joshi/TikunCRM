@@ -1069,6 +1069,7 @@ export default function LeadsPage() {
                             <TableHead>Customer</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead>Source</TableHead>
+                            <TableHead>Down Payment</TableHead>
                             <TableHead>Assigned To</TableHead>
                             <TableHead className="max-w-[140px]">Notes</TableHead>
                             <TableHead className="max-w-[180px]">Last action</TableHead>
@@ -1079,7 +1080,7 @@ export default function LeadsPage() {
                     <TableBody>
                         {isLoading ? (
                             <TableRow className="border-0 hover:bg-transparent">
-                                <TableCell colSpan={8} className="py-0">
+                                <TableCell colSpan={9} className="py-0">
                                     <div className="flex flex-col items-center justify-center py-16">
                                         <Loader2 className="h-10 w-10 text-primary animate-spin" />
                                         <p className="mt-4 text-sm font-medium text-muted-foreground">Loading leads...</p>
@@ -1197,6 +1198,19 @@ export default function LeadsPage() {
                                         <Badge variant={getSourceVariant(lead.source)} size="sm">
                                             {(lead.source_display ?? lead.source)?.replace(/_/g, ' ') ?? ''}
                                         </Badge>
+                                    </TableCell>
+                                    <TableCell>
+                                        {(() => {
+                                            const meta = lead.meta_data as Record<string, unknown> | undefined
+                                            const downpayment = meta?.downpayment != null ? String(meta.downpayment) : null
+                                            return downpayment ? (
+                                                <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                                                    {downpayment}
+                                                </span>
+                                            ) : (
+                                                <span className="text-xs text-muted-foreground">—</span>
+                                            )
+                                        })()}
                                     </TableCell>
                                     <TableCell>
                                         <div className="space-y-1">
