@@ -2275,18 +2275,6 @@ export default function LeadDetailsPage() {
                                         <LocalTime date={lead.created_at} />
                                     </span>
                             </div>
-                                {(() => {
-                                    const meta = (lead as Lead).meta_data as Record<string, unknown> | undefined
-                                    const downpayment = meta?.downpayment != null ? String(meta.downpayment) : null
-                                    return downpayment ? (
-                                        <div className="flex justify-between items-center text-sm">
-                                            <span className="text-muted-foreground flex items-center gap-2">
-                                                <DollarSign className="h-4 w-4" /> Down Payment
-                                            </span>
-                                            <span className="font-medium text-emerald-600 dark:text-emerald-400">{downpayment}</span>
-                                        </div>
-                                    ) : null
-                                })()}
                                 {lead.last_contacted_at && (
                                     <div className="flex justify-between items-center text-sm">
                                         <span className="text-muted-foreground flex items-center gap-2">
