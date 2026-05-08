@@ -56,6 +56,8 @@ import {
 } from "@/services/reports-service"
 import { DealershipService, type Dealership } from "@/services/dealership-service"
 import { cn } from "@/lib/utils"
+import { jsPDF } from "jspdf"
+import autoTable from "jspdf-autotable"
 
 type DatePreset =
     | "today"
@@ -273,6 +275,92 @@ export default function TeamSalesTouchReportPage() {
         URL.revokeObjectURL(url)
     }
 
+    const downloadPdf = () => {
+        if (!data) return
+
+        const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" })
+        const margin = 14
+        let y = margin
+
+        const { from, to } = getDateRange()
+        let dateRangeText: string
+        if (datePreset === "all_time") {
+            dateRangeText = "All Time"
+        } else if (from && to) {
+            dateRangeText = `${format(from, "MMM d, yyyy")} - ${format(to, "MMM d, yyyy")}`
+        } else {
+            dateRangeText = "Custom Range"
+        }
+
+        const dealershipLabel =
+            isSuperAdmin && selectedDealershipId
+                ? dealerships.find((d) => d.id === selectedDealershipId)?.name
+                : undefined
+
+        doc.setFontSize(18)
+        doc.setFont("helvetica", "bold")
+        doc.text("Team Touch & Close Report", margin, y)
+        y += 8
+
+        doc.setFontSize(10)
+        doc.setFont("helvetica", "normal")
+        doc.text(`Period: ${dateRangeText}`, margin, y)
+        y += 5
+        if (dealershipLabel) {
+            doc.text(`Dealership: ${dealershipLabel}`, margin, y)
+            y += 5
+        }
+        doc.setFontSize(9)
+        doc.setTextColor(100, 100, 100)
+        doc.text(
+            "Salespeople only; your activity excluded. Sold dates match Sold Cars report.",
+            margin,
+            y
+        )
+        doc.setTextColor(0, 0, 0)
+        y += 10
+
+        doc.setFontSize(12)
+        doc.setFont("helvetica", "bold")
+        doc.text("Summary", margin, y)
+        y += 6
+        doc.setFontSize(10)
+        doc.setFont("helvetica", "normal")
+        doc.text(`Unique leads touched: ${data.unique_leads_touched}`, margin, y)
+        doc.text(`Avg touched per rep: ${data.avg_leads_touched_per_salesperson}`, margin + 70, y)
+        doc.text(`Sold (among touched): ${data.sold_among_touched}`, margin + 140, y)
+        doc.text(`Closing rate: ${data.closing_percentage}%`, margin + 210, y)
+        y += 5
+        doc.text(`Salespeople in scope: ${data.salespeople_count}`, margin, y)
+        y += 10
+
+        const tableBody =
+            data.salespeople.length > 0
+                ? data.salespeople.map((sp) => [
+                      sp.user_name,
+                      sp.leads_touched,
+                      sp.sold_count,
+                      `${sp.closing_percentage}%`,
+                  ])
+                : [["No active salespeople in this dealership scope", "-", "-", "-"]]
+
+        autoTable(doc, {
+            startY: y,
+            head: [["Salesperson", "Leads touched", "Sold", "Closing %"]],
+            body: tableBody,
+            theme: "striped",
+            headStyles: { fillColor: [59, 130, 246] },
+            margin: { left: margin, right: margin },
+            styles: { fontSize: 9 },
+        })
+
+        const dateStr =
+            datePreset === "all_time"
+                ? "all-time"
+                : `${from ? format(from, "yyyy-MM-dd") : "start"}-to-${to ? format(to, "yyyy-MM-dd") : "end"}`
+        doc.save(`team-touch-close-report-${dateStr}.pdf`)
+    }
+
     const dateRangeLabel = React.useMemo(() => {
         const { from, to } = getDateRange()
         if (datePreset === "all_time") return "All time"
@@ -322,7 +410,11 @@ export default function TeamSalesTouchReportPage() {
                     </Button>
                     <Button variant="outline" size="sm" onClick={downloadCsv} disabled={!data || isLoading}>
                         <Download className="mr-2 h-4 w-4" />
-                        Export CSV
+                        CSV
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={downloadPdf} disabled={!data || isLoading}>
+                        <Download className="mr-2 h-4 w-4" />
+                        PDF
                     </Button>
                 </div>
             </div>
