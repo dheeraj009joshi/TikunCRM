@@ -240,6 +240,10 @@ export default function TeamSalesTouchReportPage() {
 
         const rows: string[][] = [
             ["Team touch & close report"],
+            [
+                "Touch definition",
+                "A lead counts at most once in team totals; per rep, at most once per rep. Counts if any note OR logged call on that lead in the period (timeline only).",
+            ],
             ["Period", periodLabel],
             [
                 "Salespeople (excl. yourself)",
@@ -256,7 +260,7 @@ export default function TeamSalesTouchReportPage() {
             ["Sold (among touched)", String(data.sold_among_touched)],
             ["Closing % (team)", `${data.closing_percentage}%`],
             [],
-            ["Salesperson", "Leads touched", "Sold", "Closing %"],
+            ["Salesperson", "Leads touched (notes/calls)", "Sold", "Closing %"],
             ...data.salespeople.map((sp) => [
                 sp.user_name,
                 String(sp.leads_touched),
@@ -312,13 +316,14 @@ export default function TeamSalesTouchReportPage() {
         }
         doc.setFontSize(9)
         doc.setTextColor(100, 100, 100)
-        doc.text(
-            "Salespeople only; your activity excluded. Sold dates match Sold Cars report.",
-            margin,
-            y
-        )
+        const disclaimer =
+            "Touch = note OR logged call in period. Each lead counted once team-wide; once per rep in their column. " +
+            "Salespeople only; your activity excluded. Sold dates match Sold Cars."
+        const pageWForText = doc.internal.pageSize.getWidth()
+        const discLines = doc.splitTextToSize(disclaimer, pageWForText - margin * 2)
+        doc.text(discLines, margin, y)
         doc.setTextColor(0, 0, 0)
-        y += 10
+        y += discLines.length * 4 + 6
 
         doc.setFontSize(12)
         doc.setFont("helvetica", "bold")
@@ -346,7 +351,7 @@ export default function TeamSalesTouchReportPage() {
 
         autoTable(doc, {
             startY: y,
-            head: [["Salesperson", "Leads touched", "Sold", "Closing %"]],
+            head: [["Salesperson", "Leads touched (notes/calls)", "Sold", "Closing %"]],
             body: tableBody,
             theme: "striped",
             headStyles: { fillColor: [59, 130, 246] },
@@ -389,10 +394,18 @@ export default function TeamSalesTouchReportPage() {
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">Team touch & close</h1>
                     <p className="text-muted-foreground">
-                        Leads your sales team worked (activity on the lead), sales closed in the same
-                        period, and closing rate. Counts use{" "}
-                        <strong className="font-medium text-foreground">salespeople only</strong> and
-                        exclude <strong className="font-medium text-foreground">your own</strong>{" "}
+                        <strong className="font-medium text-foreground">Touch</strong> means the rep{" "}
+                        <strong className="font-medium text-foreground">wrote a note</strong> or{" "}
+                        <strong className="font-medium text-foreground">logged a call</strong> on the
+                        lead in the selected period (lead timeline only — not SMS, email, or
+                        appointments).{" "}
+                        <strong className="font-medium text-foreground">
+                            Each lead is counted once
+                        </strong>{" "}
+                        in team totals (and once per salesperson in their column, even if they add
+                        several notes/calls). Sales closed among those leads and closing rate;{" "}
+                        <strong className="font-medium text-foreground">salespeople only</strong>,{" "}
+                        excluding <strong className="font-medium text-foreground">your</strong>{" "}
                         activity.
                     </p>
                     <p className="mt-2 text-sm text-muted-foreground">
@@ -530,13 +543,13 @@ export default function TeamSalesTouchReportPage() {
                             title="Leads touched (unique)"
                             value={data.unique_leads_touched}
                             icon={Target}
-                            description="Distinct leads with CRM activity by your salespeople"
+                            description="One row per lead across the team (deduped), note or call in period only"
                         />
                         <SummaryCard
                             title="Avg touched per rep"
                             value={data.avg_leads_touched_per_salesperson}
                             icon={Users}
-                            description={`Across ${data.salespeople_count} salesperson${data.salespeople_count === 1 ? "" : "s"}`}
+                            description={`Mean of each rep’s distinct leads (each lead once per rep), ${data.salespeople_count} rep${data.salespeople_count === 1 ? "" : "s"}`}
                         />
                         <SummaryCard
                             title="Sold (among touched)"
@@ -561,7 +574,12 @@ export default function TeamSalesTouchReportPage() {
                                 <TableHeader>
                                     <TableRow className="bg-muted/50">
                                         <TableHead>Salesperson</TableHead>
-                                        <TableHead className="text-right">Leads touched</TableHead>
+                                        <TableHead className="text-right">
+                                            Leads touched{" "}
+                                            <span className="font-normal text-muted-foreground">
+                                                (notes/calls)
+                                            </span>
+                                        </TableHead>
                                         <TableHead className="text-right">Sold</TableHead>
                                         <TableHead className="text-right">Closing %</TableHead>
                                     </TableRow>

@@ -391,8 +391,8 @@ export const ReportsService = {
     },
 
     /**
-     * Unique leads touched by salespeople (excludes current user), average per rep,
-     * sold among touched (same sold-date rules as Sold Cars), and closing %.
+     * Leads "touched" = distinct leads with a note_added or call_logged activity by a salesperson
+     * (excludes current user) in the period. Sold/close uses Sold Cars date rules.
      */
     async getTeamTouchSalesMetrics(
         filters?: TeamTouchSalesMetricsFilters

@@ -316,7 +316,7 @@ class SoldCarsResponse(BaseModel):
 
 
 class TeamTouchSalespersonRow(BaseModel):
-    """Per-salesperson touch and close metrics for a date range."""
+    """Per-salesperson metrics; leads_touched = distinct leads with note or call in period."""
 
     user_id: str
     user_name: str
@@ -329,6 +329,9 @@ class TeamTouchSalesMetricsResponse(BaseModel):
     """
     Aggregate touch/close metrics for dealership salespeople (role salesperson only),
     excluding the current user so managers do not include their own activity.
+
+    A lead is "touched" only when **note_added** or **call_logged** appears on the activity
+    timeline for that lead in the date range (not emails, SMS, follow-ups, etc.).
     """
 
     date_from: Optional[str]
@@ -2192,11 +2195,11 @@ async def get_team_touch_sales_metrics(
     """
     Touch and close metrics for active salespeople in the dealership, excluding the current user.
 
-    - **unique_leads_touched**: distinct leads with any CRM activity logged by those salespeople
-      in the date range (notes, calls, follow-ups, appointments, emails, etc.).
-    - **sold_among_touched**: of those leads, how many were marked sold (converted stage) with a
-      sold date falling in the same range (same rules as the Sold Cars report). When no dates are
-      passed, uses all-time touches and any historical sold date among touched leads.
+    - **unique_leads_touched**: count of distinct lead_ids (each lead at most once team-wide)
+      touched via **note_added** or **call_logged** by any counted salesperson in the range.
+    - **sold_among_touched**: of those distinct touched leads, how many sold (converted stage) in-range
+      (Sold Cars rules). Per-salesperson **leads_touched** is also distinct leads (once per lead per rep).
+      When no dates are passed: all-time touches vs any historical sold date among touched leads.
     """
     if current_user.role == UserRole.SUPER_ADMIN and dealership_id is not None:
         resolved_dealership_id = dealership_id
@@ -2253,8 +2256,12 @@ async def get_team_touch_sales_metrics(
     if not sp_ids:
         return empty
 
+    # Only direct rep engagement: notes and logged calls (excludes email, SMS, follow-ups, etc.)
+    touch_types = (ActivityType.NOTE_ADDED, ActivityType.CALL_LOGGED)
+
     activity_filters: List[Any] = [
         Activity.user_id.in_(sp_ids),
+        Activity.type.in_(touch_types),
         Activity.lead_id.isnot(None),
         Lead.dealership_id == resolved_dealership_id,
     ]
@@ -2304,6 +2311,7 @@ async def get_team_touch_sales_metrics(
     for sp in salespeople:
         sp_act: List[Any] = [
             Activity.user_id == sp.id,
+            Activity.type.in_(touch_types),
             Activity.lead_id.isnot(None),
             Lead.dealership_id == resolved_dealership_id,
         ]

@@ -365,8 +365,9 @@ export default function TeamPage() {
                                 Sales team touch & close (last 30 days)
                             </CardTitle>
                             <p className="text-sm text-muted-foreground">
-                                Active salespeople only; your own activity is excluded. Closing uses the
-                                same sold-date rules as Reports → Sold Cars.
+                                Each lead counts once (note or call in the period). Active
+                                salespeople only; your activity excluded. Sold dates match Reports →
+                                Sold Cars.
                             </p>
                         </div>
                         <Button variant="outline" size="sm" asChild className="shrink-0">
@@ -388,7 +389,7 @@ export default function TeamPage() {
                                         <p className="text-2xl font-bold">
                                             {touchMetrics.unique_leads_touched.toLocaleString()}
                                         </p>
-                                        <p className="text-xs text-muted-foreground">Unique leads touched</p>
+                                        <p className="text-xs text-muted-foreground">Unique leads (notes/calls)</p>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-4">
