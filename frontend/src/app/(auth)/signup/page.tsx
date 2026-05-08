@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation"
 import { Mail, Lock, User, Building2, Eye, EyeOff } from "lucide-react"
 
 import { useAuthStore } from "@/stores/auth-store"
+import { registerFCMToken } from "@/hooks/use-fcm-notifications"
 
 export default function SignupPage() {
     const router = useRouter()
@@ -45,8 +46,13 @@ export default function SignupPage() {
             // Store auth in Zustand store (includes token + refresh token + user)
             setAuth(data.user, data.access_token, data.refresh_token)
 
-            // Redirect to dashboard
-            router.push("/dashboard")
+            registerFCMToken().catch(console.error)
+
+            if (data.user?.must_change_password) {
+                router.replace("/change-password?required=true")
+            } else {
+                router.replace("/dashboard")
+            }
         } catch (err: any) {
             console.error("Signup failed:", err)
             setError(err.message || "Signup failed. Please try again.")

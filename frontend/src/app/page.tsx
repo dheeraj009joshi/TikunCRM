@@ -135,6 +135,9 @@ export default function LandingPage() {
               <Button variant="ghost" asChild>
                 <Link href="/login">Sign In</Link>
               </Button>
+              <Button variant="ghost" asChild>
+                <Link href="/signup">Sign up</Link>
+              </Button>
               <Button onClick={openWhatsApp} className="gap-2">
                 <MessageCircle className="h-4 w-4" />
                 Contact Us
@@ -165,6 +168,9 @@ export default function LandingPage() {
               <div className="pt-3 flex flex-col gap-2">
                 <Button variant="outline" asChild className="w-full">
                   <Link href="/login">Sign In</Link>
+                </Button>
+                <Button variant="outline" asChild className="w-full">
+                  <Link href="/signup">Sign up</Link>
                 </Button>
                 <Button onClick={openWhatsApp} className="w-full gap-2">
                   <MessageCircle className="h-4 w-4" />

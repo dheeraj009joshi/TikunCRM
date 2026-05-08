@@ -9,6 +9,12 @@ const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password"
 const LANDING_PAGE_PATH = "/"
 const CHANGE_PASSWORD_PATH = "/change-password"
 
+/** Logged-in users should leave marketing + auth screens for the app dashboard */
+function shouldRedirectAuthenticatedToDashboard(pathname: string): boolean {
+    if (pathname === LANDING_PAGE_PATH) return true
+    return PUBLIC_PATHS.some((path) => pathname.startsWith(path))
+}
+
 export function AuthGuard({ children }: { children: React.ReactNode }) {
     const { isAuthenticated, user, setAuth, logout, setLoading } = useAuthStore()
     const router = useRouter()
@@ -42,9 +48,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                     return
                 }
                 
-                // Already authenticated - redirect from auth pages (not landing page)
-                const isAuthPage = PUBLIC_PATHS.some(path => pathname.startsWith(path))
-                if (isAuthPage) {
+                // Already authenticated — marketing home + auth pages → app
+                if (shouldRedirectAuthenticatedToDashboard(pathname)) {
                     router.replace('/dashboard')
                 }
                 setIsInitialized(true)
@@ -71,9 +76,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                         return
                     }
                     
-                    // Redirect from auth pages (not landing page)
-                    const isAuthPage = PUBLIC_PATHS.some(path => pathname.startsWith(path))
-                    if (isAuthPage) {
+                    if (shouldRedirectAuthenticatedToDashboard(pathname)) {
                         router.replace('/dashboard')
                     }
                 } else {
@@ -108,9 +111,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                                         return
                                     }
                                     
-                                    // Redirect from auth pages (not landing page)
-                                    const isAuthPageRefresh = PUBLIC_PATHS.some(path => pathname.startsWith(path))
-                                    if (isAuthPageRefresh) {
+                                    if (shouldRedirectAuthenticatedToDashboard(pathname)) {
                                         router.replace('/dashboard')
                                     }
                                     setIsInitialized(true)
@@ -163,7 +164,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
         }
 
         initAuth()
-    }, [pathname])
+    }, [pathname, isAuthenticated, user?.id, user?.must_change_password])
 
     // Show loading while initializing
     if (!isInitialized) {
