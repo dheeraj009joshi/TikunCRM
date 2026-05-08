@@ -272,6 +272,33 @@ export interface SoldCarsFilters {
     assigned_to?: string;
 }
 
+/** Team touch & close report (salespeople only; excludes current user on server) */
+export interface TeamTouchSalespersonRow {
+    user_id: string;
+    user_name: string;
+    leads_touched: number;
+    sold_count: number;
+    closing_percentage: number;
+}
+
+export interface TeamTouchSalesMetricsResponse {
+    date_from?: string;
+    date_to?: string;
+    dealership_id?: string;
+    salespeople_count: number;
+    unique_leads_touched: number;
+    avg_leads_touched_per_salesperson: number;
+    sold_among_touched: number;
+    closing_percentage: number;
+    salespeople: TeamTouchSalespersonRow[];
+}
+
+export interface TeamTouchSalesMetricsFilters {
+    date_from?: string;
+    date_to?: string;
+    dealership_id?: string;
+}
+
 export const ReportsService = {
     /**
      * Get pending tasks for a salesperson
@@ -360,6 +387,19 @@ export const ReportsService = {
      */
     async getSoldCars(filters?: SoldCarsFilters): Promise<SoldCarsResponse> {
         const response = await apiClient.get("/reports/sold-cars", { params: filters });
+        return response.data;
+    },
+
+    /**
+     * Unique leads touched by salespeople (excludes current user), average per rep,
+     * sold among touched (same sold-date rules as Sold Cars), and closing %.
+     */
+    async getTeamTouchSalesMetrics(
+        filters?: TeamTouchSalesMetricsFilters
+    ): Promise<TeamTouchSalesMetricsResponse> {
+        const response = await apiClient.get("/reports/team-touch-sales-metrics", {
+            params: filters,
+        });
         return response.data;
     },
 };

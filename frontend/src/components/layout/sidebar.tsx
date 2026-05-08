@@ -31,7 +31,9 @@ import {
     Store,
     Contact,
     Activity,
-    Car
+    Car,
+    FileBarChart,
+    Target,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -139,23 +141,16 @@ const allSidebarItems: SidebarItem[] = [
         icon: Bell, 
         href: "/notifications" 
     },
-    { 
-        name: "Analytics", 
-        icon: BarChart3, 
-        href: "/analytics",
-        roles: ["super_admin", "dealership_admin", "dealership_owner"]
-    },
-    { 
-        name: "Team Activity", 
-        icon: Activity, 
-        href: "/team-activity",
-        roles: ["super_admin", "dealership_admin", "dealership_owner"]
-    },
-    { 
-        name: "Sold Cars", 
-        icon: Car, 
-        href: "/sold-cars",
-        roles: ["super_admin", "dealership_admin", "dealership_owner"]
+    {
+        name: "Reports",
+        icon: FileBarChart,
+        roles: ["super_admin", "dealership_admin", "dealership_owner"],
+        children: [
+            { name: "Analytics", icon: BarChart3, href: "/analytics" },
+            { name: "Team Activity", icon: Activity, href: "/team-activity" },
+            { name: "Sold Cars", icon: Car, href: "/sold-cars" },
+            { name: "Team touch & close", icon: Target, href: "/reports/team-sales-touch" },
+        ],
     },
     { 
         name: "Integrations", 
@@ -415,12 +410,19 @@ export function Sidebar() {
     
     // Expand Conversations when on WhatsApp, SMS, or Calls
     const isConversationsActive = pathname === "/whatsapp" || pathname === "/sms" || pathname === "/calls"
+    const reportPaths = ["/analytics", "/team-activity", "/sold-cars", "/reports/team-sales-touch"]
+    const isReportsSectionActive = reportPaths.some(
+        (p) => pathname === p || pathname.startsWith(`${p}/`)
+    )
     const [expandedGroup, setExpandedGroup] = React.useState<string | null>(() =>
         isConversationsActive ? "Conversations" : null
     )
     React.useEffect(() => {
         if (isConversationsActive) setExpandedGroup("Conversations")
     }, [isConversationsActive])
+    React.useEffect(() => {
+        if (isReportsSectionActive) setExpandedGroup("Reports")
+    }, [isReportsSectionActive])
 
     // Build sidebar items with dynamic badges
     const sidebarItems = React.useMemo(() => {

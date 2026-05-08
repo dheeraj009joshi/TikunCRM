@@ -315,6 +315,75 @@ class SoldCarsResponse(BaseModel):
         from_attributes = True
 
 
+class TeamTouchSalespersonRow(BaseModel):
+    """Per-salesperson touch and close metrics for a date range."""
+
+    user_id: str
+    user_name: str
+    leads_touched: int
+    sold_count: int
+    closing_percentage: float
+
+
+class TeamTouchSalesMetricsResponse(BaseModel):
+    """
+    Aggregate touch/close metrics for dealership salespeople (role salesperson only),
+    excluding the current user so managers do not include their own activity.
+    """
+
+    date_from: Optional[str]
+    date_to: Optional[str]
+    dealership_id: Optional[str]
+    salespeople_count: int
+    unique_leads_touched: int
+    avg_leads_touched_per_salesperson: float
+    sold_among_touched: int
+    closing_percentage: float
+    salespeople: List[TeamTouchSalespersonRow]
+
+
+def _append_sold_date_filters_to_lead_query(
+    lead_filters: List[Any],
+    date_from_dt: Optional[datetime],
+    date_to_dt: Optional[datetime],
+) -> None:
+    """Mutates lead_filters with the same sold-date logic as /sold-cars."""
+    if date_from_dt:
+        status_change_from_subq = (
+            select(Activity.lead_id)
+            .where(
+                Activity.type == ActivityType.STATUS_CHANGED,
+                Activity.meta_data["new_status"].astext == "converted",
+                Activity.created_at >= date_from_dt,
+            )
+            .distinct()
+        )
+        lead_filters.append(
+            or_(
+                Lead.converted_at >= date_from_dt,
+                and_(Lead.converted_at.is_(None), Lead.closed_at >= date_from_dt),
+                and_(Lead.converted_at.is_(None), Lead.closed_at.is_(None), Lead.id.in_(status_change_from_subq)),
+            )
+        )
+    if date_to_dt:
+        status_change_to_subq = (
+            select(Activity.lead_id)
+            .where(
+                Activity.type == ActivityType.STATUS_CHANGED,
+                Activity.meta_data["new_status"].astext == "converted",
+                Activity.created_at <= date_to_dt,
+            )
+            .distinct()
+        )
+        lead_filters.append(
+            or_(
+                Lead.converted_at <= date_to_dt,
+                and_(Lead.converted_at.is_(None), Lead.closed_at <= date_to_dt),
+                and_(Lead.converted_at.is_(None), Lead.closed_at.is_(None), Lead.id.in_(status_change_to_subq)),
+            )
+        )
+
+
 # Helper function to check admin/owner permissions
 def require_admin_or_owner(current_user: User = Depends(deps.get_current_active_user)) -> User:
     """Require user to be dealership admin, owner, or super admin."""
@@ -2112,6 +2181,187 @@ async def get_daily_activities(
     )
 
 
+@router.get("/team-touch-sales-metrics", response_model=TeamTouchSalesMetricsResponse)
+async def get_team_touch_sales_metrics(
+    date_from: Optional[str] = Query(None, description="ISO range start for touches/sold (omit for all-time)"),
+    date_to: Optional[str] = Query(None, description="ISO range end for touches/sold (omit for all-time)"),
+    dealership_id: Optional[UUID] = Query(None, description="Dealership to scope (super_admin only)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_owner),
+) -> Any:
+    """
+    Touch and close metrics for active salespeople in the dealership, excluding the current user.
+
+    - **unique_leads_touched**: distinct leads with any CRM activity logged by those salespeople
+      in the date range (notes, calls, follow-ups, appointments, emails, etc.).
+    - **sold_among_touched**: of those leads, how many were marked sold (converted stage) with a
+      sold date falling in the same range (same rules as the Sold Cars report). When no dates are
+      passed, uses all-time touches and any historical sold date among touched leads.
+    """
+    if current_user.role == UserRole.SUPER_ADMIN and dealership_id is not None:
+        resolved_dealership_id = dealership_id
+    else:
+        resolved_dealership_id = current_user.dealership_id
+
+    if not resolved_dealership_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Dealership context required.",
+        )
+
+    date_from_dt: Optional[datetime] = None
+    date_to_dt: Optional[datetime] = None
+    if date_from:
+        try:
+            date_from_dt = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+            if date_from_dt.tzinfo is None:
+                date_from_dt = date_from_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date_from format")
+    if date_to:
+        try:
+            date_to_dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            if date_to_dt.tzinfo is None:
+                date_to_dt = date_to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date_to format")
+
+    sp_filters = [
+        User.dealership_id == resolved_dealership_id,
+        User.is_active == True,  # noqa: E712
+        User.role == UserRole.SALESPERSON,
+        User.id != current_user.id,
+    ]
+    sp_result = await db.execute(
+        select(User).where(and_(*sp_filters)).order_by(User.first_name, User.last_name)
+    )
+    salespeople = sp_result.scalars().all()
+    sp_ids = [u.id for u in salespeople]
+
+    empty = TeamTouchSalesMetricsResponse(
+        date_from=date_from_dt.isoformat() if date_from_dt else None,
+        date_to=date_to_dt.isoformat() if date_to_dt else None,
+        dealership_id=str(resolved_dealership_id),
+        salespeople_count=0,
+        unique_leads_touched=0,
+        avg_leads_touched_per_salesperson=0.0,
+        sold_among_touched=0,
+        closing_percentage=0.0,
+        salespeople=[],
+    )
+
+    if not sp_ids:
+        return empty
+
+    activity_filters: List[Any] = [
+        Activity.user_id.in_(sp_ids),
+        Activity.lead_id.isnot(None),
+        Lead.dealership_id == resolved_dealership_id,
+    ]
+    if date_from_dt:
+        activity_filters.append(Activity.created_at >= date_from_dt)
+    if date_to_dt:
+        activity_filters.append(Activity.created_at <= date_to_dt)
+
+    touched_result = await db.execute(
+        select(Activity.lead_id)
+        .join(Lead, Activity.lead_id == Lead.id)
+        .where(and_(*activity_filters))
+        .distinct()
+    )
+    touched_lead_ids = [row[0] for row in touched_result.all()]
+    unique_leads_touched = len(touched_lead_ids)
+
+    converted_stage_result = await db.execute(
+        select(LeadStage).where(
+            LeadStage.name == "converted",
+            or_(
+                LeadStage.dealership_id == resolved_dealership_id,
+                LeadStage.dealership_id.is_(None),
+            ),
+        ).order_by(LeadStage.dealership_id.desc().nullslast())
+    )
+    converted_stage = converted_stage_result.scalars().first()
+
+    sold_among_touched = 0
+    if touched_lead_ids and converted_stage:
+        sold_filters = [
+            Lead.stage_id == converted_stage.id,
+            Lead.is_active == False,  # noqa: E712
+            Lead.id.in_(touched_lead_ids),
+            Lead.dealership_id == resolved_dealership_id,
+        ]
+        _append_sold_date_filters_to_lead_query(sold_filters, date_from_dt, date_to_dt)
+        sold_cnt_result = await db.execute(select(func.count()).select_from(Lead).where(and_(*sold_filters)))
+        sold_among_touched = sold_cnt_result.scalar() or 0
+
+    closing_pct = (
+        round((sold_among_touched / unique_leads_touched) * 100, 1) if unique_leads_touched else 0.0
+    )
+
+    per_rows: List[TeamTouchSalespersonRow] = []
+    sum_per_touched = 0
+    for sp in salespeople:
+        sp_act: List[Any] = [
+            Activity.user_id == sp.id,
+            Activity.lead_id.isnot(None),
+            Lead.dealership_id == resolved_dealership_id,
+        ]
+        if date_from_dt:
+            sp_act.append(Activity.created_at >= date_from_dt)
+        if date_to_dt:
+            sp_act.append(Activity.created_at <= date_to_dt)
+        sp_touched_result = await db.execute(
+            select(Activity.lead_id)
+            .join(Lead, Activity.lead_id == Lead.id)
+            .where(and_(*sp_act))
+            .distinct()
+        )
+        sp_touched_ids = [row[0] for row in sp_touched_result.all()]
+        lt = len(sp_touched_ids)
+        sum_per_touched += lt
+
+        sold_sp = 0
+        if sp_touched_ids and converted_stage:
+            sf = [
+                Lead.stage_id == converted_stage.id,
+                Lead.is_active == False,  # noqa: E712
+                Lead.id.in_(sp_touched_ids),
+                Lead.dealership_id == resolved_dealership_id,
+            ]
+            _append_sold_date_filters_to_lead_query(sf, date_from_dt, date_to_dt)
+            sr = await db.execute(select(func.count()).select_from(Lead).where(and_(*sf)))
+            sold_sp = sr.scalar() or 0
+
+        close_sp = round((sold_sp / lt) * 100, 1) if lt else 0.0
+        per_rows.append(
+            TeamTouchSalespersonRow(
+                user_id=str(sp.id),
+                user_name=sp.full_name,
+                leads_touched=lt,
+                sold_count=sold_sp,
+                closing_percentage=close_sp,
+            )
+        )
+
+    per_rows.sort(key=lambda r: r.leads_touched, reverse=True)
+    avg_touched = (
+        round(sum_per_touched / len(salespeople), 1) if salespeople else 0.0
+    )
+
+    return TeamTouchSalesMetricsResponse(
+        date_from=date_from_dt.isoformat() if date_from_dt else None,
+        date_to=date_to_dt.isoformat() if date_to_dt else None,
+        dealership_id=str(resolved_dealership_id),
+        salespeople_count=len(salespeople),
+        unique_leads_touched=unique_leads_touched,
+        avg_leads_touched_per_salesperson=avg_touched,
+        sold_among_touched=sold_among_touched,
+        closing_percentage=closing_pct,
+        salespeople=per_rows,
+    )
+
+
 @router.get("/sold-cars", response_model=SoldCarsResponse)
 async def get_sold_cars_report(
     date_from: Optional[str] = Query(None, description="ISO date for sold date range start (YYYY-MM-DD)"),
@@ -2180,45 +2430,8 @@ async def get_sold_cars_report(
         lead_filters.append(Lead.dealership_id == resolved_dealership_id)
     if assigned_to:
         lead_filters.append(Lead.assigned_to == assigned_to)
-    
-    # Date filtering uses converted_at, closed_at, OR status change activity date
-    # Create subqueries for leads with status change activities in the date range
-    if date_from_dt:
-        # Subquery: leads with status change to "converted" on or after date_from
-        status_change_from_subq = (
-            select(Activity.lead_id)
-            .where(
-                Activity.type == ActivityType.STATUS_CHANGED,
-                Activity.meta_data["new_status"].astext == "converted",
-                Activity.created_at >= date_from_dt
-            )
-            .distinct()
-        )
-        lead_filters.append(
-            or_(
-                Lead.converted_at >= date_from_dt,
-                and_(Lead.converted_at.is_(None), Lead.closed_at >= date_from_dt),
-                and_(Lead.converted_at.is_(None), Lead.closed_at.is_(None), Lead.id.in_(status_change_from_subq))
-            )
-        )
-    if date_to_dt:
-        # Subquery: leads with status change to "converted" on or before date_to
-        status_change_to_subq = (
-            select(Activity.lead_id)
-            .where(
-                Activity.type == ActivityType.STATUS_CHANGED,
-                Activity.meta_data["new_status"].astext == "converted",
-                Activity.created_at <= date_to_dt
-            )
-            .distinct()
-        )
-        lead_filters.append(
-            or_(
-                Lead.converted_at <= date_to_dt,
-                and_(Lead.converted_at.is_(None), Lead.closed_at <= date_to_dt),
-                and_(Lead.converted_at.is_(None), Lead.closed_at.is_(None), Lead.id.in_(status_change_to_subq))
-            )
-        )
+
+    _append_sold_date_filters_to_lead_query(lead_filters, date_from_dt, date_to_dt)
 
     # Fetch converted leads with customer data
     # Order by converted_at, falling back to closed_at

@@ -1,6 +1,8 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
+import { subDays, startOfDay, endOfDay } from "date-fns"
 import {
     Users,
     UserPlus,
@@ -19,6 +21,8 @@ import {
     EyeOff,
     Bell,
     ClipboardList,
+    Target,
+    Percent,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -68,6 +72,10 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { TeamService, UserWithStats, CreateUserData } from "@/services/team-service"
+import {
+    ReportsService,
+    type TeamTouchSalesMetricsResponse,
+} from "@/services/reports-service"
 import { useRole, getRoleDisplayName } from "@/hooks/use-role"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
@@ -80,6 +88,9 @@ export default function TeamPage() {
     const { isSuperAdmin, isDealershipOwner, isDealershipAdmin, isDealershipLevel, user } = useRole()
     const [team, setTeam] = React.useState<UserWithStats[]>([])
     const [dealershipName, setDealershipName] = React.useState<string | null>(null)
+    const [teamDealershipId, setTeamDealershipId] = React.useState<string | null>(null)
+    const [touchMetrics, setTouchMetrics] = React.useState<TeamTouchSalesMetricsResponse | null>(null)
+    const [touchMetricsLoading, setTouchMetricsLoading] = React.useState(false)
     const [isLoading, setIsLoading] = React.useState(true)
     const [search, setSearch] = React.useState("")
     
@@ -111,6 +122,7 @@ export default function TeamPage() {
             const data = await TeamService.getTeamWithStats()
             setTeam(data.items)
             setDealershipName(data.dealership_name || null)
+            setTeamDealershipId(data.dealership_id ? String(data.dealership_id) : null)
         } catch (error) {
             console.error("Failed to fetch team:", error)
         } finally {
@@ -121,6 +133,36 @@ export default function TeamPage() {
     React.useEffect(() => {
         fetchTeam()
     }, [fetchTeam])
+
+    React.useEffect(() => {
+        const dealershipKey = teamDealershipId ?? user?.dealership_id
+        if (!dealershipKey) {
+            setTouchMetrics(null)
+            return
+        }
+        let cancelled = false
+        setTouchMetricsLoading(true)
+        ;(async () => {
+            try {
+                const from = startOfDay(subDays(new Date(), 29))
+                const to = endOfDay(new Date())
+                const res = await ReportsService.getTeamTouchSalesMetrics({
+                    date_from: from.toISOString(),
+                    date_to: to.toISOString(),
+                    ...(isSuperAdmin ? { dealership_id: dealershipKey } : {}),
+                })
+                if (!cancelled) setTouchMetrics(res)
+            } catch (e) {
+                console.error("Failed to load touch metrics:", e)
+                if (!cancelled) setTouchMetrics(null)
+            } finally {
+                if (!cancelled) setTouchMetricsLoading(false)
+            }
+        })()
+        return () => {
+            cancelled = true
+        }
+    }, [teamDealershipId, user?.dealership_id, isSuperAdmin])
 
     const filteredTeam = team.filter(member =>
         member.first_name.toLowerCase().includes(search.toLowerCase()) ||
@@ -314,6 +356,79 @@ export default function TeamPage() {
                     </CardContent>
                 </Card>
             </div>
+
+            {(touchMetricsLoading || touchMetrics) && (
+                <Card>
+                    <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between space-y-0 pb-2">
+                        <div>
+                            <CardTitle className="text-base">
+                                Sales team touch & close (last 30 days)
+                            </CardTitle>
+                            <p className="text-sm text-muted-foreground">
+                                Active salespeople only; your own activity is excluded. Closing uses the
+                                same sold-date rules as Reports → Sold Cars.
+                            </p>
+                        </div>
+                        <Button variant="outline" size="sm" asChild className="shrink-0">
+                            <Link href="/reports/team-sales-touch">Open in Reports</Link>
+                        </Button>
+                    </CardHeader>
+                    <CardContent>
+                        {touchMetricsLoading && !touchMetrics ? (
+                            <div className="flex justify-center py-8">
+                                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                            </div>
+                        ) : touchMetrics ? (
+                            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-4">
+                                    <div className="rounded-lg bg-violet-500/10 p-2">
+                                        <Target className="h-5 w-5 text-violet-600" />
+                                    </div>
+                                    <div>
+                                        <p className="text-2xl font-bold">
+                                            {touchMetrics.unique_leads_touched.toLocaleString()}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground">Unique leads touched</p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-4">
+                                    <div className="rounded-lg bg-blue-500/10 p-2">
+                                        <Users className="h-5 w-5 text-blue-600" />
+                                    </div>
+                                    <div>
+                                        <p className="text-2xl font-bold">
+                                            {touchMetrics.avg_leads_touched_per_salesperson}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground">
+                                            Avg per salesperson ({touchMetrics.salespeople_count} reps)
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-4">
+                                    <div className="rounded-lg bg-emerald-500/10 p-2">
+                                        <CheckCircle className="h-5 w-5 text-emerald-600" />
+                                    </div>
+                                    <div>
+                                        <p className="text-2xl font-bold">
+                                            {touchMetrics.sold_among_touched.toLocaleString()}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground">Sold (among touched)</p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-4">
+                                    <div className="rounded-lg bg-amber-500/10 p-2">
+                                        <Percent className="h-5 w-5 text-amber-600" />
+                                    </div>
+                                    <div>
+                                        <p className="text-2xl font-bold">{touchMetrics.closing_percentage}%</p>
+                                        <p className="text-xs text-muted-foreground">Closing rate</p>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : null}
+                    </CardContent>
+                </Card>
+            )}
 
             {/* Performance Chart */}
             {team.length > 0 && (
