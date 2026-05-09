@@ -96,6 +96,11 @@ import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
 import { filterStorage } from "@/lib/filter-storage"
 import { rememberLeadsListLocation } from "@/lib/leads-list-return"
+import {
+    getStoredLeadsOpenPreference,
+    setStoredLeadsOpenPreference,
+    clearStoredLeadsOpenPreference,
+} from "@/lib/leads-open-preference"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
 
 // Lead stages are now loaded dynamically from the API
@@ -133,7 +138,12 @@ export default function LeadsPage() {
 
     const [leads, setLeads] = React.useState<Lead[]>([])
     const [total, setTotal] = React.useState(0)
-    const [page, setPage] = React.useState(1)
+    const [page, setPage] = React.useState(() => {
+        const raw = searchParams.get("page")
+        if (raw == null || raw === "") return 1
+        const n = parseInt(raw, 10)
+        return Number.isFinite(n) && n >= 1 ? n : 1
+    })
     const [search, setSearch] = React.useState("")
     const searchInitRef = React.useRef(false)
     const [status, setStatus] = React.useState(statusParam || "all")
@@ -275,14 +285,54 @@ export default function LeadsPage() {
         [router, searchParams, total]
     )
 
-    const navigateToLead = React.useCallback((leadId: string, e: React.MouseEvent) => {
-        if (e.metaKey || e.ctrlKey) {
-            window.open(`/leads/${leadId}`, "_blank", "noopener,noreferrer")
-            return
+    const [openLeadDialog, setOpenLeadDialog] = React.useState<{ leadId: string; name: string } | null>(
+        null
+    )
+    const [rememberOpenChoice, setRememberOpenChoice] = React.useState(false)
+    const [leadOpenPrefVersion, setLeadOpenPrefVersion] = React.useState(0)
+
+    const performOpenLead = React.useCallback(
+        (leadId: string, mode: "same" | "new") => {
+            rememberLeadsListLocation()
+            if (mode === "new") {
+                window.open(`/leads/${leadId}`, "_blank", "noopener,noreferrer")
+            } else {
+                router.push(`/leads/${leadId}`)
+            }
+        },
+        [router]
+    )
+
+    const handleLeadActivation = React.useCallback(
+        (lead: Lead, e?: React.MouseEvent) => {
+            if (e && (e.metaKey || e.ctrlKey)) {
+                rememberLeadsListLocation()
+                window.open(`/leads/${lead.id}`, "_blank", "noopener,noreferrer")
+                return
+            }
+            const pref = getStoredLeadsOpenPreference()
+            if (pref === "same") {
+                performOpenLead(lead.id, "same")
+                return
+            }
+            if (pref === "new") {
+                performOpenLead(lead.id, "new")
+                return
+            }
+            setRememberOpenChoice(false)
+            setOpenLeadDialog({ leadId: lead.id, name: getLeadFullName(lead) })
+        },
+        [performOpenLead]
+    )
+
+    const confirmOpenLeadDialog = (mode: "same" | "new") => {
+        if (!openLeadDialog) return
+        if (rememberOpenChoice) {
+            setStoredLeadsOpenPreference(mode)
         }
-        rememberLeadsListLocation()
-        router.push(`/leads/${leadId}`)
-    }, [router])
+        performOpenLead(openLeadDialog.leadId, mode)
+        setOpenLeadDialog(null)
+    }
 
     // Reset pagination when search query changes
     React.useEffect(() => {
@@ -1190,7 +1240,7 @@ export default function LeadsPage() {
                                 <TableRow
                                     key={lead.id}
                                     className="hover:bg-muted/30 transition-colors group cursor-pointer"
-                                    onClick={(e) => navigateToLead(lead.id, e)}
+                                    onClick={(e) => handleLeadActivation(lead, e)}
                                     onAuxClick={(e) => {
                                         if (e.button === 1) {
                                             e.preventDefault()
@@ -1343,8 +1393,7 @@ export default function LeadsPage() {
                                                 <DropdownMenuItem
                                                     onClick={(e) => {
                                                         e.stopPropagation()
-                                                        rememberLeadsListLocation()
-                                                        router.push(`/leads/${lead.id}`)
+                                                        handleLeadActivation(lead)
                                                     }}
                                                 >
                                                     <Eye className="mr-2 h-4 w-4" />
@@ -1472,6 +1521,67 @@ export default function LeadsPage() {
                 onClose={() => setCreateModalOpen(false)}
                 onSuccess={fetchLeads}
             />
+
+            <Dialog
+                open={!!openLeadDialog}
+                onOpenChange={(open) => {
+                    if (!open) setOpenLeadDialog(null)
+                }}
+            >
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Open lead</DialogTitle>
+                        <DialogDescription className="space-y-3 pt-1">
+                            <span className="block font-medium text-foreground">
+                                {openLeadDialog?.name ?? "This lead"}
+                            </span>
+                            <span className="block">
+                                Open here or in a new tab? Your filters and page stay in the URL (for example{" "}
+                                <code className="rounded bg-muted px-1 py-0.5 text-xs">?page=2</code>
+                                ), so browser Back and &quot;Back to Leads&quot; return to this list.
+                            </span>
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="flex items-start gap-2 py-1">
+                        <Checkbox
+                            id="remember-open-lead"
+                            checked={rememberOpenChoice}
+                            onCheckedChange={(v) => setRememberOpenChoice(v === true)}
+                        />
+                        <Label htmlFor="remember-open-lead" className="text-sm font-normal leading-snug cursor-pointer">
+                            Remember my choice next time
+                        </Label>
+                    </div>
+                    {openLeadDialog && getStoredLeadsOpenPreference() != null ? (
+                        <button
+                            type="button"
+                            className="text-xs text-primary underline underline-offset-2 hover:text-primary/90"
+                            onClick={() => {
+                                clearStoredLeadsOpenPreference()
+                                setLeadOpenPrefVersion((v) => v + 1)
+                            }}
+                        >
+                            Stop remembering — ask every time
+                        </button>
+                    ) : null}
+                    <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
+                        <Button type="button" variant="outline" onClick={() => setOpenLeadDialog(null)}>
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => confirmOpenLeadDialog("new")}
+                        >
+                            <ExternalLink className="mr-2 h-4 w-4" />
+                            New tab
+                        </Button>
+                        <Button type="button" onClick={() => confirmOpenLeadDialog("same")}>
+                            This tab
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
             
             {/* Delete Confirmation Dialog */}
             <AlertDialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>
