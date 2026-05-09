@@ -114,6 +114,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
+import { getLeadsListReturnHref } from "@/lib/leads-list-return"
 import { WhatsAppIcon } from "@/components/icons/whatsapp"
 import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
@@ -380,11 +381,16 @@ export default function LeadDetailsPage() {
     const searchParams = useSearchParams()
     const leadId = params.id as string
     const noteIdFromUrl = searchParams.get("note")
+    const [backToLeadsHref, setBackToLeadsHref] = React.useState("/leads")
     const { canAssignToSalesperson, canAssignToDealership, role, isDealershipLevel, isSuperAdmin, isSalesperson } = useRole()
     const user = useAuthStore(state => state.user)
     const { timezone } = useBrowserTimezone()
     const { toast } = useToast()
-    
+
+    React.useEffect(() => {
+        setBackToLeadsHref(getLeadsListReturnHref())
+    }, [])
+
     const [lead, setLead] = React.useState<Lead | null>(null)
     const [activities, setActivities] = React.useState<Activity[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
@@ -655,31 +661,32 @@ export default function LeadDetailsPage() {
             d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
         const toDate = (s: string) => parseAsUTC(s)
         const leadAssignedTo = lead?.assigned_to
-        // If item's assigned_to differs from lead's assigned_to, show in Past (history)
+        // If item's assigned_to differs from lead's and the date is already in the past, show in Past (history)
         const isAssignedToDifferentUser = (itemAssignedTo?: string) =>
             Boolean(leadAssignedTo && itemAssignedTo && itemAssignedTo !== leadAssignedTo)
-        // Appointments: Today (all), Upcoming (all), Overdue (active + past due), Past (terminal + past or different assignee)
+        // Appointments: Today, Upcoming (after today), Overdue / Past (yesterday+); assignee mismatch only in the past-date branch
         const todayApt: Appointment[] = []
         const upcomingApt: Appointment[] = []
         const overdueApt: Appointment[] = []
         const pastApt: Appointment[] = []
         let aptTodayOverdue = false
         leadAppointments.forEach((a) => {
-            if (isAssignedToDifferentUser(a.assigned_to)) {
-                pastApt.push(a)
-                return
-            }
             const d = toDate(a.scheduled_at)
             if (isNaN(d.getTime())) return
             const isActive = ACTIVE_APPOINTMENT_STATUSES.includes(a.status as typeof ACTIVE_APPOINTMENT_STATUSES[number])
+            // Today and future calendar days first — do not send a future meeting to History
+            // just because appointment.assignee !== lead.assignee.
             if (isSameDay(d)) {
                 todayApt.push(a)
                 if (isActive && d.getTime() < now.getTime()) aptTodayOverdue = true
             } else if (d.getTime() > endOfToday.getTime()) {
                 upcomingApt.push(a)
+            } else if (isAssignedToDifferentUser(a.assigned_to)) {
+                pastApt.push(a)
+            } else if (isActive) {
+                overdueApt.push(a)
             } else {
-                if (isActive) overdueApt.push(a)
-                else pastApt.push(a)
+                pastApt.push(a)
             }
         })
         todayApt.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
@@ -688,7 +695,7 @@ export default function LeadDetailsPage() {
         pastApt.sort((a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime())
         const appointmentBadgeCount = todayApt.length
         const appointmentBadgeColor = aptTodayOverdue ? "red" : "green"
-        // Follow-ups: same partition (assigned_to different from lead -> Past)
+        // Follow-ups: same partition; assignee mismatch only when not today / not upcoming
         const todayFu: FollowUp[] = []
         const upcomingFu: FollowUp[] = []
         const overdueFu: FollowUp[] = []
@@ -696,10 +703,6 @@ export default function LeadDetailsPage() {
         let fuTodayOverdue = false
         leadFollowUps.forEach((f) => {
             if (f.status === "cancelled") return
-            if (isAssignedToDifferentUser(f.assigned_to)) {
-                pastFu.push(f)
-                return
-            }
             const d = toDate(f.scheduled_at)
             if (isNaN(d.getTime())) return
             if (isSameDay(d)) {
@@ -707,9 +710,12 @@ export default function LeadDetailsPage() {
                 if (f.status === "pending" && d.getTime() < now.getTime()) fuTodayOverdue = true
             } else if (d.getTime() > endOfToday.getTime()) {
                 upcomingFu.push(f)
+            } else if (isAssignedToDifferentUser(f.assigned_to)) {
+                pastFu.push(f)
+            } else if (f.status === "pending") {
+                overdueFu.push(f)
             } else {
-                if (f.status === "pending") overdueFu.push(f)
-                else pastFu.push(f)
+                pastFu.push(f)
             }
         })
         todayFu.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
@@ -1963,7 +1969,7 @@ export default function LeadDetailsPage() {
                         <p className="mt-2 text-sm text-muted-foreground">
                             The lead you're looking for doesn't exist or you don't have access.
                         </p>
-                        <Link href="/leads">
+                        <Link href={backToLeadsHref}>
                             <Button className="mt-4">Back to Leads</Button>
                         </Link>
                     </CardContent>
@@ -1978,7 +1984,7 @@ export default function LeadDetailsPage() {
         <div className="h-[calc(100vh-120px)] flex flex-col max-w-7xl mx-auto overflow-hidden">
             {/* Navigation */}
             <div className="flex items-center justify-between shrink-0 mb-4">
-                <Link href="/leads" className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors duration-200 rounded-md hover:bg-muted/50 px-2 py-1 -mx-2 -my-1">
+                <Link href={backToLeadsHref} className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors duration-200 rounded-md hover:bg-muted/50 px-2 py-1 -mx-2 -my-1">
                     <ChevronLeft className="h-4 w-4 shrink-0" />
                     Back to Leads
                 </Link>

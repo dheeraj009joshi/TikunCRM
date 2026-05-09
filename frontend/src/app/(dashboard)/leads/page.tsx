@@ -95,6 +95,7 @@ import type { DragEndEvent } from "@dnd-kit/core"
 import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
 import { filterStorage } from "@/lib/filter-storage"
+import { rememberLeadsListLocation } from "@/lib/leads-list-return"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
 
 // Lead stages are now loaded dynamically from the API
@@ -134,6 +135,7 @@ export default function LeadsPage() {
     const [total, setTotal] = React.useState(0)
     const [page, setPage] = React.useState(1)
     const [search, setSearch] = React.useState("")
+    const searchInitRef = React.useRef(false)
     const [status, setStatus] = React.useState(statusParam || "all")
     const [selectedStageIds, setSelectedStageIds] = React.useState<string[]>([])
     const [source, setSource] = React.useState(sourceParam || "all")
@@ -248,6 +250,51 @@ export default function LeadsPage() {
             setCampaignFilter("all")
         }
     }, [searchParams])
+
+    // List page index in URL (?page=) so Back from lead detail restores the same slice
+    React.useEffect(() => {
+        const raw = searchParams.get("page")
+        if (raw == null || raw === "") {
+            setPage(1)
+            return
+        }
+        const n = parseInt(raw, 10)
+        setPage(Number.isFinite(n) && n >= 1 ? n : 1)
+    }, [searchParams])
+
+    const goToListPage = React.useCallback(
+        (nextPage: number) => {
+            const maxPage = Math.max(1, Math.ceil(total / 20))
+            const clamped = Math.min(Math.max(1, nextPage), maxPage)
+            setPage(clamped)
+            const params = new URLSearchParams(searchParams.toString())
+            if (clamped <= 1) params.delete("page")
+            else params.set("page", String(clamped))
+            router.replace(`/leads?${params.toString()}`, { scroll: false })
+        },
+        [router, searchParams, total]
+    )
+
+    const navigateToLead = React.useCallback((leadId: string, e: React.MouseEvent) => {
+        if (e.metaKey || e.ctrlKey) {
+            window.open(`/leads/${leadId}`, "_blank", "noopener,noreferrer")
+            return
+        }
+        rememberLeadsListLocation()
+        router.push(`/leads/${leadId}`)
+    }, [router])
+
+    // Reset pagination when search query changes
+    React.useEffect(() => {
+        if (!searchInitRef.current) {
+            searchInitRef.current = true
+            return
+        }
+        setPage(1)
+        const params = new URLSearchParams(searchParams.toString())
+        params.delete("page")
+        router.replace(`/leads?${params.toString()}`, { scroll: false })
+    }, [search, router, searchParams])
 
     // Load team members for admin/owner salesperson filter
     const { user } = useAuthStore()
@@ -642,6 +689,7 @@ export default function LeadsPage() {
                     onValueChange={(v) => {
                         const mode = v as ViewMode
                         setViewMode(mode)
+                        setPage(1)
                         if (mode === "converted") {
                             setStatus("converted")
                             router.push("/leads?filter=converted")
@@ -694,9 +742,11 @@ export default function LeadsPage() {
                         onValueChange={(v) => {
                             const next = v as DisplayView
                             setDisplayView(next)
+                            setPage(1)
                             const params = new URLSearchParams(searchParams.toString())
                             if (next === "pipeline") params.set("view", "pipeline")
                             else params.delete("view")
+                            params.delete("page")
                             router.push(`/leads?${params.toString()}`)
                             filterStorage.setLeads({
                                 filter: viewMode,
@@ -739,9 +789,11 @@ export default function LeadsPage() {
                                     value={status}
                                     onValueChange={(v) => {
                                         setStatus(v)
+                                        setPage(1)
                                         const params = new URLSearchParams(searchParams.toString())
                                         if (v && v !== "all") params.set("status", v)
                                         else params.delete("status")
+                                        params.delete("page")
                                         router.replace(`/leads?${params.toString()}`)
                                         filterStorage.setLeads({
                                             filter: viewMode,
@@ -820,9 +872,11 @@ export default function LeadsPage() {
                                     value={source}
                                     onValueChange={(v) => {
                                         setSource(v)
+                                        setPage(1)
                                         const params = new URLSearchParams(searchParams.toString())
                                         if (v && v !== "all") params.set("source", v)
                                         else params.delete("source")
+                                        params.delete("page")
                                         router.replace(`/leads?${params.toString()}`)
                                         filterStorage.setLeads({
                                             filter: viewMode,
@@ -850,9 +904,11 @@ export default function LeadsPage() {
                                     value={assignedTo}
                                     onValueChange={(v) => {
                                         setAssignedTo(v)
+                                        setPage(1)
                                         const params = new URLSearchParams(searchParams.toString())
                                         if (v && v !== "all") params.set("assigned_to", v)
                                         else params.delete("assigned_to")
+                                        params.delete("page")
                                         router.replace(`/leads?${params.toString()}`)
                                         filterStorage.setLeads({
                                             filter: viewMode,
@@ -886,6 +942,7 @@ export default function LeadsPage() {
                                         const params = new URLSearchParams(searchParams.toString())
                                         if (v !== "all") params.set("campaign", v)
                                         else params.delete("campaign")
+                                        params.delete("page")
                                         router.replace(`/leads?${params.toString()}`)
                                         filterStorage.setLeads({
                                             filter: viewMode,
@@ -1133,7 +1190,13 @@ export default function LeadsPage() {
                                 <TableRow
                                     key={lead.id}
                                     className="hover:bg-muted/30 transition-colors group cursor-pointer"
-                                    onClick={() => window.location.href = `/leads/${lead.id}`}
+                                    onClick={(e) => navigateToLead(lead.id, e)}
+                                    onAuxClick={(e) => {
+                                        if (e.button === 1) {
+                                            e.preventDefault()
+                                            window.open(`/leads/${lead.id}`, "_blank", "noopener,noreferrer")
+                                        }
+                                    }}
                                 >
                                     <TableCell>
                                         <div className="flex items-center">
@@ -1277,10 +1340,13 @@ export default function LeadsPage() {
                                                 </Button>
                                             </DropdownMenuTrigger>
                                             <DropdownMenuContent align="end">
-                                                <DropdownMenuItem onClick={(e) => {
-                                                    e.stopPropagation()
-                                                    window.location.href = `/leads/${lead.id}`
-                                                }}>
+                                                <DropdownMenuItem
+                                                    onClick={(e) => {
+                                                        e.stopPropagation()
+                                                        rememberLeadsListLocation()
+                                                        router.push(`/leads/${lead.id}`)
+                                                    }}
+                                                >
                                                     <Eye className="mr-2 h-4 w-4" />
                                                     View Details
                                                 </DropdownMenuItem>
@@ -1366,7 +1432,7 @@ export default function LeadsPage() {
                                 variant="outline"
                                 size="sm"
                                 disabled={page === 1 || isLoading}
-                                onClick={() => setPage(page - 1)}
+                                    onClick={() => goToListPage(page - 1)}
                             >
                                 Previous
                             </Button>
@@ -1374,7 +1440,7 @@ export default function LeadsPage() {
                                 variant="outline"
                                 size="sm"
                                 disabled={page >= Math.ceil(total / 20) || isLoading}
-                                onClick={() => setPage(page + 1)}
+                                    onClick={() => goToListPage(page + 1)}
                             >
                                 Next
                             </Button>

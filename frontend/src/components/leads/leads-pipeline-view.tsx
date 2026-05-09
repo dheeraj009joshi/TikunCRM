@@ -23,6 +23,7 @@ import { LeadStage } from "@/services/lead-stage-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { cn } from "@/lib/utils"
+import { rememberLeadsListLocation } from "@/lib/leads-list-return"
 
 function PipelineLeadCard({ lead, isDragging }: { lead: Lead; isDragging?: boolean }) {
     const { timezone } = useBrowserTimezone()
@@ -32,7 +33,10 @@ function PipelineLeadCard({ lead, isDragging }: { lead: Lead; isDragging?: boole
     const assignedUser = lead.assigned_to_user
 
     return (
-        <Link href={`/leads/${lead.id}`}>
+        <Link
+            href={`/leads/${lead.id}`}
+            onClick={() => rememberLeadsListLocation()}
+        >
             <div
                 className={cn(
                     "rounded-lg border bg-card p-3 shadow-sm hover:shadow-md transition-shadow cursor-pointer",
