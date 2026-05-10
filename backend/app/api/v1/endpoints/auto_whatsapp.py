@@ -49,7 +49,7 @@ router = APIRouter(prefix="/auto-whatsapp", tags=["Auto WhatsApp"])
 
 def _require_admin(current_user: User) -> None:
     """Raise 403 if user is not admin or super admin"""
-    if current_user.role not in (UserRole.ADMIN, UserRole.SUPER_ADMIN):
+    if current_user.role not in (UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER, UserRole.SUPER_ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can manage Auto WhatsApp",
@@ -70,11 +70,13 @@ def _require_dealership(current_user: User) -> UUID:
 
 @router.get("/profile", response_model=AutoWhatsAppProfileResponse)
 async def get_profile(
+    verify: bool = Query(False, description="Actually verify session by opening browser (slower)"),
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Get the WhatsApp profile for the current user's dealership.
+    If verify=true, actually checks the browser session (takes 10-15 seconds).
     Returns 404 if no profile exists.
     """
     _require_admin(current_user)
@@ -89,14 +91,65 @@ async def get_profile(
             detail="WhatsApp profile not configured. Use POST /profile/setup to create one.",
         )
 
+    actual_status = profile.status
+    error_message = profile.error_message
+
+    # Only verify if explicitly requested (to avoid blocking other requests)
+    if verify:
+        from app.models.dealership import Dealership
+        import concurrent.futures
+        
+        dealership = await db.get(Dealership, dealership_id)
+        slug = dealership.slug or str(dealership_id)[:8] if dealership else str(dealership_id)[:8]
+        profile_id = profile.id
+
+        def check_browser_status():
+            """Run browser check in thread to not block async loop"""
+            try:
+                driver = driver_manager.get_driver(slug, headless=True)
+                if not driver._is_initialized:
+                    if driver.start(timeout=30):
+                        is_connected = driver.is_logged_in(timeout=10)
+                        driver_manager.stop_driver(slug)
+                        return is_connected
+                    return None  # Couldn't start
+                else:
+                    is_connected = driver.is_logged_in(timeout=5)
+                    driver_manager.stop_driver(slug)
+                    return is_connected
+            except Exception as e:
+                logger.warning(f"Error in browser check: {e}")
+                return None
+
+        # Run browser check in thread pool
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            is_connected = await loop.run_in_executor(executor, check_browser_status)
+
+        if is_connected is not None:
+            if is_connected:
+                actual_status = AutoWhatsAppProfileStatus.CONNECTED
+                error_message = None
+            else:
+                actual_status = AutoWhatsAppProfileStatus.DISCONNECTED
+                error_message = "Session expired or logged out"
+
+            # Update profile status if changed
+            if actual_status != profile.status:
+                await service.update_profile_status(
+                    profile_id,
+                    actual_status,
+                    error_message=error_message,
+                )
+
     return AutoWhatsAppProfileResponse(
         id=profile.id,
         dealership_id=profile.dealership_id,
         dealership_name=profile.dealership.name if profile.dealership else None,
         phone_number=profile.phone_number,
-        status=profile.status.value if isinstance(profile.status, AutoWhatsAppProfileStatus) else profile.status,
+        status=actual_status.value if isinstance(actual_status, AutoWhatsAppProfileStatus) else actual_status,
         last_connected_at=profile.last_connected_at,
-        error_message=profile.error_message,
+        error_message=error_message,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )
@@ -134,18 +187,20 @@ async def setup_profile(
         AutoWhatsAppProfileStatus.CONNECTING,
     )
 
-    # Start browser and get QR code
+    # Start browser and get QR code (use headless mode - we capture QR as image)
     try:
-        driver = driver_manager.get_driver(slug, headless=False)
+        driver = driver_manager.get_driver(slug, headless=True)
         if not driver.start(timeout=30):
             await service.update_profile_status(
                 profile.id,
                 AutoWhatsAppProfileStatus.ERROR,
                 error_message="Failed to start browser",
             )
+            # Stop driver to clean up
+            driver_manager.stop_driver(slug)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to start WhatsApp browser",
+                detail="Failed to start WhatsApp browser. Make sure Chrome is installed.",
             )
 
         # Check if already logged in
@@ -154,6 +209,8 @@ async def setup_profile(
                 profile.id,
                 AutoWhatsAppProfileStatus.CONNECTED,
             )
+            # Close browser after confirming logged in
+            driver_manager.stop_driver(slug)
             return AutoWhatsAppProfileSetupResponse(
                 profile_id=profile.id,
                 status="connected",
@@ -169,6 +226,7 @@ async def setup_profile(
                 AutoWhatsAppProfileStatus.ERROR,
                 error_message="Could not capture QR code",
             )
+            driver_manager.stop_driver(slug)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Could not capture QR code. Please try again.",
@@ -179,6 +237,7 @@ async def setup_profile(
             AutoWhatsAppProfileStatus.QR_READY,
         )
 
+        # Keep browser open for QR polling - will be closed when user is connected or times out
         return AutoWhatsAppProfileSetupResponse(
             profile_id=profile.id,
             status="qr_ready",
@@ -190,6 +249,8 @@ async def setup_profile(
         raise
     except Exception as e:
         logger.exception(f"Error during profile setup: {e}")
+        # Clean up driver on error
+        driver_manager.stop_driver(slug)
         await service.update_profile_status(
             profile.id,
             AutoWhatsAppProfileStatus.ERROR,
@@ -228,7 +289,7 @@ async def get_qr_code(
     slug = dealership.slug or str(dealership_id)[:8] if dealership else str(dealership_id)[:8]
 
     # Check if driver is running
-    driver = driver_manager.get_driver(slug, headless=False)
+    driver = driver_manager.get_driver(slug, headless=True)
     if not driver._is_initialized:
         return AutoWhatsAppProfileSetupResponse(
             profile_id=profile.id,
@@ -243,6 +304,8 @@ async def get_qr_code(
             profile.id,
             AutoWhatsAppProfileStatus.CONNECTED,
         )
+        # Close browser after successful login - session is saved in profile directory
+        driver_manager.stop_driver(slug)
         return AutoWhatsAppProfileSetupResponse(
             profile_id=profile.id,
             status="connected",
@@ -286,7 +349,7 @@ async def verify_profile(
     dealership = await db.get(Dealership, dealership_id)
     slug = dealership.slug or str(dealership_id)[:8] if dealership else str(dealership_id)[:8]
 
-    driver = driver_manager.get_driver(slug, headless=False)
+    driver = driver_manager.get_driver(slug, headless=True)
     
     if not driver._is_initialized:
         return AutoWhatsAppProfileStatusResponse(
@@ -304,6 +367,8 @@ async def verify_profile(
             profile.id,
             AutoWhatsAppProfileStatus.CONNECTED,
         )
+        # Close browser after verification - session is saved in profile
+        driver_manager.stop_driver(slug)
     else:
         await service.update_profile_status(
             profile.id,

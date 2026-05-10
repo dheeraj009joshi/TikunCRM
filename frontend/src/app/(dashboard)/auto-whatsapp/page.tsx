@@ -55,6 +55,7 @@ import {
   LeadPreviewFilter,
 } from "@/services/auto-whatsapp-service";
 import { LeadStageService, LeadStage } from "@/services/lead-stage-service";
+import { LeadService, type CampaignFilterOption } from "@/services/lead-service";
 
 export default function AutoWhatsAppPage() {
   const router = useRouter();
@@ -63,12 +64,14 @@ export default function AutoWhatsAppPage() {
   // Profile state
   const [profile, setProfile] = useState<AutoWhatsAppProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
+  const [profileVerifying, setProfileVerifying] = useState(false);
   const [setupLoading, setSetupLoading] = useState(false);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [qrPolling, setQrPolling] = useState(false);
 
   // Lead selection state
   const [stages, setStages] = useState<LeadStage[]>([]);
+  const [campaigns, setCampaigns] = useState<CampaignFilterOption[]>([]);
   const [filters, setFilters] = useState<LeadPreviewFilter>({
     has_phone: true,
     is_active: true,
@@ -85,17 +88,27 @@ export default function AutoWhatsAppPage() {
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
 
-  // Load profile on mount
+  // Load profile and filter options on mount
   useEffect(() => {
     loadProfile();
     loadStages();
+    loadCampaigns();
   }, []);
 
-  const loadProfile = async () => {
+  const loadProfile = async (verify: boolean = false) => {
     try {
-      setProfileLoading(true);
-      const data = await autoWhatsAppService.getProfile();
+      if (verify) {
+        setProfileVerifying(true);
+      } else {
+        setProfileLoading(true);
+      }
+      const data = await autoWhatsAppService.getProfile(verify);
       setProfile(data);
+      
+      // After initial load, verify the actual status in background
+      if (!verify && data) {
+        verifyProfileStatus();
+      }
     } catch (error: any) {
       if (error.response?.status !== 404) {
         console.error("Failed to load profile:", error);
@@ -103,6 +116,19 @@ export default function AutoWhatsAppPage() {
       setProfile(null);
     } finally {
       setProfileLoading(false);
+      setProfileVerifying(false);
+    }
+  };
+  
+  const verifyProfileStatus = async () => {
+    try {
+      setProfileVerifying(true);
+      const data = await autoWhatsAppService.getProfile(true);
+      setProfile(data);
+    } catch (error: any) {
+      console.error("Failed to verify profile:", error);
+    } finally {
+      setProfileVerifying(false);
     }
   };
 
@@ -112,6 +138,15 @@ export default function AutoWhatsAppPage() {
       setStages(data);
     } catch (error) {
       console.error("Failed to load stages:", error);
+    }
+  };
+
+  const loadCampaigns = async () => {
+    try {
+      const data = await LeadService.getCampaignFilterOptions();
+      setCampaigns(data);
+    } catch (error) {
+      console.error("Failed to load campaigns:", error);
     }
   };
 
@@ -159,7 +194,15 @@ export default function AutoWhatsAppPage() {
         if (response.qr_code_base64) {
           setQrCode(response.qr_code_base64);
         }
-      } catch (error) {
+      } catch (error: any) {
+        // If profile not found (404), stop polling
+        if (error.response?.status === 404) {
+          console.warn("Profile not found, stopping QR polling");
+          clearInterval(interval);
+          setQrPolling(false);
+          setQrCode(null);
+          return;
+        }
         console.error("QR polling error:", error);
       }
     }, 3000);
@@ -356,20 +399,28 @@ export default function AutoWhatsAppPage() {
                   : "Connection status"}
               </CardDescription>
             </div>
-            <Badge
-              variant={isProfileConnected ? "default" : "destructive"}
-              className={isProfileConnected ? "bg-green-500" : ""}
-            >
-              {isProfileConnected ? (
-                <>
-                  <CheckCircle2 className="h-3 w-3 mr-1" /> Connected
-                </>
-              ) : (
-                <>
-                  <XCircle className="h-3 w-3 mr-1" /> {profile.status}
-                </>
+            <div className="flex items-center gap-2">
+              {profileVerifying && (
+                <span className="text-sm text-muted-foreground flex items-center gap-1">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Verifying...
+                </span>
               )}
-            </Badge>
+              <Badge
+                variant={isProfileConnected ? "default" : "destructive"}
+                className={isProfileConnected ? "bg-green-500" : ""}
+              >
+                {isProfileConnected ? (
+                  <>
+                    <CheckCircle2 className="h-3 w-3 mr-1" /> Connected
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="h-3 w-3 mr-1" /> {profile.status}
+                  </>
+                )}
+              </Badge>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="flex gap-2">
@@ -428,7 +479,7 @@ export default function AutoWhatsAppPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="space-y-2">
                   <Label>Stage</Label>
                   <Select
@@ -453,6 +504,33 @@ export default function AutoWhatsAppPage() {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {campaigns.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Campaign</Label>
+                    <Select
+                      value={filters.campaign_ids?.[0] || "all"}
+                      onValueChange={(value) =>
+                        setFilters((prev) => ({
+                          ...prev,
+                          campaign_ids: value === "all" ? undefined : [value],
+                        }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="All campaigns" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All campaigns</SelectItem>
+                        {campaigns.map((campaign) => (
+                          <SelectItem key={campaign.id} value={campaign.id} title={campaign.match_pattern}>
+                            {campaign.display_name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <Label>Search</Label>

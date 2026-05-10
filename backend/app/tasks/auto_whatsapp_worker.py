@@ -153,8 +153,8 @@ async def process_auto_whatsapp_job(job_id: UUID) -> dict:
                 "percent": 0,
             })
         
-        # Get or start driver
-        driver = driver_manager.get_driver(slug, headless=False)
+        # Get or start driver (headless mode for background processing)
+        driver = driver_manager.get_driver(slug, headless=True)
         if not driver._is_initialized:
             if not driver.start(timeout=30):
                 service = AutoWhatsAppService(session)
@@ -162,8 +162,10 @@ async def process_auto_whatsapp_job(job_id: UUID) -> dict:
                     job_id,
                     AutoWhatsAppJobStatus.FAILED,
                     AutoWhatsAppLogAction.FAILED,
-                    "Failed to start browser",
+                    "Failed to start browser. Make sure Chrome is installed.",
                 )
+                # Clean up driver
+                driver_manager.stop_driver(slug)
                 return {"error": "Failed to start browser"}
         
         # Verify still logged in
@@ -192,6 +194,8 @@ async def process_auto_whatsapp_job(job_id: UUID) -> dict:
                 "failed": job.failed_count,
             })
             
+            # Close browser on failure
+            driver_manager.stop_driver(slug)
             return {"error": "Session expired"}
         
         # Get service for updates
@@ -239,6 +243,8 @@ async def process_auto_whatsapp_job(job_id: UUID) -> dict:
                     "at_index": i,
                 })
                 
+                # Close browser on cancellation
+                driver_manager.stop_driver(slug)
                 return {
                     "status": "cancelled",
                     "sent_count": sent_count,
@@ -346,6 +352,8 @@ async def process_auto_whatsapp_job(job_id: UUID) -> dict:
             "duration_seconds": duration_seconds,
         })
         
+        # Close browser after job completion to free resources
+        driver_manager.stop_driver(slug)
         logger.info(f"Job {job_id} completed: sent={sent_count}, failed={failed_count}")
         
         return {
@@ -403,3 +411,19 @@ async def run_auto_whatsapp_worker():
                 )
             except Exception as inner_e:
                 logger.error(f"Failed to update job status: {inner_e}")
+        
+        # Clean up any running driver on error
+        try:
+            # Try to get dealership slug and stop driver
+            async with session_maker() as session:
+                result = await session.execute(
+                    select(AutoWhatsAppJob)
+                    .where(AutoWhatsAppJob.id == job.id)
+                    .options(selectinload(AutoWhatsAppJob.dealership))
+                )
+                failed_job = result.scalar_one_or_none()
+                if failed_job and failed_job.dealership:
+                    slug = failed_job.dealership.slug or str(failed_job.dealership_id)[:8]
+                    driver_manager.stop_driver(slug)
+        except Exception as cleanup_e:
+            logger.warning(f"Failed to cleanup driver after error: {cleanup_e}")

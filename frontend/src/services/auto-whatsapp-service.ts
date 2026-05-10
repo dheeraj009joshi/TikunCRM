@@ -201,9 +201,12 @@ class AutoWhatsAppService {
 
   /**
    * Get the WhatsApp profile for current dealership
+   * @param verify - If true, actually opens browser to verify session (slower, 10-15s)
    */
-  async getProfile(): Promise<AutoWhatsAppProfile> {
-    const response = await apiClient.get<AutoWhatsAppProfile>("/auto-whatsapp/profile");
+  async getProfile(verify: boolean = false): Promise<AutoWhatsAppProfile> {
+    const response = await apiClient.get<AutoWhatsAppProfile>("/auto-whatsapp/profile", {
+      params: { verify },
+    });
     return response.data;
   }
 
@@ -313,8 +316,10 @@ class AutoWhatsAppService {
    */
   createJobWebSocket(jobId: string): WebSocket {
     const token = localStorage.getItem("auth_token");
-    const wsUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/^http/, "ws") || "wss://api.tikuncrm.com";
-    const wsEndpoint = `${wsUrl}/api/v1/auto-whatsapp/jobs/${jobId}/ws`;
+    // NEXT_PUBLIC_API_URL already includes /api/v1, so we just replace http with ws
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
+    const wsUrl = baseUrl.replace(/^http/, "ws");
+    const wsEndpoint = `${wsUrl}/auto-whatsapp/jobs/${jobId}/ws`;
     
     const ws = new WebSocket(wsEndpoint);
     

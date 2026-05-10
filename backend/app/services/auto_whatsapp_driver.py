@@ -56,13 +56,13 @@ class AutoWhatsAppDriver:
     Each instance manages one browser session for a dealership.
     """
 
-    def __init__(self, dealership_slug: str, headless: bool = False):
+    def __init__(self, dealership_slug: str, headless: bool = True):
         """
         Initialize driver for a specific dealership.
         
         Args:
             dealership_slug: URL-safe dealership identifier for profile directory
-            headless: Run in headless mode (no visible browser window)
+            headless: Run in headless mode (no visible browser window). Default True for server use.
         """
         self.dealership_slug = dealership_slug
         self.headless = headless
@@ -121,9 +121,25 @@ class AutoWhatsAppDriver:
             if self.driver:
                 self.stop()
             
-            logger.info(f"Starting WhatsApp driver for dealership: {self.dealership_slug}")
+            logger.info(f"Starting WhatsApp driver for dealership: {self.dealership_slug} (headless={self.headless})")
+            logger.info(f"Profile path: {self.profile_path}")
             options = self._get_chrome_options()
-            self.driver = webdriver.Chrome(options=options)
+            
+            try:
+                self.driver = webdriver.Chrome(options=options)
+            except WebDriverException as e:
+                error_msg = str(e).lower()
+                if "chromedriver" in error_msg or "chrome not reachable" in error_msg:
+                    logger.error(
+                        f"Chrome/ChromeDriver not found or not compatible. "
+                        f"Please ensure Chrome browser and ChromeDriver are installed. "
+                        f"Error: {e}"
+                    )
+                elif "user data directory" in error_msg or "profile" in error_msg:
+                    logger.error(f"Profile directory issue: {e}. Path: {self.profile_path}")
+                else:
+                    logger.error(f"WebDriver error: {e}")
+                return False
             
             # Navigate to WhatsApp Web
             self.driver.get("https://web.whatsapp.com")
@@ -137,9 +153,11 @@ class AutoWhatsAppDriver:
             
         except WebDriverException as e:
             logger.error(f"Failed to start Chrome driver: {e}")
+            self._is_initialized = False
             return False
         except Exception as e:
             logger.exception(f"Unexpected error starting driver: {e}")
+            self._is_initialized = False
             return False
 
     def stop(self):
@@ -359,13 +377,13 @@ class AutoWhatsAppDriverManager:
             cls._drivers = {}
         return cls._instance
 
-    def get_driver(self, dealership_slug: str, headless: bool = False) -> AutoWhatsAppDriver:
+    def get_driver(self, dealership_slug: str, headless: bool = True) -> AutoWhatsAppDriver:
         """
         Get or create a driver for a dealership.
         
         Args:
             dealership_slug: Dealership identifier
-            headless: Run in headless mode
+            headless: Run in headless mode (default True for server use)
             
         Returns:
             AutoWhatsAppDriver instance
