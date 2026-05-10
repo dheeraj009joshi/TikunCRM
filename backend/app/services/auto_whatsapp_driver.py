@@ -31,6 +31,13 @@ from selenium.common.exceptions import (
     StaleElementReferenceException,
 )
 
+# Try to use webdriver-manager for automatic driver management
+try:
+    from webdriver_manager.chrome import ChromeDriverManager
+    USE_WEBDRIVER_MANAGER = True
+except ImportError:
+    USE_WEBDRIVER_MANAGER = False
+
 logger = logging.getLogger(__name__)
 
 # Base directory for Chrome profiles (relative to backend/)
@@ -126,14 +133,26 @@ class AutoWhatsAppDriver:
             options = self._get_chrome_options()
             
             try:
-                self.driver = webdriver.Chrome(options=options)
+                # Try using webdriver-manager first (auto-downloads correct driver)
+                if USE_WEBDRIVER_MANAGER:
+                    try:
+                        service = Service(ChromeDriverManager().install())
+                        self.driver = webdriver.Chrome(service=service, options=options)
+                        logger.info("Using webdriver-manager for ChromeDriver")
+                    except Exception as wdm_error:
+                        logger.warning(f"webdriver-manager failed: {wdm_error}, falling back to default")
+                        # Fallback to Selenium's built-in manager (Selenium 4.6+)
+                        self.driver = webdriver.Chrome(options=options)
+                else:
+                    # Use Selenium's built-in Selenium Manager (4.6+)
+                    self.driver = webdriver.Chrome(options=options)
             except WebDriverException as e:
                 error_msg = str(e).lower()
                 if "chromedriver" in error_msg or "chrome not reachable" in error_msg:
                     logger.error(
                         f"Chrome/ChromeDriver not found or not compatible. "
                         f"Please ensure Chrome browser and ChromeDriver are installed. "
-                        f"Error: {e}"
+                        f"Try: pip install webdriver-manager. Error: {e}"
                     )
                 elif "user data directory" in error_msg or "profile" in error_msg:
                     logger.error(f"Profile directory issue: {e}. Path: {self.profile_path}")

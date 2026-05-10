@@ -73,3 +73,4 @@ openai>=1.74.0
 
 # Browser Automation (Auto WhatsApp)
 selenium>=4.25.0
+webdriver-manager>=4.0.0  # Auto-manages ChromeDriver downloads
