@@ -54,7 +54,7 @@ import {
   LeadPreviewItem,
   LeadPreviewFilter,
 } from "@/services/auto-whatsapp-service";
-import { leadStageService, LeadStage } from "@/services/lead-stage-service";
+import { LeadStageService, LeadStage } from "@/services/lead-stage-service";
 
 export default function AutoWhatsAppPage() {
   const router = useRouter();
@@ -108,7 +108,7 @@ export default function AutoWhatsAppPage() {
 
   const loadStages = async () => {
     try {
-      const data = await leadStageService.getStages();
+      const data = await LeadStageService.list();
       setStages(data);
     } catch (error) {
       console.error("Failed to load stages:", error);
@@ -246,7 +246,7 @@ export default function AutoWhatsAppPage() {
         name: jobName.trim(),
         message_text: messageText.trim(),
         lead_ids: Array.from(selectedLeadIds),
-        filter_criteria: filters,
+        filter_criteria: filters as Record<string, unknown>,
       });
 
       toast({ title: "Job created!", description: `Sending to ${job.total_leads} leads` });

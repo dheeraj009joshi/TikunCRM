@@ -35,6 +35,7 @@ import {
   AutoWhatsAppJobDetail,
   AutoWhatsAppJobError,
   WSMessage,
+  WSStateChangeMessage,
 } from "@/services/auto-whatsapp-service";
 
 const statusConfig: Record<
@@ -172,13 +173,14 @@ export default function AutoWhatsAppJobDetailPage() {
             data.type
           )
         ) {
+          const stateData = data as WSStateChangeMessage;
           setJob((prev) =>
             prev
               ? {
                   ...prev,
-                  status: data.status as any,
-                  sent_count: data.sent,
-                  failed_count: data.failed,
+                  status: stateData.status as any,
+                  sent_count: stateData.sent,
+                  failed_count: stateData.failed,
                 }
               : prev
           );
@@ -187,13 +189,13 @@ export default function AutoWhatsAppJobDetailPage() {
             ...prev,
             {
               type: "state",
-              message: data.message || `Job ${data.type}`,
+              message: stateData.message || `Job ${stateData.type}`,
               timestamp: new Date(),
             },
           ]);
 
           // Reload job for full details on completion
-          if (["completed", "cancelled", "failed"].includes(data.type)) {
+          if (["completed", "cancelled", "failed"].includes(stateData.type)) {
             loadJob();
           }
         }
