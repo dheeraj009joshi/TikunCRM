@@ -34,6 +34,7 @@ import {
     Car,
     FileBarChart,
     Target,
+    Send,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -135,6 +136,12 @@ const allSidebarItems: SidebarItem[] = [
             { name: "Text", icon: MessageSquare, href: "/sms" },
             { name: "Calls", icon: Phone, href: "/calls" },
         ],
+    },
+    {
+        name: "Auto WhatsApp",
+        icon: Send,
+        href: "/auto-whatsapp",
+        roles: ["super_admin", "dealership_admin", "dealership_owner"],
     },
     { 
         name: "Notifications", 

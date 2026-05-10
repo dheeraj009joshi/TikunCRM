@@ -31,6 +31,14 @@ from app.models.campaign_mapping import CampaignMapping, MatchType
 from app.models.lead_campaign import LeadCampaign
 from app.models.whatsapp_message import WhatsAppMessage, WhatsAppBulkSend, WhatsAppConnection, WhatsAppChannel
 from app.models.ai_outbound_call import AiOutboundCall
+from app.models.auto_whatsapp import (
+    AutoWhatsAppProfile,
+    AutoWhatsAppJob,
+    AutoWhatsAppJobLog,
+    AutoWhatsAppProfileStatus,
+    AutoWhatsAppJobStatus,
+    AutoWhatsAppLogAction,
+)
 
 __all__ = [
     "Customer",
@@ -84,4 +92,10 @@ __all__ = [
     "WhatsAppConnection",
     "WhatsAppChannel",
     "AiOutboundCall",
+    "AutoWhatsAppProfile",
+    "AutoWhatsAppJob",
+    "AutoWhatsAppJobLog",
+    "AutoWhatsAppProfileStatus",
+    "AutoWhatsAppJobStatus",
+    "AutoWhatsAppLogAction",
 ]

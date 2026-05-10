@@ -135,6 +135,17 @@ def setup_scheduler():
         max_instances=1,
     )
     
+    # Auto WhatsApp (Selenium-based) job processing - runs every 30 seconds
+    from app.tasks.auto_whatsapp_worker import run_auto_whatsapp_worker
+    scheduler.add_job(
+        run_auto_whatsapp_worker,
+        trigger=IntervalTrigger(seconds=30, start_date=datetime.now() + timedelta(seconds=15)),
+        id="auto_whatsapp_worker",
+        name="Process Auto WhatsApp bulk send jobs",
+        replace_existing=True,
+        max_instances=1,
+    )
+    
     logger.info("Background scheduler configured (tasks staggered to prevent blocking):")
     logger.info("  - IMAP email sync (every 2 minutes, offset: 0s)")
     logger.info("  - Google Sheets lead sync (every 2 minutes, offset: 40s)")
@@ -144,6 +155,7 @@ def setup_scheduler():
     logger.info("  - Follow-up reminders (every 15 minutes)")
     logger.info("  - Missed appointment detection (every 30 minutes)")
     logger.info("  - WhatsApp bulk sends (every 2 minutes, offset: 100s)")
+    logger.info("  - Auto WhatsApp worker (every 30 seconds, offset: 15s)")
 
 
 def start_scheduler():

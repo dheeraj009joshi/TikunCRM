@@ -70,3 +70,6 @@ deepgram-sdk>=6.0.0
 openai>=1.74.0
 # Alternative TTS: elevenlabs or cartesia
 # elevenlabs==0.2.26
+
+# Browser Automation (Auto WhatsApp)
+selenium>=4.25.0
