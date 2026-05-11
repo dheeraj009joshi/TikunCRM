@@ -34,6 +34,8 @@ from app.services.auto_whatsapp_driver import (
     driver_manager,
     get_random_delay,
 )
+from app.services.activity import ActivityService
+from app.models.activity import ActivityType
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +284,26 @@ async def process_auto_whatsapp_job(job_id: UUID) -> dict:
             if success:
                 sent_count += 1
                 logger.info(f"Message sent to {phone}")
+                
+                # Log activity for the lead (async, don't wait)
+                try:
+                    await ActivityService.log_activity(
+                        session,
+                        activity_type=ActivityType.WHATSAPP_SENT,
+                        description=f"Auto WhatsApp message sent: {message[:100]}{'...' if len(message) > 100 else ''}",
+                        lead_id=UUID(lead_id),
+                        dealership_id=job.dealership_id,
+                        user_id=job.created_by,
+                        meta_data={
+                            "job_id": str(job.id),
+                            "job_name": job.name,
+                            "phone": phone,
+                            "message_preview": message[:200],
+                            "auto_whatsapp": True,
+                        }
+                    )
+                except Exception as activity_error:
+                    logger.warning(f"Failed to log activity for lead {lead_id}: {activity_error}")
             else:
                 failed_count += 1
                 logger.warning(f"Failed to send to {phone}: {error}")

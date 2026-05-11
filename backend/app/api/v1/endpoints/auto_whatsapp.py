@@ -8,8 +8,9 @@ Handles:
 - Real-time progress via WebSocket
 """
 import asyncio
+import concurrent.futures
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
@@ -187,68 +188,83 @@ async def setup_profile(
         AutoWhatsAppProfileStatus.CONNECTING,
     )
 
-    # Start browser and get QR code (use headless mode - we capture QR as image)
-    try:
-        driver = driver_manager.get_driver(slug, headless=True)
-        logger.info(f"Starting browser for profile setup. Profile path: {driver.profile_path}")
-        
-        if not driver.start(timeout=30):
-            error_msg = (
-                "Failed to start Chrome browser. Common issues: "
-                "1) Chrome not installed (run: google-chrome --version) "
-                "2) Zombie Chrome processes (run: pkill -9 chrome) "
-                "3) Corrupted profile (run: rm -rf {profile_path}) "
-                "4) Missing dependencies (run: apt-get install libnss3 libatk1.0-0)"
-            ).format(profile_path=driver.profile_path)
+    # Run Selenium operations in a thread pool to avoid blocking the event loop
+    def setup_browser_sync() -> Tuple[str, Optional[str], Optional[str]]:
+        """
+        Synchronous browser setup - runs in thread pool.
+        Returns: (status, qr_code_base64, error_message)
+        """
+        try:
+            driver = driver_manager.get_driver(slug, headless=True)
+            logger.info(f"Starting browser for profile setup. Profile path: {driver.profile_path}")
             
+            if not driver.start(timeout=30):
+                error_msg = (
+                    "Failed to start Chrome browser. Common issues: "
+                    "1) Chrome not installed (run: google-chrome --version) "
+                    "2) Zombie Chrome processes (run: pkill -9 chrome) "
+                    "3) Corrupted profile (run: rm -rf {profile_path}) "
+                    "4) Missing dependencies (run: apt-get install libnss3 libatk1.0-0)"
+                ).format(profile_path=driver.profile_path)
+                logger.error(f"Browser failed to start for {slug}. {error_msg}")
+                driver_manager.stop_driver(slug)
+                return "error", None, "Failed to start browser - check server logs"
+            
+            # Check if already logged in
+            if driver.is_logged_in(timeout=5):
+                driver_manager.stop_driver(slug)
+                return "connected", None, None
+            
+            # Get QR code
+            qr_code = driver.get_qr_code_base64(timeout=15)
+            if not qr_code:
+                driver_manager.stop_driver(slug)
+                return "error", None, "Could not capture QR code"
+            
+            # Keep browser open for QR polling
+            return "qr_ready", qr_code, None
+            
+        except Exception as e:
+            logger.exception(f"Error in browser setup: {e}")
+            driver_manager.stop_driver(slug)
+            return "error", None, str(e)
+
+    try:
+        # Run browser setup in thread pool (non-blocking)
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            status_result, qr_code, error_msg = await loop.run_in_executor(
+                executor, setup_browser_sync
+            )
+        
+        if status_result == "error":
             await service.update_profile_status(
                 profile.id,
                 AutoWhatsAppProfileStatus.ERROR,
-                error_message="Failed to start browser - check server logs",
+                error_message=error_msg,
             )
-            # Stop driver to clean up
-            driver_manager.stop_driver(slug)
-            logger.error(f"Browser failed to start for {slug}. {error_msg}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to start WhatsApp browser. Check server logs for details.",
+                detail=error_msg or "Setup failed",
             )
-
-        # Check if already logged in
-        if driver.is_logged_in(timeout=5):
+        
+        if status_result == "connected":
             await service.update_profile_status(
                 profile.id,
                 AutoWhatsAppProfileStatus.CONNECTED,
             )
-            # Close browser after confirming logged in
-            driver_manager.stop_driver(slug)
             return AutoWhatsAppProfileSetupResponse(
                 profile_id=profile.id,
                 status="connected",
                 message="Already logged in to WhatsApp",
                 qr_code_base64=None,
             )
-
-        # Get QR code
-        qr_code = driver.get_qr_code_base64(timeout=15)
-        if not qr_code:
-            await service.update_profile_status(
-                profile.id,
-                AutoWhatsAppProfileStatus.ERROR,
-                error_message="Could not capture QR code",
-            )
-            driver_manager.stop_driver(slug)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Could not capture QR code. Please try again.",
-            )
-
+        
+        # qr_ready
         await service.update_profile_status(
             profile.id,
             AutoWhatsAppProfileStatus.QR_READY,
         )
-
-        # Keep browser open for QR polling - will be closed when user is connected or times out
         return AutoWhatsAppProfileSetupResponse(
             profile_id=profile.id,
             status="qr_ready",
@@ -260,8 +276,6 @@ async def setup_profile(
         raise
     except Exception as e:
         logger.exception(f"Error during profile setup: {e}")
-        # Clean up driver on error
-        driver_manager.stop_driver(slug)
         await service.update_profile_status(
             profile.id,
             AutoWhatsAppProfileStatus.ERROR,
@@ -298,37 +312,57 @@ async def get_qr_code(
     from app.models.dealership import Dealership
     dealership = await db.get(Dealership, dealership_id)
     slug = dealership.slug or str(dealership_id)[:8] if dealership else str(dealership_id)[:8]
+    profile_id = profile.id
 
-    # Check if driver is running
-    driver = driver_manager.get_driver(slug, headless=True)
-    if not driver._is_initialized:
+    def check_qr_status_sync() -> Tuple[str, Optional[str]]:
+        """
+        Check QR/login status synchronously - runs in thread pool.
+        Returns: (status, qr_code_base64)
+        """
+        driver = driver_manager.get_driver(slug, headless=True)
+        
+        # Check if driver is running
+        if not driver._is_initialized:
+            return "disconnected", None
+        
+        # Check if logged in
+        if driver.is_logged_in(timeout=3):
+            driver_manager.stop_driver(slug)
+            return "connected", None
+        
+        # Not logged in, get fresh QR code
+        qr_code = driver.get_qr_code_base64(timeout=10)
+        return "qr_ready" if qr_code else "waiting", qr_code
+
+    # Run in thread pool (non-blocking)
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        status_result, qr_code = await loop.run_in_executor(executor, check_qr_status_sync)
+
+    if status_result == "disconnected":
         return AutoWhatsAppProfileSetupResponse(
-            profile_id=profile.id,
+            profile_id=profile_id,
             status="disconnected",
             message="Browser not running. Use POST /profile/setup to restart.",
             qr_code_base64=None,
         )
 
-    # Check if logged in
-    if driver.is_logged_in(timeout=3):
+    if status_result == "connected":
         await service.update_profile_status(
-            profile.id,
+            profile_id,
             AutoWhatsAppProfileStatus.CONNECTED,
         )
-        # Close browser after successful login - session is saved in profile directory
-        driver_manager.stop_driver(slug)
         return AutoWhatsAppProfileSetupResponse(
-            profile_id=profile.id,
+            profile_id=profile_id,
             status="connected",
             message="Successfully logged in to WhatsApp!",
             qr_code_base64=None,
         )
 
-    # Not logged in, get fresh QR code
-    qr_code = driver.get_qr_code_base64(timeout=10)
+    # qr_ready or waiting
     return AutoWhatsAppProfileSetupResponse(
-        profile_id=profile.id,
-        status="qr_ready" if qr_code else "waiting",
+        profile_id=profile_id,
+        status=status_result,
         message="Scan the QR code with your WhatsApp mobile app" if qr_code else "Waiting for QR code...",
         qr_code_base64=qr_code,
     )
@@ -359,37 +393,53 @@ async def verify_profile(
     from app.models.dealership import Dealership
     dealership = await db.get(Dealership, dealership_id)
     slug = dealership.slug or str(dealership_id)[:8] if dealership else str(dealership_id)[:8]
+    profile_id = profile.id
+    phone_number = profile.phone_number
 
-    driver = driver_manager.get_driver(slug, headless=True)
-    
-    if not driver._is_initialized:
+    def verify_login_sync() -> Tuple[bool, Optional[bool]]:
+        """
+        Verify login status synchronously - runs in thread pool.
+        Returns: (is_initialized, is_connected)
+        """
+        driver = driver_manager.get_driver(slug, headless=True)
+        
+        if not driver._is_initialized:
+            return False, None
+        
+        is_connected = driver.is_logged_in(timeout=5)
+        if is_connected:
+            driver_manager.stop_driver(slug)
+        return True, is_connected
+
+    # Run in thread pool (non-blocking)
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        is_initialized, is_connected = await loop.run_in_executor(executor, verify_login_sync)
+
+    if not is_initialized:
         return AutoWhatsAppProfileStatusResponse(
-            profile_id=profile.id,
+            profile_id=profile_id,
             status="disconnected",
-            phone_number=profile.phone_number,
+            phone_number=phone_number,
             is_connected=False,
             error_message="Browser not running",
         )
 
-    is_connected = driver.is_logged_in(timeout=5)
-
     if is_connected:
         await service.update_profile_status(
-            profile.id,
+            profile_id,
             AutoWhatsAppProfileStatus.CONNECTED,
         )
-        # Close browser after verification - session is saved in profile
-        driver_manager.stop_driver(slug)
     else:
         await service.update_profile_status(
-            profile.id,
+            profile_id,
             AutoWhatsAppProfileStatus.DISCONNECTED,
         )
 
     return AutoWhatsAppProfileStatusResponse(
-        profile_id=profile.id,
+        profile_id=profile_id,
         status="connected" if is_connected else "disconnected",
-        phone_number=profile.phone_number,
+        phone_number=phone_number,
         is_connected=is_connected,
         error_message=None if is_connected else "Not logged in",
     )
