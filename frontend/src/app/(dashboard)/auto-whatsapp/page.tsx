@@ -171,6 +171,8 @@ export default function AutoWhatsAppPage() {
         description: error.response?.data?.detail || "Failed to start setup",
         variant: "destructive",
       });
+      // Reload profile to get updated error status from backend
+      await loadProfile();
     } finally {
       setSetupLoading(false);
     }

@@ -190,17 +190,28 @@ async def setup_profile(
     # Start browser and get QR code (use headless mode - we capture QR as image)
     try:
         driver = driver_manager.get_driver(slug, headless=True)
+        logger.info(f"Starting browser for profile setup. Profile path: {driver.profile_path}")
+        
         if not driver.start(timeout=30):
+            error_msg = (
+                "Failed to start Chrome browser. Common issues: "
+                "1) Chrome not installed (run: google-chrome --version) "
+                "2) Zombie Chrome processes (run: pkill -9 chrome) "
+                "3) Corrupted profile (run: rm -rf {profile_path}) "
+                "4) Missing dependencies (run: apt-get install libnss3 libatk1.0-0)"
+            ).format(profile_path=driver.profile_path)
+            
             await service.update_profile_status(
                 profile.id,
                 AutoWhatsAppProfileStatus.ERROR,
-                error_message="Failed to start browser",
+                error_message="Failed to start browser - check server logs",
             )
             # Stop driver to clean up
             driver_manager.stop_driver(slug)
+            logger.error(f"Browser failed to start for {slug}. {error_msg}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to start WhatsApp browser. Make sure Chrome is installed.",
+                detail="Failed to start WhatsApp browser. Check server logs for details.",
             )
 
         # Check if already logged in

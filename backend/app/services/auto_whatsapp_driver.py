@@ -136,28 +136,50 @@ class AutoWhatsAppDriver:
                 # Try using webdriver-manager first (auto-downloads correct driver)
                 if USE_WEBDRIVER_MANAGER:
                     try:
+                        logger.info("Attempting to use webdriver-manager for ChromeDriver...")
                         service = Service(ChromeDriverManager().install())
                         self.driver = webdriver.Chrome(service=service, options=options)
-                        logger.info("Using webdriver-manager for ChromeDriver")
+                        logger.info("Successfully started Chrome using webdriver-manager")
                     except Exception as wdm_error:
-                        logger.warning(f"webdriver-manager failed: {wdm_error}, falling back to default")
+                        logger.warning(f"webdriver-manager failed: {wdm_error}, falling back to default Selenium Manager")
                         # Fallback to Selenium's built-in manager (Selenium 4.6+)
                         self.driver = webdriver.Chrome(options=options)
+                        logger.info("Successfully started Chrome using default Selenium Manager")
                 else:
                     # Use Selenium's built-in Selenium Manager (4.6+)
+                    logger.info("Using default Selenium Manager for ChromeDriver...")
                     self.driver = webdriver.Chrome(options=options)
+                    logger.info("Successfully started Chrome")
             except WebDriverException as e:
                 error_msg = str(e).lower()
+                full_error = str(e)
+                logger.error(f"WebDriverException during Chrome startup. Full error: {full_error}")
+                
+                # Log specific actionable advice
                 if "chromedriver" in error_msg or "chrome not reachable" in error_msg:
                     logger.error(
                         f"Chrome/ChromeDriver not found or not compatible. "
-                        f"Please ensure Chrome browser and ChromeDriver are installed. "
-                        f"Try: pip install webdriver-manager. Error: {e}"
+                        f"1. Check if Chrome is installed: google-chrome --version "
+                        f"2. Check ChromeDriver: chromedriver --version "
+                        f"3. Install webdriver-manager: pip install webdriver-manager"
                     )
-                elif "user data directory" in error_msg or "profile" in error_msg:
-                    logger.error(f"Profile directory issue: {e}. Path: {self.profile_path}")
+                elif "user data directory" in error_msg or "profile" in error_msg or "singleton" in error_msg:
+                    logger.error(
+                        f"Profile directory issue. Path: {self.profile_path}. "
+                        f"Try: rm -rf {self.profile_path} && pkill -9 chrome"
+                    )
+                elif "session not created" in error_msg or "crashed" in error_msg or "exited" in error_msg:
+                    logger.error(
+                        f"Chrome crashed during startup. Common fixes: "
+                        f"1. Kill zombie processes: pkill -9 chrome && pkill -9 chromedriver "
+                        f"2. Clear profile: rm -rf {self.profile_path} "
+                        f"3. Install headless deps: apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2"
+                    )
                 else:
-                    logger.error(f"WebDriver error: {e}")
+                    logger.error(f"Unknown WebDriver error: {e}")
+                return False
+            except Exception as e:
+                logger.exception(f"Unexpected error during Chrome startup: {e}")
                 return False
             
             # Navigate to WhatsApp Web
