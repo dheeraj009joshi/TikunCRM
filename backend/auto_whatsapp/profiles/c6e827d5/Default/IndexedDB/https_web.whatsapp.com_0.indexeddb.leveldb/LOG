@@ -1,0 +1,5 @@
+2026/05/10-12:50:21.236 4f79861 Creating DB /Users/dheeraj/Development/Work_Dheeraj/Tikuntech/LeedsCrm/backend/auto_whatsapp/profiles/c6e827d5/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb since it was missing.
+2026/05/10-12:50:21.244 4f79861 Reusing MANIFEST /Users/dheeraj/Development/Work_Dheeraj/Tikuntech/LeedsCrm/backend/auto_whatsapp/profiles/c6e827d5/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/05/11-10:10:26.729 4f79863 Level-0 table #5: started
+2026/05/11-10:10:26.738 4f79863 Level-0 table #5: 1152981 bytes OK
+2026/05/11-10:10:26.739 4f79863 Delete type=0 #3

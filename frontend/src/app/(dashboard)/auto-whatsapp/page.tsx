@@ -423,8 +423,28 @@ export default function AutoWhatsAppPage() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="flex gap-2">
+        <CardContent className="flex flex-wrap gap-2">
           {!isProfileConnected && (
+            <>
+              <Button onClick={handleSetupProfile} disabled={setupLoading}>
+                {setupLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                )}
+                Reconnect
+              </Button>
+              <Button 
+                variant="outline" 
+                onClick={handleDeleteProfile}
+                className="text-red-600 hover:text-red-700 hover:bg-red-50"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Reset Profile
+              </Button>
+            </>
+          )}
+          {isProfileConnected && (
             <Button onClick={handleSetupProfile} disabled={setupLoading}>
               {setupLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />

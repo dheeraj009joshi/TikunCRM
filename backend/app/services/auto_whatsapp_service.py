@@ -145,15 +145,35 @@ class AutoWhatsAppService:
         return None
 
     async def delete_profile(self, dealership_id: UUID) -> bool:
-        """Delete a profile and stop any associated driver"""
+        """Delete a profile, stop any associated driver, and remove Chrome profile folder"""
+        import shutil
+        from app.services.auto_whatsapp_driver import BASE_PROFILES_DIR
+        
         profile = await self.get_profile_for_dealership(dealership_id)
         if not profile:
             return False
 
-        # Stop the driver if running
+        # Get dealership info
         dealership = await self.db.get(Dealership, dealership_id)
-        if dealership and dealership.slug:
-            driver_manager.stop_driver(dealership.slug)
+        slug = None
+        if dealership:
+            slug = dealership.slug or str(dealership_id)[:8]
+        else:
+            slug = str(dealership_id)[:8]
+        
+        # Stop the driver if running
+        if slug:
+            driver_manager.stop_driver(slug)
+        
+        # Delete Chrome profile folder from disk
+        if slug:
+            profile_path = BASE_PROFILES_DIR / slug
+            if profile_path.exists():
+                try:
+                    shutil.rmtree(profile_path)
+                    logger.info(f"Deleted Chrome profile folder: {profile_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete Chrome profile folder {profile_path}: {e}")
 
         await self.db.delete(profile)
         await self.db.commit()
