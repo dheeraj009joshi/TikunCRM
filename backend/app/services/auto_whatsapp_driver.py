@@ -376,8 +376,8 @@ class AutoWhatsAppDriver:
         if not self.driver:
             return False, "Driver not initialized"
         
-        if not self.is_logged_in():
-            return False, "Not logged in to WhatsApp"
+        # Note: Login check is done once at job start for performance
+        # Skip per-message check: if not self.is_logged_in(): return False, "Not logged in"
         
         try:
             # Clean phone number (remove spaces, dashes, and leading +)
@@ -394,15 +394,15 @@ class AutoWhatsAppDriver:
             
             wait = WebDriverWait(self.driver, timeout)
             
-            # Check for invalid number popup
+            # Check for invalid number popup (reduced timeout for speed)
             try:
-                invalid_popup = WebDriverWait(self.driver, 5).until(
+                invalid_popup = WebDriverWait(self.driver, 3).until(
                     EC.presence_of_element_located((By.XPATH, SELECTORS["invalid_number_popup"]))
                 )
                 # Click OK to dismiss
                 ok_btn = self.driver.find_element(By.XPATH, SELECTORS["ok_button"])
                 ok_btn.click()
-                time.sleep(1)
+                time.sleep(0.5)
                 return False, "Phone number not on WhatsApp"
             except TimeoutException:
                 pass  # No invalid number popup, continue
@@ -415,8 +415,8 @@ class AutoWhatsAppDriver:
             except TimeoutException:
                 return False, "Message input not found - chat may not have loaded"
             
-            # Small delay to ensure UI is stable
-            time.sleep(1)
+            # Small delay to ensure UI is stable (reduced for speed)
+            time.sleep(0.5)
             
             # Find and click send button
             try:
@@ -427,8 +427,8 @@ class AutoWhatsAppDriver:
             except TimeoutException:
                 return False, "Send button not clickable"
             
-            # Wait a moment for message to be sent
-            time.sleep(2)
+            # Wait a moment for message to be sent (reduced for speed)
+            time.sleep(1)
             
             logger.info(f"Message sent to {phone_number}")
             return True, None

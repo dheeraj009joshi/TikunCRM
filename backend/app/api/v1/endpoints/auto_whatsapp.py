@@ -45,6 +45,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auto-whatsapp", tags=["Auto WhatsApp"])
 
+# Shared thread pool for browser operations (reused across requests for performance)
+_browser_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="whatsapp_browser")
+
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -122,10 +125,9 @@ async def get_profile(
                 logger.warning(f"Error in browser check: {e}")
                 return None
 
-        # Run browser check in thread pool
+        # Run browser check in shared thread pool (faster - no pool creation overhead)
         loop = asyncio.get_event_loop()
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            is_connected = await loop.run_in_executor(executor, check_browser_status)
+        is_connected = await loop.run_in_executor(_browser_thread_pool, check_browser_status)
 
         if is_connected is not None:
             if is_connected:
@@ -230,12 +232,11 @@ async def setup_profile(
             return "error", None, str(e)
 
     try:
-        # Run browser setup in thread pool (non-blocking)
+        # Run browser setup in shared thread pool (non-blocking, faster)
         loop = asyncio.get_event_loop()
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            status_result, qr_code, error_msg = await loop.run_in_executor(
-                executor, setup_browser_sync
-            )
+        status_result, qr_code, error_msg = await loop.run_in_executor(
+            _browser_thread_pool, setup_browser_sync
+        )
         
         if status_result == "error":
             await service.update_profile_status(
@@ -334,10 +335,9 @@ async def get_qr_code(
         qr_code = driver.get_qr_code_base64(timeout=10)
         return "qr_ready" if qr_code else "waiting", qr_code
 
-    # Run in thread pool (non-blocking)
+    # Run in shared thread pool (non-blocking, faster)
     loop = asyncio.get_event_loop()
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        status_result, qr_code = await loop.run_in_executor(executor, check_qr_status_sync)
+    status_result, qr_code = await loop.run_in_executor(_browser_thread_pool, check_qr_status_sync)
 
     if status_result == "disconnected":
         return AutoWhatsAppProfileSetupResponse(
@@ -411,10 +411,9 @@ async def verify_profile(
             driver_manager.stop_driver(slug)
         return True, is_connected
 
-    # Run in thread pool (non-blocking)
+    # Run in shared thread pool (non-blocking, faster)
     loop = asyncio.get_event_loop()
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        is_initialized, is_connected = await loop.run_in_executor(executor, verify_login_sync)
+    is_initialized, is_connected = await loop.run_in_executor(_browser_thread_pool, verify_login_sync)
 
     if not is_initialized:
         return AutoWhatsAppProfileStatusResponse(

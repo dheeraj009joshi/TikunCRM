@@ -223,57 +223,67 @@ async def process_auto_whatsapp_job(job_id: UUID) -> dict:
         
         logger.info(f"Processing job {job_id} from index {start_index}, total {len(lead_ids)} leads")
         
+        # OPTIMIZATION: Batch fetch all remaining leads upfront (much faster than one-by-one)
+        remaining_lead_ids = [UUID(lid) for lid in lead_ids[start_index:]]
+        leads_result = await session.execute(
+            select(Lead)
+            .where(Lead.id.in_(remaining_lead_ids))
+            .options(selectinload(Lead.customer), selectinload(Lead.dealership))
+        )
+        leads_by_id = {str(lead.id): lead for lead in leads_result.scalars().all()}
+        logger.info(f"Batch loaded {len(leads_by_id)} leads for job {job_id}")
+        
+        # Batch commit interval - commit every N messages for performance
+        BATCH_COMMIT_SIZE = 5
+        messages_since_commit = 0
+        
         for i in range(start_index, len(lead_ids)):
-            # Check if job was paused or cancelled
-            await session.refresh(job)
-            if job.status == AutoWhatsAppJobStatus.PAUSED:
-                logger.info(f"Job {job_id} paused at index {i}")
+            # Check if job was paused or cancelled (only every 3 messages for performance)
+            if i % 3 == 0:
+                await session.refresh(job)
+                if job.status == AutoWhatsAppJobStatus.PAUSED:
+                    logger.info(f"Job {job_id} paused at index {i}")
+                    
+                    await broadcast_progress(job_id_str, {
+                        "type": "paused",
+                        "job_id": job_id_str,
+                        "status": "paused",
+                        "sent": sent_count,
+                        "failed": failed_count,
+                        "at_index": i,
+                    })
+                    
+                    return {
+                        "status": "paused",
+                        "sent_count": sent_count,
+                        "failed_count": failed_count,
+                        "at_index": i,
+                    }
                 
-                await broadcast_progress(job_id_str, {
-                    "type": "paused",
-                    "job_id": job_id_str,
-                    "status": "paused",
-                    "sent": sent_count,
-                    "failed": failed_count,
-                    "at_index": i,
-                })
-                
-                return {
-                    "status": "paused",
-                    "sent_count": sent_count,
-                    "failed_count": failed_count,
-                    "at_index": i,
-                }
+                if job.status == AutoWhatsAppJobStatus.CANCELLED:
+                    logger.info(f"Job {job_id} cancelled at index {i}")
+                    
+                    await broadcast_progress(job_id_str, {
+                        "type": "cancelled",
+                        "job_id": job_id_str,
+                        "status": "cancelled",
+                        "sent": sent_count,
+                        "failed": failed_count,
+                        "at_index": i,
+                    })
+                    
+                    # Close browser on cancellation
+                    driver_manager.stop_driver(slug)
+                    return {
+                        "status": "cancelled",
+                        "sent_count": sent_count,
+                        "failed_count": failed_count,
+                        "at_index": i,
+                    }
             
-            if job.status == AutoWhatsAppJobStatus.CANCELLED:
-                logger.info(f"Job {job_id} cancelled at index {i}")
-                
-                await broadcast_progress(job_id_str, {
-                    "type": "cancelled",
-                    "job_id": job_id_str,
-                    "status": "cancelled",
-                    "sent": sent_count,
-                    "failed": failed_count,
-                    "at_index": i,
-                })
-                
-                # Close browser on cancellation
-                driver_manager.stop_driver(slug)
-                return {
-                    "status": "cancelled",
-                    "sent_count": sent_count,
-                    "failed_count": failed_count,
-                    "at_index": i,
-                }
-            
-            # Get lead
+            # Get lead from pre-fetched batch (fast lookup)
             lead_id = lead_ids[i]
-            lead_result = await session.execute(
-                select(Lead)
-                .where(Lead.id == UUID(lead_id))
-                .options(selectinload(Lead.customer), selectinload(Lead.dealership))
-            )
-            lead = lead_result.scalar_one_or_none()
+            lead = leads_by_id.get(lead_id)
             
             if not lead or not lead.customer or not lead.customer.phone:
                 logger.warning(f"Lead {lead_id} not found or has no phone")
@@ -336,7 +346,12 @@ async def process_auto_whatsapp_job(job_id: UUID) -> dict:
             job.sent_count = sent_count
             job.failed_count = failed_count
             job.current_index = current_index
-            await session.commit()
+            messages_since_commit += 1
+            
+            # OPTIMIZATION: Batch commit every N messages (faster than every message)
+            if messages_since_commit >= BATCH_COMMIT_SIZE or current_index == len(lead_ids):
+                await session.commit()
+                messages_since_commit = 0
             
             # Broadcast progress
             percent = round((sent_count + failed_count) / job.total_leads * 100, 1)
@@ -352,9 +367,9 @@ async def process_auto_whatsapp_job(job_id: UUID) -> dict:
                 "percent": percent,
             })
             
-            # Random delay between messages (5-10 seconds)
+            # Random delay between messages (3-6 seconds - reduced for faster processing)
             if i < len(lead_ids) - 1:  # Don't delay after last message
-                delay = get_random_delay(5.0, 10.0)
+                delay = get_random_delay(3.0, 6.0)
                 logger.debug(f"Waiting {delay:.1f}s before next message")
                 await asyncio.sleep(delay)
         
