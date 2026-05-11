@@ -46,3 +46,6 @@ npm-debug.log*
 *.tmp
 .coverage
 htmlcov/
+
+# Auto WhatsApp Chrome profiles (generated at runtime, per-server)
+backend/auto_whatsapp/profiles/*/
