@@ -7,14 +7,20 @@ Processes pending and running bulk WhatsApp send jobs:
 - Updates progress and broadcasts via WebSocket
 - Handles pause/resume/cancel signals
 - Logs errors and handles failures gracefully
+
+Uses database-level locking (FOR UPDATE SKIP LOCKED) to prevent
+duplicate job processing across multiple server workers.
 """
 import asyncio
 import logging
+import os
+import socket
 import time
+from datetime import timedelta
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -45,9 +51,15 @@ _auto_wa_session_maker: Optional[async_sessionmaker] = None
 # Daily message limit per dealership
 DAILY_MESSAGE_LIMIT = 500
 
-# In-memory lock to prevent concurrent processing of the same job
-_processing_jobs: set[UUID] = set()
-_processing_lock = asyncio.Lock()
+# Lock timeout - jobs locked for longer than this are considered stale
+LOCK_TIMEOUT_MINUTES = 5
+
+
+def get_worker_id() -> str:
+    """Get a unique identifier for this worker process"""
+    hostname = socket.gethostname()[:50]
+    pid = os.getpid()
+    return f"{hostname}:{pid}"
 
 
 def get_auto_whatsapp_session_maker() -> async_sessionmaker:
@@ -135,13 +147,9 @@ async def process_auto_whatsapp_job(job_id: UUID) -> dict:
         dealership = job.dealership
         slug = dealership.slug or str(dealership.id)[:8] if dealership else str(job.dealership_id)[:8]
         
-        # Mark as running if pending
-        if job.status == AutoWhatsAppJobStatus.PENDING:
-            job.status = AutoWhatsAppJobStatus.RUNNING
-            job.started_at = utc_now()
-            await session.commit()
-            
-            # Add log
+        # Add started log if this is the first time processing (index is 0)
+        # Note: Status is already set to RUNNING atomically by run_auto_whatsapp_worker
+        if job.current_index == 0 and job.sent_count == 0 and job.failed_count == 0:
             service = AutoWhatsAppService(session)
             await service._add_job_log(
                 job_id,
@@ -393,41 +401,58 @@ async def run_auto_whatsapp_worker():
     """
     Background task to process pending Auto WhatsApp jobs.
     Called periodically by the scheduler.
+    
+    Uses database-level locking (FOR UPDATE SKIP LOCKED) to prevent
+    multiple workers from processing the same job simultaneously.
     """
     logger.info("Running Auto WhatsApp worker...")
     
     session_maker = get_auto_whatsapp_session_maker()
     job_id = None
+    worker_id = get_worker_id()
+    
+    # Calculate stale lock threshold (jobs locked for more than LOCK_TIMEOUT_MINUTES)
+    stale_lock_threshold = utc_now() - timedelta(minutes=LOCK_TIMEOUT_MINUTES)
     
     async with session_maker() as session:
-        # Find pending or running jobs (running jobs may have been interrupted)
-        result = await session.execute(
-            select(AutoWhatsAppJob)
-            .where(
-                AutoWhatsAppJob.status.in_([
-                    AutoWhatsAppJobStatus.PENDING,
-                    AutoWhatsAppJobStatus.RUNNING,
-                ])
+        async with session.begin():
+            # Use FOR UPDATE SKIP LOCKED to atomically select and lock a job
+            # This prevents multiple workers from selecting the same job
+            result = await session.execute(
+                select(AutoWhatsAppJob)
+                .where(
+                    or_(
+                        # Pending jobs that aren't locked
+                        AutoWhatsAppJob.status == AutoWhatsAppJobStatus.PENDING,
+                        # Stale locked jobs (worker crashed, lock expired)
+                        (AutoWhatsAppJob.status == AutoWhatsAppJobStatus.RUNNING) & 
+                        (AutoWhatsAppJob.locked_at != None) & 
+                        (AutoWhatsAppJob.locked_at < stale_lock_threshold)
+                    )
+                )
+                .order_by(AutoWhatsAppJob.created_at)
+                .limit(1)
+                .with_for_update(skip_locked=True)  # Skip rows locked by other transactions
             )
-            .order_by(AutoWhatsAppJob.created_at)
-            .limit(1)  # Process one job at a time
-        )
-        job = result.scalar_one_or_none()
-        
-        if not job:
-            logger.debug("No pending Auto WhatsApp jobs")
-            return
-        
-        job_id = job.id
-        
-        # Check if this job is already being processed (in-memory lock)
-        async with _processing_lock:
-            if job_id in _processing_jobs:
-                logger.info(f"Job {job_id} is already being processed by another worker, skipping")
+            job = result.scalar_one_or_none()
+            
+            if not job:
+                logger.debug("No pending Auto WhatsApp jobs available")
                 return
-            _processing_jobs.add(job_id)
+            
+            job_id = job.id
+            
+            # Immediately lock the job by updating status and lock fields
+            # This happens in the same transaction, so it's atomic
+            job.status = AutoWhatsAppJobStatus.RUNNING
+            job.locked_at = utc_now()
+            job.locked_by = worker_id
+            if not job.started_at:
+                job.started_at = utc_now()
+            
+            logger.info(f"Acquired lock on job {job_id} (worker: {worker_id})")
         
-        logger.info(f"Found job to process: {job_id} (status: {job.status})")
+        # Transaction committed, lock is now visible to other workers
     
     # Process the job (outside the session to avoid long transactions)
     try:
@@ -435,7 +460,7 @@ async def run_auto_whatsapp_worker():
     except Exception as e:
         logger.exception(f"Error processing Auto WhatsApp job {job_id}: {e}")
         
-        # Mark as failed
+        # Mark as failed and release lock
         async with session_maker() as session:
             service = AutoWhatsAppService(session)
             try:
@@ -445,12 +470,20 @@ async def run_auto_whatsapp_worker():
                     AutoWhatsAppLogAction.FAILED,
                     f"Job failed with error: {str(e)}",
                 )
+                # Clear lock fields
+                result = await session.execute(
+                    select(AutoWhatsAppJob).where(AutoWhatsAppJob.id == job_id)
+                )
+                failed_job = result.scalar_one_or_none()
+                if failed_job:
+                    failed_job.locked_at = None
+                    failed_job.locked_by = None
+                    await session.commit()
             except Exception as inner_e:
                 logger.error(f"Failed to update job status: {inner_e}")
         
         # Clean up any running driver on error
         try:
-            # Try to get dealership slug and stop driver
             async with session_maker() as session:
                 result = await session.execute(
                     select(AutoWhatsAppJob)
@@ -464,7 +497,17 @@ async def run_auto_whatsapp_worker():
         except Exception as cleanup_e:
             logger.warning(f"Failed to cleanup driver after error: {cleanup_e}")
     finally:
-        # Always release the lock when done
-        async with _processing_lock:
-            _processing_jobs.discard(job_id)
-            logger.debug(f"Released processing lock for job {job_id}")
+        # Release the lock when done (clear locked_at/locked_by)
+        try:
+            async with session_maker() as session:
+                result = await session.execute(
+                    select(AutoWhatsAppJob).where(AutoWhatsAppJob.id == job_id)
+                )
+                completed_job = result.scalar_one_or_none()
+                if completed_job:
+                    completed_job.locked_at = None
+                    completed_job.locked_by = None
+                    await session.commit()
+                    logger.debug(f"Released database lock for job {job_id}")
+        except Exception as e:
+            logger.warning(f"Failed to release lock for job {job_id}: {e}")

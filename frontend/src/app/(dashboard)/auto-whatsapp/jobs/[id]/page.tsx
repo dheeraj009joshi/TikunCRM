@@ -120,7 +120,31 @@ export default function AutoWhatsAppJobDetailPage() {
     loadJob();
   }, [loadJob]);
 
-  // WebSocket connection
+  // Polling fallback - WebSocket broadcasts don't work across multiple server workers
+  // Poll every 5 seconds when job is in active state to ensure UI stays updated
+  useEffect(() => {
+    if (!job || !["pending", "running"].includes(job.status)) {
+      return;
+    }
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const data = await autoWhatsAppService.getJob(jobId);
+        setJob(data);
+        
+        // Stop polling if job is no longer active
+        if (!["pending", "running"].includes(data.status)) {
+          clearInterval(pollInterval);
+        }
+      } catch (error) {
+        console.error("Polling error:", error);
+      }
+    }, 5000); // Poll every 5 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [job?.status, jobId]);
+
+  // WebSocket connection (may not work across server workers, polling is the backup)
   useEffect(() => {
     if (!job || !["pending", "running", "paused"].includes(job.status)) {
       return;

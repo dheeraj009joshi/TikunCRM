@@ -220,6 +220,17 @@ class AutoWhatsAppJob(Base):
         DateTime(timezone=True),
         nullable=True
     )
+    locked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="Timestamp when job was locked for processing"
+    )
+    locked_by: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="Worker identifier (hostname:pid) that locked the job"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,

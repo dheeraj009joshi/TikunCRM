@@ -96,15 +96,20 @@ export default function AutoWhatsAppJobsPage() {
         page_size: 20,
         status: statusFilter === "all" ? undefined : statusFilter,
       });
-      setJobs(response.jobs);
-      setTotal(response.total);
-      setTotalPages(response.total_pages);
+      console.log("Jobs API response:", response);
+      setJobs(response.jobs || []);
+      setTotal(response.total || 0);
+      setTotalPages(response.total_pages || 1);
     } catch (error: any) {
+      console.error("Failed to load jobs:", error);
       toast({
         title: "Error",
         description: error.response?.data?.detail || "Failed to load jobs",
         variant: "destructive",
       });
+      setJobs([]);
+      setTotal(0);
+      setTotalPages(1);
     } finally {
       setLoading(false);
     }
