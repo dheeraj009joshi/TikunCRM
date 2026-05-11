@@ -12,6 +12,9 @@ import logging
 import os
 import random
 import re
+import shutil
+import signal
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional, Tuple
@@ -82,6 +85,44 @@ class AutoWhatsAppDriver:
         self.profile_path.mkdir(parents=True, exist_ok=True)
         return self.profile_path
 
+    def _cleanup_locks(self):
+        """Remove Chrome lock files that prevent startup"""
+        lock_files = ["SingletonLock", "SingletonSocket", "SingletonCookie"]
+        for lock_file in lock_files:
+            lock_path = self.profile_path / lock_file
+            if lock_path.exists() or lock_path.is_symlink():
+                try:
+                    lock_path.unlink()
+                    logger.info(f"Removed lock file: {lock_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove lock file {lock_path}: {e}")
+
+    def _kill_existing_chrome_for_profile(self):
+        """Kill any Chrome processes using this profile directory"""
+        try:
+            # Find Chrome processes with this profile path
+            result = subprocess.run(
+                ["pgrep", "-f", str(self.profile_path)],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            pids = result.stdout.strip().split('\n')
+            for pid in pids:
+                if pid.strip():
+                    try:
+                        os.kill(int(pid.strip()), signal.SIGKILL)
+                        logger.info(f"Killed Chrome process {pid} using profile {self.profile_path}")
+                    except (ProcessLookupError, ValueError):
+                        pass
+        except subprocess.TimeoutExpired:
+            logger.warning("Timeout finding Chrome processes")
+        except FileNotFoundError:
+            # pgrep not available (Windows), skip
+            pass
+        except Exception as e:
+            logger.warning(f"Error killing existing Chrome: {e}")
+
     def _get_chrome_options(self) -> Options:
         """Configure Chrome options for WhatsApp Web automation"""
         options = Options()
@@ -130,6 +171,13 @@ class AutoWhatsAppDriver:
             
             logger.info(f"Starting WhatsApp driver for dealership: {self.dealership_slug} (headless={self.headless})")
             logger.info(f"Profile path: {self.profile_path}")
+            
+            # Auto-cleanup before starting
+            logger.info("Cleaning up any existing Chrome processes and locks...")
+            self._kill_existing_chrome_for_profile()
+            self._cleanup_locks()
+            time.sleep(1)  # Brief pause after cleanup
+            
             options = self._get_chrome_options()
             
             try:
@@ -212,6 +260,10 @@ class AutoWhatsAppDriver:
                 self.driver = None
                 self._is_initialized = False
                 logger.info(f"WhatsApp driver stopped for {self.dealership_slug}")
+        
+        # Always cleanup locks and zombie processes
+        self._kill_existing_chrome_for_profile()
+        self._cleanup_locks()
 
     def is_logged_in(self, timeout: int = 5) -> bool:
         """
