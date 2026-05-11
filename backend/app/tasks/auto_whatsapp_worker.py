@@ -45,6 +45,10 @@ _auto_wa_session_maker: Optional[async_sessionmaker] = None
 # Daily message limit per dealership
 DAILY_MESSAGE_LIMIT = 500
 
+# In-memory lock to prevent concurrent processing of the same job
+_processing_jobs: set[UUID] = set()
+_processing_lock = asyncio.Lock()
+
 
 def get_auto_whatsapp_session_maker() -> async_sessionmaker:
     """Get or create an async session maker for Auto WhatsApp tasks."""
@@ -393,6 +397,7 @@ async def run_auto_whatsapp_worker():
     logger.info("Running Auto WhatsApp worker...")
     
     session_maker = get_auto_whatsapp_session_maker()
+    job_id = None
     
     async with session_maker() as session:
         # Find pending or running jobs (running jobs may have been interrupted)
@@ -413,20 +418,29 @@ async def run_auto_whatsapp_worker():
             logger.debug("No pending Auto WhatsApp jobs")
             return
         
-        logger.info(f"Found job to process: {job.id} (status: {job.status})")
+        job_id = job.id
+        
+        # Check if this job is already being processed (in-memory lock)
+        async with _processing_lock:
+            if job_id in _processing_jobs:
+                logger.info(f"Job {job_id} is already being processed by another worker, skipping")
+                return
+            _processing_jobs.add(job_id)
+        
+        logger.info(f"Found job to process: {job_id} (status: {job.status})")
     
     # Process the job (outside the session to avoid long transactions)
     try:
-        await process_auto_whatsapp_job(job.id)
+        await process_auto_whatsapp_job(job_id)
     except Exception as e:
-        logger.exception(f"Error processing Auto WhatsApp job {job.id}: {e}")
+        logger.exception(f"Error processing Auto WhatsApp job {job_id}: {e}")
         
         # Mark as failed
         async with session_maker() as session:
             service = AutoWhatsAppService(session)
             try:
                 await service.update_job_status(
-                    job.id,
+                    job_id,
                     AutoWhatsAppJobStatus.FAILED,
                     AutoWhatsAppLogAction.FAILED,
                     f"Job failed with error: {str(e)}",
@@ -440,7 +454,7 @@ async def run_auto_whatsapp_worker():
             async with session_maker() as session:
                 result = await session.execute(
                     select(AutoWhatsAppJob)
-                    .where(AutoWhatsAppJob.id == job.id)
+                    .where(AutoWhatsAppJob.id == job_id)
                     .options(selectinload(AutoWhatsAppJob.dealership))
                 )
                 failed_job = result.scalar_one_or_none()
@@ -449,3 +463,8 @@ async def run_auto_whatsapp_worker():
                     driver_manager.stop_driver(slug)
         except Exception as cleanup_e:
             logger.warning(f"Failed to cleanup driver after error: {cleanup_e}")
+    finally:
+        # Always release the lock when done
+        async with _processing_lock:
+            _processing_jobs.discard(job_id)
+            logger.debug(f"Released processing lock for job {job_id}")

@@ -321,12 +321,28 @@ class AutoWhatsAppService:
         if profile.status != AutoWhatsAppProfileStatus.CONNECTED:
             raise ValueError(f"WhatsApp profile is not connected (status: {profile.status})")
 
-        # Verify leads exist and have phone numbers
+        # Verify leads exist and have phone numbers (deduplicate to prevent duplicate messages)
         leads = await self.get_leads_by_ids(lead_ids)
+        seen_lead_ids = set()
+        seen_phones = set()
         valid_lead_ids = []
+        
         for lead in leads:
             if lead.customer and lead.customer.phone:
-                valid_lead_ids.append(str(lead.id))
+                lead_id_str = str(lead.id)
+                phone = lead.customer.phone.strip()
+                
+                # Skip duplicate lead IDs
+                if lead_id_str in seen_lead_ids:
+                    continue
+                    
+                # Skip duplicate phone numbers (same person might have multiple leads)
+                if phone in seen_phones:
+                    continue
+                    
+                seen_lead_ids.add(lead_id_str)
+                seen_phones.add(phone)
+                valid_lead_ids.append(lead_id_str)
 
         if not valid_lead_ids:
             raise ValueError("No leads with valid phone numbers found")
