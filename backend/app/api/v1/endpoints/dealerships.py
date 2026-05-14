@@ -5,7 +5,7 @@ from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -69,13 +69,22 @@ async def create_dealership(
     and assigned to this dealership. A welcome email with login credentials
     is sent to the owner.
     """
-    # Check if owner email is already registered
+    # Email uniqueness is dealership-scoped: the owner email may already exist in
+    # other dealerships, but cannot collide with an existing super admin (they
+    # share the global "no-dealership" partial unique index). Same-dealership
+    # collisions are impossible here because the dealership is brand new.
     if dealership_in.owner:
-        result = await db.execute(select(User).where(User.email == dealership_in.owner.email))
+        owner_email_normalized = dealership_in.owner.email.strip().lower()
+        result = await db.execute(
+            select(User).where(
+                func.lower(User.email) == owner_email_normalized,
+                User.dealership_id.is_(None),
+            )
+        )
         if result.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Owner email is already registered",
+                detail="This email is already used by a super admin account",
             )
     
     # Create dealership

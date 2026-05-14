@@ -165,6 +165,9 @@ export interface LeadListParams {
     campaign_mapping_id?: string;
 }
 
+/** Same query params as GET /leads/ but without pagination — used for CSV export */
+export type LeadExportFilters = Omit<LeadListParams, "page" | "page_size">;
+
 export interface CampaignFilterOption {
     id: string;
     display_name: string;
@@ -372,23 +375,28 @@ export const LeadService = {
         return response.data;
     },
 
-    async exportToCSV(options?: {
-        include_activities?: boolean;
-        include_appointments?: boolean;
-        include_notes?: boolean;
-        status?: string;
-        source?: string;
-        date_from?: string;
-        date_to?: string;
-    }): Promise<void> {
+    async exportToCSV(
+        options?: LeadExportFilters & {
+            include_activities?: boolean;
+            include_appointments?: boolean;
+            include_notes?: boolean;
+        }
+    ): Promise<void> {
         const params = new URLSearchParams();
         if (options?.include_activities) params.append("include_activities", "true");
         if (options?.include_appointments) params.append("include_appointments", "true");
         if (options?.include_notes) params.append("include_notes", "true");
-        if (options?.status && options.status !== "all") params.append("status", options.status);
+        if (options?.search) params.append("search", options.search);
         if (options?.source && options.source !== "all") params.append("source", options.source);
+        if (options?.stage_id) params.append("stage_id", options.stage_id);
+        if (options?.pool) params.append("pool", options.pool);
+        if (options?.fresh_only === true) params.append("fresh_only", "true");
+        if (options?.multi_campaign_only === true) params.append("multi_campaign_only", "true");
+        if (options?.campaign_mapping_id) params.append("campaign_mapping_id", options.campaign_mapping_id);
+        if (options?.assigned_to) params.append("assigned_to", options.assigned_to);
         if (options?.date_from) params.append("date_from", options.date_from);
         if (options?.date_to) params.append("date_to", options.date_to);
+        if (typeof options?.is_active === "boolean") params.append("is_active", String(options.is_active));
 
         const response = await apiClient.get(`${LEADS_PREFIX}/export/csv?${params.toString()}`, {
             responseType: "blob",

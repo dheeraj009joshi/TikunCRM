@@ -322,10 +322,30 @@ class VoiceService:
         return True
 
     async def get_user_by_identity(self, identity: str) -> Optional[User]:
-        """Get user by email (identity used in Twilio client)."""
+        """
+        Resolve a Twilio client identity to a User.
+
+        New tokens use the user UUID as identity (multi-dealership safe). Older
+        tokens issued before that change used the user's email; we fall back to
+        an email lookup so in-flight calls during rollout still resolve. Email
+        fallback may be ambiguous when the same email exists in multiple
+        dealerships, so it is intentionally a last resort.
+        """
         normalized = self._normalize_identity(identity)
         if not normalized:
             return None
+
+        try:
+            user_uuid = UUID(normalized)
+            result = await self.db.execute(
+                select(User).where(User.id == user_uuid).limit(1)
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                return user
+        except (ValueError, TypeError):
+            pass
+
         result = await self.db.execute(
             select(User).where(User.email == normalized).limit(1)
         )
@@ -577,11 +597,7 @@ class VoiceService:
         Create call_log with real Twilio CallSid when outgoing webhook runs.
         Returns (call_log, effective_twilio_config) for TwiML generation.
         """
-        identity = self._normalize_identity(from_identity)
-        result = await self.db.execute(
-            select(User).where(User.email == identity).limit(1)
-        )
-        user = result.scalar_one_or_none()
+        user = await self.get_user_by_identity(from_identity)
         if not user:
             return None, None
         lead = await self.find_lead_by_phone(to_number)

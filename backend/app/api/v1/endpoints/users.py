@@ -241,12 +241,30 @@ async def create_user(
     - Dealership Owner: can create Dealership Admin and Salesperson (within their dealership)
     - Dealership Admin: can only create Salesperson (within their dealership)
     """
-    # Check email uniqueness
-    result = await db.execute(select(User).where(User.email == user_in.email))
+    # Email uniqueness is dealership-scoped: the same email may be reused in
+    # different dealerships, but must be unique within a single dealership.
+    # Super admins (no dealership) must still be globally unique among themselves.
+    email_normalized = user_in.email.strip().lower()
+    if user_in.dealership_id is None:
+        # Creating a super admin (only super admin can do this); collide only
+        # with other super admins.
+        dup_query = select(User).where(
+            func.lower(User.email) == email_normalized,
+            User.dealership_id.is_(None),
+        )
+        dup_msg = "This email is already used by a super admin account"
+    else:
+        dup_query = select(User).where(
+            func.lower(User.email) == email_normalized,
+            User.dealership_id == user_in.dealership_id,
+        )
+        dup_msg = "Email already registered in this dealership"
+
+    result = await db.execute(dup_query)
     if result.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered",
+            detail=dup_msg,
         )
     
     # Role creation restrictions based on current user's role

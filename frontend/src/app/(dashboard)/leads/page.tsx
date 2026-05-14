@@ -79,7 +79,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar as CalendarPicker } from "@/components/ui/calendar"
-import { LeadService, Lead, LeadListResponse, type LeadListParams, type CampaignFilterOption, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool } from "@/services/lead-service"
+import { LeadService, Lead, LeadListResponse, type LeadListParams, type LeadExportFilters, type CampaignFilterOption, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool } from "@/services/lead-service"
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
@@ -382,48 +382,75 @@ export default function LeadsPage() {
     })
     const [isExporting, setIsExporting] = React.useState(false)
 
+    const buildLeadListFilters = React.useCallback((): LeadExportFilters => {
+        const params: LeadExportFilters = {}
+        if (search) params.search = search
+        if (source && source !== "all") params.source = source
+        if (campaignFilter !== "all") params.campaign_mapping_id = campaignFilter
+
+        if (viewMode === "unassigned") {
+            params.pool = "unassigned"
+        } else if (viewMode === "mine") {
+            params.pool = "mine"
+        } else if (viewMode === "fresh") {
+            params.fresh_only = true
+        } else if (viewMode === "multi_campaign") {
+            params.multi_campaign_only = true
+        } else if (viewMode === "converted") {
+            const convertedStage = stages.find((s) => s.name === "converted")
+            if (convertedStage) params.stage_id = convertedStage.id
+            params.is_active = false
+        } else if (viewMode === "manager_review") {
+            const managerReviewStage = stages.find((s) => s.name === "manager_review")
+            if (managerReviewStage) params.stage_id = managerReviewStage.id
+        }
+
+        const isValidStageId =
+            status &&
+            status !== "all" &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(status)
+        if (
+            viewMode !== "converted" &&
+            viewMode !== "fresh" &&
+            viewMode !== "manager_review" &&
+            isValidStageId
+        ) {
+            params.stage_id = status
+        }
+        if (assignedTo && assignedTo !== "all") params.assigned_to = assignedTo
+
+        if (dateMode === "single" && specificDate) {
+            params.date_from = startOfDay(specificDate).toISOString()
+            params.date_to = endOfDay(specificDate).toISOString()
+        } else if (dateMode === "range") {
+            if (dateFrom) params.date_from = startOfDay(dateFrom).toISOString()
+            if (dateTo) params.date_to = endOfDay(dateTo).toISOString()
+        }
+
+        return params
+    }, [
+        search,
+        source,
+        campaignFilter,
+        viewMode,
+        stages,
+        status,
+        assignedTo,
+        dateMode,
+        specificDate,
+        dateFrom,
+        dateTo,
+    ])
+
     const fetchLeads = React.useCallback(async () => {
         setIsLoading(true)
         try {
-            const params: Record<string, unknown> = { page, page_size: 20 }
-            if (search) params.search = search
-            if (source && source !== "all") params.source = source
-            if (campaignFilter !== "all") params.campaign_mapping_id = campaignFilter
-
-            // Filter by view mode
-            if (viewMode === "unassigned") {
-                params.pool = "unassigned"
-            } else if (viewMode === "mine") {
-                params.pool = "mine"
-            } else if (viewMode === "fresh") {
-                params.fresh_only = true
-                // Fresh = unassigned only; do not set pool so backend returns unassigned fresh leads in scope
-            } else if (viewMode === "multi_campaign") {
-                params.multi_campaign_only = true
-            } else if (viewMode === "converted") {
-                // Find converted stage id
-                const convertedStage = stages.find(s => s.name === "converted")
-                if (convertedStage) params.stage_id = convertedStage.id
-                params.is_active = false
-            } else if (viewMode === "manager_review") {
-                const managerReviewStage = stages.find(s => s.name === "manager_review")
-                if (managerReviewStage) params.stage_id = managerReviewStage.id
-            }
-            // Stage filter (stage_id must be a UUID; ignore URL values like "active" or stage names)
-            const isValidStageId = status && status !== "all" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(status)
-            if (viewMode !== "converted" && viewMode !== "fresh" && viewMode !== "manager_review" && isValidStageId) params.stage_id = status
-            if (assignedTo && assignedTo !== "all") params.assigned_to = assignedTo
-
-            // Date range filters
-            if (dateMode === "single" && specificDate) {
-                params.date_from = startOfDay(specificDate).toISOString()
-                params.date_to = endOfDay(specificDate).toISOString()
-            } else if (dateMode === "range") {
-                if (dateFrom) params.date_from = startOfDay(dateFrom).toISOString()
-                if (dateTo) params.date_to = endOfDay(dateTo).toISOString()
-            }
-
-            const data = await LeadService.listLeads(params as LeadListParams)
+            const filters = buildLeadListFilters()
+            const data = await LeadService.listLeads({
+                ...filters,
+                page,
+                page_size: 20,
+            } as LeadListParams)
             setLeads(data.items)
             setTotal(data.total)
         } catch (error) {
@@ -431,7 +458,7 @@ export default function LeadsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [page, search, status, source, viewMode, stages, assignedTo, dateMode, specificDate, dateFrom, dateTo, campaignFilter])
+    }, [page, buildLeadListFilters])
 
     const fetchLeadsForPipeline = React.useCallback(async () => {
         if (stages.length === 0) return
@@ -706,8 +733,7 @@ export default function LeadsPage() {
         try {
             await LeadService.exportToCSV({
                 ...exportOptions,
-                status: status !== "all" ? status : undefined,
-                source: source !== "all" ? source : undefined,
+                ...buildLeadListFilters(),
             })
             setExportModalOpen(false)
         } catch (error) {

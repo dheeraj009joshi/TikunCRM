@@ -2,12 +2,13 @@
 Authentication Endpoints - Enhanced with Signup and Password Reset
 """
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, List, Optional
+from uuid import UUID
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, Form, HTTPException, status, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -33,6 +34,10 @@ from app.schemas.auth import (
     ConfigAccessStatusResponse,
     ConfigAccessVerifyRequest,
     ConfigAccessUnlockResponse,
+    DealershipLookupRequest,
+    DealershipLookupResponse,
+    DealershipLookupOption,
+    DealershipRequiredDetail,
 )
 from app.schemas.user import UserResponse
 
@@ -47,41 +52,157 @@ _CONFIG_ACCESS_ROLES = (
 )
 
 
+async def _load_users_by_email(db: AsyncSession, email: str) -> List[User]:
+    """Return all User rows matching the given email (case-insensitive)."""
+    result = await db.execute(
+        select(User).where(func.lower(User.email) == email.strip().lower())
+    )
+    return list(result.scalars().all())
+
+
+def _build_dealership_options(
+    users: List[User],
+    dealership_name_by_id: dict,
+) -> List[DealershipLookupOption]:
+    """Render User rows as the public dealership-picker payload."""
+    options: List[DealershipLookupOption] = []
+    for u in users:
+        if u.dealership_id is None:
+            options.append(DealershipLookupOption(
+                id=None,
+                name="Super Admin",
+                is_super_admin=True,
+            ))
+        else:
+            options.append(DealershipLookupOption(
+                id=u.dealership_id,
+                name=dealership_name_by_id.get(u.dealership_id, "Dealership"),
+                is_super_admin=False,
+            ))
+    return options
+
+
+async def _resolve_dealership_options(
+    db: AsyncSession, users: List[User]
+) -> List[DealershipLookupOption]:
+    """Look up dealership names for the given users and return picker options."""
+    dealership_ids = [u.dealership_id for u in users if u.dealership_id is not None]
+    name_by_id: dict = {}
+    if dealership_ids:
+        rows = await db.execute(
+            select(Dealership.id, Dealership.name).where(Dealership.id.in_(dealership_ids))
+        )
+        name_by_id = {row.id: row.name for row in rows}
+    return _build_dealership_options(users, name_by_id)
+
+
+@router.post("/lookup-dealerships", response_model=DealershipLookupResponse)
+async def lookup_dealerships(
+    body: DealershipLookupRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Return the list of dealerships an email is registered against.
+
+    Used by the two-step login UI to decide whether to show a dealership picker
+    before asking for the password. Always returns 200 with a (possibly empty)
+    list — the frontend treats an empty list as "no account".
+    """
+    users = await _load_users_by_email(db, body.email)
+    # Only surface active accounts; deactivated users should not be selectable.
+    users = [u for u in users if u.is_active]
+    options = await _resolve_dealership_options(db, users)
+    return DealershipLookupResponse(dealerships=options)
+
+
 @router.post("/login", response_model=Token)
 async def login(
     db: AsyncSession = Depends(get_db),
-    form_data: OAuth2PasswordRequestForm = Depends()
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    dealership_id: Optional[str] = Form(
+        None,
+        description=(
+            "Optional dealership UUID. Required when the email is registered "
+            "with multiple dealerships. Send an empty string or 'super_admin' "
+            "to log in as a super admin (no dealership)."
+        ),
+    ),
 ) -> Any:
     """
-    OAuth2 compatible token login, get an access token for future requests
+    OAuth2 compatible token login, get an access token for future requests.
+
+    When the same email exists in multiple dealerships, the caller must pass
+    `dealership_id` to disambiguate. If omitted in that case, the API responds
+    with HTTP 409 and a list of dealerships so the frontend can show a picker.
     """
-    # Case-insensitive email lookup
-    result = await db.execute(
-        select(User).where(func.lower(User.email) == form_data.username.strip().lower())
-    )
-    user = result.scalar_one_or_none()
-    
+    users = await _load_users_by_email(db, form_data.username)
+
+    if not users:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Resolve the requested dealership_id (None / "" / "super_admin" all mean super admin)
+    requested_dealership_uuid: Optional[UUID] = None
+    requested_super_admin = False
+    if dealership_id is not None and dealership_id.strip() != "":
+        if dealership_id.strip().lower() == "super_admin":
+            requested_super_admin = True
+        else:
+            try:
+                requested_dealership_uuid = UUID(dealership_id.strip())
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid dealership_id",
+                )
+
+    # Filter candidates by dealership_id (if provided)
+    if requested_super_admin:
+        candidates = [u for u in users if u.dealership_id is None]
+    elif requested_dealership_uuid is not None:
+        candidates = [u for u in users if u.dealership_id == requested_dealership_uuid]
+    else:
+        candidates = users
+
+    # Multiple candidates and no dealership chosen → ask the client to pick one
+    if len(candidates) > 1:
+        active_users = [u for u in candidates if u.is_active]
+        options = await _resolve_dealership_options(db, active_users or candidates)
+        detail = DealershipRequiredDetail(
+            message="This email is registered with multiple dealerships. Select one to continue.",
+            dealerships=options,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=detail.model_dump(mode="json"),
+        )
+
+    user = candidates[0] if candidates else None
+
     if not user or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="account_deactivated",
         )
-    
+
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
     refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
-    
+
     # Include dealership_id in token for WebSocket dealership broadcasts
     additional_claims = {}
     if user.dealership_id:
         additional_claims["dealership_id"] = str(user.dealership_id)
-    
+
     access_token = create_access_token(
         subject=str(user.id),
         expires_delta=access_token_expires,
@@ -90,7 +211,7 @@ async def login(
     refresh_token = create_refresh_token(
         subject=str(user.id), expires_delta=refresh_token_expires
     )
-    
+
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -108,14 +229,21 @@ async def signup(
     """
     Create new dealership and admin user account
     """
-    # Check if email already exists
-    result = await db.execute(select(User).where(User.email == signup_data.email))
-    existing_user = result.scalar_one_or_none()
-    
-    if existing_user:
+    # Signup always provisions a brand-new dealership, so the only collision the
+    # partial unique indexes can hit is an existing super admin (dealership_id IS NULL)
+    # using the same email. Other dealership users sharing this email are allowed.
+    result = await db.execute(
+        select(User).where(
+            func.lower(User.email) == signup_data.email.strip().lower(),
+            User.dealership_id.is_(None),
+        )
+    )
+    existing_super_admin = result.scalar_one_or_none()
+
+    if existing_super_admin:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
+            detail="This email is already used by a super admin account"
         )
     
     # Create the dealership first
@@ -308,39 +436,62 @@ async def forgot_password(
 ) -> Any:
     """
     Request a password reset email.
-    Always returns success to prevent email enumeration.
+
+    When the email is registered with multiple dealerships, the caller must
+    pass `dealership_id` to disambiguate. If omitted in that case, responds
+    409 dealership_required with the dealership list (mirrors /auth/login).
+    Otherwise always returns success to prevent email enumeration.
     """
-    # Find user by email (case insensitive)
-    result = await db.execute(
-        select(User).where(func.lower(User.email) == request.email.strip().lower())
-    )
-    user = result.scalar_one_or_none()
-    
-    if user and user.is_active:
-        # Invalidate any existing tokens for this user
-        await db.execute(
-            select(PasswordResetToken).where(
-                PasswordResetToken.user_id == user.id,
-                PasswordResetToken.used == False
-            )
+    users = await _load_users_by_email(db, request.email)
+    active_users = [u for u in users if u.is_active]
+
+    # Filter by requested dealership_id (if provided)
+    if request.dealership_id is not None:
+        candidates = [u for u in active_users if u.dealership_id == request.dealership_id]
+    else:
+        candidates = active_users
+
+    # Multiple matches without a dealership_id → ask client to pick one
+    if request.dealership_id is None and len(candidates) > 1:
+        options = await _resolve_dealership_options(db, candidates)
+        detail = DealershipRequiredDetail(
+            message="This email is registered with multiple dealerships. Select one to continue.",
+            dealerships=options,
         )
-        
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=detail.model_dump(mode="json"),
+        )
+
+    user = candidates[0] if candidates else None
+
+    if user:
+        # Invalidate any prior unused reset tokens for this user
+        await db.execute(
+            update(PasswordResetToken)
+            .where(
+                PasswordResetToken.user_id == user.id,
+                PasswordResetToken.used == False,  # noqa: E712
+            )
+            .values(used=True)
+        )
+
         # Create new reset token
         token_model, raw_token = PasswordResetToken.create_for_user(user.id)
         db.add(token_model)
         await db.commit()
-        
+
         # Build reset URL
         reset_url = f"{settings.frontend_url}/reset-password?token={raw_token}"
-        
+
         # Send email in background
         background_tasks.add_task(send_password_reset_email, user, reset_url)
-        
+
         logger.info(f"Password reset requested for user: {user.email}")
     else:
         # Log but don't reveal user doesn't exist
         logger.info(f"Password reset requested for non-existent email: {request.email}")
-    
+
     # Always return success to prevent email enumeration
     return ForgotPasswordResponse(
         message="If an account with that email exists, we've sent a password reset link.",

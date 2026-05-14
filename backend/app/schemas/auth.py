@@ -1,7 +1,9 @@
 """
 Authentication Schemas
 """
-from typing import Optional
+from typing import List, Optional
+from uuid import UUID
+
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.schemas.user import UserResponse
@@ -12,6 +14,33 @@ class LoginRequest(BaseModel):
     """Login request schema"""
     email: EmailStr
     password: str
+    dealership_id: Optional[UUID] = None
+
+
+# ============== Dealership lookup (multi-dealership login) ==============
+
+class DealershipLookupRequest(BaseModel):
+    """Request the list of dealerships an email is registered with."""
+    email: EmailStr
+
+
+class DealershipLookupOption(BaseModel):
+    """A single dealership a given email belongs to."""
+    id: Optional[UUID] = None  # None for super admin (no dealership)
+    name: str
+    is_super_admin: bool = False
+
+
+class DealershipLookupResponse(BaseModel):
+    """Result of /auth/lookup-dealerships."""
+    dealerships: List[DealershipLookupOption]
+
+
+class DealershipRequiredDetail(BaseModel):
+    """409 detail body returned when an email matches multiple dealerships."""
+    code: str = "dealership_required"
+    message: str
+    dealerships: List[DealershipLookupOption]
 
 
 class RefreshTokenRequest(BaseModel):
@@ -74,6 +103,9 @@ class SignupResponse(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     """Request to initiate password reset"""
     email: EmailStr
+    # Required when the email exists in multiple dealerships. If omitted and the
+    # email matches more than one user, the API responds 409 dealership_required.
+    dealership_id: Optional[UUID] = None
 
 
 class ForgotPasswordResponse(BaseModel):

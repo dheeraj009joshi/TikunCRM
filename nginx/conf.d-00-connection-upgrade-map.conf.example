@@ -1,0 +1,13 @@
+# Install ONCE as (Debian/Ubuntu):
+#   sudo cp conf.d-00-connection-upgrade-map.conf.example /etc/nginx/conf.d/00-connection-upgrade-map.conf
+#
+# conf.d/*.conf is loaded inside `http { }` BEFORE sites-enabled on many distros,
+# so `$connection_upgrade` exists for any `server` that uses it.
+#
+# Only needed if you use: proxy_set_header Connection $connection_upgrade;
+# If your frontend omits Upgrade/Connection entirely, you can skip this file.
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}

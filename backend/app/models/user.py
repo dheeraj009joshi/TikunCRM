@@ -33,9 +33,12 @@ class User(Base):
         primary_key=True,
         default=uuid.uuid4
     )
+    # Email uniqueness is enforced by partial unique indexes (see Alembic migration
+    # aw_multi_dealership_email): unique per (lower(email), dealership_id) when
+    # dealership_id IS NOT NULL, and globally unique among super admins (NULL
+    # dealership_id). The same email can therefore exist in multiple dealerships.
     email: Mapped[str] = mapped_column(
         String(255),
-        unique=True,
         nullable=False,
         index=True
     )

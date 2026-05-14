@@ -453,6 +453,111 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
     return enriched_items
 
 
+def _build_leads_list_select(
+    current_user: User,
+    *,
+    pool: Optional[str] = None,
+    assigned_to: Optional[UUID] = None,
+    stage_id: Optional[UUID] = None,
+    source: Optional[LeadSource] = None,
+    search: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    fresh_only: Optional[bool] = None,
+    multi_campaign_only: Optional[bool] = None,
+    campaign_mapping_id: Optional[UUID] = None,
+):
+    """
+    Shared SELECT for list_leads and export_leads_csv — same visibility and filters
+    as the leads table (no pagination, no ORDER BY).
+    """
+    query = select(Lead)
+
+    if pool == "mine":
+        query = query.where(Lead.assigned_to == current_user.id)
+
+    elif pool == "unassigned":
+        if current_user.role == UserRole.SUPER_ADMIN:
+            query = query.where(Lead.dealership_id.is_(None))
+        elif current_user.dealership_id:
+            query = query.where(
+                and_(
+                    Lead.dealership_id == current_user.dealership_id,
+                    Lead.assigned_to.is_(None),
+                )
+            )
+        else:
+            query = query.where(Lead.id.is_(None))
+
+    else:
+        if current_user.role == UserRole.SALESPERSON:
+            if current_user.dealership_id:
+                query = query.where(Lead.dealership_id == current_user.dealership_id)
+            else:
+                query = query.where(Lead.id.is_(None))
+
+        elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+            if current_user.dealership_id:
+                query = query.where(Lead.dealership_id == current_user.dealership_id)
+            else:
+                query = query.where(Lead.id.is_(None))
+
+    if assigned_to is not None:
+        if current_user.role not in (UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
+            pass
+        else:
+            query = query.where(Lead.assigned_to == assigned_to)
+
+    if stage_id:
+        query = query.where(Lead.stage_id == stage_id)
+    if source:
+        query = query.where(Lead.source == source)
+    if is_active is not None:
+        query = query.where(Lead.is_active == is_active)
+    if search:
+        query = query.join(Customer, Lead.customer_id == Customer.id)
+        full_name = func.concat(Customer.first_name, " ", func.coalesce(Customer.last_name, ""))
+        search_filter = or_(
+            Customer.first_name.ilike(f"%{search}%"),
+            Customer.last_name.ilike(f"%{search}%"),
+            full_name.ilike(f"%{search}%"),
+            Customer.email.ilike(f"%{search}%"),
+            Customer.phone.ilike(f"%{search}%"),
+        )
+        query = query.where(search_filter)
+
+    if date_from:
+        query = query.where(Lead.created_at >= date_from)
+    if date_to:
+        query = query.where(Lead.created_at <= date_to)
+
+    if fresh_only:
+        fresh_subq = (
+            select(Activity.lead_id)
+            .where(Activity.lead_id.isnot(None))
+            .group_by(Activity.lead_id)
+            .having(func.count(Activity.id) == 1)
+        )
+        query = query.where(Lead.id.in_(fresh_subq)).where(Lead.assigned_to.is_(None))
+
+    if multi_campaign_only:
+        query = query.where(Lead.is_starred.is_(True))
+
+    if campaign_mapping_id is not None:
+        campaign_lead_subq = select(LeadCampaign.lead_id).where(
+            LeadCampaign.campaign_mapping_id == campaign_mapping_id
+        )
+        query = query.where(
+            or_(
+                Lead.campaign_mapping_id == campaign_mapping_id,
+                Lead.id.in_(campaign_lead_subq),
+            )
+        )
+
+    return query
+
+
 @router.get("/")
 async def list_leads(
     db: AsyncSession = Depends(get_db),
@@ -490,103 +595,20 @@ async def list_leads(
     - "mine": leads assigned to the current user only
     - None (default): all leads visible to the user based on role
     """
-    query = select(Lead)
-    
-    # Handle pool filters first as they override role-based filtering
-    if pool == "mine":
-        # Show only leads assigned to the current user
-        query = query.where(Lead.assigned_to == current_user.id)
-        
-    elif pool == "unassigned":
-        if current_user.role == UserRole.SUPER_ADMIN:
-            # Super Admin: show leads with no dealership (for dealership assignment)
-            query = query.where(Lead.dealership_id.is_(None))
-        elif current_user.dealership_id:
-            # Dealership users: show leads in their dealership but no salesperson assigned
-            query = query.where(
-                and_(
-                    Lead.dealership_id == current_user.dealership_id,
-                    Lead.assigned_to.is_(None)
-                )
-            )
-        else:
-            query = query.where(Lead.id.is_(None))  # Returns empty if no dealership
-            
-    else:
-        # Default: Apply role-based filtering for "all" leads view
-        if current_user.role == UserRole.SALESPERSON:
-            # Salesperson sees ALL leads in their dealership (including those assigned to others)
-            # SKATE warnings will prompt when attempting actions on others' leads
-            if current_user.dealership_id:
-                query = query.where(Lead.dealership_id == current_user.dealership_id)
-            else:
-                query = query.where(Lead.id.is_(None))  # Returns empty if no dealership
-            
-        elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-            # Dealership admins/owners see all leads in their dealership
-            if current_user.dealership_id:
-                query = query.where(Lead.dealership_id == current_user.dealership_id)
-            else:
-                # Admin/owner without dealership shouldn't see any leads
-                query = query.where(Lead.id.is_(None))  # Returns empty
-        # Super admin sees all (no filter)
-    
-    # Filter by salesperson (admin/owner/super only; ignore for salespersons)
-    if assigned_to is not None:
-        if current_user.role not in (UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
-            assigned_to = None  # Ignore for salespersons
-        else:
-            query = query.where(Lead.assigned_to == assigned_to)
-    
-    # Filters
-    if stage_id:
-        query = query.where(Lead.stage_id == stage_id)
-    if source:
-        query = query.where(Lead.source == source)
-    if is_active is not None:
-        query = query.where(Lead.is_active == is_active)
-    if search:
-        # Search via Customer (name, phone, email)
-        query = query.join(Customer, Lead.customer_id == Customer.id)
-        full_name = func.concat(Customer.first_name, ' ', func.coalesce(Customer.last_name, ''))
-        search_filter = or_(
-            Customer.first_name.ilike(f"%{search}%"),
-            Customer.last_name.ilike(f"%{search}%"),
-            full_name.ilike(f"%{search}%"),
-            Customer.email.ilike(f"%{search}%"),
-            Customer.phone.ilike(f"%{search}%"),
-        )
-        query = query.where(search_filter)
-
-    # Date range filters
-    if date_from:
-        query = query.where(Lead.created_at >= date_from)
-    if date_to:
-        query = query.where(Lead.created_at <= date_to)
-
-    # Fresh/untouched leads only: exactly one activity (creation) AND not assigned to anyone
-    if fresh_only:
-        fresh_subq = (
-            select(Activity.lead_id)
-            .where(Activity.lead_id.isnot(None))
-            .group_by(Activity.lead_id)
-            .having(func.count(Activity.id) == 1)
-        )
-        query = query.where(Lead.id.in_(fresh_subq)).where(Lead.assigned_to.is_(None))
-
-    if multi_campaign_only:
-        query = query.where(Lead.is_starred.is_(True))
-
-    if campaign_mapping_id is not None:
-        campaign_lead_subq = select(LeadCampaign.lead_id).where(
-            LeadCampaign.campaign_mapping_id == campaign_mapping_id
-        )
-        query = query.where(
-            or_(
-                Lead.campaign_mapping_id == campaign_mapping_id,
-                Lead.id.in_(campaign_lead_subq),
-            )
-        )
+    query = _build_leads_list_select(
+        current_user,
+        pool=pool,
+        assigned_to=assigned_to,
+        stage_id=stage_id,
+        source=source,
+        search=search,
+        is_active=is_active,
+        date_from=date_from,
+        date_to=date_to,
+        fresh_only=fresh_only,
+        multi_campaign_only=multi_campaign_only,
+        campaign_mapping_id=campaign_mapping_id,
+    )
 
     # Pagination
     total_query = select(func.count()).select_from(query.subquery())
@@ -2979,59 +3001,66 @@ async def export_leads_csv(
     include_activities: bool = Query(False, description="Include activity history"),
     include_appointments: bool = Query(False, description="Include appointments"),
     include_notes: bool = Query(False, description="Include notes in export"),
-    status: Optional[str] = Query(None, description="Filter by stage name"),
+    stage_id: Optional[UUID] = Query(None, description="Filter by pipeline stage UUID (same as list)"),
+    status: Optional[str] = Query(
+        None,
+        description="Deprecated: filter by stage name; use stage_id when possible",
+    ),
     source: Optional[LeadSource] = Query(None, description="Filter by source"),
+    search: Optional[str] = Query(None, description="Search customer name/email/phone"),
+    is_active: Optional[bool] = Query(None, description="Filter by active flag"),
+    pool: Optional[str] = Query(None, description='"mine" | "unassigned" | omit for all'),
+    fresh_only: Optional[bool] = Query(None, description="Only untouched/fresh leads"),
+    multi_campaign_only: Optional[bool] = Query(None, description="Only multi-campaign / starred leads"),
+    campaign_mapping_id: Optional[UUID] = Query(None, description="Leads tied to this campaign"),
+    assigned_to: Optional[UUID] = Query(
+        None, description="Filter by assignee (admin/owner/super only)"
+    ),
     date_from: Optional[datetime] = Query(None, description="Filter by created date from"),
     date_to: Optional[datetime] = Query(None, description="Filter by created date to"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.get_current_active_user)
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Export leads to CSV with optional detailed data.
-    - Basic export: lead info only
-    - Detailed export: includes activities, appointments, notes
+    Uses the same filters as GET /leads/ so exports match the current table view.
     """
     import csv
     from io import StringIO
     from fastapi.responses import StreamingResponse
     from app.models.activity import Activity
     from app.models.appointment import Appointment
-    
-    # Build query based on user role
-    query = select(Lead)
-    
-    if current_user.role == UserRole.SALESPERSON:
-        # Salesperson sees only their leads
-        query = query.where(
-            (Lead.assigned_to == current_user.id) | 
-            (Lead.secondary_salesperson_id == current_user.id)
-        )
-    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        # Dealership staff sees only their dealership leads
-        if current_user.dealership_id:
-            query = query.where(Lead.dealership_id == current_user.dealership_id)
-    # Super admin sees all
-    
-    # Apply filters (status is now a stage name for backward compat)
-    if status:
-        _stage = await LeadStageService.get_stage_by_name(db, status)
+
+    effective_stage_id = stage_id
+    if effective_stage_id is None and status:
+        dealership_for_stage = current_user.dealership_id
+        _stage = await LeadStageService.get_stage_by_name(db, status, dealership_for_stage)
         if _stage:
-            query = query.where(Lead.stage_id == _stage.id)
-    if source:
-        query = query.where(Lead.source == source)
-    if date_from:
-        query = query.where(Lead.created_at >= date_from)
-    if date_to:
-        query = query.where(Lead.created_at <= date_to)
-    
+            effective_stage_id = _stage.id
+
+    query = _build_leads_list_select(
+        current_user,
+        pool=pool,
+        assigned_to=assigned_to,
+        stage_id=effective_stage_id,
+        source=source,
+        search=search,
+        is_active=is_active,
+        date_from=date_from,
+        date_to=date_to,
+        fresh_only=fresh_only,
+        multi_campaign_only=multi_campaign_only,
+        campaign_mapping_id=campaign_mapping_id,
+    )
+
     query = query.order_by(Lead.created_at.desc())
-    
+
     result = await db.execute(query)
     leads = result.scalars().all()
-    
+
     # Prepare CSV output
     output = StringIO()
-    
+
     # Build header based on options
     headers = [
         "ID", "First Name", "Last Name", "Email", "Phone",
@@ -3039,18 +3068,18 @@ async def export_leads_csv(
         "Dealership ID", "Assigned To ID", "Secondary Salesperson ID",
         "Converted At", "Notes"
     ]
-    
+
     if include_activities:
         headers.extend(["Activity Count", "Last Activity"])
     if include_appointments:
         headers.extend(["Appointment Count", "Next Appointment"])
-    
+
     writer = csv.writer(output)
     writer.writerow(headers)
-    
+
     # Fetch additional data if needed
     lead_ids = [lead.id for lead in leads]
-    
+
     activity_counts = {}
     last_activities = {}
     if include_activities and lead_ids:
@@ -3063,7 +3092,7 @@ async def export_leads_csv(
         for row in activity_result.all():
             activity_counts[row.lead_id] = row.count
             last_activities[row.lead_id] = row.last
-    
+
     appointment_counts = {}
     next_appointments = {}
     if include_appointments and lead_ids:
@@ -3077,7 +3106,7 @@ async def export_leads_csv(
         for row in appt_result.all():
             appointment_counts[row.lead_id] = row.count
             next_appointments[row.lead_id] = row.next
-    
+
     # Pre-fetch customers and stages for CSV
     cust_ids = {l.customer_id for l in leads if l.customer_id}
     stage_ids_csv = {l.stage_id for l in leads if l.stage_id}
@@ -3112,24 +3141,24 @@ async def export_leads_csv(
             lead.converted_at.isoformat() if lead.converted_at else "",
             lead.notes or "" if include_notes else ""
         ]
-        
+
         if include_activities:
             row.append(str(activity_counts.get(lead.id, 0)))
             last_act = last_activities.get(lead.id)
             row.append(last_act.isoformat() if last_act else "")
-        
+
         if include_appointments:
             row.append(str(appointment_counts.get(lead.id, 0)))
             next_appt = next_appointments.get(lead.id)
             row.append(next_appt.isoformat() if next_appt else "")
-        
+
         writer.writerow(row)
-    
+
     output.seek(0)
-    
+
     # Generate filename with timestamp
     filename = f"leads_export_{utc_now().strftime('%Y%m%d_%H%M%S')}.csv"
-    
+
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",

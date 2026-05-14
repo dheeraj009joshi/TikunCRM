@@ -199,7 +199,10 @@ async def get_voice_token(
 
     service = get_voice_service(db)
 
-    identity = current_user.email
+    # Use the user UUID as the Twilio client identity. With multi-dealership
+    # accounts the same email may belong to multiple users, so email is no
+    # longer a unique identifier — user.id is.
+    identity = str(current_user.id)
 
     try:
         token = service.generate_access_token(

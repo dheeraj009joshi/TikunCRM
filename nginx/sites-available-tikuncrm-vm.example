@@ -1,0 +1,85 @@
+# /etc/nginx/sites-available/tikuncrm (VM: Next :3000, API :8000)
+#
+# 1) In the FRONTEND server block, replace /REPLACE_WITH_ABSOLUTE_PATH_TO_FRONTEND/ with the
+#    real path to your Next app root (the directory that contains the `.next` folder).
+# 2) sudo nginx -t && sudo systemctl reload nginx
+#
+# If CSS still fails: run on the VM (replace CHUNK.css with the failing file from DevTools):
+#   curl -sI "http://127.0.0.1:3000/_next/static/chunks/CHUNK.css"
+#   ls -la FRONTEND_DIR/.next/static/chunks/CHUNK.css
+# - 200 from curl + file exists → problem was nginx→Node; serving static below fixes it.
+# - 500 from curl → rebuild/restart Node (npm run build in FRONTEND_DIR, restart pm2/systemd).
+
+################################
+# FRONTEND (Next.js)
+# Set this to your real app path (the directory where you run `npm run build`).
+################################
+server {
+    server_name tikuncrm.com www.tikuncrm.com;
+
+    client_max_body_size 100M;
+
+    # Absolute path to THIS folder on the VM: .../frontend/.next/static/
+    # (no variables in alias — nginx is picky). Example:
+    #   alias /home/tikuncrm/LeedsCrm/frontend/.next/static/;
+    location ^~ /_next/static/ {
+        alias /REPLACE_WITH_ABSOLUTE_PATH_TO_FRONTEND/.next/static/;
+        access_log off;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    location / {
+        client_max_body_size 100M;
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400s;
+    }
+
+    listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/tikuncrm.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/tikuncrm.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+}
+
+################################
+# BACKEND (FastAPI)
+################################
+server {
+    server_name api.tikuncrm.com;
+
+    client_max_body_size 100M;
+
+    location / {
+        client_max_body_size 100M;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location ~ ^/api/v1/.*/ws {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/tikuncrm.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/tikuncrm.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+}
