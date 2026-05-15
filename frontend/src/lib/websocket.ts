@@ -2,16 +2,16 @@
  * WebSocket Service for real-time updates
  */
 
-type EventCallback = (data: any) => void;
+import { API_BASE_URL } from "@/lib/api-client";
 
 export interface WebSocketMessage {
     type: string;
-    data: any;
+    data?: unknown;
 }
 
 class WebSocketService {
     private ws: WebSocket | null = null;
-    private listeners: Map<string, Set<EventCallback>> = new Map();
+    private listeners: Map<string, Set<(data: unknown) => void>> = new Map();
     private reconnectAttempts = 0;
     private maxReconnectAttempts = 5;
     private reconnectDelay = 1000;
@@ -39,7 +39,7 @@ class WebSocketService {
         this.isConnecting = true;
 
         const wsUrl = this.getWebSocketUrl(token);
-        console.log("[WS] Connecting to:", wsUrl.replace(token, "***"));
+        console.log("[WS] Connecting to:", `${wsUrl.split("?")[0]}?token=***`);
 
         try {
             this.ws = new WebSocket(wsUrl);
@@ -58,7 +58,7 @@ class WebSocketService {
                     console.log("[WS] Received:", message.type);
                     const payload = message.data !== undefined ? message.data : message.payload;
                     this.emit(message.type, payload);
-                } catch (e) {
+                } catch {
                     // Handle non-JSON messages (like pong)
                     if (event.data === "pong") {
                         console.log("[WS] Pong received");
@@ -79,12 +79,16 @@ class WebSocketService {
             };
 
             this.ws.onerror = (event: Event) => {
-                // WebSocket error events don't contain much info - check if it's a connection failure
+                // Browser WebSocket error events carry almost no detail; failures usually mean
+                // TLS/DNS/network, wrong API base URL, or reverse-proxy missing Upgrade headers.
                 const errorInfo = {
                     type: event.type,
                     readyState: this.ws?.readyState,
                     readyStateText: this.getReadyStateText(this.ws?.readyState),
-                    message: "WebSocket connection error - check if backend is running on port 8000"
+                    message:
+                        "WebSocket failed to connect. Confirm the API host is reachable (same as REST), " +
+                        "NEXT_PUBLIC_API_URL is correct at build time, and nginx/Caddy proxies " +
+                        "/api/v1/ws with Upgrade and Connection headers.",
                 };
                 console.error("[WS] Error:", errorInfo);
                 this.isConnecting = false;
@@ -126,34 +130,36 @@ class WebSocketService {
     /**
      * Subscribe to an event
      */
-    on(event: string, callback: EventCallback): () => void {
+    on<T = unknown>(event: string, callback: (data: T) => void): () => void {
         if (!this.listeners.has(event)) {
             this.listeners.set(event, new Set());
         }
-        this.listeners.get(event)!.add(callback);
+        const wrapper = (data: unknown) => {
+            callback(data as T);
+        };
+        this.listeners.get(event)!.add(wrapper);
 
-        // Return unsubscribe function
         return () => {
-            this.listeners.get(event)?.delete(callback);
+            this.listeners.get(event)?.delete(wrapper);
         };
     }
 
     /**
      * Unsubscribe from an event
      */
-    off(event: string, callback: EventCallback): void {
+    off(event: string, callback: (data: unknown) => void): void {
         this.listeners.get(event)?.delete(callback);
     }
 
     /**
      * Emit an event to all listeners
      */
-    private emit(event: string, data: any): void {
+    private emit(event: string, data: unknown): void {
         this.listeners.get(event)?.forEach((callback) => {
             try {
                 callback(data);
-            } catch (e) {
-                console.error(`[WS] Error in listener for ${event}:`, e);
+            } catch (listenerErr) {
+                console.error(`[WS] Error in listener for ${event}:`, listenerErr);
             }
         });
     }
@@ -171,10 +177,9 @@ class WebSocketService {
      * Get the WebSocket URL
      */
     private getWebSocketUrl(token: string): string {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
-        // Convert http(s) to ws(s)
-        const wsUrl = apiUrl.replace(/^http/, "ws");
-        return `${wsUrl}/ws?token=${token}`;
+        // Same base as axios (api-client) so dev/prod never drift.
+        const wsUrl = API_BASE_URL.replace(/^http/, "ws");
+        return `${wsUrl}/ws?token=${encodeURIComponent(token)}`;
     }
 
     /**
