@@ -149,6 +149,12 @@ export default function LeadsPage() {
     const [status, setStatus] = React.useState(statusParam || "all")
     const [selectedStageIds, setSelectedStageIds] = React.useState<string[]>([])
     const [source, setSource] = React.useState(sourceParam || "all")
+    const { user: authUser } = useAuthStore()
+    const isAdminLevel =
+        authUser?.role === "dealership_admin" ||
+        authUser?.role === "dealership_owner" ||
+        authUser?.role === "super_admin"
+
     const [viewMode, setViewMode] = React.useState<ViewMode>(
         filterParam === "unassigned"
             ? "unassigned"
@@ -162,7 +168,11 @@ export default function LeadsPage() {
                     ? "manager_review"
                     : filterParam === "multi_campaign"
                       ? "multi_campaign"
-                      : "mine"
+                      : filterParam === "mine"
+                        ? "mine"
+                        : isAdminLevel
+                          ? "all"
+                          : "mine"
     )
     const [displayView, setDisplayView] = React.useState<DisplayView>(viewParam === "pipeline" ? "pipeline" : "list")
     const [assignedTo, setAssignedTo] = React.useState(assignedToParam || "all")
@@ -334,12 +344,16 @@ export default function LeadsPage() {
         setOpenLeadDialog(null)
     }
 
-    // Reset pagination when search query changes
+    // Reset pagination only when the search box text changes (not on ?page= URL updates)
+    const prevSearchRef = React.useRef(search)
     React.useEffect(() => {
         if (!searchInitRef.current) {
             searchInitRef.current = true
+            prevSearchRef.current = search
             return
         }
+        if (prevSearchRef.current === search) return
+        prevSearchRef.current = search
         setPage(1)
         const params = new URLSearchParams(searchParams.toString())
         params.delete("page")
@@ -347,13 +361,12 @@ export default function LeadsPage() {
     }, [search, router, searchParams])
 
     // Load team members for admin/owner salesperson filter
-    const { user } = useAuthStore()
     React.useEffect(() => {
         if (!isDealershipLevel && !isSuperAdmin) return
-        TeamService.getSalespersons(user?.dealership_id ?? undefined)
+        TeamService.getSalespersons(authUser?.dealership_id ?? undefined)
             .then((list) => setTeamMembers(list))
             .catch(() => setTeamMembers([]))
-    }, [isDealershipLevel, isSuperAdmin, user?.dealership_id])
+    }, [isDealershipLevel, isSuperAdmin, authUser?.dealership_id])
 
     React.useEffect(() => {
         LeadService.getCampaignFilterOptions().then(setCampaignOptions).catch(() => setCampaignOptions([]))

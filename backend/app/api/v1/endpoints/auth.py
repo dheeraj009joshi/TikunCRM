@@ -38,6 +38,7 @@ from app.schemas.auth import (
     DealershipLookupResponse,
     DealershipLookupOption,
     DealershipRequiredDetail,
+    SwitchDealershipRequest,
 )
 from app.schemas.user import UserResponse
 
@@ -362,6 +363,97 @@ async def get_current_user_info(
     Get current user information
     """
     return current_user
+
+
+def _issue_tokens_for_user(user: User) -> dict:
+    """Build access/refresh tokens and response payload for a user."""
+    access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+    refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
+
+    additional_claims = {}
+    if user.dealership_id:
+        additional_claims["dealership_id"] = str(user.dealership_id)
+
+    access_token = create_access_token(
+        subject=str(user.id),
+        expires_delta=access_token_expires,
+        additional_claims=additional_claims if additional_claims else None,
+    )
+    refresh_token = create_refresh_token(
+        subject=str(user.id), expires_delta=refresh_token_expires
+    )
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "user": user,
+    }
+
+
+def _resolve_target_user_for_dealership(
+    users: List[User],
+    dealership_id: Optional[UUID],
+) -> Optional[User]:
+    """Pick the active user row for the requested dealership (or super admin)."""
+    if dealership_id is None:
+        candidates = [u for u in users if u.dealership_id is None]
+    else:
+        candidates = [u for u in users if u.dealership_id == dealership_id]
+    active = [u for u in candidates if u.is_active]
+    return (active or candidates)[0] if candidates else None
+
+
+@router.get("/my-dealerships", response_model=DealershipLookupResponse)
+async def my_dealerships(
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    List every dealership the current user's email is registered with.
+    Used by the in-app dealership switcher.
+    """
+    users = await _load_users_by_email(db, current_user.email)
+    users = [u for u in users if u.is_active]
+    options = await _resolve_dealership_options(db, users)
+    return DealershipLookupResponse(dealerships=options)
+
+
+@router.post("/switch-dealership", response_model=Token)
+async def switch_dealership(
+    body: SwitchDealershipRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Switch to another dealership account that shares the same email.
+
+    Issues new tokens for the target user row without requiring re-login.
+    """
+    users = await _load_users_by_email(db, current_user.email)
+    if not users:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No accounts found for this email",
+        )
+
+    target = _resolve_target_user_for_dealership(users, body.dealership_id)
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No account found for the selected dealership",
+        )
+
+    if target.id == current_user.id:
+        return _issue_tokens_for_user(current_user)
+
+    if not target.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="account_deactivated",
+        )
+
+    return _issue_tokens_for_user(target)
 
 
 # ============== Password Reset Endpoints ==============

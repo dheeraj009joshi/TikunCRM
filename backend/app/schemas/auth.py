@@ -43,6 +43,14 @@ class DealershipRequiredDetail(BaseModel):
     dealerships: List[DealershipLookupOption]
 
 
+class SwitchDealershipRequest(BaseModel):
+    """Switch the active session to another dealership account with the same email."""
+    dealership_id: Optional[UUID] = Field(
+        None,
+        description="Target dealership UUID. Omit or null for super admin account.",
+    )
+
+
 class RefreshTokenRequest(BaseModel):
     """Refresh token request"""
     refresh_token: str

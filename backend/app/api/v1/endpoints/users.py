@@ -473,7 +473,33 @@ async def update_user(
         setattr(user, "is_active", update_data["is_active"])
         update_data.pop("is_active")
 
-    # Apply other allowed fields (name, phone, etc.) - exclude role/dealership unless super_admin if needed
+    if "role" in update_data:
+        new_role = update_data["role"]
+        if current_user.id == user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You cannot change your own role",
+            )
+        if current_user.role == UserRole.DEALERSHIP_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Dealership Admins cannot change team member roles",
+            )
+        if current_user.role == UserRole.DEALERSHIP_OWNER:
+            if new_role not in (UserRole.DEALERSHIP_ADMIN, UserRole.SALESPERSON):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Dealership Owners can only assign Admin or Salesperson roles",
+                )
+        elif current_user.role != UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to change roles",
+            )
+        user.role = new_role
+        update_data.pop("role")
+
+    # Apply other allowed fields (name, phone, etc.)
     for field, value in update_data.items():
         if hasattr(user, field):
             setattr(user, field, value)

@@ -59,5 +59,21 @@ export const AuthService = {
             email,
             dealership_id: dealershipId ?? null,
         });
-    }
+    },
+
+    async getMyDealerships(): Promise<DealershipOption[]> {
+        const response = await apiClient.get<{ dealerships: DealershipOption[] }>(
+            `${AUTH_PREFIX}/my-dealerships`,
+        );
+        return response.data.dealerships;
+    },
+
+    async switchDealership(dealershipId: string | null) {
+        const response = await apiClient.post(`${AUTH_PREFIX}/switch-dealership`, {
+            dealership_id: dealershipId,
+        });
+        const { user, access_token, refresh_token } = response.data;
+        useAuthStore.getState().setAuth(user, access_token, refresh_token);
+        return response.data;
+    },
 };

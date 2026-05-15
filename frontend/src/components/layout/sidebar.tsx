@@ -49,6 +49,7 @@ import { LeadService } from "@/services/lead-service"
 import { LeadStageService } from "@/services/lead-stage-service"
 import apiClient from "@/lib/api-client"
 import { GlobalSearchModal } from "@/components/search/global-search-modal"
+import { DealershipSwitcher } from "@/components/layout/dealership-switcher"
 
 interface SidebarLink {
     name: string
@@ -679,6 +680,11 @@ export function Sidebar() {
                         </button>
                     </div>
                 )}
+
+                {/* Dealership switcher (multi-dealership emails only) */}
+                <div className={cn("mt-2 shrink-0", collapsed ? "px-0" : "px-2")}>
+                    <DealershipSwitcher collapsed={collapsed} />
+                </div>
 
                 {/* User / Bottom Section */}
                 <div className="mt-2 shrink-0 border-t pt-4">

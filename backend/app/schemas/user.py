@@ -33,6 +33,7 @@ class UserUpdate(BaseModel):
     phone: Optional[str] = Field(None, max_length=20)
     avatar_url: Optional[str] = None
     is_active: Optional[bool] = None
+    role: Optional[UserRole] = None
     dealership_email: Optional[str] = Field(None, max_length=255, description="Deprecated: Use smtp_email")
 
 
