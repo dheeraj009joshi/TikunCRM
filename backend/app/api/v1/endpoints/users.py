@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select, func, and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -317,7 +318,16 @@ async def create_user(
     )
     
     db.add(user)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "That email is already registered for this dealership, or conflicts with "
+                "account uniqueness rules (e.g. super admin email collision)."
+            ),
+        ) from None
 
     # Send welcome email with login credentials in background (after response, session will have committed)
     to_name = f"{user.first_name} {user.last_name}".strip() or user.email

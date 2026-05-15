@@ -125,9 +125,11 @@ def create_application() -> FastAPI:
     )
     
     # Configure CORS - Use explicit origins when credentials=True (required by spec)
+    _cors = settings.cors_origins_list or ["http://localhost:3000"]
+    logger.info("CORS allow_origins (%d): %s", len(_cors), ", ".join(_cors))
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins_list or ["http://localhost:3000"],
+        allow_origins=_cors,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

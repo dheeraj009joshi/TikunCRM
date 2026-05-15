@@ -8,6 +8,7 @@ Also loads into ``os.environ`` so libraries that read the environment directly s
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from pydantic import AliasChoices, Field
@@ -65,12 +66,9 @@ class Settings(BaseSettings):
     # Short-lived JWT after POST /auth/verify-config-access (sensitive CRM config screens)
     config_unlock_token_expire_minutes: int = 30
     
-    # CORS
-    cors_origins: str = "http://localhost:3000,http://localhost:3001"
-    
-    @property
-    def cors_origins_list(self) -> List[str]:
-        return [origin.strip() for origin in self.cors_origins.split(",")]
+    # CORS — comma-separated list. The browser Origin from FRONTEND_URL is always merged in
+    # so production works even when operators forget to add tikuncrm.com here.
+    cors_origins: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000"
     
     # Google OAuth
     google_client_id: str = ""
@@ -86,6 +84,30 @@ class Settings(BaseSettings):
     frontend_url: str = "https://tikuncrm.com"
     # Backend public URL (for Twilio webhooks, etc.). Defaults to localhost in dev.
     backend_url: str = "http://localhost:8000"
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Origins allowed for credentialed browser requests (must include the live app Origin)."""
+        seen: set[str] = set()
+        out: List[str] = []
+        for part in self.cors_origins.split(","):
+            o = part.strip()
+            if o and o not in seen:
+                seen.add(o)
+                out.append(o)
+        parsed = urlparse(self.frontend_url)
+        if parsed.scheme and parsed.netloc:
+            primary = f"{parsed.scheme}://{parsed.netloc}"
+            if primary not in seen:
+                seen.add(primary)
+                out.append(primary)
+            host = parsed.netloc
+            if host and not host.startswith("www."):
+                www_origin = f"{parsed.scheme}://www.{host}"
+                if www_origin not in seen:
+                    seen.add(www_origin)
+                    out.append(www_origin)
+        return out if out else ["http://localhost:3000"]
     
     # Email Provider Settings
     # Options: "smtp", "sendgrid", "mailgun", "aws_ses"
