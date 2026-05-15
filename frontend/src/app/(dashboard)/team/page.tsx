@@ -79,6 +79,7 @@ import {
 import { useRole, getRoleDisplayName } from "@/hooks/use-role"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
+import { getApiErrorMessage } from "@/lib/api-errors"
 import { BarChart } from "@tremor/react"
 import { SalespersonPendingTasksModal } from "@/components/team/salesperson-pending-tasks-modal"
 import { NotifySalespersonDialog } from "@/components/team/notify-salesperson-dialog"
@@ -190,17 +191,9 @@ export default function TeamPage() {
             setNewMember({ role: "salesperson" })
             setAddMemberError(null)
             fetchTeam()
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error("Failed to add member:", error)
-            const detail = error?.response?.data?.detail
-            if (typeof detail === "string") {
-                setAddMemberError(detail)
-            } else if (Array.isArray(detail)) {
-                // Pydantic validation errors
-                setAddMemberError(detail.map((d: any) => d.msg).join(", "))
-            } else {
-                setAddMemberError("Failed to add team member. Please try again.")
-            }
+            setAddMemberError(getApiErrorMessage(error, "Failed to add team member. Please try again."))
         } finally {
             setIsSubmitting(false)
         }

@@ -14,7 +14,11 @@ export const UserService = {
     },
 
     async createUser(data: any) {
-        const response = await apiClient.post(`${USERS_PREFIX}/`, data);
+        const { phone, ...rest } = data;
+        const payload: Record<string, unknown> = { ...rest };
+        const trimmed = typeof phone === "string" ? phone.trim() : "";
+        if (trimmed) payload.phone = trimmed;
+        const response = await apiClient.post(`${USERS_PREFIX}/`, payload);
         return response.data;
     },
 

@@ -74,6 +74,7 @@ import { ConfigUnlockModal } from "@/components/security/config-unlock-modal"
 import { getConfigAccessStatus } from "@/services/config-access-service"
 import { getConfigUnlockToken } from "@/lib/config-unlock"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { getApiErrorMessage } from "@/lib/api-errors"
 
 const COMMON_TIMEZONES = [
     { value: "America/New_York", label: "Eastern Time (US)" },
@@ -428,8 +429,14 @@ export default function DealershipDetailPage() {
                 dealership_id: dealershipId,
             })
             await loadTeam()
+            toast({ title: "Team member created", description: "They will be asked to change password on first login." })
         } catch (error) {
             console.error("Failed to create user:", error)
+            toast({
+                variant: "destructive",
+                title: "Could not create user",
+                description: getApiErrorMessage(error, "Could not create user. Please try again."),
+            })
         } finally {
             setIsCreatingUser(false)
         }
@@ -1304,6 +1311,8 @@ export default function DealershipDetailPage() {
                         <DialogTitle>Add Team Member</DialogTitle>
                         <DialogDescription>
                             Create a new user for this dealership. They will receive an email to set up their account.
+                            The same email may already be used at another dealership—that is allowed. It only has to be
+                            unique within this dealership.
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 py-4">

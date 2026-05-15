@@ -20,6 +20,7 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { UserService } from "@/services/user-service"
+import { getApiErrorMessage } from "@/lib/api-errors"
 import { DealershipService } from "@/services/dealership-service"
 import { useRole } from "@/hooks/use-role"
 
@@ -129,7 +130,7 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
             onClose()
         } catch (err: any) {
             console.error("Failed to create user:", err)
-            setError(err?.response?.data?.detail || "Failed to create user. Please try again.")
+            setError(getApiErrorMessage(err, "Failed to create user. Please try again."))
         } finally {
             setIsLoading(false)
         }

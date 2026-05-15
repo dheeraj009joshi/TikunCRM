@@ -302,11 +302,14 @@ async def create_user(
             detail="Dealership ID is required for this role",
         )
 
+    phone_val = (user_in.phone or "").strip() or None
+
     user = User(
         email=user_in.email,
         password_hash=get_password_hash(user_in.password),
         first_name=user_in.first_name,
         last_name=user_in.last_name,
+        phone=phone_val,
         role=user_in.role,
         dealership_id=user_in.dealership_id,
         is_active=True,

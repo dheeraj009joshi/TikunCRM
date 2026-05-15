@@ -76,7 +76,11 @@ export const TeamService = {
 
     // Create new user (team member)
     async createUser(data: CreateUserData): Promise<UserBrief> {
-        const response = await apiClient.post("/users/", data);
+        const { phone, ...rest } = data;
+        const payload: Record<string, unknown> = { ...rest };
+        const trimmed = phone?.trim();
+        if (trimmed) payload.phone = trimmed;
+        const response = await apiClient.post("/users/", payload);
         return response.data;
     },
 
