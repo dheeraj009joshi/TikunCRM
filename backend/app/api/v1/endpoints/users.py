@@ -320,14 +320,17 @@ async def create_user(
     db.add(user)
     try:
         await db.flush()
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "That email is already registered for this dealership, or conflicts with "
-                "account uniqueness rules (e.g. super admin email collision)."
-            ),
-        ) from None
+    except IntegrityError as exc:
+        raw = str(getattr(exc, "orig", exc) or exc).lower()
+        if "ix_users_email_per_dealership" in raw or "lower(email), dealership_id" in raw:
+            detail = "This email is already registered for this dealership."
+        elif "ix_users_email_super_admin" in raw:
+            detail = "This email is already used by a super admin account."
+        elif "unique" in raw or "duplicate" in raw:
+            detail = "This record conflicts with a uniqueness rule in the database."
+        else:
+            detail = "Could not create this user (database constraint). Check email and dealership."
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from None
 
     # Send welcome email with login credentials in background (after response, session will have committed)
     to_name = f"{user.first_name} {user.last_name}".strip() or user.email
