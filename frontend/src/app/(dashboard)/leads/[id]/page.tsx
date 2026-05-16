@@ -249,6 +249,95 @@ function LeadAppointmentCompleteForm({
     )
 }
 
+function LeadScheduledAppointmentQuickPanel({
+    appointment,
+    onConfirm,
+    onReschedule,
+    onComplete,
+    onCancel,
+    onNoShow,
+    onViewAll,
+}: {
+    appointment: Appointment
+    onConfirm: () => void
+    onReschedule: () => void
+    onComplete: () => void
+    onCancel: () => void
+    onNoShow: () => void
+    onViewAll: () => void
+}) {
+    const terminal = isAppointmentStatusTerminal(appointment.status)
+    return (
+        <div className="space-y-3">
+            <div>
+                <p className="font-medium text-foreground">{appointment.title}</p>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                    <LocalTime date={appointment.scheduled_at} />
+                    {appointment.duration_minutes ? ` · ${appointment.duration_minutes} min` : ""}
+                </p>
+                <Badge variant="outline" className={cn("mt-2", getAppointmentStatusColor(appointment.status))} size="sm">
+                    {getAppointmentStatusLabel(appointment.status)}
+                </Badge>
+            </div>
+            {!terminal && (
+                <div className="flex flex-col gap-1.5">
+                    {appointment.status === "scheduled" && (
+                        <Button type="button" size="sm" className="w-full justify-start" onClick={onConfirm}>
+                            <CheckCircle className="h-4 w-4 mr-2 text-blue-600" />
+                            Confirm appointment
+                        </Button>
+                    )}
+                    <Button type="button" size="sm" variant="outline" className="w-full justify-start" onClick={onReschedule}>
+                        <CalendarClock className="h-4 w-4 mr-2" />
+                        Reschedule
+                    </Button>
+                    {(appointment.status === "scheduled" ||
+                        appointment.status === "confirmed" ||
+                        appointment.status === "arrived" ||
+                        appointment.status === "in_showroom" ||
+                        appointment.status === "in_progress" ||
+                        appointment.status === "no_show") && (
+                        <Button type="button" size="sm" variant="outline" className="w-full justify-start" onClick={onComplete}>
+                            <CheckCircle className="h-4 w-4 mr-2 text-green-600" />
+                            Mark completed
+                        </Button>
+                    )}
+                    {(appointment.status === "scheduled" ||
+                        appointment.status === "confirmed" ||
+                        appointment.status === "arrived" ||
+                        appointment.status === "in_showroom" ||
+                        appointment.status === "in_progress") && (
+                        <Button type="button" size="sm" variant="outline" className="w-full justify-start" onClick={onNoShow}>
+                            <XCircle className="h-4 w-4 mr-2 text-amber-600" />
+                            No show
+                        </Button>
+                    )}
+                    {(appointment.status === "scheduled" ||
+                        appointment.status === "confirmed" ||
+                        appointment.status === "arrived" ||
+                        appointment.status === "in_showroom" ||
+                        appointment.status === "in_progress" ||
+                        appointment.status === "no_show") && (
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="w-full justify-start text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={onCancel}
+                        >
+                            <XCircle className="h-4 w-4 mr-2" />
+                            Cancel appointment
+                        </Button>
+                    )}
+                </div>
+            )}
+            <Button type="button" variant="link" size="sm" className="h-auto p-0 text-primary" onClick={onViewAll}>
+                View in Appointments tab
+            </Button>
+        </div>
+    )
+}
+
 function LeadAppointmentRescheduleForm({
     appointment,
     timeSlots,
@@ -451,6 +540,7 @@ export default function LeadDetailsPage() {
     // Appointment actions (lead detail Appointments tab)
     const [appointmentCompleteModal, setAppointmentCompleteModal] = React.useState<Appointment | null>(null)
     const [appointmentRescheduleModal, setAppointmentRescheduleModal] = React.useState<Appointment | null>(null)
+    const [appointmentBannerOpen, setAppointmentBannerOpen] = React.useState(false)
     // Credit app outcome (capture when user returns after initiating)
     const [showCreditAppOutcomeModal, setShowCreditAppOutcomeModal] = React.useState(false)
     const [creditAppOutcomeSubmitting, setCreditAppOutcomeSubmitting] = React.useState<"complete" | "abandon" | null>(null)
@@ -642,7 +732,7 @@ export default function LeadDetailsPage() {
     const FOLLOW_UP_TERMINAL_STATUSES = ["completed", "missed", "cancelled"] as const
     const {
         appointmentBadgeCount,
-        appointmentBadgeColor,
+        nextScheduledAppointment,
         followUpBadgeCount,
         followUpBadgeColor,
         appointmentsToday,
@@ -693,8 +783,13 @@ export default function LeadDetailsPage() {
         upcomingApt.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
         overdueApt.sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
         pastApt.sort((a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime())
-        const appointmentBadgeCount = todayApt.length
-        const appointmentBadgeColor = aptTodayOverdue ? "red" : "green"
+        const activeScheduledAppointments = [...todayApt, ...overdueApt, ...upcomingApt]
+            .filter((a) => ACTIVE_APPOINTMENT_STATUSES.includes(a.status as typeof ACTIVE_APPOINTMENT_STATUSES[number]))
+            .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
+        const nextScheduledAppointment = activeScheduledAppointments[0] ?? null
+        const appointmentBadgeCount = activeScheduledAppointments.length
+        const appointmentBadgeColor: "red" | "green" | "grey" =
+            appointmentBadgeCount > 0 ? "red" : aptTodayOverdue ? "red" : "green"
         // Follow-ups: same partition; assignee mismatch only when not today / not upcoming
         const todayFu: FollowUp[] = []
         const upcomingFu: FollowUp[] = []
@@ -727,6 +822,8 @@ export default function LeadDetailsPage() {
         return {
             appointmentBadgeCount,
             appointmentBadgeColor,
+            nextScheduledAppointment,
+            activeScheduledAppointments,
             followUpBadgeCount,
             followUpBadgeColor,
             appointmentsToday: todayApt,
@@ -3098,7 +3195,72 @@ export default function LeadDetailsPage() {
                 <div className="lg:col-span-2 flex flex-col min-h-0 overflow-hidden">
                     <Card className="flex-1 flex flex-col min-h-0 overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
                         <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as "timeline" | "notes" | "appointments" | "followups" | "stips")} className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                            <div className="border-b border-border/60 px-6 flex items-center justify-between gap-4">
+                            <div className="border-b border-border/60">
+                                {nextScheduledAppointment && (
+                                    <div className="px-6 pt-3 pb-1">
+                                        <Popover open={appointmentBannerOpen} onOpenChange={setAppointmentBannerOpen}>
+                                            <PopoverTrigger asChild>
+                                                <button
+                                                    type="button"
+                                                    className="w-full flex items-center gap-3 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2.5 text-left transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                                >
+                                                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/15">
+                                                        <CalendarClock className="h-4 w-4 text-primary" />
+                                                    </span>
+                                                    <span className="min-w-0 flex-1">
+                                                        <span className="block text-sm font-semibold text-foreground">
+                                                            Appointment scheduled
+                                                        </span>
+                                                        <span className="block text-xs text-muted-foreground truncate">
+                                                            {nextScheduledAppointment.title} ·{" "}
+                                                            <LocalTime date={nextScheduledAppointment.scheduled_at} />
+                                                        </span>
+                                                    </span>
+                                                    <Badge
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className={cn(
+                                                            "shrink-0",
+                                                            getAppointmentStatusColor(nextScheduledAppointment.status)
+                                                        )}
+                                                    >
+                                                        {getAppointmentStatusLabel(nextScheduledAppointment.status)}
+                                                    </Badge>
+                                                </button>
+                                            </PopoverTrigger>
+                                            <PopoverContent className="w-80 p-4" align="start" sideOffset={8}>
+                                                <LeadScheduledAppointmentQuickPanel
+                                                    appointment={nextScheduledAppointment}
+                                                    onConfirm={() => {
+                                                        void handleAppointmentConfirm(nextScheduledAppointment)
+                                                        setAppointmentBannerOpen(false)
+                                                    }}
+                                                    onReschedule={() => {
+                                                        setAppointmentRescheduleModal(nextScheduledAppointment)
+                                                        setAppointmentBannerOpen(false)
+                                                    }}
+                                                    onComplete={() => {
+                                                        setAppointmentCompleteModal(nextScheduledAppointment)
+                                                        setAppointmentBannerOpen(false)
+                                                    }}
+                                                    onCancel={() => {
+                                                        void handleAppointmentCancel(nextScheduledAppointment)
+                                                        setAppointmentBannerOpen(false)
+                                                    }}
+                                                    onNoShow={() => {
+                                                        void handleAppointmentNoShow(nextScheduledAppointment)
+                                                        setAppointmentBannerOpen(false)
+                                                    }}
+                                                    onViewAll={() => {
+                                                        setActiveActivityTab("appointments")
+                                                        setAppointmentBannerOpen(false)
+                                                    }}
+                                                />
+                                            </PopoverContent>
+                                        </Popover>
+                                    </div>
+                                )}
+                            <div className="px-6 flex items-center justify-between gap-4">
                                 <TabsList className="bg-transparent h-auto p-0 gap-1">
                                     <TabsTrigger 
                                         value="timeline"
@@ -3118,16 +3280,16 @@ export default function LeadDetailsPage() {
                                     >
                                         Appointments
                                         {appointmentBadgeCount > 0 && (
-                                            <span
-                                className={cn(
-                                                    "h-5 min-w-[20px] rounded-full text-white text-xs font-medium flex items-center justify-center px-1.5",
-                                                    appointmentBadgeColor === "red" && "bg-red-500",
-                                                    appointmentBadgeColor === "green" && "bg-green-500",
-                                                    appointmentBadgeColor === "grey" && "bg-gray-500"
-                                                )}
-                                            >
-                                                {appointmentBadgeCount}
-                                            </span>
+                                            <>
+                                                <span
+                                                    className="h-2 w-2 shrink-0 rounded-full bg-red-500"
+                                                    title="Scheduled appointment"
+                                                    aria-hidden
+                                                />
+                                                <span className="h-5 min-w-[20px] rounded-full bg-red-500 text-white text-xs font-medium flex items-center justify-center px-1.5">
+                                                    {appointmentBadgeCount}
+                                                </span>
+                                            </>
                                         )}
                                     </TabsTrigger>
                                     <TabsTrigger 
@@ -3196,7 +3358,8 @@ export default function LeadDetailsPage() {
                                         </>
                                     )}
                                 </div>
-                        </div>
+                            </div>
+                            </div>
 
                             <TabsContent value="timeline" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
                                 {isLoadingActivities ? (
