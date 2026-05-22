@@ -379,6 +379,11 @@ export function Sidebar() {
     }, [refetchBadgeCounts])
     
     useLeadUpdateEvents(null, handleLeadUpdate)
+
+    const handleLeadCreated = React.useCallback(() => {
+        refetchBadgeCounts({ unassigned: true, notifications: true })
+    }, [refetchBadgeCounts])
+    useWebSocketEvent("lead:created", handleLeadCreated, [handleLeadCreated])
     
     // Listen for explicit badge refresh (e.g. stale leads returned to pool, new unassigned lead created)
     const handleBadgesRefresh = React.useCallback((data: { unassigned?: boolean; managerReview?: boolean; notifications?: boolean }) => {

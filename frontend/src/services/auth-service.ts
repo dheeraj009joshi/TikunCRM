@@ -4,10 +4,18 @@ import { useAuthStore, User } from "@/stores/auth-store";
 const AUTH_PREFIX = "/auth";
 
 export type DealershipOption = {
-    id: string | null; // null for super admin
+    id: string | null; // null for org-wide roles (super admin, BDC)
     name: string;
     is_super_admin: boolean;
+    is_bdc?: boolean;
 };
+
+/** Form/login key sent as dealership_id to disambiguate org-wide accounts. */
+export function dealershipLoginKey(option: DealershipOption): string {
+    if (option.is_bdc) return "bdc";
+    if (option.is_super_admin) return "super_admin";
+    return option.id!;
+}
 
 export type DealershipRequiredDetail = {
     code: "dealership_required";
@@ -54,10 +62,17 @@ export const AuthService = {
         return response.data.dealerships;
     },
 
-    async forgotPassword(email: string, dealershipId?: string | null) {
+    async forgotPassword(email: string, option?: DealershipOption | null) {
         return apiClient.post(`${AUTH_PREFIX}/forgot-password`, {
             email,
-            dealership_id: dealershipId ?? null,
+            dealership_id: option?.id ?? null,
+            account_kind: option
+                ? option.is_bdc
+                    ? "bdc"
+                    : option.is_super_admin
+                      ? "super_admin"
+                      : null
+                : null,
         });
     },
 
@@ -68,9 +83,14 @@ export const AuthService = {
         return response.data.dealerships;
     },
 
-    async switchDealership(dealershipId: string | null) {
+    async switchDealership(option: DealershipOption) {
         const response = await apiClient.post(`${AUTH_PREFIX}/switch-dealership`, {
-            dealership_id: dealershipId,
+            dealership_id: option.is_super_admin || option.is_bdc ? null : option.id,
+            account_kind: option.is_bdc
+                ? "bdc"
+                : option.is_super_admin
+                  ? "super_admin"
+                  : null,
         });
         const { user, access_token, refresh_token } = response.data;
         useAuthStore.getState().setAuth(user, access_token, refresh_token);

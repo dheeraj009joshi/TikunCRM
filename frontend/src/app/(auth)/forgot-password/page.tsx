@@ -6,7 +6,7 @@ import Image from "next/image"
 import { useSearchParams } from "next/navigation"
 import { Mail, ArrowLeft, CheckCircle, Building2, ChevronRight } from "lucide-react"
 
-import { AuthService, DealershipOption } from "@/services/auth-service"
+import { AuthService, DealershipOption, dealershipLoginKey } from "@/services/auth-service"
 
 type Step = "email" | "dealership"
 
@@ -19,11 +19,11 @@ export default function ForgotPasswordPage() {
     const [step, setStep] = React.useState<Step>("email")
     const [dealerships, setDealerships] = React.useState<DealershipOption[]>([])
 
-    async function sendResetEmail(dealershipId: string | null) {
+    async function sendResetEmail(option: DealershipOption) {
         setIsLoading(true)
         setError(null)
         try {
-            await AuthService.forgotPassword(email, dealershipId)
+            await AuthService.forgotPassword(email, option)
             setSuccess(true)
         } catch (err: any) {
             const detail = err?.response?.data?.detail
@@ -52,7 +52,7 @@ export default function ForgotPasswordPage() {
                 return
             }
             if (options.length === 1) {
-                await sendResetEmail(options[0].id ?? null)
+                await sendResetEmail(options[0])
                 return
             }
             setDealerships(options)
@@ -222,10 +222,10 @@ export default function ForgotPasswordPage() {
                                 <div className="grid gap-2">
                                     {dealerships.map((d) => (
                                         <button
-                                            key={d.id ?? "super_admin"}
+                                            key={dealershipLoginKey(d)}
                                             type="button"
                                             disabled={isLoading}
-                                            onClick={() => sendResetEmail(d.id)}
+                                            onClick={() => sendResetEmail(d)}
                                             className="group flex items-center justify-between rounded-md border border-input bg-background px-4 py-3 text-left text-sm shadow-sm transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground disabled:opacity-60 disabled:cursor-not-allowed"
                                         >
                                             <span className="flex items-center gap-3">
@@ -236,6 +236,9 @@ export default function ForgotPasswordPage() {
                                                     <span className="block font-medium">{d.name}</span>
                                                     {d.is_super_admin && (
                                                         <span className="block text-xs text-muted-foreground">System administrator</span>
+                                                    )}
+                                                    {d.is_bdc && (
+                                                        <span className="block text-xs text-muted-foreground">BDC agent</span>
                                                     )}
                                                 </span>
                                             </span>

@@ -8,7 +8,7 @@ import { Mail, Lock, Eye, EyeOff, UserX, Building2, ArrowLeft, ChevronRight } fr
 
 import { useAuthStore } from "@/stores/auth-store"
 import { registerFCMToken } from "@/hooks/use-fcm-notifications"
-import { AuthService, DealershipOption } from "@/services/auth-service"
+import { AuthService, DealershipOption, dealershipLoginKey } from "@/services/auth-service"
 
 type Step = "email" | "dealership" | "password"
 
@@ -90,7 +90,7 @@ export default function LoginPage() {
             formBody.append('username', email)
             formBody.append('password', password)
             // Empty string when super admin (no dealership UUID)
-            formBody.append('dealership_id', selectedDealership.id ?? "super_admin")
+            formBody.append('dealership_id', dealershipLoginKey(selectedDealership))
 
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
             const response = await fetch(`${apiUrl}/auth/login`, {
@@ -259,7 +259,7 @@ export default function LoginPage() {
                                         <div className="grid gap-2">
                                             {dealerships.map((d) => (
                                                 <button
-                                                    key={d.id ?? "super_admin"}
+                                                    key={dealershipLoginKey(d)}
                                                     type="button"
                                                     onClick={() => pickDealership(d)}
                                                     className="group flex items-center justify-between rounded-md border border-input bg-background px-4 py-3 text-left text-sm shadow-sm transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground"
@@ -272,6 +272,9 @@ export default function LoginPage() {
                                                             <span className="block font-medium">{d.name}</span>
                                                             {d.is_super_admin && (
                                                                 <span className="block text-xs text-muted-foreground">System administrator</span>
+                                                            )}
+                                                            {d.is_bdc && (
+                                                                <span className="block text-xs text-muted-foreground">BDC agent</span>
                                                             )}
                                                         </span>
                                                     </span>

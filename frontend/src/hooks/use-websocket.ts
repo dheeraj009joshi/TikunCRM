@@ -10,21 +10,18 @@ import { useAuthStore } from "@/stores/auth-store";
  */
 export function useWebSocketConnection() {
     const user = useAuthStore((state) => state.user);
+    const token = useAuthStore((state) => state.token);
     const [isConnected, setIsConnected] = useState(false);
 
     useEffect(() => {
-        if (!user?.id) {
+        if (!user?.id || !token) {
             wsService.disconnect();
             setIsConnected(false);
             return;
         }
 
-        const token = localStorage.getItem("auth_token");
-        if (!token) {
-            return;
-        }
-
-        // Connect
+        // Reconnect on login/token refresh so BDC multi-dealership claims apply
+        wsService.disconnect();
         wsService.connect(user.id, token);
 
         // Listen for connection events
@@ -40,7 +37,7 @@ export function useWebSocketConnection() {
             unsubOpen();
             unsubClose();
         };
-    }, [user?.id]);
+    }, [user?.id, user?.role, token]);
 
     return { isConnected };
 }

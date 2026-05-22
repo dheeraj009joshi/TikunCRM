@@ -1,6 +1,8 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
+import { ChevronRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -107,14 +109,16 @@ interface MetricCardProps {
     title: string
     metric: string | number
     icon?: React.ReactNode
+    description?: string
     trend?: {
         value: string
         isPositive: boolean
     }
     color?: "blue" | "emerald" | "amber" | "rose" | "purple"
     className?: string
-    href?: string  // Optional navigation link
-    onClick?: () => void  // Optional click handler
+    href?: string
+    onClick?: () => void
+    actionLabel?: string
 }
 
 const colorClasses = {
@@ -125,65 +129,82 @@ const colorClasses = {
     purple: "bg-purple-500/10 text-purple-500",
 }
 
-function MetricCard({ title, metric, icon, trend, color = "blue", className, href, onClick }: MetricCardProps) {
+const metricBorderAccent: Record<NonNullable<MetricCardProps["color"]>, string> = {
+    blue: "hover:border-blue-300/80 hover:shadow-blue-500/10",
+    emerald: "hover:border-emerald-300/80 hover:shadow-emerald-500/10",
+    amber: "hover:border-amber-300/80 hover:shadow-amber-500/10",
+    rose: "hover:border-rose-300/80 hover:shadow-rose-500/10",
+    purple: "hover:border-purple-300/80 hover:shadow-purple-500/10",
+}
+
+function MetricCard({
+    title,
+    metric,
+    icon,
+    description,
+    trend,
+    color = "blue",
+    className,
+    href,
+    onClick,
+    actionLabel = "View",
+}: MetricCardProps) {
+    const isInteractive = Boolean(href || onClick)
     const cardContent = (
-        <Card className={cn(
-            "relative overflow-hidden hover:shadow-lg transition-all",
-            (href || onClick) && "cursor-pointer hover:scale-[1.02]",
-            className
-        )} onClick={onClick}>
-            <CardContent className="p-6">
-                <div className="flex items-center justify-between">
+        <Card
+            className={cn(
+                "relative overflow-hidden border-2 border-transparent transition-all duration-200",
+                isInteractive && "cursor-pointer hover:shadow-lg hover:-translate-y-0.5",
+                isInteractive && metricBorderAccent[color],
+                className
+            )}
+            onClick={onClick}
+        >
+            <CardContent className="flex h-full flex-col p-5">
+                <div className="flex items-start justify-between gap-2">
                     {icon && (
-                        <div className={cn("rounded-lg p-2", colorClasses[color])}>
+                        <div className={cn("rounded-xl p-2.5 shadow-sm", colorClasses[color])}>
                             {icon}
                         </div>
                     )}
                     {trend && (
-                        <div className={cn(
-                            "flex items-center gap-1 text-[10px] font-black uppercase tracking-tighter",
-                            trend.isPositive ? "text-emerald-500" : "text-rose-500"
-                        )}>
+                        <div
+                            className={cn(
+                                "flex items-center gap-1 text-[10px] font-bold uppercase tracking-tight",
+                                trend.isPositive ? "text-emerald-600" : "text-rose-600"
+                            )}
+                        >
                             {trend.value}
-                            <svg
-                                className="h-3 w-3"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                            >
-                                <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d={trend.isPositive
-                                        ? "M7 17L17 7M17 7H7M17 7V17"
-                                        : "M17 17L7 7M7 7H17M7 7V17"
-                                    }
-                                />
-                            </svg>
                         </div>
                     )}
                 </div>
-                <div className="mt-4">
-                    <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground/60">
+                <div className="mt-4 flex-1">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                         {title}
-                    </h2>
-                    <p className="mt-1 text-2xl font-black tracking-tighter">{metric}</p>
+                    </p>
+                    <p className="mt-1 text-3xl font-bold tabular-nums tracking-tight">{metric}</p>
+                    {description && (
+                        <p className="mt-1.5 text-xs text-muted-foreground line-clamp-2">{description}</p>
+                    )}
                 </div>
-                <div className={cn(
-                    "absolute -right-4 -top-4 h-24 w-24 rounded-full opacity-[0.03]",
-                    colorClasses[color].split(" ")[0]
-                )} />
+                {isInteractive && (
+                    <div className="mt-4 flex items-center gap-1 text-xs font-semibold text-primary group-hover:gap-2 transition-all">
+                        {actionLabel}
+                        <ChevronRight className="h-4 w-4" />
+                    </div>
+                )}
             </CardContent>
         </Card>
     )
-    
+
     if (href) {
-        // Import Link dynamically to avoid issues
-        const Link = require("next/link").default
-        return <Link href={href}>{cardContent}</Link>
+        return (
+            <Link href={href} className="group block h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-xl">
+                {cardContent}
+            </Link>
+        )
     }
-    
+
     return cardContent
 }
 

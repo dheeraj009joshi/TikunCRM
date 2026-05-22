@@ -4,7 +4,7 @@ import * as React from "react"
 import { Building2, Check, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
-import { AuthService, DealershipOption } from "@/services/auth-service"
+import { AuthService, DealershipOption, dealershipLoginKey } from "@/services/auth-service"
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -51,21 +51,25 @@ export function DealershipSwitcher({ collapsed = false }: DealershipSwitcherProp
 
     const currentOption =
         options.find((o) =>
-            o.is_super_admin
-                ? user?.dealership_id == null
-                : o.id === user?.dealership_id
+            o.is_bdc
+                ? user?.role === "bdc"
+                : o.is_super_admin
+                  ? user?.role === "super_admin"
+                  : o.id === user?.dealership_id
         ) ?? options[0]
 
     const handleSwitch = async (option: DealershipOption) => {
         const isCurrent =
-            option.is_super_admin
-                ? user?.dealership_id == null
-                : option.id === user?.dealership_id
+            option.is_bdc
+                ? user?.role === "bdc"
+                : option.is_super_admin
+                  ? user?.role === "super_admin"
+                  : option.id === user?.dealership_id
         if (isCurrent || isSwitching) return
 
         setIsSwitching(true)
         try {
-            await AuthService.switchDealership(option.is_super_admin ? null : option.id)
+            await AuthService.switchDealership(option)
             window.location.href = "/dashboard"
         } catch (error) {
             console.error("Failed to switch dealership:", error)
@@ -103,12 +107,14 @@ export function DealershipSwitcher({ collapsed = false }: DealershipSwitcherProp
                 <DropdownMenuSeparator />
                 {options.map((option) => {
                     const isCurrent =
-                        option.is_super_admin
-                            ? user?.dealership_id == null
-                            : option.id === user?.dealership_id
+                        option.is_bdc
+                            ? user?.role === "bdc"
+                            : option.is_super_admin
+                              ? user?.role === "super_admin"
+                              : option.id === user?.dealership_id
                     return (
                         <DropdownMenuItem
-                            key={option.is_super_admin ? "super_admin" : option.id!}
+                            key={dealershipLoginKey(option)}
                             onClick={() => handleSwitch(option)}
                             className="flex items-center gap-2"
                         >

@@ -40,6 +40,9 @@ export interface BdcDealershipBreakdown {
     name: string;
     total_leads: number;
     unassigned_leads: number;
+    overdue_follow_ups: number;
+    todays_follow_ups: number;
+    fresh_leads: number;
 }
 
 export interface BdcStats {
@@ -51,6 +54,7 @@ export interface BdcStats {
     todays_follow_ups: number;
     overdue_follow_ups: number;
     upcoming_appointments: number;
+    fresh_leads: number;
     dealership_count: number;
     dealerships: BdcDealershipBreakdown[];
 }

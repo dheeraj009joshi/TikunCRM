@@ -875,7 +875,13 @@ async def notify_lead_assigned_to_dealership_background(
                 lead_id,
                 len(notifications),
             )
-            await emit_badges_refresh(notifications=True)
+            await emit_badges_refresh(unassigned=True, notifications=True)
+            await emit_lead_created(
+                str(lead_id),
+                str(dealership_id),
+                {"dealership_id": str(dealership_id)},
+                db=db,
+            )
         except Exception as e:
             await db.rollback()
             logger.warning("notify_lead_assigned_to_dealership_background failed: %s\n%s", e, traceback.format_exc())
@@ -1007,13 +1013,11 @@ async def emit_lead_created(lead_id: str, dealership_id: Optional[str], lead_dat
         }
         
         if dealership_id:
-            # Broadcast to all users in the dealership
-            await ws_manager.broadcast_to_dealership(dealership_id, message)
+            await ws_manager.broadcast_to_dealership(str(dealership_id), message)
         else:
-            # Broadcast to all connected users (for unassigned pool leads)
             await ws_manager.broadcast_all(message)
-        
-        # Also trigger stats refresh for dashboards
+
+        await emit_badges_refresh(unassigned=True, notifications=True)
         await emit_stats_refresh(dealership_id, db=db)
     except Exception as e:
         logger.warning(f"Failed to emit lead:created WebSocket event: {e}")

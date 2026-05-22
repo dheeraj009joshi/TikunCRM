@@ -68,6 +68,9 @@ class BdcDealershipBreakdown(BaseModel):
     name: str
     total_leads: int
     unassigned_leads: int
+    overdue_follow_ups: int = 0
+    todays_follow_ups: int = 0
+    fresh_leads: int = 0
 
 
 class BdcStats(BaseModel):
@@ -79,6 +82,7 @@ class BdcStats(BaseModel):
     todays_follow_ups: int
     overdue_follow_ups: int
     upcoming_appointments: int
+    fresh_leads: int = 0
     dealership_count: int
     dealerships: List[BdcDealershipBreakdown]
 
@@ -488,11 +492,18 @@ async def get_bdc_stats(
             todays_follow_ups=0,
             overdue_follow_ups=0,
             upcoming_appointments=0,
+            fresh_leads=0,
             dealership_count=0,
             dealerships=[],
         )
 
     scope = Lead.dealership_id.in_(accessible_ids)
+    fresh_subq = (
+        select(Activity.lead_id)
+        .where(Activity.lead_id.isnot(None))
+        .group_by(Activity.lead_id)
+        .having(func.count(Activity.id) == 1)
+    )
     total_result = await db.execute(
         select(func.count()).select_from(Lead).where(scope)
     )
@@ -551,6 +562,17 @@ async def get_bdc_stats(
         )
     )
 
+    fresh_leads_result = await db.execute(
+        select(func.count()).select_from(Lead).where(
+            and_(
+                scope,
+                Lead.assigned_to.is_(None),
+                Lead.id.in_(fresh_subq),
+            )
+        )
+    )
+    fresh_leads_total = fresh_leads_result.scalar() or 0
+
     dealer_rows = await db.execute(
         select(Dealership.id, Dealership.name)
         .where(Dealership.id.in_(accessible_ids))
@@ -558,12 +580,41 @@ async def get_bdc_stats(
     )
     breakdown = []
     for did, dname in dealer_rows.fetchall():
+        d_scope = Lead.dealership_id == did
+        d_lead_ids = select(Lead.id).where(d_scope)
         d_total = await db.execute(
-            select(func.count()).select_from(Lead).where(Lead.dealership_id == did)
+            select(func.count()).select_from(Lead).where(d_scope)
         )
         d_unassigned = await db.execute(
             select(func.count()).select_from(Lead).where(
-                and_(Lead.dealership_id == did, Lead.assigned_to.is_(None))
+                and_(d_scope, Lead.assigned_to.is_(None))
+            )
+        )
+        d_overdue = await db.execute(
+            select(func.count()).select_from(FollowUp).where(
+                and_(
+                    FollowUp.lead_id.in_(d_lead_ids),
+                    FollowUp.status == FollowUpStatus.PENDING,
+                    FollowUp.scheduled_at < now,
+                )
+            )
+        )
+        d_today_fu = await db.execute(
+            select(func.count()).select_from(FollowUp).where(
+                and_(
+                    FollowUp.lead_id.in_(d_lead_ids),
+                    FollowUp.status == FollowUpStatus.PENDING,
+                    func.date(FollowUp.scheduled_at) == today,
+                )
+            )
+        )
+        d_fresh = await db.execute(
+            select(func.count()).select_from(Lead).where(
+                and_(
+                    d_scope,
+                    Lead.assigned_to.is_(None),
+                    Lead.id.in_(fresh_subq),
+                )
             )
         )
         breakdown.append(
@@ -572,6 +623,9 @@ async def get_bdc_stats(
                 name=dname,
                 total_leads=d_total.scalar() or 0,
                 unassigned_leads=d_unassigned.scalar() or 0,
+                overdue_follow_ups=d_overdue.scalar() or 0,
+                todays_follow_ups=d_today_fu.scalar() or 0,
+                fresh_leads=d_fresh.scalar() or 0,
             )
         )
 
@@ -584,6 +638,7 @@ async def get_bdc_stats(
         todays_follow_ups=todays_fu.scalar() or 0,
         overdue_follow_ups=overdue_fu.scalar() or 0,
         upcoming_appointments=upcoming_appt.scalar() or 0,
+        fresh_leads=fresh_leads_total,
         dealership_count=len(accessible_ids),
         dealerships=breakdown,
     )

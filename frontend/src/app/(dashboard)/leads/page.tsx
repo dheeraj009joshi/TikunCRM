@@ -131,6 +131,7 @@ export default function LeadsPage() {
     const viewParam = searchParams.get("view")
     const assignedToParam = searchParams.get("assigned_to")
     const campaignParam = searchParams.get("campaign")
+    const dealershipIdParam = searchParams.get("dealership_id")
     const { timezone } = useBrowserTimezone()
 
     const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, isSalesperson, canAssignToSalesperson, hasPermission } = useRole()
@@ -179,6 +180,11 @@ export default function LeadsPage() {
     const [assignedTo, setAssignedTo] = React.useState(assignedToParam || "all")
     const [campaignFilter, setCampaignFilter] = React.useState(
         campaignParam && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(campaignParam) ? campaignParam : "all"
+    )
+    const [dealershipFilter, setDealershipFilter] = React.useState(
+        dealershipIdParam && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(dealershipIdParam)
+            ? dealershipIdParam
+            : "all"
     )
     const [campaignOptions, setCampaignOptions] = React.useState<CampaignFilterOption[]>([])
     const [teamMembers, setTeamMembers] = React.useState<{ id: string; first_name: string; last_name: string }[]>([])
@@ -269,6 +275,13 @@ export default function LeadsPage() {
             setCampaignFilter(urlCampaign)
         } else {
             setCampaignFilter("all")
+        }
+
+        const urlDealershipId = searchParams.get("dealership_id")
+        if (urlDealershipId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(urlDealershipId)) {
+            setDealershipFilter(urlDealershipId)
+        } else {
+            setDealershipFilter("all")
         }
     }, [searchParams])
 
@@ -432,6 +445,7 @@ export default function LeadsPage() {
             params.stage_id = status
         }
         if (assignedTo && assignedTo !== "all") params.assigned_to = assignedTo
+        if (dealershipFilter && dealershipFilter !== "all") params.dealership_id = dealershipFilter
 
         if (dateMode === "single" && specificDate) {
             params.date_from = startOfDay(specificDate).toISOString()
@@ -450,6 +464,7 @@ export default function LeadsPage() {
         stages,
         status,
         assignedTo,
+        dealershipFilter,
         dateMode,
         specificDate,
         dateFrom,
@@ -485,6 +500,7 @@ export default function LeadsPage() {
             if (source && source !== "all") baseParams.source = source
             if (campaignFilter !== "all") baseParams.campaign_mapping_id = campaignFilter
             if (assignedTo && assignedTo !== "all") baseParams.assigned_to = assignedTo
+            if (dealershipFilter && dealershipFilter !== "all") baseParams.dealership_id = dealershipFilter
 
             // Date range filters
             if (dateMode === "single" && specificDate) {

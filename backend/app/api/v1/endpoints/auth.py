@@ -22,6 +22,7 @@ from app.core.security import (
     verify_token,
 )
 from app.core.timezone import utc_now
+from app.core.access_scope import build_ws_token_claims
 from app.db.database import get_db
 from app.models.user import User, UserRole
 from app.models.dealership import Dealership
@@ -69,18 +70,52 @@ def _build_dealership_options(
     options: List[DealershipLookupOption] = []
     for u in users:
         if u.dealership_id is None:
-            options.append(DealershipLookupOption(
-                id=None,
-                name="Super Admin",
-                is_super_admin=True,
-            ))
+            if u.role == UserRole.BDC:
+                options.append(DealershipLookupOption(
+                    id=None,
+                    name="BDC Agent",
+                    is_super_admin=False,
+                    is_bdc=True,
+                ))
+            elif u.role == UserRole.SUPER_ADMIN:
+                options.append(DealershipLookupOption(
+                    id=None,
+                    name="Super Admin",
+                    is_super_admin=True,
+                    is_bdc=False,
+                ))
+            else:
+                options.append(DealershipLookupOption(
+                    id=None,
+                    name="Organization",
+                    is_super_admin=False,
+                    is_bdc=False,
+                ))
         else:
             options.append(DealershipLookupOption(
                 id=u.dealership_id,
                 name=dealership_name_by_id.get(u.dealership_id, "Dealership"),
                 is_super_admin=False,
+                is_bdc=False,
             ))
     return options
+
+
+def _filter_users_by_account_kind(
+    users: List[User],
+    *,
+    dealership_id: Optional[UUID] = None,
+    account_kind: Optional[str] = None,
+) -> List[User]:
+    """Narrow user rows for login, switch, or password reset."""
+    kind = (account_kind or "").strip().lower()
+    if kind == "bdc":
+        return [u for u in users if u.role == UserRole.BDC]
+    if kind == "super_admin":
+        return [u for u in users if u.role == UserRole.SUPER_ADMIN]
+    if dealership_id is not None:
+        return [u for u in users if u.dealership_id == dealership_id]
+    return [u for u in users if u.dealership_id is None]
 
 
 async def _resolve_dealership_options(
@@ -124,8 +159,8 @@ async def login(
         None,
         description=(
             "Optional dealership UUID. Required when the email is registered "
-            "with multiple dealerships. Send an empty string or 'super_admin' "
-            "to log in as a super admin (no dealership)."
+            "with multiple dealerships. Send 'super_admin' or 'bdc' for "
+            "org-wide accounts (no dealership)."
         ),
     ),
 ) -> Any:
@@ -145,12 +180,13 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Resolve the requested dealership_id (None / "" / "super_admin" all mean super admin)
+    # Resolve dealership_id form field (UUID, super_admin, or bdc)
     requested_dealership_uuid: Optional[UUID] = None
-    requested_super_admin = False
+    account_kind: Optional[str] = None
     if dealership_id is not None and dealership_id.strip() != "":
-        if dealership_id.strip().lower() == "super_admin":
-            requested_super_admin = True
+        raw = dealership_id.strip().lower()
+        if raw in ("super_admin", "bdc"):
+            account_kind = raw
         else:
             try:
                 requested_dealership_uuid = UUID(dealership_id.strip())
@@ -160,11 +196,12 @@ async def login(
                     detail="Invalid dealership_id",
                 )
 
-    # Filter candidates by dealership_id (if provided)
-    if requested_super_admin:
-        candidates = [u for u in users if u.dealership_id is None]
+    if account_kind is not None:
+        candidates = _filter_users_by_account_kind(users, account_kind=account_kind)
     elif requested_dealership_uuid is not None:
-        candidates = [u for u in users if u.dealership_id == requested_dealership_uuid]
+        candidates = _filter_users_by_account_kind(
+            users, dealership_id=requested_dealership_uuid
+        )
     else:
         candidates = users
 
@@ -199,10 +236,7 @@ async def login(
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
     refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
 
-    # Include dealership_id in token for WebSocket dealership broadcasts
-    additional_claims = {}
-    if user.dealership_id:
-        additional_claims["dealership_id"] = str(user.dealership_id)
+    additional_claims = await build_ws_token_claims(db, user)
 
     access_token = create_access_token(
         subject=str(user.id),
@@ -274,8 +308,9 @@ async def signup(
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
     refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
     
-    # Include dealership_id in token for WebSocket dealership broadcasts
-    additional_claims = {"dealership_id": str(dealership.id)}
+    additional_claims = await build_ws_token_claims(db, user)
+    if not additional_claims.get("dealership_id"):
+        additional_claims["dealership_id"] = str(dealership.id)
     
     access_token = create_access_token(
         subject=str(user.id),
@@ -329,12 +364,9 @@ async def refresh_access_token(
             detail="account_deactivated",
         )
     
-    # Generate new access token with dealership_id for WebSocket broadcasts
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
-    additional_claims = {}
-    if user.dealership_id:
-        additional_claims["dealership_id"] = str(user.dealership_id)
-    
+    additional_claims = await build_ws_token_claims(db, user)
+
     access_token = create_access_token(
         subject=str(user.id),
         expires_delta=access_token_expires,
@@ -365,14 +397,12 @@ async def get_current_user_info(
     return current_user
 
 
-def _issue_tokens_for_user(user: User) -> dict:
+async def _issue_tokens_for_user(db: AsyncSession, user: User) -> dict:
     """Build access/refresh tokens and response payload for a user."""
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
     refresh_token_expires = timedelta(days=settings.refresh_token_expire_days)
 
-    additional_claims = {}
-    if user.dealership_id:
-        additional_claims["dealership_id"] = str(user.dealership_id)
+    additional_claims = await build_ws_token_claims(db, user)
 
     access_token = create_access_token(
         subject=str(user.id),
@@ -394,12 +424,16 @@ def _issue_tokens_for_user(user: User) -> dict:
 def _resolve_target_user_for_dealership(
     users: List[User],
     dealership_id: Optional[UUID],
+    account_kind: Optional[str] = None,
 ) -> Optional[User]:
-    """Pick the active user row for the requested dealership (or super admin)."""
-    if dealership_id is None:
-        candidates = [u for u in users if u.dealership_id is None]
+    """Pick the active user row for the requested dealership or org-wide role."""
+    if dealership_id is not None:
+        candidates = _filter_users_by_account_kind(users, dealership_id=dealership_id)
+    elif account_kind:
+        candidates = _filter_users_by_account_kind(users, account_kind=account_kind)
     else:
-        candidates = [u for u in users if u.dealership_id == dealership_id]
+        # Legacy: null dealership_id without account_kind → super admin only
+        candidates = _filter_users_by_account_kind(users, account_kind="super_admin")
     active = [u for u in candidates if u.is_active]
     return (active or candidates)[0] if candidates else None
 
@@ -437,7 +471,9 @@ async def switch_dealership(
             detail="No accounts found for this email",
         )
 
-    target = _resolve_target_user_for_dealership(users, body.dealership_id)
+    target = _resolve_target_user_for_dealership(
+        users, body.dealership_id, body.account_kind
+    )
     if not target:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -445,7 +481,7 @@ async def switch_dealership(
         )
 
     if target.id == current_user.id:
-        return _issue_tokens_for_user(current_user)
+        return await _issue_tokens_for_user(db, current_user)
 
     if not target.is_active:
         raise HTTPException(
@@ -453,7 +489,7 @@ async def switch_dealership(
             detail="account_deactivated",
         )
 
-    return _issue_tokens_for_user(target)
+    return await _issue_tokens_for_user(db, target)
 
 
 # ============== Password Reset Endpoints ==============
@@ -537,14 +573,19 @@ async def forgot_password(
     users = await _load_users_by_email(db, request.email)
     active_users = [u for u in users if u.is_active]
 
-    # Filter by requested dealership_id (if provided)
     if request.dealership_id is not None:
-        candidates = [u for u in active_users if u.dealership_id == request.dealership_id]
+        candidates = _filter_users_by_account_kind(
+            active_users, dealership_id=request.dealership_id
+        )
+    elif request.account_kind:
+        candidates = _filter_users_by_account_kind(
+            active_users, account_kind=request.account_kind
+        )
     else:
         candidates = active_users
 
-    # Multiple matches without a dealership_id → ask client to pick one
-    if request.dealership_id is None and len(candidates) > 1:
+    # Multiple matches without disambiguation → ask client to pick one
+    if request.dealership_id is None and not request.account_kind and len(candidates) > 1:
         options = await _resolve_dealership_options(db, candidates)
         detail = DealershipRequiredDetail(
             message="This email is registered with multiple dealerships. Select one to continue.",

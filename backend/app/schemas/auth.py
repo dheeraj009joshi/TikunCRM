@@ -26,9 +26,10 @@ class DealershipLookupRequest(BaseModel):
 
 class DealershipLookupOption(BaseModel):
     """A single dealership a given email belongs to."""
-    id: Optional[UUID] = None  # None for super admin (no dealership)
+    id: Optional[UUID] = None  # None for org-wide roles (super admin, BDC)
     name: str
     is_super_admin: bool = False
+    is_bdc: bool = False
 
 
 class DealershipLookupResponse(BaseModel):
@@ -47,7 +48,11 @@ class SwitchDealershipRequest(BaseModel):
     """Switch the active session to another dealership account with the same email."""
     dealership_id: Optional[UUID] = Field(
         None,
-        description="Target dealership UUID. Omit or null for super admin account.",
+        description="Target dealership UUID. Omit or null for org-wide accounts.",
+    )
+    account_kind: Optional[str] = Field(
+        None,
+        description="When dealership_id is null: 'super_admin' or 'bdc'.",
     )
 
 
@@ -114,6 +119,10 @@ class ForgotPasswordRequest(BaseModel):
     # Required when the email exists in multiple dealerships. If omitted and the
     # email matches more than one user, the API responds 409 dealership_required.
     dealership_id: Optional[UUID] = None
+    account_kind: Optional[str] = Field(
+        None,
+        description="When dealership_id is null: 'super_admin' or 'bdc'.",
+    )
 
 
 class ForgotPasswordResponse(BaseModel):

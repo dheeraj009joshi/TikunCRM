@@ -473,6 +473,7 @@ def _build_leads_list_select(
     fresh_only: Optional[bool] = None,
     multi_campaign_only: Optional[bool] = None,
     campaign_mapping_id: Optional[UUID] = None,
+    dealership_id: Optional[UUID] = None,
 ):
     """
     Shared SELECT for list_leads and export_leads_csv — same visibility and filters
@@ -535,6 +536,17 @@ def _build_leads_list_select(
             pass
         else:
             query = query.where(Lead.assigned_to == assigned_to)
+
+    if dealership_id is not None:
+        may_filter = current_user.role == UserRole.SUPER_ADMIN
+        if accessible_dealership_ids and dealership_id in accessible_dealership_ids:
+            may_filter = True
+        if current_user.dealership_id == dealership_id:
+            may_filter = True
+        if may_filter:
+            query = query.where(Lead.dealership_id == dealership_id)
+        else:
+            query = query.where(Lead.id.is_(None))
 
     if stage_id:
         query = query.where(Lead.stage_id == stage_id)
@@ -608,6 +620,10 @@ async def list_leads(
     assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson (admin/owner only). Show only leads assigned to this user."),
     date_from: Optional[datetime] = Query(None, description="Filter leads created on or after this date (ISO format)"),
     date_to: Optional[datetime] = Query(None, description="Filter leads created on or before this date (ISO format)"),
+    dealership_id: Optional[UUID] = Query(
+        None,
+        description="Filter by dealership (BDC / super admin with access)",
+    ),
 ) -> Any:
     """
     List leads with filtering and pagination.
@@ -637,6 +653,7 @@ async def list_leads(
         fresh_only=fresh_only,
         multi_campaign_only=multi_campaign_only,
         campaign_mapping_id=campaign_mapping_id,
+        dealership_id=dealership_id,
     )
 
     # Pagination

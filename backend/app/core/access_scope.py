@@ -1,7 +1,7 @@
 """
 Dealership access scoping for multi-store BDC and other roles.
 """
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy import select
@@ -10,6 +10,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.permissions import UserRole
 from app.models.user import User
 from app.models.user_dealership_access import UserDealershipAccess
+
+
+async def build_ws_token_claims(db: AsyncSession, user: User) -> Dict[str, Any]:
+    """
+    JWT claims used by the WebSocket endpoint to subscribe users to the right
+    dealership broadcast channels (especially BDC multi-store access).
+    """
+    role = user.role.value if hasattr(user.role, "value") else str(user.role)
+    claims: Dict[str, Any] = {"role": role}
+    if user.dealership_id:
+        claims["dealership_id"] = str(user.dealership_id)
+    if user.role == UserRole.BDC:
+        ids = await get_accessible_dealership_ids(db, user)
+        if ids:
+            claims["accessible_dealership_ids"] = [str(i) for i in ids]
+    return claims
 
 
 async def get_accessible_dealership_ids(

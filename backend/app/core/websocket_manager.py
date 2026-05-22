@@ -3,7 +3,6 @@ WebSocket Connection Manager for real-time updates
 """
 import logging
 from typing import Dict, List, Optional, Set
-from uuid import UUID
 import json
 
 from fastapi import WebSocket
@@ -17,45 +16,84 @@ class WebSocketManager:
     Supports:
     - Per-user connections (notifications, lead updates)
     - Broadcasting to multiple users
-    - Dealership-wide broadcasts
+    - Dealership-wide broadcasts (including BDC agents on multiple stores)
     """
     
     def __init__(self):
         # user_id -> set of WebSocket connections (user might have multiple tabs)
         self.active_connections: Dict[str, Set[WebSocket]] = {}
-        # dealership_id -> set of user_ids (for dealership broadcasts)
+        # dealership_id -> set of user_ids subscribed to that dealership's events
         self.dealership_users: Dict[str, Set[str]] = {}
+        # user_id -> dealership ids this connection is registered under (for cleanup)
+        self.user_broadcast_dealerships: Dict[str, Set[str]] = {}
     
-    async def connect(self, websocket: WebSocket, user_id: str, dealership_id: Optional[str] = None):
-        """Accept a new WebSocket connection"""
+    def _register_user_for_dealerships(
+        self,
+        user_id: str,
+        dealership_ids: Set[str],
+    ) -> None:
+        """Subscribe user_id to dealership-wide broadcast channels."""
+        self.user_broadcast_dealerships[user_id] = set(dealership_ids)
+        for dealership_id in dealership_ids:
+            if not dealership_id:
+                continue
+            if dealership_id not in self.dealership_users:
+                self.dealership_users[dealership_id] = set()
+            self.dealership_users[dealership_id].add(user_id)
+
+    def _unregister_user_dealerships(self, user_id: str) -> None:
+        for dealership_id in self.user_broadcast_dealerships.pop(user_id, set()):
+            if dealership_id in self.dealership_users:
+                self.dealership_users[dealership_id].discard(user_id)
+                if not self.dealership_users[dealership_id]:
+                    del self.dealership_users[dealership_id]
+
+    async def connect(
+        self,
+        websocket: WebSocket,
+        user_id: str,
+        dealership_id: Optional[str] = None,
+        accessible_dealership_ids: Optional[List[str]] = None,
+    ):
+        """Accept a new WebSocket connection and register broadcast subscriptions."""
         await websocket.accept()
         
-        # Add to user's connections
         if user_id not in self.active_connections:
             self.active_connections[user_id] = set()
         self.active_connections[user_id].add(websocket)
         
-        # Track dealership membership for broadcasts
+        dealers_to_register: Set[str] = set()
         if dealership_id:
-            if dealership_id not in self.dealership_users:
-                self.dealership_users[dealership_id] = set()
-            self.dealership_users[dealership_id].add(user_id)
-            logger.info(f"WebSocket connected: user={user_id}, dealership={dealership_id} (now {len(self.dealership_users[dealership_id])} users in dealership)")
+            dealers_to_register.add(str(dealership_id))
+        if accessible_dealership_ids:
+            dealers_to_register.update(str(d) for d in accessible_dealership_ids if d)
+        
+        self._register_user_for_dealerships(user_id, dealers_to_register)
+        
+        if dealers_to_register:
+            logger.info(
+                "WebSocket connected: user=%s dealerships=%s",
+                user_id,
+                sorted(dealers_to_register),
+            )
         else:
-            logger.warning(f"WebSocket connected WITHOUT dealership_id: user={user_id} - dealership broadcasts won't reach this user!")
+            logger.info(
+                "WebSocket connected: user=%s (user-targeted events only; no dealership subscription)",
+                user_id,
+            )
     
-    def disconnect(self, websocket: WebSocket, user_id: str, dealership_id: Optional[str] = None):
-        """Remove a WebSocket connection"""
+    def disconnect(
+        self,
+        websocket: WebSocket,
+        user_id: str,
+        dealership_id: Optional[str] = None,
+    ):
+        """Remove a WebSocket connection and dealership subscriptions."""
         if user_id in self.active_connections:
             self.active_connections[user_id].discard(websocket)
-            # Clean up if no more connections for this user
             if not self.active_connections[user_id]:
                 del self.active_connections[user_id]
-                # Remove from dealership tracking
-                if dealership_id and dealership_id in self.dealership_users:
-                    self.dealership_users[dealership_id].discard(user_id)
-                    if not self.dealership_users[dealership_id]:
-                        del self.dealership_users[dealership_id]
+                self._unregister_user_dealerships(user_id)
         
         logger.info(f"WebSocket disconnected: user={user_id}")
     
@@ -70,7 +108,6 @@ class WebSocketManager:
                     logger.warning(f"Failed to send to user {user_id}: {e}")
                     dead_connections.add(websocket)
             
-            # Remove dead connections
             for ws in dead_connections:
                 self.active_connections[user_id].discard(ws)
     
@@ -79,20 +116,35 @@ class WebSocketManager:
         for user_id in user_ids:
             await self.send_to_user(user_id, message)
     
-    async def broadcast_to_dealership(self, dealership_id: str, message: dict, exclude_user: Optional[str] = None):
-        """Broadcast a message to all users in a dealership"""
+    async def broadcast_to_dealership(
+        self,
+        dealership_id: str,
+        message: dict,
+        exclude_user: Optional[str] = None,
+    ):
+        """Broadcast a message to all users subscribed to a dealership (incl. BDC)."""
         if not dealership_id:
             logger.warning("broadcast_to_dealership called with empty dealership_id")
             return
         
+        dealership_id = str(dealership_id)
         if dealership_id in self.dealership_users:
             user_count = len(self.dealership_users[dealership_id])
-            logger.info(f"Broadcasting {message.get('type')} to {user_count} users in dealership {dealership_id}")
+            logger.info(
+                "Broadcasting %s to %s users in dealership %s",
+                message.get("type"),
+                user_count,
+                dealership_id,
+            )
             for user_id in self.dealership_users[dealership_id]:
                 if user_id != exclude_user:
                     await self.send_to_user(user_id, message)
         else:
-            logger.warning(f"No users connected for dealership {dealership_id}. Active dealerships: {list(self.dealership_users.keys())}")
+            logger.debug(
+                "No users connected for dealership %s (event %s)",
+                dealership_id,
+                message.get("type"),
+            )
     
     async def broadcast_all(self, message: dict):
         """Broadcast a message to all connected users"""
