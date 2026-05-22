@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.permissions import UserRole
+from app.core.access_scope import get_accessible_dealership_ids, apply_dealership_scope_to_query, user_can_access_dealership
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
@@ -51,6 +52,22 @@ def get_start_of_week():
     now = utc_now()
     start_of_week = now - timedelta(days=now.weekday())
     return start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _scope_appointment_queries(query, count_query, db, user):
+    """Apply role-based dealership / assignee filters."""
+    accessible_ids = await get_accessible_dealership_ids(db, user)
+    if accessible_ids is None:
+        return query, count_query
+    if user.role == UserRole.SALESPERSON:
+        return (
+            query.where(Appointment.assigned_to == user.id),
+            count_query.where(Appointment.assigned_to == user.id),
+        )
+    return (
+        apply_dealership_scope_to_query(query, accessible_ids, Appointment.dealership_id),
+        apply_dealership_scope_to_query(count_query, accessible_ids, Appointment.dealership_id),
+    )
 
 
 @router.post("", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
@@ -99,9 +116,20 @@ async def create_appointment(
                             performer_user_id=current_user.id,
                         )
 
-    # Determine dealership
     dealership_id = current_user.dealership_id
-    
+    if appointment_in.lead_id:
+        lead_for_dealer = await db.execute(
+            select(Lead).where(Lead.id == appointment_in.lead_id)
+        )
+        lead_row = lead_for_dealer.scalar_one_or_none()
+        if lead_row and lead_row.dealership_id:
+            if current_user.role == UserRole.BDC:
+                if not await user_can_access_dealership(
+                    db, current_user, lead_row.dealership_id
+                ):
+                    raise HTTPException(status_code=403, detail="Not authorized for this lead")
+            dealership_id = lead_row.dealership_id
+
     # Determine assigned_to: prefer explicit, then lead's primary salesperson, then current user
     assigned_to_id = appointment_in.assigned_to
     if not assigned_to_id and appointment_in.lead_id:
@@ -247,17 +275,10 @@ async def list_appointments(
     )
     count_query = select(func.count(Appointment.id))
     
-    # Apply role-based filtering
-    if current_user.role == UserRole.SUPER_ADMIN:
-        pass  # No filter
-    elif current_user.role in [UserRole.DEALERSHIP_OWNER, UserRole.DEALERSHIP_ADMIN]:
-        query = query.where(Appointment.dealership_id == current_user.dealership_id)
-        count_query = count_query.where(Appointment.dealership_id == current_user.dealership_id)
-    else:
-        # Salesperson - own appointments only
-        query = query.where(Appointment.assigned_to == current_user.id)
-        count_query = count_query.where(Appointment.assigned_to == current_user.id)
-    
+    query, count_query = await _scope_appointment_queries(
+        query, count_query, db, current_user
+    )
+
     # Apply filters
     if status_filter:
         query = query.where(Appointment.status == status_filter)
@@ -363,13 +384,15 @@ async def get_appointment_stats(
     start_of_day, end_of_day = get_date_range_for_today()
     start_of_week = get_start_of_week()
     
-    # Base query filter based on role
-    if current_user.role == UserRole.SUPER_ADMIN:
+    accessible_ids = await get_accessible_dealership_ids(db, current_user)
+    if accessible_ids is None:
         base_filter = literal(True)
-    elif current_user.role in [UserRole.DEALERSHIP_OWNER, UserRole.DEALERSHIP_ADMIN]:
-        base_filter = Appointment.dealership_id == current_user.dealership_id
-    else:
+    elif current_user.role == UserRole.SALESPERSON:
         base_filter = Appointment.assigned_to == current_user.id
+    elif accessible_ids:
+        base_filter = Appointment.dealership_id.in_(accessible_ids)
+    else:
+        base_filter = literal(False)
     
     # Today's appointments
     today_result = await db.execute(
@@ -480,22 +503,21 @@ async def get_appointment(
             detail="Appointment not found"
         )
     
-    # Check access
-    if current_user.role == UserRole.SUPER_ADMIN:
-        pass
-    elif current_user.role in [UserRole.DEALERSHIP_OWNER, UserRole.DEALERSHIP_ADMIN]:
-        if appointment.dealership_id != current_user.dealership_id:
+    if not await user_can_access_dealership(db, current_user, appointment.dealership_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view this appointment",
+        )
+    if current_user.role == UserRole.SALESPERSON:
+        if (
+            appointment.assigned_to != current_user.id
+            and appointment.scheduled_by != current_user.id
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this appointment"
+                detail="Not authorized to view this appointment",
             )
-    else:
-        if appointment.assigned_to != current_user.id and appointment.scheduled_by != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this appointment"
-            )
-    
+
     return appointment
 
 
@@ -520,22 +542,21 @@ async def update_appointment(
             detail="Appointment not found"
         )
     
-    # Check access
-    if current_user.role == UserRole.SUPER_ADMIN:
-        pass
-    elif current_user.role in [UserRole.DEALERSHIP_OWNER, UserRole.DEALERSHIP_ADMIN]:
-        if appointment.dealership_id != current_user.dealership_id:
+    if not await user_can_access_dealership(db, current_user, appointment.dealership_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to update this appointment",
+        )
+    if current_user.role == UserRole.SALESPERSON:
+        if (
+            appointment.assigned_to != current_user.id
+            and appointment.scheduled_by != current_user.id
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to update this appointment"
+                detail="Not authorized to update this appointment",
             )
-    else:
-        if appointment.assigned_to != current_user.id and appointment.scheduled_by != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to update this appointment"
-            )
-    
+
     # Update fields
     update_data = appointment_in.model_dump(exclude_unset=True)
     for field, value in update_data.items():
@@ -586,7 +607,12 @@ async def complete_appointment(
         )
     
     # Check access
-    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_OWNER, UserRole.DEALERSHIP_ADMIN]:
+    if current_user.role not in [
+        UserRole.SUPER_ADMIN,
+        UserRole.DEALERSHIP_OWNER,
+        UserRole.DEALERSHIP_ADMIN,
+        UserRole.BDC,
+    ]:
         if appointment.assigned_to != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -658,16 +684,12 @@ async def delete_appointment(
             detail="Appointment not found"
         )
     
-    # Check access - only admins and creators can delete
-    if current_user.role == UserRole.SUPER_ADMIN:
-        pass
-    elif current_user.role in [UserRole.DEALERSHIP_OWNER, UserRole.DEALERSHIP_ADMIN]:
-        if appointment.dealership_id != current_user.dealership_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to delete this appointment"
-            )
-    else:
+    if not await user_can_access_dealership(db, current_user, appointment.dealership_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to delete this appointment",
+        )
+    if current_user.role == UserRole.SALESPERSON:
         if appointment.scheduled_by != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

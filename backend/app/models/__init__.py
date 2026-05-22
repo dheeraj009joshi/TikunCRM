@@ -5,6 +5,7 @@ from app.models.customer import Customer
 from app.models.lead_stage import LeadStage
 from app.models.dealership import Dealership
 from app.models.user import User
+from app.models.user_dealership_access import UserDealershipAccess
 from app.models.lead import Lead, LeadSource
 from app.models.activity import Activity, ActivityType
 from app.models.follow_up import FollowUp, FollowUpStatus
@@ -45,6 +46,7 @@ __all__ = [
     "LeadStage",
     "Dealership",
     "User",
+    "UserDealershipAccess",
     "Lead",
     "LeadSource",
     "Activity",

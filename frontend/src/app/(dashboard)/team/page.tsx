@@ -83,6 +83,9 @@ import { getApiErrorMessage } from "@/lib/api-errors"
 import { BarChart } from "@tremor/react"
 import { SalespersonPendingTasksModal } from "@/components/team/salesperson-pending-tasks-modal"
 import { NotifySalespersonDialog } from "@/components/team/notify-salesperson-dialog"
+import { CreateUserModal } from "@/components/team/create-user-modal"
+import { EditBdcDealershipsModal } from "@/components/team/edit-bdc-dealerships-modal"
+import { UserBrief } from "@/services/team-service"
 
 export default function TeamPage() {
     const { toast } = useToast()
@@ -117,6 +120,9 @@ export default function TeamPage() {
     } | null>(null)
     const [isTogglingStatus, setIsTogglingStatus] = React.useState(false)
     const [togglingUserId, setTogglingUserId] = React.useState<string | null>(null)
+    const [bdcAgents, setBdcAgents] = React.useState<UserBrief[]>([])
+    const [createUserOpen, setCreateUserOpen] = React.useState(false)
+    const [editBdcUser, setEditBdcUser] = React.useState<UserBrief | null>(null)
 
     const fetchTeam = React.useCallback(async () => {
         try {
@@ -133,7 +139,12 @@ export default function TeamPage() {
 
     React.useEffect(() => {
         fetchTeam()
-    }, [fetchTeam])
+        if (isSuperAdmin) {
+            TeamService.listBdcAgents()
+                .then(setBdcAgents)
+                .catch(() => setBdcAgents([]))
+        }
+    }, [fetchTeam, isSuperAdmin])
 
     React.useEffect(() => {
         const dealershipKey = teamDealershipId ?? user?.dealership_id
@@ -289,10 +300,60 @@ export default function TeamPage() {
                         }
                     </p>
                 </div>
-                <Button onClick={() => { setAddMemberError(null); setIsAddModalOpen(true); }} leftIcon={<UserPlus className="h-4 w-4" />}>
-                    Add Team Member
-                </Button>
+                <div className="flex gap-2">
+                    {isSuperAdmin && (
+                        <Button variant="outline" onClick={() => setCreateUserOpen(true)}>
+                            <UserPlus className="mr-2 h-4 w-4" />
+                            Add BDC Agent
+                        </Button>
+                    )}
+                    <Button onClick={() => { setAddMemberError(null); setIsAddModalOpen(true); }} leftIcon={<UserPlus className="h-4 w-4" />}>
+                        Add Team Member
+                    </Button>
+                </div>
             </div>
+
+            {isSuperAdmin && bdcAgents.length > 0 && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-lg">BDC Agents</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Name</TableHead>
+                                    <TableHead>Email</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead className="w-32">Actions</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {bdcAgents.map((agent) => (
+                                    <TableRow key={agent.id}>
+                                        <TableCell>{agent.first_name} {agent.last_name}</TableCell>
+                                        <TableCell>{agent.email}</TableCell>
+                                        <TableCell>
+                                            <Badge variant={agent.is_active ? "interested" : "not_interested"}>
+                                                {agent.is_active ? "Active" : "Inactive"}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={() => setEditBdcUser(agent)}
+                                            >
+                                                Dealerships
+                                            </Button>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+            )}
 
             {/* Stats Row */}
             <div className="grid gap-4 md:grid-cols-4">
@@ -788,6 +849,22 @@ export default function TeamPage() {
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
+
+            <CreateUserModal
+                isOpen={createUserOpen}
+                onClose={() => setCreateUserOpen(false)}
+                onSuccess={() => {
+                    TeamService.listBdcAgents().then(setBdcAgents).catch(() => {})
+                }}
+            />
+            <EditBdcDealershipsModal
+                user={editBdcUser}
+                isOpen={!!editBdcUser}
+                onClose={() => setEditBdcUser(null)}
+                onSuccess={() => {
+                    TeamService.listBdcAgents().then(setBdcAgents).catch(() => {})
+                }}
+            />
         </div>
     )
 }

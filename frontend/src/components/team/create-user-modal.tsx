@@ -20,6 +20,7 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { UserService } from "@/services/user-service"
+import { TeamService } from "@/services/team-service"
 import { getApiErrorMessage } from "@/lib/api-errors"
 import { DealershipService } from "@/services/dealership-service"
 import { useRole } from "@/hooks/use-role"
@@ -39,6 +40,7 @@ const ROLE_OPTIONS = [
 
 const SUPER_ADMIN_ROLE_OPTIONS = [
     ...ROLE_OPTIONS,
+    { value: "bdc", label: "BDC Agent" },
     { value: "super_admin", label: "Super Admin" },
 ]
 
@@ -48,6 +50,7 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
     const [error, setError] = React.useState("")
     const [dealerships, setDealerships] = React.useState<any[]>([])
     const [showPassword, setShowPassword] = React.useState(false)
+    const [bdcDealershipIds, setBdcDealershipIds] = React.useState<string[]>([])
     
     const [formData, setFormData] = React.useState({
         email: "",
@@ -90,7 +93,14 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
             role: "salesperson",
             dealership_id: defaultDealershipId || "",
         })
+        setBdcDealershipIds([])
         setError("")
+    }
+
+    const toggleBdcDealership = (id: string) => {
+        setBdcDealershipIds((prev) =>
+            prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+        )
     }
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -111,7 +121,16 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
             return
         }
 
-        if (formData.role !== "super_admin" && !formData.dealership_id) {
+        if (formData.role === "bdc" && bdcDealershipIds.length === 0) {
+            setError("Select at least one dealership for the BDC agent")
+            return
+        }
+
+        if (
+            formData.role !== "super_admin" &&
+            formData.role !== "bdc" &&
+            !formData.dealership_id
+        ) {
             setError("Please select a dealership")
             return
         }
@@ -122,9 +141,15 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
         try {
             const payload = {
                 ...formData,
-                dealership_id: formData.role === "super_admin" ? null : formData.dealership_id,
+                dealership_id:
+                    formData.role === "super_admin" || formData.role === "bdc"
+                        ? null
+                        : formData.dealership_id,
             }
-            await UserService.createUser(payload)
+            const created = await UserService.createUser(payload)
+            if (formData.role === "bdc") {
+                await TeamService.setUserDealershipAccess(created.id, bdcDealershipIds)
+            }
             resetForm()
             onSuccess?.()
             onClose()
@@ -253,8 +278,28 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
                         </div>
                     </div>
 
-                    {/* Dealership - show for super admin or if not selecting super_admin role */}
-                    {formData.role !== "super_admin" && (
+                    {formData.role === "bdc" && isSuperAdmin && (
+                        <div className="space-y-2">
+                            <Label>Assigned dealerships *</Label>
+                            <div className="max-h-40 overflow-y-auto rounded-md border p-3 space-y-2">
+                                {dealerships.map((d) => (
+                                    <label
+                                        key={d.id}
+                                        className="flex items-center gap-2 text-sm cursor-pointer"
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={bdcDealershipIds.includes(d.id)}
+                                            onChange={() => toggleBdcDealership(d.id)}
+                                        />
+                                        {d.name}
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {formData.role !== "super_admin" && formData.role !== "bdc" && (
                         <div className="space-y-2">
                             <Label htmlFor="dealership">Dealership *</Label>
                             {isSuperAdmin ? (

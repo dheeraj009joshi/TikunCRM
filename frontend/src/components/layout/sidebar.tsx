@@ -122,7 +122,8 @@ const allSidebarItems: SidebarItem[] = [
     { 
         name: "Dealership", 
         icon: Store, 
-        href: "/showroom" 
+        href: "/showroom",
+        roles: ["super_admin", "dealership_owner", "dealership_admin", "salesperson"],
     },
     { 
         name: "Follow-ups", 

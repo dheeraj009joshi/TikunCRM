@@ -11,6 +11,7 @@ class UserRole(str, Enum):
     DEALERSHIP_OWNER = "dealership_owner"  # Can add admins within their dealership
     DEALERSHIP_ADMIN = "dealership_admin"  # Can only add salespersons
     SALESPERSON = "salesperson"
+    BDC = "bdc"
 
 
 class Permission(str, Enum):
@@ -19,6 +20,7 @@ class Permission(str, Enum):
     VIEW_ALL_LEADS = "view_all_leads"
     VIEW_DEALERSHIP_LEADS = "view_dealership_leads"
     VIEW_OWN_LEADS = "view_own_leads"
+    VIEW_GROUP_LEADS = "view_group_leads"
     CREATE_LEAD = "create_lead"
     UPDATE_LEAD = "update_lead"
     DELETE_LEAD = "delete_lead"
@@ -131,6 +133,18 @@ ROLE_PERMISSIONS: dict[UserRole, Set[Permission]] = {
         Permission.VIEW_DEALERSHIP_REPORTS,
     },
     
+    UserRole.BDC: {
+        Permission.VIEW_GROUP_LEADS,
+        Permission.CREATE_LEAD,
+        Permission.UPDATE_LEAD,
+        Permission.ASSIGN_LEAD_TO_SALESPERSON,
+        Permission.VIEW_OWN_ACTIVITIES,
+        Permission.VIEW_OWN_SCHEDULE,
+        Permission.SEND_EMAIL,
+        Permission.SEND_SMS,
+        Permission.LOG_CALL,
+    },
+
     UserRole.SALESPERSON: {
         # Lead permissions
         Permission.VIEW_OWN_LEADS,
@@ -184,3 +198,13 @@ def is_dealership_level(role: UserRole) -> bool:
 def is_salesperson(role: UserRole) -> bool:
     """Check if role is salesperson"""
     return role == UserRole.SALESPERSON
+
+
+def is_bdc(role: UserRole) -> bool:
+    """Check if role is BDC agent"""
+    return role == UserRole.BDC
+
+
+def is_multi_dealership_role(role: UserRole) -> bool:
+    """Roles that may span multiple dealerships via access table or super admin."""
+    return role in (UserRole.SUPER_ADMIN, UserRole.BDC)

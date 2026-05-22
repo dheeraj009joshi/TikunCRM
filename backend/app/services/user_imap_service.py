@@ -350,15 +350,35 @@ async def sync_user_inbox(db: AsyncSession, user: User) -> Dict[str, Any]:
                 if lead:
                     stats["emails_matched"] += 1
                 
-                # Create notification
-                await create_notification(
-                    db, 
-                    user.id, 
-                    lead.id if lead else None, 
-                    email_data["subject"], 
-                    from_email_addr,
-                    email_log.id
-                )
+                preview = (email_data.get("body_text") or email_data.get("subject") or "")[:500]
+                if lead:
+                    from app.models.customer import Customer
+                    from app.services.notification_service import NotificationService
+
+                    lead_name = from_email_addr
+                    if lead.customer_id:
+                        customer_result = await db.execute(
+                            select(Customer).where(Customer.id == lead.customer_id)
+                        )
+                        customer = customer_result.scalar_one_or_none()
+                        if customer:
+                            lead_name = customer.full_name
+                    notification_service = NotificationService(db)
+                    await notification_service.notify_email_received(
+                        user_id=user.id,
+                        lead_name=lead_name,
+                        lead_id=lead.id,
+                        email_preview=preview or None,
+                    )
+                else:
+                    await create_notification(
+                        db,
+                        user.id,
+                        None,
+                        email_data["subject"],
+                        from_email_addr,
+                        email_log.id,
+                    )
                 
             except Exception as e:
                 logger.warning(f"Error processing email data: {e}")

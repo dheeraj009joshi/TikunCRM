@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 from app.api import deps
 from app.services.dealership_twilio_config_service import get_effective_twilio_config
 from app.core.permissions import UserRole
+from app.core.access_scope import get_accessible_dealership_ids, user_can_access_lead
 from app.db.database import get_db
 from app.models.user import User
 from app.models.sms_log import SMSLog, MessageDirection
@@ -178,23 +179,27 @@ async def list_conversations(
     user_id = None
     dealership_id = None
     
+    dealership_ids = None
     if current_user.role == UserRole.SALESPERSON:
         user_id = current_user.id
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
         dealership_id = current_user.dealership_id
-    # Super admin sees all
-    
+    elif current_user.role == UserRole.BDC:
+        dealership_ids = await get_accessible_dealership_ids(db, current_user)
+
     conversations = await service.get_conversations_list(
         user_id=user_id,
         dealership_id=dealership_id,
+        dealership_ids=dealership_ids,
         unread_only=unread_only,
         limit=limit,
         offset=offset
     )
-    
+
     total_unread = await service.get_unread_count(
         user_id=user_id,
-        dealership_id=dealership_id
+        dealership_id=dealership_id,
+        dealership_ids=dealership_ids,
     )
     
     return ConversationsListResponse(
@@ -225,18 +230,11 @@ async def get_conversation(
         )
     
     # Check access
-    if current_user.role == UserRole.SALESPERSON and lead.assigned_to != current_user.id:
+    if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
+            detail="Access denied",
         )
-    
-    if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        if current_user.dealership_id and lead.dealership_id != current_user.dealership_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied"
-            )
     
     service = get_sms_conversation_service(db)
     
@@ -300,15 +298,14 @@ async def send_to_lead(
             detail="Lead has no phone number"
         )
     
-    # Check access
-    if current_user.role == UserRole.SALESPERSON and lead.assigned_to != current_user.id:
+    if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
+            detail="Access denied",
         )
-    
+
     service = get_sms_conversation_service(db)
-    
+
     success, sms_log, error = await service.send_sms(
         to_number=lead.phone,
         body=request.body,
@@ -376,15 +373,19 @@ async def get_unread_count(
     
     user_id = None
     dealership_id = None
-    
+    dealership_ids = None
+
     if current_user.role == UserRole.SALESPERSON:
         user_id = current_user.id
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
         dealership_id = current_user.dealership_id
-    
+    elif current_user.role == UserRole.BDC:
+        dealership_ids = await get_accessible_dealership_ids(db, current_user)
+
     count = await service.get_unread_count(
         user_id=user_id,
-        dealership_id=dealership_id
+        dealership_id=dealership_id,
+        dealership_ids=dealership_ids,
     )
     
     return UnreadCountResponse(count=count)

@@ -21,6 +21,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
+from app.core.access_scope import get_accessible_dealership_ids, user_can_access_dealership, user_can_access_lead
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
@@ -37,7 +38,7 @@ from app.schemas.lead import (
     LeadStageChangeRequest, LeadStatusUpdateCompat, LeadAssignment, LeadListResponse,
     LeadDealershipAssignment, BulkLeadDealershipAssignment,
     CampaignFilterOption,
-    LeadSecondaryAssignment, LeadSwapSalespersons
+    LeadSecondaryAssignment, LeadSwapSalespersons, LeadBdcAssignment
 )
 from app.schemas.activity import NoteCreate
 from app.schemas.stips import StipDocumentResponse, StipDocumentViewUrl
@@ -55,7 +56,7 @@ from app.services.lead_stage_service import LeadStageService
 from app.services.notification_service import (
     NotificationService,
     send_skate_alert_background,
-    notify_lead_assigned_to_dealership_background,
+    enqueue_notify_lead_assigned_to_dealership,
 )
 from app.services.follow_up_schedule_service import (
     schedule_outbound_call_follow_ups,
@@ -295,6 +296,8 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             user_ids.add(lead.previous_assigned_to_id)
         if hasattr(lead, 'secondary_salesperson_id') and lead.secondary_salesperson_id:
             user_ids.add(lead.secondary_salesperson_id)
+        if getattr(lead, "bdc_assigned_to_id", None):
+            user_ids.add(lead.bdc_assigned_to_id)
         if lead.dealership_id:
             dealership_ids.add(lead.dealership_id)
         if lead.customer_id:
@@ -411,6 +414,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "dealership_id": str(lead.dealership_id) if lead.dealership_id else None,
             "assigned_to": str(lead.assigned_to) if lead.assigned_to else None,
             "secondary_salesperson_id": str(lead.secondary_salesperson_id) if hasattr(lead, 'secondary_salesperson_id') and lead.secondary_salesperson_id else None,
+            "bdc_assigned_to_id": str(lead.bdc_assigned_to_id) if getattr(lead, "bdc_assigned_to_id", None) else None,
             "created_by": str(lead.created_by) if lead.created_by else None,
             "notes": lead.notes,
             "meta_data": lead.meta_data or {},
@@ -430,6 +434,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "previous_assigned_to_user": users_map.get(lead.previous_assigned_to_id) if getattr(lead, "previous_assigned_to_id", None) else None,
             "assigned_to_user": users_map.get(lead.assigned_to) if lead.assigned_to else None,
             "secondary_salesperson": users_map.get(lead.secondary_salesperson_id) if hasattr(lead, 'secondary_salesperson_id') and lead.secondary_salesperson_id else None,
+            "bdc_assigned_to_user": users_map.get(lead.bdc_assigned_to_id) if getattr(lead, "bdc_assigned_to_id", None) else None,
             "dealership": dealerships_map.get(lead.dealership_id) if lead.dealership_id else None,
             "activity_count": activity_counts.get(lead.id, 0),
         }
@@ -455,6 +460,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
 
 def _build_leads_list_select(
     current_user: User,
+    accessible_dealership_ids: Optional[List[UUID]] = None,
     *,
     pool: Optional[str] = None,
     assigned_to: Optional[UUID] = None,
@@ -480,6 +486,16 @@ def _build_leads_list_select(
     elif pool == "unassigned":
         if current_user.role == UserRole.SUPER_ADMIN:
             query = query.where(Lead.dealership_id.is_(None))
+        elif current_user.role == UserRole.BDC:
+            if accessible_dealership_ids:
+                query = query.where(
+                    and_(
+                        Lead.dealership_id.in_(accessible_dealership_ids),
+                        Lead.assigned_to.is_(None),
+                    )
+                )
+            else:
+                query = query.where(Lead.id.is_(None))
         elif current_user.dealership_id:
             query = query.where(
                 and_(
@@ -497,6 +513,12 @@ def _build_leads_list_select(
             else:
                 query = query.where(Lead.id.is_(None))
 
+        elif current_user.role == UserRole.BDC:
+            if accessible_dealership_ids:
+                query = query.where(Lead.dealership_id.in_(accessible_dealership_ids))
+            else:
+                query = query.where(Lead.id.is_(None))
+
         elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
             if current_user.dealership_id:
                 query = query.where(Lead.dealership_id == current_user.dealership_id)
@@ -504,7 +526,12 @@ def _build_leads_list_select(
                 query = query.where(Lead.id.is_(None))
 
     if assigned_to is not None:
-        if current_user.role not in (UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
+        if current_user.role not in (
+            UserRole.SUPER_ADMIN,
+            UserRole.DEALERSHIP_ADMIN,
+            UserRole.DEALERSHIP_OWNER,
+            UserRole.BDC,
+        ):
             pass
         else:
             query = query.where(Lead.assigned_to == assigned_to)
@@ -595,8 +622,10 @@ async def list_leads(
     - "mine": leads assigned to the current user only
     - None (default): all leads visible to the user based on role
     """
+    accessible_ids = await get_accessible_dealership_ids(db, current_user)
     query = _build_leads_list_select(
         current_user,
+        accessible_ids,
         pool=pool,
         assigned_to=assigned_to,
         stage_id=stage_id,
@@ -698,9 +727,15 @@ async def list_leads_unassigned_to_salesperson(
         and_(Lead.dealership_id.isnot(None), Lead.assigned_to.is_(None))
     )
 
+    accessible_ids = await get_accessible_dealership_ids(db, current_user)
     if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER, UserRole.SALESPERSON]:
         if current_user.dealership_id:
             query = query.where(Lead.dealership_id == current_user.dealership_id)
+        else:
+            query = query.where(Lead.id.is_(None))
+    elif current_user.role == UserRole.BDC:
+        if accessible_ids:
+            query = query.where(Lead.dealership_id.in_(accessible_ids))
         else:
             query = query.where(Lead.id.is_(None))
 
@@ -808,6 +843,9 @@ async def create_lead(
         assigned_to = current_user.id
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
         dealership_id = current_user.dealership_id
+    elif current_user.role == UserRole.BDC:
+        if not dealership_id or not await user_can_access_dealership(db, current_user, dealership_id):
+            raise HTTPException(status_code=403, detail="Not authorized for this dealership")
 
     # Step 1: find or create customer
     customer_extra = {}
@@ -852,6 +890,16 @@ async def create_lead(
             meta_data={"repeat_interest": True, "source": source_label, "interest_score": existing_active_lead.interest_score},
         )
         await db.flush()
+        repeat_dealership_id = existing_active_lead.dealership_id
+        if repeat_dealership_id:
+            enqueue_notify_lead_assigned_to_dealership(
+                background_tasks,
+                lead_id=existing_active_lead.id,
+                lead_name=customer.full_name,
+                dealership_id=repeat_dealership_id,
+                performer_name=current_user.full_name or current_user.email,
+                source=f"{source_label} (repeat interest)",
+            )
         return existing_active_lead
 
     # Optional secondary customer (e.g. co-buyer)
@@ -901,8 +949,8 @@ async def create_lead(
 
     if dealership_id:
         source_display = (lead.meta_data or {}).get("source_display") or (lead.source.value if lead.source else "unknown")
-        background_tasks.add_task(
-            notify_lead_assigned_to_dealership_background,
+        enqueue_notify_lead_assigned_to_dealership(
+            background_tasks,
             lead_id=lead.id,
             lead_name=lead_name,
             dealership_id=dealership_id,
@@ -980,10 +1028,8 @@ async def update_lead(
     is_unassigned_pool = lead.dealership_id is None
     if not is_unassigned_pool:
         # Must have access to assigned leads
-        has_access = (
-            current_user.role == UserRole.SUPER_ADMIN
-            or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
-            or (current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and lead.dealership_id == current_user.dealership_id)
+        has_access = await user_can_access_lead(
+            db, current_user, lead.dealership_id, lead.assigned_to
         )
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to update this lead")
@@ -1272,7 +1318,10 @@ async def get_lead(
             # else: same dealership - keep full access (view unassigned-to-salesperson leads)
         elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and lead.dealership_id != current_user.dealership_id:
             access_level = None  # no access unless mentioned
-    
+        elif current_user.role == UserRole.BDC:
+            if not await user_can_access_dealership(db, current_user, lead.dealership_id):
+                access_level = None
+
     if access_level is None:
         # Check if user is mentioned in any note on this lead (allows read + reply only)
         from app.models.activity import Activity
@@ -1363,6 +1412,7 @@ async def get_lead(
         "dealership_id": lead.dealership_id,
         "assigned_to": lead.assigned_to,
         "secondary_salesperson_id": lead.secondary_salesperson_id,
+        "bdc_assigned_to_id": lead.bdc_assigned_to_id,
         "created_by": lead.created_by,
         "notes": lead.notes,
         "meta_data": lead.meta_data,
@@ -1382,6 +1432,7 @@ async def get_lead(
         "previous_assigned_to_user": None,
         "assigned_to_user": None,
         "secondary_salesperson": None,
+        "bdc_assigned_to_user": None,
         "created_by_user": None,
         "dealership": None,
         "access_level": access_level,
@@ -1429,6 +1480,20 @@ async def get_lead(
                 "role": secondary_user.role,
                 "is_active": secondary_user.is_active,
                 "dealership_id": secondary_user.dealership_id
+            }
+
+    if lead.bdc_assigned_to_id:
+        bdc_result = await db.execute(select(User).where(User.id == lead.bdc_assigned_to_id))
+        bdc_user = bdc_result.scalar_one_or_none()
+        if bdc_user:
+            response_data["bdc_assigned_to_user"] = {
+                "id": bdc_user.id,
+                "email": bdc_user.email,
+                "first_name": bdc_user.first_name,
+                "last_name": bdc_user.last_name,
+                "role": bdc_user.role,
+                "is_active": bdc_user.is_active,
+                "dealership_id": bdc_user.dealership_id,
             }
     
     # Fetch created by user info
@@ -1521,10 +1586,8 @@ async def update_lead_stage(
     # Access check
     is_unassigned_pool = lead.dealership_id is None
     if not is_unassigned_pool:
-        has_access = (
-            current_user.role == UserRole.SUPER_ADMIN
-            or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
-            or (current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and lead.dealership_id == current_user.dealership_id)
+        has_access = await user_can_access_lead(
+            db, current_user, lead.dealership_id, lead.assigned_to
         )
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to update this lead")
@@ -1704,7 +1767,12 @@ async def assign_lead(
     if not assign_to_user:
         raise HTTPException(status_code=404, detail="User not found")
         
-    if current_user.role != UserRole.SUPER_ADMIN:
+    if current_user.role == UserRole.BDC:
+        if not lead.dealership_id or not await user_can_access_dealership(db, current_user, lead.dealership_id):
+            raise HTTPException(status_code=403, detail="Not authorized for this lead's dealership")
+        if assign_to_user.dealership_id != lead.dealership_id:
+            raise HTTPException(status_code=400, detail="Cannot assign to user in different dealership")
+    elif current_user.role != UserRole.SUPER_ADMIN:
         if assign_to_user.dealership_id != current_user.dealership_id:
             raise HTTPException(status_code=400, detail="Cannot assign to user in different dealership")
 
@@ -1991,6 +2059,83 @@ async def assign_secondary_salesperson(
     return lead
 
 
+@router.patch("/{lead_id}/assign-bdc", response_model=LeadResponse)
+async def assign_bdc_agent(
+    lead_id: UUID,
+    assign_in: LeadBdcAssignment,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Assign or remove BDC agent on a lead."""
+    if current_user.role not in (
+        UserRole.SUPER_ADMIN,
+        UserRole.DEALERSHIP_ADMIN,
+        UserRole.DEALERSHIP_OWNER,
+        UserRole.BDC,
+    ):
+        raise HTTPException(status_code=403, detail="Not authorized to assign BDC agent")
+
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    if not lead.dealership_id:
+        raise HTTPException(status_code=400, detail="Lead must belong to a dealership")
+
+    if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    bdc_user = None
+    if assign_in.bdc_assigned_to_id:
+        from app.models.user_dealership_access import UserDealershipAccess
+
+        user_result = await db.execute(select(User).where(User.id == assign_in.bdc_assigned_to_id))
+        bdc_user = user_result.scalar_one_or_none()
+        if not bdc_user or bdc_user.role != UserRole.BDC:
+            raise HTTPException(status_code=404, detail="BDC agent not found")
+        access_row = await db.execute(
+            select(UserDealershipAccess).where(
+                UserDealershipAccess.user_id == bdc_user.id,
+                UserDealershipAccess.dealership_id == lead.dealership_id,
+            )
+        )
+        if not access_row.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400,
+                detail="BDC agent does not have access to this dealership",
+            )
+
+    old_bdc_id = lead.bdc_assigned_to_id
+    lead.bdc_assigned_to_id = assign_in.bdc_assigned_to_id
+
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
+    if bdc_user:
+        bdc_name = f"{bdc_user.first_name} {bdc_user.last_name}"
+        description = f"BDC agent set to {bdc_name} by {performer_name}"
+    else:
+        description = f"BDC agent removed by {performer_name}"
+
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.LEAD_ASSIGNED,
+        description=description,
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=lead.dealership_id,
+        meta_data={
+            "bdc_assigned_to_id": str(assign_in.bdc_assigned_to_id) if assign_in.bdc_assigned_to_id else None,
+            "old_bdc_assigned_to_id": str(old_bdc_id) if old_bdc_id else None,
+            "action": "assign_bdc",
+            "notes": assign_in.notes,
+        },
+    )
+
+    await db.commit()
+    await db.refresh(lead)
+    return lead
+
+
 @router.post("/{lead_id}/swap-salespersons", response_model=LeadResponse)
 async def swap_salespersons(
     lead_id: UUID,
@@ -2121,9 +2266,8 @@ async def assign_lead_to_dealership(
     
     await db.flush()
     
-    # Notify all dealership members in background (don't hold the API response)
-    background_tasks.add_task(
-        notify_lead_assigned_to_dealership_background,
+    enqueue_notify_lead_assigned_to_dealership(
+        background_tasks,
         lead_id=lead.id,
         lead_name=lead_name,
         dealership_id=assign_in.dealership_id,
@@ -2204,9 +2348,8 @@ async def bulk_assign_leads_to_dealership(
                 "notes": assignment_in.notes
             }
         )
-        # Notify all dealership members for this lead (background, don't hold response)
-        background_tasks.add_task(
-            notify_lead_assigned_to_dealership_background,
+        enqueue_notify_lead_assigned_to_dealership(
+            background_tasks,
             lead_id=lead.id,
             lead_name=lead_name,
             dealership_id=assignment_in.dealership_id,
@@ -2289,10 +2432,8 @@ async def add_lead_note(
     # - Assigned leads: user must have full access or be mentioned
     is_unassigned_pool = lead.dealership_id is None
     has_full = (
-        current_user.role == UserRole.SUPER_ADMIN
-        or is_unassigned_pool  # Anyone with dealership can work on unassigned leads
-        or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
-        or (current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and lead.dealership_id == current_user.dealership_id)
+        is_unassigned_pool
+        or await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to)
     )
     if not has_full:
         from app.models.activity import Activity as ActivityModel
@@ -2648,10 +2789,8 @@ async def log_call(
     is_unassigned_pool = lead.dealership_id is None
     if not is_unassigned_pool:
         # Must have access to assigned leads (admins/owners)
-        has_access = (
-            current_user.role == UserRole.SUPER_ADMIN
-            or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
-            or (current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and lead.dealership_id == current_user.dealership_id)
+        has_access = await user_can_access_lead(
+            db, current_user, lead.dealership_id, lead.assigned_to
         )
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to log calls for this lead")
@@ -2765,10 +2904,8 @@ async def log_email(
     is_unassigned_pool = lead.dealership_id is None
     if not is_unassigned_pool:
         # Must have access to assigned leads (admins/owners)
-        has_access = (
-            current_user.role == UserRole.SUPER_ADMIN
-            or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
-            or (current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and lead.dealership_id == current_user.dealership_id)
+        has_access = await user_can_access_lead(
+            db, current_user, lead.dealership_id, lead.assigned_to
         )
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to log emails for this lead")
@@ -2867,16 +3004,8 @@ async def log_outreach(
 
     is_unassigned_pool = lead.dealership_id is None
     if not is_unassigned_pool:
-        has_access = (
-            current_user.role == UserRole.SUPER_ADMIN
-            or (
-                current_user.role == UserRole.SALESPERSON
-                and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id)
-            )
-            or (
-                current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]
-                and lead.dealership_id == current_user.dealership_id
-            )
+        has_access = await user_can_access_lead(
+            db, current_user, lead.dealership_id, lead.assigned_to
         )
         if not has_access:
             raise HTTPException(status_code=403, detail="Not authorized to log outreach for this lead")
@@ -3038,8 +3167,10 @@ async def export_leads_csv(
         if _stage:
             effective_stage_id = _stage.id
 
+    accessible_ids = await get_accessible_dealership_ids(db, current_user)
     query = _build_leads_list_select(
         current_user,
+        accessible_ids,
         pool=pool,
         assigned_to=assigned_to,
         stage_id=effective_stage_id,

@@ -35,6 +35,26 @@ export interface DealershipAdminStats {
     fresh_leads: number;
 }
 
+export interface BdcDealershipBreakdown {
+    id: string;
+    name: string;
+    total_leads: number;
+    unassigned_leads: number;
+}
+
+export interface BdcStats {
+    total_leads: number;
+    active_leads: number;
+    unassigned_to_salesperson: number;
+    converted_leads: number;
+    conversion_rate: string;
+    todays_follow_ups: number;
+    overdue_follow_ups: number;
+    upcoming_appointments: number;
+    dealership_count: number;
+    dealerships: BdcDealershipBreakdown[];
+}
+
 export interface SalespersonStats {
     total_leads: number;
     active_leads: number;
@@ -93,6 +113,11 @@ export const DashboardService = {
     // Salesperson specific endpoints
     async getSalespersonStats(): Promise<SalespersonStats> {
         const response = await apiClient.get("/dashboard/salesperson/stats");
+        return response.data;
+    },
+
+    async getBdcStats(): Promise<BdcStats> {
+        const response = await apiClient.get("/dashboard/bdc/stats");
         return response.data;
     },
 

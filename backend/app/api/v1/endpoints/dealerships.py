@@ -127,6 +127,7 @@ async def create_dealership(
             to_name,
             dealership_in.owner.password,
             added_by_name,
+            dealership.name,
         )
 
     return dealership

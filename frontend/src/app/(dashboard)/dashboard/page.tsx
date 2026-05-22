@@ -5,6 +5,7 @@ import { useRole } from "@/hooks/use-role"
 import { SuperAdminDashboard } from "./super-admin-dashboard"
 import { DealershipAdminDashboard } from "./dealership-admin-dashboard"
 import { SalespersonDashboard } from "./salesperson-dashboard"
+import { BdcDashboard } from "./bdc-dashboard"
 import { Loader2 } from "lucide-react"
 
 export default function DashboardPage() {
@@ -32,6 +33,8 @@ export default function DashboardPage() {
             return <DealershipAdminDashboard />
         case "salesperson":
             return <SalespersonDashboard />
+        case "bdc":
+            return <BdcDashboard />
         default:
             return (
                 <div className="flex h-[50vh] items-center justify-center">

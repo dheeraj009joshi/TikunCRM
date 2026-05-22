@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
+from app.core.access_scope import get_accessible_dealership_ids, user_can_access_lead
 from app.db.database import get_db
 from app.models.activity import Activity, ActivityType
 from app.models.lead import Lead
@@ -60,7 +61,9 @@ async def list_activities(
         lead = lead_result.scalar_one_or_none()
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
-        has_access = _user_has_lead_access(lead, current_user)
+        has_access = await user_can_access_lead(
+            db, current_user, lead.dealership_id, lead.assigned_to
+        )
         if not has_access:
             # Check if mentioned in any note (mention-only access)
             notes_result = await db.execute(
@@ -84,6 +87,12 @@ async def list_activities(
             query = query.where(Activity.user_id == current_user.id)
         elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
             query = query.where(Activity.dealership_id == current_user.dealership_id)
+        elif current_user.role == UserRole.BDC:
+            accessible_ids = await get_accessible_dealership_ids(db, current_user)
+            if accessible_ids:
+                query = query.where(Activity.dealership_id.in_(accessible_ids))
+            else:
+                query = query.where(Activity.id.is_(None))
     
     # Additional filters
     if user_id:

@@ -117,6 +117,7 @@ function getRoleVariant(role: string): VariantProps<typeof badgeVariants>["varia
         dealership_owner: "dealership_owner",
         dealership_admin: "dealership_admin",
         salesperson: "salesperson",
+        bdc: "dealership_admin",
     }
     return roleMap[role] || "default"
 }

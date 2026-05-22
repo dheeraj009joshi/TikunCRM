@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
+from app.core.access_scope import get_accessible_dealership_ids, user_can_access_lead
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
@@ -51,10 +52,10 @@ async def list_follow_ups(
     Optionally filter by lead_id (e.g. for lead detail page) or assigned_to (e.g. for salesperson report).
     When lead_id is provided, returns all follow-ups for that lead (including past/completed) for users who can view the lead.
     """
-    # Base query for building filters
     base_filters = []
     user_join_needed = False
-    
+    accessible_ids = await get_accessible_dealership_ids(db, current_user)
+
     # When filtering by lead: verify lead access
     if lead_id is not None:
         lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
@@ -65,20 +66,23 @@ async def list_follow_ups(
         if is_unassigned_pool:
             has_access = current_user.role == UserRole.SUPER_ADMIN or current_user.dealership_id is not None
         else:
-            has_access = (
-                current_user.role == UserRole.SUPER_ADMIN
-                or (current_user.role == UserRole.SALESPERSON and (lead.assigned_to == current_user.id or lead.dealership_id == current_user.dealership_id))
-                or (current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and lead.dealership_id == current_user.dealership_id)
+            has_access = await user_can_access_lead(
+                db, current_user, lead.dealership_id, lead.assigned_to
             )
         if not has_access:
             return FollowUpListResponse(items=[], total=0, page=page, page_size=page_size, total_pages=0, stats={"total": 0, "pending": 0, "overdue": 0, "completed": 0})
         base_filters.append(FollowUp.lead_id == lead_id)
     else:
-        # RBAC Isolation (when not filtering by specific lead)
         if current_user.role == UserRole.SALESPERSON:
             base_filters.append(FollowUp.assigned_to == current_user.id)
         elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
             user_join_needed = True
+        elif current_user.role == UserRole.BDC:
+            if accessible_ids:
+                lead_ids_subq = select(Lead.id).where(Lead.dealership_id.in_(accessible_ids))
+                base_filters.append(FollowUp.lead_id.in_(lead_ids_subq))
+            else:
+                base_filters.append(FollowUp.id.is_(None))
     
     if assigned_to is not None:
         base_filters.append(FollowUp.assigned_to == assigned_to)
@@ -133,6 +137,9 @@ async def list_follow_ups(
         rbac_date_filters.append(FollowUp.lead_id == lead_id)
     elif current_user.role == UserRole.SALESPERSON:
         rbac_date_filters.append(FollowUp.assigned_to == current_user.id)
+    elif current_user.role == UserRole.BDC and accessible_ids:
+        lead_ids_subq = select(Lead.id).where(Lead.dealership_id.in_(accessible_ids))
+        rbac_date_filters.append(FollowUp.lead_id.in_(lead_ids_subq))
     if assigned_to is not None:
         rbac_date_filters.append(FollowUp.assigned_to == assigned_to)
     if date_from:
@@ -312,16 +319,11 @@ async def schedule_follow_up(
                     performer_user_id=current_user.id,
                 )
 
-    # RBAC: Check if user has access to this lead
-    if current_user.role == UserRole.SALESPERSON:
-        # Salesperson can schedule for any lead in their dealership (with SKATE warning above)
-        if lead.dealership_id != current_user.dealership_id and lead.dealership_id is not None:
-            raise HTTPException(status_code=403, detail="You can only schedule follow-ups for leads in your dealership")
-    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        # Dealership admin/owner can schedule for leads in their dealership
-        if lead.dealership_id != current_user.dealership_id:
-            raise HTTPException(status_code=403, detail="You can only schedule follow-ups for leads in your dealership")
-    # Super Admin has access to all leads
+    if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
+        raise HTTPException(
+            status_code=403,
+            detail="You can only schedule follow-ups for leads you can access",
+        )
 
     # Assignment: explicit from request, else lead's primary salesperson, else current user
     assigned_to_id = follow_up_in.assigned_to
@@ -420,7 +422,12 @@ async def complete_follow_up(
     if not follow_up:
         raise HTTPException(status_code=404, detail="Follow-up not found")
         
-    if follow_up.assigned_to != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
+    if follow_up.assigned_to != current_user.id and current_user.role not in (
+        UserRole.SUPER_ADMIN,
+        UserRole.BDC,
+        UserRole.DEALERSHIP_ADMIN,
+        UserRole.DEALERSHIP_OWNER,
+    ):
          raise HTTPException(status_code=403, detail="Not authorized")
          
     completion_notes = request.notes if request else None
@@ -497,14 +504,15 @@ async def update_follow_up(
     if not follow_up:
         raise HTTPException(status_code=404, detail="Follow-up not found")
     
-    # Authorization: Only assigned user, dealership admin/owner, or super admin can edit
+    lead_dealership_id = follow_up.lead.dealership_id if follow_up.lead else None
+    lead_assigned = follow_up.lead.assigned_to if follow_up.lead else None
     if current_user.role == UserRole.SALESPERSON:
         if follow_up.assigned_to != current_user.id:
             raise HTTPException(status_code=403, detail="Not authorized to edit this follow-up")
-    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        if follow_up.assigned_to_user and follow_up.assigned_to_user.dealership_id != current_user.dealership_id:
-            raise HTTPException(status_code=403, detail="Not authorized to edit this follow-up")
-    # Super Admin can edit any follow-up
+    elif not await user_can_access_lead(
+        db, current_user, lead_dealership_id, lead_assigned
+    ):
+        raise HTTPException(status_code=403, detail="Not authorized to edit this follow-up")
     
     # Track what changed for activity log
     changes = []
@@ -605,7 +613,12 @@ async def delete_follow_up(
     if not follow_up:
         raise HTTPException(status_code=404, detail="Follow-up not found")
         
-    if follow_up.assigned_to != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
+    if follow_up.assigned_to != current_user.id and current_user.role not in (
+        UserRole.SUPER_ADMIN,
+        UserRole.BDC,
+        UserRole.DEALERSHIP_ADMIN,
+        UserRole.DEALERSHIP_OWNER,
+    ):
          raise HTTPException(status_code=403, detail="Not authorized")
     
     await db.delete(follow_up)

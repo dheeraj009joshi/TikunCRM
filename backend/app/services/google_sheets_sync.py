@@ -675,7 +675,7 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                             )
                             
                             if lead.dealership_id:
-                                lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "New Lead"
+                                lead_name = lead.full_name or "New Lead"
                                 await notify_lead_assigned_to_dealership_background(
                                     lead_id=lead.id,
                                     lead_name=lead_name,
@@ -1073,7 +1073,7 @@ async def _legacy_sync_google_sheet_leads() -> Dict[str, Any]:
                             )
                             
                             if lead.dealership_id:
-                                lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() or "New Lead"
+                                lead_name = lead.full_name or "New Lead"
                                 await notify_lead_assigned_to_dealership_background(
                                     lead_id=lead.id,
                                     lead_name=lead_name,
@@ -1125,7 +1125,7 @@ async def send_new_lead_notifications(session: AsyncSession, leads: List[Lead], 
         
         for lead in leads:
             try:
-                lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+                lead_name = lead.full_name or "New Lead"
                 lead_source = (lead.meta_data or {}).get("source_display") or "google_sheets"
                 await notification_service.notify_new_lead_to_dealership(
                     dealership_id=dealership_id,

@@ -113,6 +113,12 @@ class Lead(Base):
         nullable=True,
         index=True,
     )
+    bdc_assigned_to_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -213,6 +219,9 @@ class Lead(Base):
     )
     secondary_salesperson: Mapped[Optional["User"]] = relationship(
         "User", foreign_keys=[secondary_salesperson_id], lazy="noload"
+    )
+    bdc_assigned_to_user: Mapped[Optional["User"]] = relationship(
+        "User", foreign_keys=[bdc_assigned_to_id], lazy="noload"
     )
     created_by_user: Mapped[Optional["User"]] = relationship(
         "User", back_populates="created_leads", foreign_keys=[created_by], lazy="noload"

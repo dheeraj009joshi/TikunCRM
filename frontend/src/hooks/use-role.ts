@@ -8,6 +8,7 @@ export type Permission =
     | "view_all_leads"
     | "view_dealership_leads"
     | "view_own_leads"
+    | "view_group_leads"
     | "create_lead"
     | "update_lead"
     | "delete_lead"
@@ -120,6 +121,17 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         "send_sms",
         "log_call",
     ],
+    bdc: [
+        "view_group_leads",
+        "create_lead",
+        "update_lead",
+        "assign_lead_to_salesperson",
+        "view_own_activities",
+        "view_own_schedule",
+        "send_email",
+        "send_sms",
+        "log_call",
+    ],
 }
 
 export function useRole() {
@@ -132,6 +144,7 @@ export function useRole() {
     const isDealershipAdmin = role === "dealership_admin"
     const isDealershipLevel = role === "dealership_owner" || role === "dealership_admin"
     const isSalesperson = role === "salesperson"
+    const isBdc = role === "bdc"
 
     const permissions = useMemo(() => {
         if (!role) return []
@@ -143,6 +156,7 @@ export function useRole() {
     }
 
     const canViewAllLeads = hasPermission("view_all_leads")
+    const canViewGroupLeads = hasPermission("view_group_leads")
     const canViewDealershipLeads = hasPermission("view_dealership_leads")
     const canAssignToDealership = hasPermission("assign_lead_to_dealership")
     const canAssignToSalesperson = hasPermission("assign_lead_to_salesperson")
@@ -159,10 +173,12 @@ export function useRole() {
         isDealershipAdmin,
         isDealershipLevel,
         isSalesperson,
+        isBdc,
         permissions,
         hasPermission,
         // Convenience checks
         canViewAllLeads,
+        canViewGroupLeads,
         canViewDealershipLeads,
         canAssignToDealership,
         canAssignToSalesperson,
@@ -178,6 +194,7 @@ export const ROLE_DISPLAY_NAMES: Record<UserRole, string> = {
     dealership_owner: "Dealership Owner",
     dealership_admin: "Dealership Admin",
     salesperson: "Salesperson",
+    bdc: "BDC Agent",
 }
 
 // Get display name for a role (accepts UserRole or string from API)

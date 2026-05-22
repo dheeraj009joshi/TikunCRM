@@ -311,6 +311,7 @@ class SMSConversationService:
         self,
         user_id: Optional[UUID] = None,
         dealership_id: Optional[UUID] = None,
+        dealership_ids: Optional[List[UUID]] = None,
         unread_only: bool = False,
         limit: int = 50,
         offset: int = 0
@@ -354,7 +355,9 @@ class SMSConversationService:
 
         if user_id:
             query = query.where(Lead.assigned_to == user_id)
-        if dealership_id:
+        if dealership_ids:
+            query = query.where(Lead.dealership_id.in_(dealership_ids))
+        elif dealership_id:
             query = query.where(Lead.dealership_id == dealership_id)
         if unread_only:
             query = query.where(
@@ -389,7 +392,8 @@ class SMSConversationService:
     async def get_unread_count(
         self,
         user_id: Optional[UUID] = None,
-        dealership_id: Optional[UUID] = None
+        dealership_id: Optional[UUID] = None,
+        dealership_ids: Optional[List[UUID]] = None,
     ) -> int:
         """Get total unread SMS count (customer-level: via lead or customer access)."""
         query = select(func.count(func.distinct(SMSLog.id))).where(
@@ -404,14 +408,18 @@ class SMSConversationService:
                     and_(SMSLog.customer_id.isnot(None), Lead.customer_id == SMSLog.customer_id)
                 )
             ).where(Lead.assigned_to == user_id)
-        elif dealership_id:
+        elif dealership_ids or dealership_id:
             query = query.join(
                 Lead,
                 or_(
                     SMSLog.lead_id == Lead.id,
                     and_(SMSLog.customer_id.isnot(None), Lead.customer_id == SMSLog.customer_id)
                 )
-            ).where(Lead.dealership_id == dealership_id)
+            )
+            if dealership_ids:
+                query = query.where(Lead.dealership_id.in_(dealership_ids))
+            else:
+                query = query.where(Lead.dealership_id == dealership_id)
         result = await self.db.execute(query)
         return result.scalar() or 0
     

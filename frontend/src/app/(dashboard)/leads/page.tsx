@@ -154,6 +154,7 @@ export default function LeadsPage() {
         authUser?.role === "dealership_admin" ||
         authUser?.role === "dealership_owner" ||
         authUser?.role === "super_admin"
+    const isBdc = authUser?.role === "bdc"
 
     const [viewMode, setViewMode] = React.useState<ViewMode>(
         filterParam === "unassigned"
@@ -1216,6 +1217,7 @@ export default function LeadsPage() {
                             <TableHead>Status</TableHead>
                             <TableHead>Source</TableHead>
                             <TableHead>Down Payment</TableHead>
+                            {isBdc && <TableHead>Dealership</TableHead>}
                             <TableHead>Assigned To</TableHead>
                             <TableHead className="max-w-[140px]">Notes</TableHead>
                             <TableHead className="max-w-[180px]">Last action</TableHead>
@@ -1226,7 +1228,7 @@ export default function LeadsPage() {
                     <TableBody>
                         {isLoading ? (
                             <TableRow className="border-0 hover:bg-transparent">
-                                <TableCell colSpan={9} className="py-0">
+                                <TableCell colSpan={isBdc ? 10 : 9} className="py-0">
                                     <div className="flex flex-col items-center justify-center py-16">
                                         <Loader2 className="h-10 w-10 text-primary animate-spin" />
                                         <p className="mt-4 text-sm font-medium text-muted-foreground">Loading leads...</p>
@@ -1364,8 +1366,8 @@ export default function LeadsPage() {
                                             )
                                         })()}
                                     </TableCell>
-                                    <TableCell>
-                                        <div className="space-y-1">
+                                    {isBdc && (
+                                        <TableCell>
                                             {lead.dealership ? (
                                                 <div className="flex items-center gap-1.5">
                                                     <Building2 className="h-3 w-3 text-muted-foreground" />
@@ -1376,6 +1378,20 @@ export default function LeadsPage() {
                                                     No Dealership
                                                 </Badge>
                                             )}
+                                        </TableCell>
+                                    )}
+                                    <TableCell>
+                                        <div className="space-y-1">
+                                            {!isBdc && lead.dealership ? (
+                                                <div className="flex items-center gap-1.5">
+                                                    <Building2 className="h-3 w-3 text-muted-foreground" />
+                                                    <span className="text-xs font-medium">{lead.dealership.name}</span>
+                                                </div>
+                                            ) : !isBdc ? (
+                                                <Badge variant="outline" className="text-amber-600 border-amber-300">
+                                                    No Dealership
+                                                </Badge>
+                                            ) : null}
                                             {lead.assigned_to_user ? (
                                                 <div className="flex items-center gap-1.5">
                                                     <UserPlus className="h-3 w-3 text-muted-foreground" />
@@ -1458,7 +1474,7 @@ export default function LeadsPage() {
                                                         Assign to Dealership
                                                     </DropdownMenuItem>
                                                 )}
-                                                {(canAssignToSalesperson || isSuperAdmin || isDealershipLevel) && lead.dealership_id && (
+                                                {(canAssignToSalesperson || isSuperAdmin || isDealershipLevel || isBdc) && lead.dealership_id && (
                                                     <DropdownMenuItem onClick={(e) => {
                                                         e.stopPropagation()
                                                         handleAssignClick(lead)

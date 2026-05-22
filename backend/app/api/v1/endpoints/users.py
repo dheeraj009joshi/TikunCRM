@@ -5,7 +5,7 @@ from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.db.database import get_db
 from app.models.user import User
 from app.models.lead import Lead
 from app.models.dealership import Dealership
+from app.models.user_dealership_access import UserDealershipAccess
 from app.schemas.user import (
     UserResponse,
     UserCreate,
@@ -23,6 +24,9 @@ from app.schemas.user import (
     UserWithStats,
     TeamListResponse,
     SetConfigAccessPasswordRequest,
+    DealershipAccessItem,
+    UserDealershipAccessResponse,
+    UserDealershipAccessUpdate,
 )
 from app.core.security import get_password_hash, verify_password
 from app.services.email_notifier import send_new_member_welcome_email
@@ -47,6 +51,8 @@ async def list_users(
     # Role-based filtering
     if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
         query = query.where(User.dealership_id == current_user.dealership_id)
+    elif current_user.role == UserRole.BDC:
+        query = query.where(User.id == current_user.id)
     elif current_user.role == UserRole.SALESPERSON:
         # Salesperson can only see themselves
         query = query.where(User.id == current_user.id)
@@ -81,9 +87,19 @@ async def get_mentionable_users(
     
     # Determine which users can be mentioned
     if current_user.role == UserRole.SUPER_ADMIN:
-        # Super Admin can mention anyone, optionally filter by dealership
         if dealership_id:
             query = query.where(User.dealership_id == dealership_id)
+    elif current_user.role == UserRole.BDC:
+        from app.core.access_scope import get_accessible_dealership_ids
+        accessible_ids = await get_accessible_dealership_ids(db, current_user)
+        if dealership_id:
+            if accessible_ids and dealership_id not in accessible_ids:
+                return []
+            query = query.where(User.dealership_id == dealership_id)
+        elif accessible_ids:
+            query = query.where(User.dealership_id.in_(accessible_ids))
+        else:
+            return []
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER, UserRole.SALESPERSON]:
         # Dealership users can only mention users in their dealership
         if current_user.dealership_id:
@@ -215,6 +231,16 @@ async def list_salespersons(
     # Filter by dealership
     if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
         query = query.where(User.dealership_id == current_user.dealership_id)
+    elif current_user.role == UserRole.BDC:
+        if not dealership_id:
+            raise HTTPException(
+                status_code=400,
+                detail="dealership_id query param is required for BDC users",
+            )
+        from app.core.access_scope import user_can_access_dealership
+        if not await user_can_access_dealership(db, current_user, dealership_id):
+            raise HTTPException(status_code=403, detail="Not authorized for this dealership")
+        query = query.where(User.dealership_id == dealership_id)
     elif dealership_id:
         query = query.where(User.dealership_id == dealership_id)
     
@@ -247,13 +273,12 @@ async def create_user(
     # Super admins (no dealership) must still be globally unique among themselves.
     email_normalized = user_in.email.strip().lower()
     if user_in.dealership_id is None:
-        # Creating a super admin (only super admin can do this); collide only
-        # with other super admins.
+        # Super admin / BDC (no dealership); unique among null-dealership accounts.
         dup_query = select(User).where(
             func.lower(User.email) == email_normalized,
             User.dealership_id.is_(None),
         )
-        dup_msg = "This email is already used by a super admin account"
+        dup_msg = "This email is already used by another platform-level account"
     else:
         dup_query = select(User).where(
             func.lower(User.email) == email_normalized,
@@ -296,12 +321,24 @@ async def create_user(
             detail="You don't have permission to create users",
         )
     
-    # Validate dealership for non-superadmin roles
-    if user_in.role not in (UserRole.SUPER_ADMIN,) and not user_in.dealership_id:
+    # BDC: platform-level user, dealerships assigned separately
+    if user_in.role == UserRole.BDC:
+        if current_user.role != UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only Super Admin can create BDC agents",
+            )
+        user_in.dealership_id = None
+
+    # Validate dealership for dealership-scoped roles
+    if user_in.role not in (UserRole.SUPER_ADMIN, UserRole.BDC) and not user_in.dealership_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Dealership ID is required for this role",
         )
+
+    if user_in.role == UserRole.SUPER_ADMIN:
+        user_in.dealership_id = None
 
     phone_val = (user_in.phone or "").strip() or None
 
@@ -335,12 +372,19 @@ async def create_user(
     # Send welcome email with login credentials in background (after response, session will have committed)
     to_name = f"{user.first_name} {user.last_name}".strip() or user.email
     added_by_name = current_user.full_name or current_user.email
+    dealership_name: str | None = None
+    if user.dealership_id:
+        dealership_row = await db.execute(
+            select(Dealership.name).where(Dealership.id == user.dealership_id)
+        )
+        dealership_name = dealership_row.scalar_one_or_none()
     background_tasks.add_task(
         send_new_member_welcome_email,
         user.email,
         to_name,
         user_in.password,
         added_by_name,
+        dealership_name,
     )
 
     return user
@@ -525,6 +569,101 @@ async def update_user(
     return user
 
 
+@router.get("/bdc-agents", response_model=List[UserBrief])
+async def list_bdc_agents(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.SUPER_ADMIN)),
+) -> Any:
+    """List all BDC agents (Super Admin only)."""
+    result = await db.execute(
+        select(User)
+        .where(User.role == UserRole.BDC, User.is_active == True)
+        .order_by(User.first_name, User.last_name)
+    )
+    return result.scalars().all()
+
+
+@router.get("/{user_id}/dealership-access", response_model=UserDealershipAccessResponse)
+async def get_user_dealership_access(
+    user_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.SUPER_ADMIN)),
+) -> Any:
+    """List dealerships assigned to a BDC user (Super Admin only)."""
+    user_result = await db.execute(select(User).where(User.id == user_id))
+    target = user_result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target.role != UserRole.BDC:
+        raise HTTPException(status_code=400, detail="User is not a BDC agent")
+
+    rows = await db.execute(
+        select(Dealership.id, Dealership.name)
+        .join(UserDealershipAccess, UserDealershipAccess.dealership_id == Dealership.id)
+        .where(UserDealershipAccess.user_id == user_id)
+        .order_by(Dealership.name)
+    )
+    dealerships = [
+        DealershipAccessItem(id=row[0], name=row[1]) for row in rows.fetchall()
+    ]
+    return UserDealershipAccessResponse(user_id=user_id, dealerships=dealerships)
+
+
+@router.put("/{user_id}/dealership-access", response_model=UserDealershipAccessResponse)
+async def set_user_dealership_access(
+    user_id: UUID,
+    body: UserDealershipAccessUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.SUPER_ADMIN)),
+) -> Any:
+    """Replace dealerships assigned to a BDC user (Super Admin only)."""
+    user_result = await db.execute(select(User).where(User.id == user_id))
+    target = user_result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target.role != UserRole.BDC:
+        raise HTTPException(status_code=400, detail="User is not a BDC agent")
+
+    if body.dealership_ids:
+        d_result = await db.execute(
+            select(Dealership.id).where(
+                Dealership.id.in_(body.dealership_ids),
+                Dealership.is_active == True,
+            )
+        )
+        found = set(d_result.scalars().all())
+        missing = set(body.dealership_ids) - found
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid or inactive dealership IDs: {', '.join(str(m) for m in missing)}",
+            )
+
+    await db.execute(
+        delete(UserDealershipAccess).where(UserDealershipAccess.user_id == user_id)
+    )
+    for did in body.dealership_ids:
+        db.add(
+            UserDealershipAccess(
+                user_id=user_id,
+                dealership_id=did,
+                assigned_by=current_user.id,
+            )
+        )
+    await db.commit()
+
+    rows = await db.execute(
+        select(Dealership.id, Dealership.name)
+        .join(UserDealershipAccess, UserDealershipAccess.dealership_id == Dealership.id)
+        .where(UserDealershipAccess.user_id == user_id)
+        .order_by(Dealership.name)
+    )
+    dealerships = [
+        DealershipAccessItem(id=row[0], name=row[1]) for row in rows.fetchall()
+    ]
+    return UserDealershipAccessResponse(user_id=user_id, dealerships=dealerships)
+
+
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(
     user_id: UUID,
@@ -536,6 +675,8 @@ async def get_user(
     """
     # Authorization checks
     if current_user.role == UserRole.SALESPERSON and current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if current_user.role == UserRole.BDC and current_user.id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
         
     result = await db.execute(select(User).where(User.id == user_id))

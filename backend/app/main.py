@@ -73,6 +73,13 @@ async def lifespan(app: FastAPI):
     
     # Startup
     logger.info(f"Starting {settings.app_name} in {settings.app_env} mode")
+    from app.services.email_notifier import email_notifier
+    if email_notifier.is_configured:
+        logger.info("System SMTP configured for notification emails")
+    else:
+        logger.warning(
+            "System SMTP not configured (SMTP_USER/SMTP_PASSWORD) — notification emails will be skipped"
+        )
     
     # Only one worker should run the scheduler (optional in development — see settings.run_background_scheduler)
     if not settings.run_background_scheduler:

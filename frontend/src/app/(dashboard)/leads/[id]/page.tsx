@@ -94,6 +94,7 @@ import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/ser
 import { ActivityService, Activity, ACTIVITY_TYPE_INFO, ActivityType } from "@/services/activity-service"
 import { ShowroomService, ShowroomVisit, ShowroomOutcome, getOutcomeLabel } from "@/services/showroom-service"
 import { useRole } from "@/hooks/use-role"
+import { TeamService, UserBrief } from "@/services/team-service"
 import { useAuthStore } from "@/stores/auth-store"
 import { AssignToDealershipModal, AssignToSalespersonModal, AssignSecondaryCustomerModal } from "@/components/leads/assignment-modal"
 import { LogContactModal } from "@/components/leads/log-contact-modal"
@@ -471,7 +472,7 @@ export default function LeadDetailsPage() {
     const leadId = params.id as string
     const noteIdFromUrl = searchParams.get("note")
     const [backToLeadsHref, setBackToLeadsHref] = React.useState("/leads")
-    const { canAssignToSalesperson, canAssignToDealership, role, isDealershipLevel, isSuperAdmin, isSalesperson } = useRole()
+    const { canAssignToSalesperson, canAssignToDealership, role, isDealershipLevel, isSuperAdmin, isSalesperson, isBdc } = useRole()
     const user = useAuthStore(state => state.user)
     const { timezone } = useBrowserTimezone()
     const { toast } = useToast()
@@ -504,6 +505,8 @@ export default function LeadDetailsPage() {
     // Assignment modals
     const [showDealershipModal, setShowDealershipModal] = React.useState(false)
     const [showSalespersonModal, setShowSalespersonModal] = React.useState(false)
+    const [bdcAgents, setBdcAgents] = React.useState<UserBrief[]>([])
+    const [isAssigningBdc, setIsAssigningBdc] = React.useState(false)
     const [showSecondaryCustomerModal, setShowSecondaryCustomerModal] = React.useState(false)
     const [showRemoveSecondaryConfirm, setShowRemoveSecondaryConfirm] = React.useState(false)
     
@@ -971,7 +974,10 @@ export default function LeadDetailsPage() {
         fetchActivities()
         fetchShowroomStatus()
         fetchLeadAppointmentsAndFollowUps()
-    }, [fetchLead, fetchActivities, fetchShowroomStatus, fetchLeadAppointmentsAndFollowUps])
+        if (isSuperAdmin || isDealershipLevel) {
+            TeamService.listBdcAgents().then(setBdcAgents).catch(() => setBdcAgents([]))
+        }
+    }, [fetchLead, fetchActivities, fetchShowroomStatus, fetchLeadAppointmentsAndFollowUps, isSuperAdmin, isDealershipLevel])
 
     // Pending credit app: most recent credit-app activity is "initiated" (not completed/abandoned)
     const hasPendingCreditApp = React.useMemo(() => {
@@ -2624,6 +2630,67 @@ export default function LeadDetailsPage() {
                                     </div>
                                 )}
                             </div>
+
+                            {(isSuperAdmin || isDealershipLevel || isBdc) && lead.dealership_id && (
+                                <div>
+                                    <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
+                                        BDC Agent
+                                    </p>
+                                    {lead.bdc_assigned_to_user ? (
+                                        <div className="flex items-center gap-2">
+                                            <UserAvatar
+                                                firstName={lead.bdc_assigned_to_user.first_name}
+                                                lastName={lead.bdc_assigned_to_user.last_name}
+                                                size="sm"
+                                            />
+                                            <span className="text-sm font-medium">
+                                                {lead.bdc_assigned_to_user.first_name}{" "}
+                                                {lead.bdc_assigned_to_user.last_name}
+                                            </span>
+                                        </div>
+                                    ) : (
+                                        <Badge variant="outline" className="text-muted-foreground">
+                                            No BDC assigned
+                                        </Badge>
+                                    )}
+                                    {!isMentionOnly && (isSuperAdmin || isDealershipLevel || isBdc) && (
+                                        <div className="mt-2 flex gap-2">
+                                            <select
+                                                className="flex h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+                                                defaultValue=""
+                                                disabled={isAssigningBdc || bdcAgents.length === 0}
+                                                onChange={async (e) => {
+                                                    const v = e.target.value
+                                                    if (!v || !lead) return
+                                                    setIsAssigningBdc(true)
+                                                    try {
+                                                        await LeadService.assignBdcAgent(
+                                                            lead.id,
+                                                            v === "none" ? null : v
+                                                        )
+                                                        await fetchLead()
+                                                    } catch (err) {
+                                                        console.error(err)
+                                                    } finally {
+                                                        setIsAssigningBdc(false)
+                                                        e.target.value = ""
+                                                    }
+                                                }}
+                                            >
+                                                <option value="" disabled>
+                                                    {bdcAgents.length ? "Assign BDC…" : "No BDC agents"}
+                                                </option>
+                                                <option value="none">Remove BDC</option>
+                                                {bdcAgents.map((a) => (
+                                                    <option key={a.id} value={a.id}>
+                                                        {a.first_name} {a.last_name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                             
                             {lead.interested_in && (
                                 <div>

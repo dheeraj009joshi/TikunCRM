@@ -142,3 +142,20 @@ class TeamListResponse(BaseModel):
     total: int
     dealership_id: Optional[UUID] = None
     dealership_name: Optional[str] = None
+
+
+class DealershipAccessItem(BaseModel):
+    """Dealership assigned to a BDC user."""
+    id: UUID
+    name: str
+
+
+class UserDealershipAccessResponse(BaseModel):
+    """BDC user's assigned dealerships."""
+    user_id: UUID
+    dealerships: list[DealershipAccessItem]
+
+
+class UserDealershipAccessUpdate(BaseModel):
+    """Replace BDC user's dealership access list."""
+    dealership_ids: list[UUID] = Field(default_factory=list)

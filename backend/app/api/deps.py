@@ -98,7 +98,8 @@ require_any_role = require_role(
     UserRole.SUPER_ADMIN,
     UserRole.DEALERSHIP_ADMIN,
     UserRole.DEALERSHIP_OWNER,
-    UserRole.SALESPERSON
+    UserRole.SALESPERSON,
+    UserRole.BDC,
 )
 
 # Roles that may set a configuration-access password and unlock Twilio / dealership email secrets

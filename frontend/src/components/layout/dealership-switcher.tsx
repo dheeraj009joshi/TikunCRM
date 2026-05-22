@@ -20,6 +20,10 @@ type DealershipSwitcherProps = {
 
 export function DealershipSwitcher({ collapsed = false }: DealershipSwitcherProps) {
     const { user } = useAuthStore()
+
+    if (user?.role === "bdc") {
+        return null
+    }
     const [options, setOptions] = React.useState<DealershipOption[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const [isSwitching, setIsSwitching] = React.useState(false)

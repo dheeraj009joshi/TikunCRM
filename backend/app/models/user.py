@@ -15,6 +15,7 @@ from app.db.database import Base
 
 if TYPE_CHECKING:
     from app.models.dealership import Dealership
+    from app.models.user_dealership_access import UserDealershipAccess
     from app.models.lead import Lead
     from app.models.activity import Activity
     from app.models.schedule import Schedule
@@ -219,7 +220,13 @@ class User(Base):
         foreign_keys="CallLog.user_id",
         lazy="noload"
     )
-    
+    dealership_access: Mapped[List["UserDealershipAccess"]] = relationship(
+        "UserDealershipAccess",
+        foreign_keys="UserDealershipAccess.user_id",
+        back_populates="user",
+        lazy="noload",
+    )
+
     @property
     def full_name(self) -> str:
         """Get user's full name"""

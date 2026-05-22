@@ -69,6 +69,7 @@ export interface Lead {
     dealership_id?: string;
     assigned_to?: string;
     secondary_salesperson_id?: string;
+    bdc_assigned_to_id?: string;
     created_by?: string;
     notes?: string;
     meta_data: Record<string, unknown>;
@@ -100,6 +101,7 @@ export interface Lead {
     // Extended info (available in detail view)
     assigned_to_user?: UserBrief;
     secondary_salesperson?: UserBrief;
+    bdc_assigned_to_user?: UserBrief;
     created_by_user?: UserBrief;
     dealership?: DealershipBrief;
     access_level?: "full" | "mention_only";
@@ -354,6 +356,14 @@ export const LeadService = {
     },
     async creditAppAbandon(leadId: string, data: { reason?: string } = {}): Promise<{ ok: boolean }> {
         const response = await apiClient.post(`${LEADS_PREFIX}/${leadId}/credit-app/abandon`, data);
+        return response.data;
+    },
+
+    async assignBdcAgent(id: string, bdcUserId: string | null, notes?: string): Promise<Lead> {
+        const response = await apiClient.patch(`${LEADS_PREFIX}/${id}/assign-bdc`, {
+            bdc_assigned_to_id: bdcUserId,
+            notes,
+        });
         return response.data;
     },
 

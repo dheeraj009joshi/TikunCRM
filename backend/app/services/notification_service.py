@@ -3,16 +3,19 @@ Notification Service
 Handles creating and managing notifications
 Also sends web push notifications and WebSocket events when configured
 """
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from uuid import UUID
 
+from fastapi import BackgroundTasks
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification import Notification, NotificationType
 from app.models.user import User
+from app.models.dealership import Dealership
 from app.core.websocket_manager import ws_manager
 from app.core.timezone import utc_now
 
@@ -107,35 +110,67 @@ class NotificationService:
         if send_email and user and user.email:
             try:
                 from app.services.email_notifier import email_notifier
-                
-                if email_notifier.is_configured:
-                    # Simple email notification - could be enhanced with HTML templates
-                    await email_notifier.send_notification_email(
+
+                if not email_notifier.is_configured:
+                    logger.warning(
+                        "Email notification skipped for user %s (%s): SMTP not configured",
+                        user_id,
+                        user.email,
+                    )
+                else:
+                    dealership_name: Optional[str] = None
+                    if user.dealership_id:
+                        dealership_row = await self.db.execute(
+                            select(Dealership.name).where(Dealership.id == user.dealership_id)
+                        )
+                        dealership_name = dealership_row.scalar_one_or_none()
+                    sent = await email_notifier.send_notification_email(
                         to_email=user.email,
-                        to_name=f"{user.first_name} {user.last_name}",
+                        to_name=f"{user.first_name} {user.last_name}".strip() or user.email,
                         subject=title,
                         message=message or title,
-                        link=link
+                        link=link,
+                        dealership_name=dealership_name,
                     )
+                    if not sent:
+                        logger.warning(
+                            "Email notification not delivered to %s (%s) for: %s",
+                            user_id,
+                            user.email,
+                            title,
+                        )
             except Exception as e:
-                logger.warning(f"Failed to send email notification: {e}")
+                logger.warning(
+                    "Failed to send email notification to user %s (%s): %s",
+                    user_id,
+                    user.email if user else None,
+                    e,
+                )
         
-        # Send SMS notification if enabled
+        # Send SMS in a detached task so Twilio latency does not block push/email delivery
         if send_sms and user and user.phone:
-            try:
-                from app.services.sms_service import sms_service
-                from app.services.dealership_twilio_config_service import get_effective_twilio_config
+            user_phone = user.phone
+            user_dealership_id = user.dealership_id
+            sms_title = title
+            sms_message = message
 
-                effective = await get_effective_twilio_config(self.db, user.dealership_id)
-                if effective.is_sms_ready():
-                    sms_text = f"{title}"
-                    if message:
-                        sms_text = f"{title}: {message}"
-                    sms_text = sms_text[:160]
+            async def _send_sms_notification() -> None:
+                try:
+                    from app.db.database import async_session_maker
+                    from app.services.sms_service import sms_service
+                    from app.services.dealership_twilio_config_service import get_effective_twilio_config
 
-                    await sms_service.send_sms(user.phone, sms_text, effective)
-            except Exception as e:
-                logger.warning(f"Failed to send SMS notification: {e}")
+                    async with async_session_maker() as sms_db:
+                        effective = await get_effective_twilio_config(sms_db, user_dealership_id)
+                        if effective.is_sms_ready():
+                            sms_text = sms_title
+                            if sms_message:
+                                sms_text = f"{sms_title}: {sms_message}"
+                            await sms_service.send_sms(user_phone, sms_text[:160], effective)
+                except Exception as e:
+                    logger.warning("Failed to send SMS notification to %s: %s", user_phone, e)
+
+            asyncio.create_task(_send_sms_notification())
         
         # Send WebSocket event for real-time updates
         try:
@@ -180,14 +215,7 @@ class NotificationService:
         email_preview: Optional[str] = None,
     ) -> Notification:
         """
-        Create notification for a received email reply.
-        DISABLED: Only creates in-app notification (no push/email/SMS).
-        
-        Args:
-            user_id: User who should receive the notification
-            lead_name: Name of the lead who sent the email
-            lead_id: ID of the lead
-            email_preview: Preview of the email content
+        Create notification for a received email reply (push + email).
         """
         return await self.create_notification(
             user_id=user_id,
@@ -197,8 +225,8 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=lead_id,
             related_type="lead",
-            send_push=False,
-            send_email=False,
+            send_push=True,
+            send_email=True,
             send_sms=False,
         )
     
@@ -210,14 +238,7 @@ class NotificationService:
         assigned_by: Optional[str] = None,
     ) -> Notification:
         """
-        Create notification for lead assignment.
-        DISABLED: Only creates in-app notification (no push/email/SMS).
-        
-        Args:
-            user_id: User who the lead was assigned to
-            lead_name: Name of the lead
-            lead_id: ID of the lead
-            assigned_by: Name of the user who assigned the lead
+        Create notification for lead assignment (push + email).
         """
         title = f"New lead assigned: {lead_name}"
         message = f"Assigned by {assigned_by}" if assigned_by else None
@@ -230,8 +251,8 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=lead_id,
             related_type="lead",
-            send_push=False,
-            send_email=False,
+            send_push=True,
+            send_email=True,
             send_sms=False,
         )
     
@@ -244,15 +265,7 @@ class NotificationService:
         due_time: datetime,
     ) -> Notification:
         """
-        Create notification for upcoming follow-up.
-        DISABLED: Only creates in-app notification (no push/email/SMS).
-        
-        Args:
-            user_id: User who has the follow-up
-            lead_name: Name of the lead
-            lead_id: ID of the lead
-            follow_up_id: ID of the follow-up
-            due_time: When the follow-up is due
+        Create notification for upcoming follow-up (push + email).
         """
         return await self.create_notification(
             user_id=user_id,
@@ -262,8 +275,8 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=follow_up_id,
             related_type="follow_up",
-            send_push=False,
-            send_email=False,
+            send_push=True,
+            send_email=True,
             send_sms=False,
         )
     
@@ -275,8 +288,7 @@ class NotificationService:
         follow_up_id: UUID,
     ) -> Notification:
         """
-        Create notification for overdue follow-up.
-        DISABLED: Only creates in-app notification (no push/email/SMS).
+        Create notification for overdue follow-up (push + email).
         """
         return await self.create_notification(
             user_id=user_id,
@@ -286,8 +298,8 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=follow_up_id,
             related_type="follow_up",
-            send_push=False,
-            send_email=False,
+            send_push=True,
+            send_email=True,
             send_sms=False,
         )
     
@@ -359,14 +371,7 @@ class NotificationService:
         appointment_id: UUID,
     ) -> Notification:
         """
-        Create notification for missed appointment.
-        DISABLED: Only creates in-app notification (no push/email/SMS).
-        
-        Args:
-            user_id: User who missed the appointment
-            lead_name: Name of the lead
-            lead_id: ID of the lead
-            appointment_id: ID of the appointment
+        Create notification for missed appointment (push + email).
         """
         return await self.create_notification(
             user_id=user_id,
@@ -376,11 +381,47 @@ class NotificationService:
             link=f"/leads/{lead_id}",
             related_id=appointment_id,
             related_type="appointment",
-            send_push=False,
-            send_email=False,
+            send_push=True,
+            send_email=True,
             send_sms=False,
         )
     
+    async def _get_dealership_notification_recipients(
+        self, dealership_id: UUID
+    ) -> list[tuple["User", bool]]:
+        """
+        Active users to notify for a new lead at a dealership.
+        Returns (user, send_sms) — BDC agents get email+push only (no SMS).
+        """
+        from app.core.permissions import UserRole
+        from app.models.user import User
+        from app.models.user_dealership_access import UserDealershipAccess
+
+        result = await self.db.execute(
+            select(User).where(
+                User.dealership_id == dealership_id,
+                User.is_active == True,
+            )
+        )
+        recipients: dict = {u.id: (u, True) for u in result.scalars().all()}
+
+        bdc_result = await self.db.execute(
+            select(User)
+            .join(
+                UserDealershipAccess,
+                UserDealershipAccess.user_id == User.id,
+            )
+            .where(
+                UserDealershipAccess.dealership_id == dealership_id,
+                User.role == UserRole.BDC,
+                User.is_active == True,
+            )
+        )
+        for bdc_user in bdc_result.scalars().all():
+            recipients[bdc_user.id] = (bdc_user, False)
+
+        return list(recipients.values())
+
     async def notify_new_lead_to_dealership(
         self,
         dealership_id: UUID,
@@ -390,31 +431,14 @@ class NotificationService:
     ) -> List[Notification]:
         """
         Broadcast new lead notification to all active users in a dealership.
-        Sends via push + SMS to all team members.
-        
-        Args:
-            dealership_id: Dealership ID
-            lead_name: Name of the new lead
-            lead_id: ID of the lead
-            lead_source: Source of the lead (e.g., "google_sheets", "manual")
-            
-        Returns:
-            List of created notifications
+        Sends via push + SMS to dealership team; BDC agents get email+push only.
         """
-        # Get all active users in the dealership
-        from app.models.user import User
-        result = await self.db.execute(
-            select(User).where(
-                User.dealership_id == dealership_id,
-                User.is_active == True
-            )
-        )
-        users = result.scalars().all()
-        
+        recipients = await self._get_dealership_notification_recipients(dealership_id)
+
         notifications = []
         source_msg = f" from {lead_source}" if lead_source else ""
-        
-        for user in users:
+
+        for user, send_sms in recipients:
             try:
                 notification = await self.create_notification(
                     user_id=user.id,
@@ -425,14 +449,21 @@ class NotificationService:
                     related_id=lead_id,
                     related_type="lead",
                     send_push=True,
-                    send_email=True,  # Send email for all notifications
-                    send_sms=True,  # SMS to all team members
+                    send_email=True,
+                    send_sms=send_sms,
                 )
+                await self.db.commit()
                 notifications.append(notification)
             except Exception as e:
-                logger.error(f"Failed to notify user {user.id} about new lead: {e}")
-        
-        logger.info(f"Sent new lead notifications to {len(notifications)} users in dealership {dealership_id}")
+                await self.db.rollback()
+                logger.error("Failed to notify user %s about new lead %s: %s", user.id, lead_id, e)
+
+        logger.info(
+            "Sent new lead notifications to %s/%s users in dealership %s",
+            len(notifications),
+            len(recipients),
+            dealership_id,
+        )
         return notifications
     
     async def notify_lead_assigned_to_dealership(
@@ -447,26 +478,25 @@ class NotificationService:
         Notify all active users in a dealership that a new lead was added to their dealership.
         Used when a lead is created or assigned to a dealership (single, bulk, or auto-assign).
         """
-        result = await self.db.execute(
-            select(User).where(
-                User.dealership_id == dealership_id,
-                User.is_active == True,
-            )
-        )
-        users = result.scalars().all()
+        recipients = await self._get_dealership_notification_recipients(dealership_id)
         notifications = []
-        
-        # Build notification message
+
         if source:
             message = f"New lead: {lead_name} (from {source})"
         else:
             message = f"New lead: {lead_name}"
-        
+
         if performer_name:
             message += f" added by {performer_name}"
-        
+
         link = f"/leads/{lead_id}"
-        for user in users:
+        if not recipients:
+            logger.warning(
+                "No active users to notify for new lead %s in dealership %s",
+                lead_id,
+                dealership_id,
+            )
+        for user, send_sms in recipients:
             try:
                 notification = await self.create_notification(
                     user_id=user.id,
@@ -479,12 +509,26 @@ class NotificationService:
                     meta_data={"lead_id": str(lead_id), "lead_name": lead_name, "performer_name": performer_name, "source": source},
                     send_push=True,
                     send_email=True,
-                    send_sms=True,
+                    send_sms=send_sms,
                 )
+                await self.db.commit()
                 notifications.append(notification)
             except Exception as e:
-                logger.warning("Failed to notify user %s about lead assigned to dealership: %s", user.id, e)
-        logger.info("Sent lead-assigned-to-dealership notifications to %s users in dealership %s", len(notifications), dealership_id)
+                await self.db.rollback()
+                logger.warning(
+                    "Failed to notify user %s about lead %s in dealership %s: %s",
+                    user.id,
+                    lead_id,
+                    dealership_id,
+                    e,
+                )
+        logger.info(
+            "Sent lead-assigned-to-dealership notifications to %s/%s users for lead %s in dealership %s",
+            len(notifications),
+            len(recipients),
+            lead_id,
+            dealership_id,
+        )
         return notifications
     
     async def notify_admin_reminder_to_salesperson(
@@ -770,6 +814,38 @@ async def send_skate_alert_background(
             logger.warning("send_skate_alert_background failed: %s\n%s", e, traceback.format_exc())
 
 
+def enqueue_notify_lead_assigned_to_dealership(
+    background_tasks: BackgroundTasks,
+    *,
+    lead_id: UUID,
+    lead_name: str,
+    dealership_id: UUID,
+    performer_name: Optional[str] = None,
+    source: Optional[str] = None,
+) -> None:
+    """
+    Enqueue new-lead notifications as a FastAPI background job.
+
+    Uses its own DB session inside notify_lead_assigned_to_dealership_background so
+    the HTTP request can finish (and commit the lead) before notifications run.
+    Pass only plain values — never ORM objects.
+    """
+    background_tasks.add_task(
+        notify_lead_assigned_to_dealership_background,
+        lead_id,
+        lead_name,
+        dealership_id,
+        performer_name,
+        source,
+    )
+    logger.info(
+        "Enqueued new-lead notification job: lead_id=%s dealership_id=%s source=%s",
+        lead_id,
+        dealership_id,
+        source,
+    )
+
+
 async def notify_lead_assigned_to_dealership_background(
     lead_id: UUID,
     lead_name: str,
@@ -787,15 +863,18 @@ async def notify_lead_assigned_to_dealership_background(
     async with async_session_maker() as db:
         try:
             service = NotificationService(db)
-            await service.notify_lead_assigned_to_dealership(
+            notifications = await service.notify_lead_assigned_to_dealership(
                 lead_id=lead_id,
                 lead_name=lead_name,
                 dealership_id=dealership_id,
                 performer_name=performer_name,
                 source=source,
             )
-            await db.commit()
-            logger.info("notify_lead_assigned_to_dealership_background completed: lead_id=%s", lead_id)
+            logger.info(
+                "notify_lead_assigned_to_dealership_background completed: lead_id=%s delivered=%s",
+                lead_id,
+                len(notifications),
+            )
             await emit_badges_refresh(notifications=True)
         except Exception as e:
             await db.rollback()

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
+from app.core.access_scope import get_accessible_dealership_ids
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.lead import Lead, LeadSource
@@ -21,6 +22,7 @@ from app.models.dealership import Dealership
 from app.models.user import User
 from app.models.activity import Activity
 from app.models.follow_up import FollowUp, FollowUpStatus
+from app.models.appointment import Appointment, AppointmentStatus
 
 router = APIRouter()
 
@@ -59,6 +61,26 @@ class DealershipAdminStats(BaseModel):
     pending_follow_ups: int
     overdue_follow_ups: int
     fresh_leads: int  # Leads with no activity except creation (untouched)
+
+
+class BdcDealershipBreakdown(BaseModel):
+    id: UUID
+    name: str
+    total_leads: int
+    unassigned_leads: int
+
+
+class BdcStats(BaseModel):
+    total_leads: int
+    active_leads: int
+    unassigned_to_salesperson: int
+    converted_leads: int
+    conversion_rate: str
+    todays_follow_ups: int
+    overdue_follow_ups: int
+    upcoming_appointments: int
+    dealership_count: int
+    dealerships: List[BdcDealershipBreakdown]
 
 
 class SalespersonStats(BaseModel):
@@ -449,6 +471,124 @@ async def get_salesperson_stats(
     )
 
 
+@router.get("/bdc/stats", response_model=BdcStats)
+async def get_bdc_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.BDC)),
+) -> Any:
+    """Aggregated dashboard stats across all assigned dealerships."""
+    accessible_ids = await get_accessible_dealership_ids(db, current_user)
+    if not accessible_ids:
+        return BdcStats(
+            total_leads=0,
+            active_leads=0,
+            unassigned_to_salesperson=0,
+            converted_leads=0,
+            conversion_rate="0.0%",
+            todays_follow_ups=0,
+            overdue_follow_ups=0,
+            upcoming_appointments=0,
+            dealership_count=0,
+            dealerships=[],
+        )
+
+    scope = Lead.dealership_id.in_(accessible_ids)
+    total_result = await db.execute(
+        select(func.count()).select_from(Lead).where(scope)
+    )
+    total_leads = total_result.scalar() or 0
+
+    active_result = await db.execute(
+        select(func.count()).select_from(Lead).where(and_(scope, Lead.is_active == True))
+    )
+    active_leads = active_result.scalar() or 0
+
+    unassigned_result = await db.execute(
+        select(func.count()).select_from(Lead).where(
+            and_(scope, Lead.assigned_to.is_(None))
+        )
+    )
+    unassigned_leads = unassigned_result.scalar() or 0
+
+    converted_result = await db.execute(
+        select(func.count()).select_from(Lead).where(
+            and_(scope, Lead.outcome == "converted")
+        )
+    )
+    converted_leads = converted_result.scalar() or 0
+    conversion_rate = (converted_leads / total_leads * 100) if total_leads > 0 else 0
+
+    lead_ids_subq = select(Lead.id).where(scope)
+    today = utc_now().date()
+    todays_fu = await db.execute(
+        select(func.count()).select_from(FollowUp).where(
+            and_(
+                FollowUp.lead_id.in_(lead_ids_subq),
+                FollowUp.status == FollowUpStatus.PENDING,
+                func.date(FollowUp.scheduled_at) == today,
+            )
+        )
+    )
+    overdue_fu = await db.execute(
+        select(func.count()).select_from(FollowUp).where(
+            and_(
+                FollowUp.lead_id.in_(lead_ids_subq),
+                FollowUp.status == FollowUpStatus.PENDING,
+                FollowUp.scheduled_at < utc_now(),
+            )
+        )
+    )
+    now = utc_now()
+    upcoming_appt = await db.execute(
+        select(func.count()).select_from(Appointment).where(
+            and_(
+                Appointment.dealership_id.in_(accessible_ids),
+                Appointment.scheduled_at > now,
+                Appointment.status.in_(
+                    [AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED]
+                ),
+            )
+        )
+    )
+
+    dealer_rows = await db.execute(
+        select(Dealership.id, Dealership.name)
+        .where(Dealership.id.in_(accessible_ids))
+        .order_by(Dealership.name)
+    )
+    breakdown = []
+    for did, dname in dealer_rows.fetchall():
+        d_total = await db.execute(
+            select(func.count()).select_from(Lead).where(Lead.dealership_id == did)
+        )
+        d_unassigned = await db.execute(
+            select(func.count()).select_from(Lead).where(
+                and_(Lead.dealership_id == did, Lead.assigned_to.is_(None))
+            )
+        )
+        breakdown.append(
+            BdcDealershipBreakdown(
+                id=did,
+                name=dname,
+                total_leads=d_total.scalar() or 0,
+                unassigned_leads=d_unassigned.scalar() or 0,
+            )
+        )
+
+    return BdcStats(
+        total_leads=total_leads,
+        active_leads=active_leads,
+        unassigned_to_salesperson=unassigned_leads,
+        converted_leads=converted_leads,
+        conversion_rate=f"{conversion_rate:.1f}%",
+        todays_follow_ups=todays_fu.scalar() or 0,
+        overdue_follow_ups=overdue_fu.scalar() or 0,
+        upcoming_appointments=upcoming_appt.scalar() or 0,
+        dealership_count=len(accessible_ids),
+        dealerships=breakdown,
+    )
+
+
 @router.get("/stats")
 async def get_role_based_stats(
     db: AsyncSession = Depends(get_db),
@@ -460,6 +600,8 @@ async def get_role_based_stats(
     """
     if current_user.role == UserRole.SUPER_ADMIN:
         return await get_super_admin_stats(db, current_user)
+    elif current_user.role == UserRole.BDC:
+        return await get_bdc_stats(db, current_user)
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
         return await get_dealership_admin_stats(db, current_user)
     else:

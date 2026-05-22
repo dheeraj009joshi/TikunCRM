@@ -94,5 +94,21 @@ export const TeamService = {
     async toggleUserStatus(userId: string, isActive: boolean): Promise<UserBrief> {
         const response = await apiClient.patch(`/users/${userId}`, { is_active: isActive });
         return response.data;
-    }
+    },
+
+    async listBdcAgents(): Promise<UserBrief[]> {
+        const response = await apiClient.get("/users/bdc-agents");
+        return response.data;
+    },
+
+    async getUserDealershipAccess(userId: string): Promise<{ user_id: string; dealerships: { id: string; name: string }[] }> {
+        const response = await apiClient.get(`/users/${userId}/dealership-access`);
+        return response.data;
+    },
+
+    async setUserDealershipAccess(userId: string, dealershipIds: string[]): Promise<void> {
+        await apiClient.put(`/users/${userId}/dealership-access`, {
+            dealership_ids: dealershipIds,
+        });
+    },
 };

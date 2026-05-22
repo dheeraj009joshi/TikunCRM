@@ -133,6 +133,12 @@ class LeadSecondaryAssignment(BaseModel):
     notes: Optional[str] = None
 
 
+class LeadBdcAssignment(BaseModel):
+    """Schema for assigning BDC agent on a lead."""
+    bdc_assigned_to_id: Optional[UUID] = None
+    notes: Optional[str] = None
+
+
 class LeadSwapSalespersons(BaseModel):
     """Schema for swapping primary and secondary salespersons."""
     notes: Optional[str] = None
@@ -203,6 +209,7 @@ class LeadResponse(BaseModel):
     dealership_id: Optional[UUID] = None
     assigned_to: Optional[UUID] = None
     secondary_salesperson_id: Optional[UUID] = None
+    bdc_assigned_to_id: Optional[UUID] = None
     created_by: Optional[UUID] = None
     notes: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
@@ -266,6 +273,7 @@ class LeadDetail(LeadResponse):
     """Detailed lead response with related user and dealership info."""
     assigned_to_user: Optional[UserBrief] = None
     secondary_salesperson: Optional[UserBrief] = None
+    bdc_assigned_to_user: Optional[UserBrief] = None
     created_by_user: Optional[UserBrief] = None
     dealership: Optional[DealershipBrief] = None
     access_level: Optional[str] = None

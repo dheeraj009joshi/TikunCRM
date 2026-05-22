@@ -2,6 +2,7 @@
 Email Notifier Service
 Sends email notifications to users when they receive replies
 """
+import asyncio
 import logging
 import smtplib
 import ssl
@@ -38,7 +39,8 @@ class EmailNotifier:
         to_name: str,
         subject: str,
         message: str,
-        link: Optional[str] = None
+        link: Optional[str] = None,
+        dealership_name: Optional[str] = None,
     ) -> bool:
         """
         Send a generic notification email.
@@ -54,10 +56,16 @@ class EmailNotifier:
             True if sent successfully
         """
         try:
+            dealership_line = ""
+            dealership_line_html = ""
+            if dealership_name:
+                dealership_line = f"\nDealership: {dealership_name}\n"
+                dealership_line_html = f'<p style="margin: 0 0 12px; color: #4b5563;"><strong>Dealership:</strong> {dealership_name}</p>'
+
             # Build email body
             body_text = f"""
 Hello {to_name},
-
+{dealership_line}
 {message}
 
 {f'View details: {settings.frontend_url}{link}' if link else ''}
@@ -88,6 +96,7 @@ This is an automated notification from TikunCRM.
         </div>
         <div class="content">
             <p>Hello {to_name},</p>
+            {dealership_line_html}
             <div class="message">
                 <p style="margin: 0; color: #4b5563;">{message}</p>
             </div>
@@ -101,11 +110,17 @@ This is an automated notification from TikunCRM.
 </html>
             """
             
-            # Send via system SMTP
-            return self._send_via_system(to_email, subject, body_text, body_html)
+            # Send via system SMTP (thread pool — smtplib blocks the event loop)
+            return await asyncio.to_thread(
+                EmailNotifier._send_via_system,
+                to_email,
+                subject,
+                body_text,
+                body_html,
+            )
             
         except Exception as e:
-            logger.error(f"Error sending notification email: {e}")
+            logger.error("Error sending notification email to %s: %s", to_email, e)
             return False
     
     @staticmethod
@@ -208,8 +223,12 @@ This is an automated notification from TikunCRM.
                 )
             
             if not sent:
-                sent = EmailNotifier._send_via_system(
-                    user.email, subject, body_text, body_html
+                sent = await asyncio.to_thread(
+                    EmailNotifier._send_via_system,
+                    user.email,
+                    subject,
+                    body_text,
+                    body_html,
                 )
             
             if sent:
@@ -257,20 +276,22 @@ This is an automated notification from TikunCRM.
             
             password = config.smtp_password
             
-            if config.smtp_use_ssl:
-                context = ssl.create_default_context()
-                with smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, context=context) as server:
-                    server.login(config.smtp_username, password)
-                    server.send_message(msg)
-            else:
-                with smtplib.SMTP(config.smtp_host, config.smtp_port) as server:
-                    if config.smtp_use_tls:
-                        context = ssl.create_default_context()
-                        server.starttls(context=context)
-                    server.login(config.smtp_username, password)
-                    server.send_message(msg)
-            
-            return True
+            def _send() -> bool:
+                if config.smtp_use_ssl:
+                    context = ssl.create_default_context()
+                    with smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, context=context) as server:
+                        server.login(config.smtp_username, password)
+                        server.send_message(msg)
+                else:
+                    with smtplib.SMTP(config.smtp_host, config.smtp_port) as server:
+                        if config.smtp_use_tls:
+                            context = ssl.create_default_context()
+                            server.starttls(context=context)
+                        server.login(config.smtp_username, password)
+                        server.send_message(msg)
+                return True
+
+            return await asyncio.to_thread(_send)
             
         except Exception as e:
             logger.error(f"Error sending via dealership SMTP: {e}")
@@ -321,6 +342,7 @@ def send_new_member_welcome_email(
     to_name: str,
     temp_password: str,
     added_by_name: str,
+    dealership_name: str | None = None,
 ) -> None:
     """
     Send welcome email to a new team member with their temporary login credentials.
@@ -333,11 +355,20 @@ def send_new_member_welcome_email(
         "After logging in, go to Profile or Settings to change your password."
     )
     app_name = settings.email_from_name or "TikunCRM"
+    if dealership_name:
+        added_to_line = f"You have been added to {dealership_name} on {app_name} by {added_by_name}."
+        added_to_line_html = (
+            f"You have been added to <strong>{dealership_name}</strong> on {app_name} "
+            f"by <strong>{added_by_name}</strong>."
+        )
+    else:
+        added_to_line = f"You have been added to {app_name} by {added_by_name}."
+        added_to_line_html = f"You have been added to {app_name} by <strong>{added_by_name}</strong>."
     subject = f"Welcome to {app_name} – Your login details"
     body_text = f"""
 Hello {to_name},
 
-You have been added to {app_name} by {added_by_name}.
+{added_to_line}
 
 Your temporary login credentials:
 
@@ -373,7 +404,7 @@ This is an automated message from {app_name}.
     <div class="header"><h2 style="margin: 0;">Welcome to {app_name}</h2></div>
     <div class="content">
         <p>Hello {to_name},</p>
-        <p>You have been added to {app_name} by <strong>{added_by_name}</strong>.</p>
+        <p>{added_to_line_html}</p>
         <p><strong>Your temporary login credentials:</strong></p>
         <div class="credentials">
             <div class="credential-row"><span class="label">Email:</span> {to_email}</div>
@@ -388,6 +419,7 @@ This is an automated message from {app_name}.
 </html>
 """
     try:
+        # Called from FastAPI BackgroundTasks (sync worker thread) — blocking SMTP is OK here.
         ok = EmailNotifier._send_via_system(to_email, subject, body_text, body_html)
         if ok:
             logger.info("New member welcome email sent to %s", to_email)
