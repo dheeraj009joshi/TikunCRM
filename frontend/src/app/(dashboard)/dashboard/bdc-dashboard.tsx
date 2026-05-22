@@ -164,7 +164,9 @@ export function BdcDashboard() {
                                         <TableCell className="text-right">{d.total_leads}</TableCell>
                                         <TableCell className="text-right">
                                             {d.unassigned_leads > 0 ? (
-                                                <Badge variant="warning">{d.unassigned_leads}</Badge>
+                                                <Badge variant="outline" className="text-amber-600 border-amber-300">
+                                                    {d.unassigned_leads}
+                                                </Badge>
                                             ) : (
                                                 "0"
                                             )}
