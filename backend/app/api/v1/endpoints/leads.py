@@ -1165,7 +1165,7 @@ async def update_lead(
 
 
 # ----- Credit application (initiate / complete / abandon) -----
-CREDIT_APP_URL = "https://www.toyotasouthatlanta.com/credit-application"
+DEFAULT_CREDIT_APP_URL = "https://www.toyotasouthatlanta.com/credit-application"
 
 
 @router.post("/{lead_id}/credit-app/initiate")
@@ -1178,6 +1178,9 @@ async def credit_app_initiate(
     Log that the user initiated the credit application (redirects to external URL).
     Optionally stores pending state on lead meta_data for outcome capture when user returns.
     Rejects if a credit app is already pending (prevents duplicate timeline entries).
+    
+    The credit app URL is configurable per dealership via dealership.config["credit_app_url"].
+    Falls back to a default URL if not configured.
     """
     lead = await _lead_access(db, lead_id, current_user)
     if (lead.meta_data or {}).get("credit_app_initiated_at"):
@@ -1186,6 +1189,15 @@ async def credit_app_initiate(
             detail="Credit app already initiated for this lead. Capture the outcome (complete or abandon) first.",
         )
     dealership_id = lead.dealership_id or current_user.dealership_id
+    
+    # Get dealership-specific credit app URL from config, fallback to default
+    credit_app_url = DEFAULT_CREDIT_APP_URL
+    if dealership_id:
+        dealership_r = await db.execute(select(Dealership).where(Dealership.id == dealership_id))
+        dealership = dealership_r.scalar_one_or_none()
+        if dealership and dealership.config:
+            credit_app_url = dealership.config.get("credit_app_url") or DEFAULT_CREDIT_APP_URL
+    
     cust_r = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
     cust = cust_r.scalar_one_or_none()
     lead_name = f"{cust.first_name or ''} {cust.last_name or ''}".strip() if cust else "Customer"
@@ -1199,7 +1211,7 @@ async def credit_app_initiate(
         dealership_id=dealership_id,
         meta_data={
             "action": "initiated",
-            "redirect_url": CREDIT_APP_URL,
+            "redirect_url": credit_app_url,
             "performer_name": performer_name,
         },
     )
@@ -1208,7 +1220,7 @@ async def credit_app_initiate(
     meta["credit_app_initiated_at"] = utc_now().isoformat()
     lead.meta_data = meta
     await db.commit()
-    return {"ok": True, "redirect_url": CREDIT_APP_URL}
+    return {"ok": True, "redirect_url": credit_app_url}
 
 
 @router.post("/{lead_id}/credit-app/complete")
