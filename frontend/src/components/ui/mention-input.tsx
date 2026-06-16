@@ -24,6 +24,7 @@ interface MentionInputProps {
     rows?: number
     disabled?: boolean
     onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
+    dealershipId?: string | null
 }
 
 export function MentionInput({
@@ -34,7 +35,8 @@ export function MentionInput({
     className,
     rows = 3,
     disabled = false,
-    onKeyDown
+    onKeyDown,
+    dealershipId
 }: MentionInputProps) {
     const [mentionableUsers, setMentionableUsers] = React.useState<MentionableUser[]>([])
     const [showSuggestions, setShowSuggestions] = React.useState(false)
@@ -46,18 +48,19 @@ export function MentionInput({
     const textareaRef = React.useRef<HTMLTextAreaElement>(null)
     const suggestionsRef = React.useRef<HTMLDivElement>(null)
     
-    // Fetch mentionable users on mount
+    // Fetch mentionable users on mount or when dealershipId changes
     React.useEffect(() => {
         async function fetchUsers() {
             try {
-                const response = await apiClient.get("/users/mentionable")
+                const params = dealershipId ? { dealership_id: dealershipId } : undefined
+                const response = await apiClient.get("/users/mentionable", { params })
                 setMentionableUsers(response.data)
             } catch (error) {
                 console.error("Failed to fetch mentionable users:", error)
             }
         }
         fetchUsers()
-    }, [])
+    }, [dealershipId])
     
     // Filter users based on current mention query
     const filteredUsers = React.useMemo(() => {

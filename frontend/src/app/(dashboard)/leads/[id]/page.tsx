@@ -3751,6 +3751,7 @@ export default function LeadDetailsPage() {
                                                                     placeholder="Write a reply... Use @ to mention someone"
                                                                     rows={2}
                                                                     disabled={isAddingNote}
+                                                                    dealershipId={lead.dealership_id}
                                                                 />
                                                                 <div className="flex justify-end gap-2 mt-2">
                                                                     <Button
@@ -4765,6 +4766,7 @@ export default function LeadDetailsPage() {
                                     placeholder="Add a note... Use @ to mention someone"
                                     rows={2}
                                     disabled={isAddingNote}
+                                    dealershipId={lead.dealership_id}
                                 />
                                 <div className="flex justify-end">
                                     <Button 

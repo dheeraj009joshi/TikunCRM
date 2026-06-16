@@ -78,44 +78,101 @@ async def get_mentionable_users(
 ) -> Any:
     """
     Get users that can be mentioned in notes.
-    - Dealership users: Can mention users in the same dealership
-    - Super Admin: Can mention users in a specific dealership or all users
+    - Dealership users: Can mention users in the same dealership + BDC agents with access
+    - Super Admin: Can mention users in a specific dealership or all users + BDC agents
+    - BDC: Can mention users in accessible dealerships + other BDC agents with access
     
     Returns active users only.
     """
-    query = select(User).where(User.is_active == True)
+    from app.core.access_scope import get_accessible_dealership_ids
     
-    # Determine which users can be mentioned
+    # Determine which dealership to scope to
+    target_dealership_id: Optional[UUID] = None
+    
     if current_user.role == UserRole.SUPER_ADMIN:
-        if dealership_id:
-            query = query.where(User.dealership_id == dealership_id)
+        target_dealership_id = dealership_id
     elif current_user.role == UserRole.BDC:
-        from app.core.access_scope import get_accessible_dealership_ids
         accessible_ids = await get_accessible_dealership_ids(db, current_user)
         if dealership_id:
             if accessible_ids and dealership_id not in accessible_ids:
                 return []
-            query = query.where(User.dealership_id == dealership_id)
+            target_dealership_id = dealership_id
         elif accessible_ids:
-            query = query.where(User.dealership_id.in_(accessible_ids))
+            # BDC without specific dealership - get users from all accessible dealerships
+            query = select(User).where(
+                User.is_active == True,
+                User.dealership_id.in_(accessible_ids),
+                User.id != current_user.id,
+            )
+            result = await db.execute(query)
+            dealership_users = list(result.scalars().all())
+            
+            # Also get BDC agents with access to any of those dealerships
+            bdc_query = (
+                select(User)
+                .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
+                .where(
+                    User.role == UserRole.BDC,
+                    User.is_active == True,
+                    UserDealershipAccess.dealership_id.in_(accessible_ids),
+                    User.id != current_user.id,
+                )
+            )
+            bdc_result = await db.execute(bdc_query)
+            bdc_users = list(bdc_result.scalars().all())
+            
+            # Combine and deduplicate
+            seen_ids = set()
+            combined = []
+            for user in dealership_users + bdc_users:
+                if user.id not in seen_ids:
+                    seen_ids.add(user.id)
+                    combined.append(user)
+            combined.sort(key=lambda u: (u.first_name or "", u.last_name or ""))
+            return combined
         else:
             return []
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER, UserRole.SALESPERSON]:
-        # Dealership users can only mention users in their dealership
         if current_user.dealership_id:
-            query = query.where(User.dealership_id == current_user.dealership_id)
+            target_dealership_id = current_user.dealership_id
         else:
-            # No dealership - can't mention anyone
             return []
     
-    # Exclude current user from the list (can't mention yourself)
-    query = query.where(User.id != current_user.id)
-    
-    # Order by name
+    # Query dealership users
+    query = select(User).where(User.is_active == True, User.id != current_user.id)
+    if target_dealership_id:
+        query = query.where(User.dealership_id == target_dealership_id)
     query = query.order_by(User.first_name, User.last_name)
     
     result = await db.execute(query)
-    return result.scalars().all()
+    dealership_users = list(result.scalars().all())
+    
+    # Also include BDC agents who have access to the target dealership
+    if target_dealership_id:
+        bdc_query = (
+            select(User)
+            .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
+            .where(
+                User.role == UserRole.BDC,
+                User.is_active == True,
+                UserDealershipAccess.dealership_id == target_dealership_id,
+                User.id != current_user.id,
+            )
+        )
+        bdc_result = await db.execute(bdc_query)
+        bdc_users = list(bdc_result.scalars().all())
+        
+        # Combine and deduplicate (in case BDC is already in the list somehow)
+        seen_ids = {u.id for u in dealership_users}
+        for bdc_user in bdc_users:
+            if bdc_user.id not in seen_ids:
+                dealership_users.append(bdc_user)
+                seen_ids.add(bdc_user.id)
+        
+        # Re-sort by name
+        dealership_users.sort(key=lambda u: (u.first_name or "", u.last_name or ""))
+    
+    return dealership_users
 
 
 @router.get("/team", response_model=TeamListResponse)
