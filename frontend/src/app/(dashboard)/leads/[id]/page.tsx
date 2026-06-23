@@ -108,6 +108,7 @@ import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/fol
 import { StipsService, StipsCategory, StipDocument } from "@/services/stips-service"
 import { useLeadUpdateEvents, useActivityEvents } from "@/hooks/use-websocket"
 import { LocalTime } from "@/components/ui/local-time"
+import { DealershipTime } from "@/components/ui/dealership-time"
 import { format } from "date-fns"
 import { formatDateInTimezone, parseAsUTC } from "@/utils/timezone"
 import { Calendar as CalendarPicker } from "@/components/ui/calendar"
@@ -273,7 +274,7 @@ function LeadScheduledAppointmentQuickPanel({
             <div>
                 <p className="font-medium text-foreground">{appointment.title}</p>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                    <LocalTime date={appointment.scheduled_at} />
+                    <DealershipTime date={appointment.scheduled_at} showTimezoneAbbr />
                     {appointment.duration_minutes ? ` · ${appointment.duration_minutes} min` : ""}
                 </p>
                 <Badge variant="outline" className={cn("mt-2", getAppointmentStatusColor(appointment.status))} size="sm">
@@ -3280,7 +3281,7 @@ export default function LeadDetailsPage() {
                                                         </span>
                                                         <span className="block text-xs text-muted-foreground truncate">
                                                             {nextScheduledAppointment.title} ·{" "}
-                                                            <LocalTime date={nextScheduledAppointment.scheduled_at} />
+                                                            <DealershipTime date={nextScheduledAppointment.scheduled_at} showTimezoneAbbr />
                                                         </span>
                                                     </span>
                                                     <Badge
@@ -3830,7 +3831,7 @@ export default function LeadDetailsPage() {
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
                                                                 <TableCell>
-                                                                    <LocalTime date={apt.scheduled_at} />
+                                                                    <DealershipTime date={apt.scheduled_at} showTimezoneAbbr />
                                                                     {apt.duration_minutes ? ` (${apt.duration_minutes}m)` : ""}
                                                                 </TableCell>
                                                                 <TableCell>
@@ -3929,7 +3930,7 @@ export default function LeadDetailsPage() {
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
                                                                 <TableCell>
-                                                                    <LocalTime date={apt.scheduled_at} />
+                                                                    <DealershipTime date={apt.scheduled_at} showTimezoneAbbr />
                                                                     {apt.duration_minutes ? ` (${apt.duration_minutes}m)` : ""}
                                                                 </TableCell>
                                                                 <TableCell>
@@ -4028,7 +4029,7 @@ export default function LeadDetailsPage() {
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
                                                                 <TableCell>
-                                                                    <LocalTime date={apt.scheduled_at} />
+                                                                    <DealershipTime date={apt.scheduled_at} showTimezoneAbbr />
                                                                     {apt.duration_minutes ? ` (${apt.duration_minutes}m)` : ""}
                                                                 </TableCell>
                                                                 <TableCell>
@@ -4125,7 +4126,7 @@ export default function LeadDetailsPage() {
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
                                                                 <TableCell>
-                                                                    <LocalTime date={apt.scheduled_at} />
+                                                                    <DealershipTime date={apt.scheduled_at} showTimezoneAbbr />
                                                                     {apt.duration_minutes ? ` (${apt.duration_minutes}m)` : ""}
                                                                 </TableCell>
                                                                 <TableCell>
@@ -4250,7 +4251,7 @@ export default function LeadDetailsPage() {
                                                             const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status as keyof typeof FOLLOW_UP_STATUS_INFO] ?? { label: fu.status || "—", variant: "secondary" as const }
                                                             return (
                                                                 <TableRow key={fu.id}>
-                                                                    <TableCell><LocalTime date={fu.scheduled_at} /></TableCell>
+                                                                    <TableCell><DealershipTime date={fu.scheduled_at} showTimezoneAbbr /></TableCell>
                                                                     <TableCell>
                                                                         <Badge variant={statusInfo.variant} size="sm">{statusInfo.label}</Badge>
                                                                     </TableCell>
@@ -4312,7 +4313,7 @@ export default function LeadDetailsPage() {
                                                             const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status as keyof typeof FOLLOW_UP_STATUS_INFO] ?? { label: fu.status || "—", variant: "secondary" as const }
                                                             return (
                                                                 <TableRow key={fu.id}>
-                                                                    <TableCell><LocalTime date={fu.scheduled_at} /></TableCell>
+                                                                    <TableCell><DealershipTime date={fu.scheduled_at} showTimezoneAbbr /></TableCell>
                                                                     <TableCell>
                                                                         <Badge variant={statusInfo.variant} size="sm">{statusInfo.label}</Badge>
                                                                     </TableCell>
@@ -4374,7 +4375,7 @@ export default function LeadDetailsPage() {
                                                             const statusInfo = FOLLOW_UP_STATUS_INFO[fu.status as keyof typeof FOLLOW_UP_STATUS_INFO] ?? { label: fu.status || "—", variant: "secondary" as const }
                                                             return (
                                                                 <TableRow key={fu.id}>
-                                                                    <TableCell><LocalTime date={fu.scheduled_at} /></TableCell>
+                                                                    <TableCell><DealershipTime date={fu.scheduled_at} showTimezoneAbbr /></TableCell>
                                                                     <TableCell>
                                                                         <Badge variant={statusInfo.variant} size="sm">{statusInfo.label}</Badge>
                                                                     </TableCell>
@@ -4437,7 +4438,7 @@ export default function LeadDetailsPage() {
                                                             const notesDisplay = fu.status === "completed" && fu.completion_notes ? fu.completion_notes : (fu.notes || "—")
                                                             return (
                                                                 <TableRow key={fu.id}>
-                                                                    <TableCell><LocalTime date={fu.scheduled_at} /></TableCell>
+                                                                    <TableCell><DealershipTime date={fu.scheduled_at} showTimezoneAbbr /></TableCell>
                                                                     <TableCell>
                                                                         <Badge variant={statusInfo.variant} size="sm">{statusInfo.label}</Badge>
                                                                     </TableCell>

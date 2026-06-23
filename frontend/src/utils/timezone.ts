@@ -97,10 +97,93 @@ export function convertLocalToUTC(date: Date): string {
     return date.toISOString();
 }
 
+/**
+ * Format a date in a specific timezone (e.g., dealership timezone).
+ * Used for appointments which should display in dealership business hours.
+ * 
+ * @param date - The date to format (UTC from backend)
+ * @param timezone - IANA timezone string (e.g., "America/New_York")
+ * @param options - Optional formatting options
+ */
+export function formatDateInDealershipTimezone(
+    date: Date | string | null | undefined,
+    timezone: string,
+    options?: {
+        dateStyle?: "full" | "long" | "medium" | "short";
+        timeStyle?: "full" | "long" | "medium" | "short";
+        dateOnly?: boolean;
+        timeOnly?: boolean;
+    }
+): string {
+    if (!date) return "—";
+    
+    try {
+        const d = parseAsUTC(date);
+        if (isNaN(d.getTime())) return "—";
+        
+        // Build format options based on what's requested
+        const formatOptions: Intl.DateTimeFormatOptions = {
+            timeZone: timezone,
+        };
+        
+        if (options?.dateOnly) {
+            formatOptions.month = "short";
+            formatOptions.day = "numeric";
+            formatOptions.year = "numeric";
+        } else if (options?.timeOnly) {
+            formatOptions.hour = "numeric";
+            formatOptions.minute = "2-digit";
+            formatOptions.hour12 = true;
+        } else if (options?.dateStyle || options?.timeStyle) {
+            if (options.dateStyle) formatOptions.dateStyle = options.dateStyle;
+            if (options.timeStyle) formatOptions.timeStyle = options.timeStyle;
+        } else {
+            // Default: show date and time
+            formatOptions.month = "short";
+            formatOptions.day = "numeric";
+            formatOptions.year = "numeric";
+            formatOptions.hour = "numeric";
+            formatOptions.minute = "2-digit";
+            formatOptions.hour12 = true;
+        }
+        
+        return d.toLocaleString("en-US", formatOptions);
+    } catch (e) {
+        console.error("[formatDateInDealershipTimezone] Error:", e);
+        return "—";
+    }
+}
+
+/**
+ * Get timezone abbreviation (e.g., "ET", "CT", "PT", "IST")
+ */
+export function getTimezoneAbbreviation(timezone: string): string {
+    try {
+        const formatter = new Intl.DateTimeFormat("en-US", {
+            timeZone: timezone,
+            timeZoneName: "short",
+        });
+        const parts = formatter.formatToParts(new Date());
+        const tzPart = parts.find(p => p.type === "timeZoneName");
+        return tzPart?.value || "";
+    } catch {
+        return "";
+    }
+}
+
 export const COMMON_TIMEZONES = [
     { value: "America/New_York", label: "Eastern Time (ET)" },
     { value: "America/Chicago", label: "Central Time (CT)" },
     { value: "America/Denver", label: "Mountain Time (MT)" },
     { value: "America/Los_Angeles", label: "Pacific Time (PT)" },
+    { value: "America/Phoenix", label: "Arizona Time (MST)" },
+    { value: "America/Anchorage", label: "Alaska Time (AKT)" },
+    { value: "Pacific/Honolulu", label: "Hawaii Time (HST)" },
     { value: "Asia/Kolkata", label: "India (IST)" },
+    { value: "Europe/London", label: "UK (GMT/BST)" },
+    { value: "Europe/Paris", label: "Central European (CET)" },
+    { value: "Asia/Dubai", label: "Dubai (GST)" },
+    { value: "Asia/Singapore", label: "Singapore (SGT)" },
+    { value: "Australia/Sydney", label: "Sydney (AEST)" },
+    { value: "UTC", label: "UTC" },
 ];

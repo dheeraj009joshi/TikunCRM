@@ -76,8 +76,8 @@ import {
     FOLLOW_UP_STATUS_INFO,
     FollowUpStats,
 } from "@/services/follow-up-service"
-import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
-import { formatDateInTimezone, formatRelativeTimeInTimezone } from "@/utils/timezone"
+import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { formatDateInDealershipTimezone, formatRelativeTime, getTimezoneAbbreviation } from "@/utils/timezone"
 import { UserAvatar } from "@/components/ui/avatar"
 import { getRoleDisplayName } from "@/hooks/use-role"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
@@ -100,7 +100,8 @@ const DATE_RANGE_PRESETS: { value: DateRangePreset; label: string }[] = [
 export default function FollowUpsPage() {
     const router = useRouter()
     const searchParams = useSearchParams()
-    const { timezone } = useBrowserTimezone()
+    const { dealershipTimezone } = useDealershipTimezone()
+    const tzAbbr = getTimezoneAbbreviation(dealershipTimezone)
 
     const [followUps, setFollowUps] = React.useState<FollowUp[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
@@ -623,10 +624,8 @@ export default function FollowUpsPage() {
                                                             <div className="flex items-center gap-1">
                                                                 <Calendar className="h-4 w-4" />
                                                                 <span>
-                                                                    {formatDateInTimezone(followUp.scheduled_at, timezone, {
-                                                                        dateStyle: "medium",
-                                                                        timeStyle: "short"
-                                                                    })}
+                                                                    {formatDateInDealershipTimezone(followUp.scheduled_at, dealershipTimezone)}
+                                                                    {tzAbbr && <span className="text-xs ml-1">({tzAbbr})</span>}
                                                                 </span>
                                                             </div>
                                                             {followUp.assigned_to_user && (
@@ -662,7 +661,7 @@ export default function FollowUpsPage() {
                                                         
                                                         {followUp.status === "completed" && followUp.completed_at && (
                                                             <p className="text-xs text-muted-foreground mt-2">
-                                                                Completed {formatRelativeTimeInTimezone(followUp.completed_at, timezone)}
+                                                                Completed {formatRelativeTime(followUp.completed_at)}
                                                             </p>
                                                         )}
                                                         

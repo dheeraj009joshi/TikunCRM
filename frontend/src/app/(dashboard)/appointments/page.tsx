@@ -42,8 +42,8 @@ import {
 } from "@/services/appointment-service"
 import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { TeamService, UserBrief } from "@/services/team-service"
-import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
-import { formatDateInTimezone } from "@/utils/timezone"
+import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { formatDateInDealershipTimezone, getTimezoneAbbreviation } from "@/utils/timezone"
 import { useAuthStore } from "@/stores/auth-store"
 import { useRole } from "@/hooks/use-role"
 import { UserAvatar } from "@/components/ui/avatar"
@@ -788,7 +788,8 @@ const DATE_RANGE_PRESETS: { value: DateRangePreset; label: string }[] = [
 
 export default function AppointmentsPage() {
     const { user } = useAuthStore()
-    const { timezone } = useBrowserTimezone()
+    const { dealershipTimezone } = useDealershipTimezone()
+    const tzAbbr = getTimezoneAbbreviation(dealershipTimezone)
     const searchParams = useSearchParams()
     const router = useRouter()
 
@@ -1032,8 +1033,8 @@ export default function AppointmentsPage() {
         const headers = ["Title", "Date", "Time", "Status", "Type", "Lead", "Assigned To", "Location", "Notes"]
         const rows = appointments.map(apt => [
             apt.title,
-            formatDateInTimezone(apt.scheduled_at, timezone, { dateStyle: "medium" }),
-            formatDateInTimezone(apt.scheduled_at, timezone, { timeStyle: "short" }),
+            formatDateInDealershipTimezone(apt.scheduled_at, dealershipTimezone, { dateOnly: true }),
+            formatDateInDealershipTimezone(apt.scheduled_at, dealershipTimezone, { timeOnly: true }) + (tzAbbr ? ` (${tzAbbr})` : ""),
             getAppointmentStatusLabel(apt.status),
             getAppointmentTypeLabel(apt.appointment_type),
             apt.lead ? (apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown") : "-",
@@ -1125,7 +1126,7 @@ export default function AppointmentsPage() {
                     <tbody>
                         ${appointments.map(apt => `
                             <tr>
-                                <td>${formatDateInTimezone(apt.scheduled_at, timezone, { dateStyle: "medium", timeStyle: "short" })}</td>
+                                <td>${formatDateInDealershipTimezone(apt.scheduled_at, dealershipTimezone)}${tzAbbr ? ` (${tzAbbr})` : ""}</td>
                                 <td>${apt.title}</td>
                                 <td>${apt.lead ? (apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown") : "-"}</td>
                                 <td>${apt.assigned_to_user ? `${apt.assigned_to_user.first_name} ${apt.assigned_to_user.last_name}` : "-"}</td>
@@ -1521,10 +1522,8 @@ export default function AppointmentsPage() {
                                                 <div className="flex items-center gap-1">
                                                     <Calendar className="h-4 w-4" />
                                                     <span>
-                                                        {formatDateInTimezone(appointment.scheduled_at, timezone, {
-                                                            dateStyle: "medium",
-                                                            timeStyle: "short"
-                                                        })}
+                                                        {formatDateInDealershipTimezone(appointment.scheduled_at, dealershipTimezone)}
+                                                        {tzAbbr && <span className="text-xs ml-1">({tzAbbr})</span>}
                                                     </span>
                                                 </div>
                                                 {appointment.assigned_to_user && (

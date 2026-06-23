@@ -27,6 +27,7 @@ import { DealershipService, Dealership } from "@/services/dealership-service"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
 import { COMMON_TIMEZONES } from "@/utils/timezone"
+import { clearDealershipTimezoneCache } from "@/hooks/use-dealership-timezone"
 
 export default function DealershipSettingsPage() {
     const router = useRouter()
@@ -89,6 +90,8 @@ export default function DealershipSettingsPage() {
                 config: updatedConfig,
             })
             setDealership(updated)
+            // Clear timezone cache so hook will refetch the new timezone
+            clearDealershipTimezoneCache(dealership.id)
             setSuccessMessage("Dealership settings saved successfully!")
         } catch (err: any) {
             setError(err?.response?.data?.detail || "Failed to save settings")
