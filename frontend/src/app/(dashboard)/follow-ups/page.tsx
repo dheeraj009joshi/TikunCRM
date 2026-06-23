@@ -360,160 +360,250 @@ export default function FollowUpsPage() {
             </div>
             
             {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <Card>
-                    <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-sm text-muted-foreground">Total</p>
-                                <p className="text-2xl font-bold">{stats.total}</p>
-                            </div>
-                            <Calendar className="h-8 w-8 text-muted-foreground" />
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-sm text-muted-foreground">Pending</p>
-                                <p className="text-2xl font-bold text-yellow-600">{stats.pending}</p>
-                            </div>
-                            <Clock className="h-8 w-8 text-yellow-600" />
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-sm text-muted-foreground">Overdue</p>
-                                <p className="text-2xl font-bold text-red-600">{stats.overdue}</p>
-                            </div>
-                            <AlertCircle className="h-8 w-8 text-red-600" />
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <p className="text-sm text-muted-foreground">Completed</p>
-                                <p className="text-2xl font-bold text-green-600">{stats.completed}</p>
-                            </div>
-                            <CheckCircle className="h-8 w-8 text-green-600" />
-                        </div>
-                    </CardContent>
-                </Card>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <button
+                    onClick={() => setFilter("all")}
+                    className={cn(
+                        "flex items-center gap-4 p-4 rounded-lg border transition-all text-left",
+                        filter === "all" 
+                            ? "border-primary bg-primary/5 ring-2 ring-primary ring-offset-2" 
+                            : "hover:border-primary/50 hover:bg-accent"
+                    )}
+                >
+                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/30">
+                        <Calendar className="h-5 w-5 text-blue-600" />
+                    </div>
+                    <div>
+                        <p className="text-sm text-muted-foreground">Total</p>
+                        <p className="text-2xl font-bold">{stats.total}</p>
+                    </div>
+                </button>
+                <button
+                    onClick={() => setFilter("pending")}
+                    className={cn(
+                        "flex items-center gap-4 p-4 rounded-lg border transition-all text-left",
+                        filter === "pending" 
+                            ? "border-yellow-500 bg-yellow-50 dark:bg-yellow-900/10 ring-2 ring-yellow-500 ring-offset-2" 
+                            : "hover:border-yellow-300 hover:bg-yellow-50/50"
+                    )}
+                >
+                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-yellow-100 dark:bg-yellow-900/30">
+                        <Clock className="h-5 w-5 text-yellow-600" />
+                    </div>
+                    <div>
+                        <p className="text-sm text-muted-foreground">Pending</p>
+                        <p className="text-2xl font-bold text-yellow-600">{stats.pending}</p>
+                    </div>
+                </button>
+                <button
+                    onClick={() => setFilter("overdue")}
+                    className={cn(
+                        "flex items-center gap-4 p-4 rounded-lg border transition-all text-left",
+                        filter === "overdue" 
+                            ? "border-red-500 bg-red-50 dark:bg-red-900/10 ring-2 ring-red-500 ring-offset-2" 
+                            : "hover:border-red-300 hover:bg-red-50/50"
+                    )}
+                >
+                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
+                        <AlertCircle className="h-5 w-5 text-red-600" />
+                    </div>
+                    <div>
+                        <p className="text-sm text-muted-foreground">Overdue</p>
+                        <p className="text-2xl font-bold text-red-600">{stats.overdue}</p>
+                    </div>
+                </button>
+                <button
+                    onClick={() => setFilter("completed")}
+                    className={cn(
+                        "flex items-center gap-4 p-4 rounded-lg border transition-all text-left",
+                        filter === "completed" 
+                            ? "border-green-500 bg-green-50 dark:bg-green-900/10 ring-2 ring-green-500 ring-offset-2" 
+                            : "hover:border-green-300 hover:bg-green-50/50"
+                    )}
+                >
+                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+                        <CheckCircle className="h-5 w-5 text-green-600" />
+                    </div>
+                    <div>
+                        <p className="text-sm text-muted-foreground">Completed</p>
+                        <p className="text-2xl font-bold text-green-600">{stats.completed}</p>
+                    </div>
+                </button>
             </div>
             
             {/* Filters */}
             <Card>
                 <CardContent className="p-4">
-                    <div className="flex flex-wrap items-center gap-4">
-                        <Tabs value={filter} onValueChange={(v) => setFilter(v as FollowUpFilterType)}>
-                            <TabsList>
-                                <TabsTrigger value="all">All</TabsTrigger>
-                                <TabsTrigger value="pending">
-                                    Pending
-                                    {stats.pending > 0 && (
-                                        <Badge variant="secondary" className="ml-2">
-                                            {stats.pending}
-                                        </Badge>
-                                    )}
-                                </TabsTrigger>
-                                <TabsTrigger value="overdue">
-                                    Overdue
-                                    {stats.overdue > 0 && (
-                                        <Badge variant="destructive" className="ml-2">
-                                            {stats.overdue}
-                                        </Badge>
-                                    )}
-                                </TabsTrigger>
-                                <TabsTrigger value="completed">Completed</TabsTrigger>
-                            </TabsList>
-                        </Tabs>
+                    <div className="flex flex-col gap-4">
+                        {/* Primary Filters Row */}
+                        <div className="flex flex-wrap items-center gap-4">
+                            <div className="flex items-center gap-2 text-sm font-medium">
+                                <Filter className="h-4 w-4" />
+                                <span>Filters</span>
+                            </div>
+                            
+                            <div className="h-6 w-px bg-border" />
+                            
+                            {/* Quick Filter Tabs */}
+                            <Tabs value={filter} onValueChange={(v) => setFilter(v as FollowUpFilterType)}>
+                                <TabsList className="h-9">
+                                    <TabsTrigger value="all" className="text-xs">All</TabsTrigger>
+                                    <TabsTrigger value="pending" className="text-xs">
+                                        Pending
+                                        {stats.pending > 0 && (
+                                            <Badge variant="secondary" className="ml-1.5 h-5 px-1.5">
+                                                {stats.pending}
+                                            </Badge>
+                                        )}
+                                    </TabsTrigger>
+                                    <TabsTrigger value="overdue" className="text-xs">
+                                        Overdue
+                                        {stats.overdue > 0 && (
+                                            <Badge variant="destructive" className="ml-1.5 h-5 px-1.5">
+                                                {stats.overdue}
+                                            </Badge>
+                                        )}
+                                    </TabsTrigger>
+                                    <TabsTrigger value="completed" className="text-xs">Completed</TabsTrigger>
+                                </TabsList>
+                            </Tabs>
+                            
+                            <div className="h-6 w-px bg-border" />
+                            
+                            {/* Status Filter */}
+                            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as FollowUpStatus | "all")}>
+                                <SelectTrigger className="w-[150px] h-9">
+                                    <SelectValue placeholder="All Statuses" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All Statuses</SelectItem>
+                                    <SelectItem value="pending">Pending</SelectItem>
+                                    <SelectItem value="completed">Completed</SelectItem>
+                                    <SelectItem value="missed">Missed</SelectItem>
+                                    <SelectItem value="cancelled">Cancelled</SelectItem>
+                                </SelectContent>
+                            </Select>
+
+                            {/* Date Range Filter */}
+                            <Select value={dateRangePreset} onValueChange={(v) => handleDatePresetChange(v as DateRangePreset)}>
+                                <SelectTrigger className="w-[140px] h-9">
+                                    <Calendar className="mr-2 h-4 w-4" />
+                                    <SelectValue placeholder="Date Range" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {DATE_RANGE_PRESETS.map((preset) => (
+                                        <SelectItem key={preset.value} value={preset.value}>
+                                            {preset.label}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            
+                            {/* Clear Filters */}
+                            {hasActiveFilters && (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-9"
+                                    onClick={clearFilters}
+                                >
+                                    <X className="h-4 w-4 mr-1" />
+                                    Clear All
+                                </Button>
+                            )}
+                        </div>
                         
-                        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as FollowUpStatus | "all")}>
-                            <SelectTrigger className="w-[160px]">
-                                <SelectValue placeholder="Filter by status" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All Statuses</SelectItem>
-                                <SelectItem value="pending">Pending</SelectItem>
-                                <SelectItem value="completed">Completed</SelectItem>
-                                <SelectItem value="missed">Missed</SelectItem>
-                                <SelectItem value="cancelled">Cancelled</SelectItem>
-                            </SelectContent>
-                        </Select>
-
-                        {/* Date Range Filter */}
-                        <Select value={dateRangePreset} onValueChange={(v) => handleDatePresetChange(v as DateRangePreset)}>
-                            <SelectTrigger className="w-[160px]">
-                                <Calendar className="mr-2 h-4 w-4" />
-                                <SelectValue placeholder="Date Range" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {DATE_RANGE_PRESETS.map((preset) => (
-                                    <SelectItem key={preset.value} value={preset.value}>
-                                        {preset.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-
-                        {/* Custom Date Pickers */}
+                        {/* Custom Date Range Section */}
                         {dateRangePreset === "custom" && (
-                            <div className="flex items-center gap-2">
-                                <Popover>
-                                    <PopoverTrigger asChild>
-                                        <Button variant="outline" size="sm" className={cn(!customDateFrom && "text-muted-foreground")}>
-                                            {customDateFrom ? format(customDateFrom, "MMM d, yyyy") : "From"}
-                                        </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent className="w-auto p-0" align="start">
-                                        <CalendarComponent
-                                            mode="single"
-                                            selected={customDateFrom}
-                                            onSelect={(date) => {
-                                                setCustomDateFrom(date)
-                                                setPage(1)
-                                            }}
-                                            initialFocus
-                                        />
-                                    </PopoverContent>
-                                </Popover>
-                                <span className="text-muted-foreground">to</span>
-                                <Popover>
-                                    <PopoverTrigger asChild>
-                                        <Button variant="outline" size="sm" className={cn(!customDateTo && "text-muted-foreground")}>
-                                            {customDateTo ? format(customDateTo, "MMM d, yyyy") : "To"}
-                                        </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent className="w-auto p-0" align="start">
-                                        <CalendarComponent
-                                            mode="single"
-                                            selected={customDateTo}
-                                            onSelect={(date) => {
-                                                setCustomDateTo(date)
-                                                setPage(1)
-                                            }}
-                                            initialFocus
-                                        />
-                                    </PopoverContent>
-                                </Popover>
+                            <div className="flex items-center gap-3 flex-wrap pt-3 border-t">
+                                <span className="text-sm text-muted-foreground">Custom Date Range:</span>
+                                <div className="flex items-center gap-2">
+                                    <Popover>
+                                        <PopoverTrigger asChild>
+                                            <Button 
+                                                variant="outline" 
+                                                size="sm" 
+                                                className={cn(
+                                                    "w-[140px] h-9 justify-start text-left font-normal",
+                                                    !customDateFrom && "text-muted-foreground"
+                                                )}
+                                            >
+                                                <Calendar className="mr-2 h-4 w-4" />
+                                                {customDateFrom ? format(customDateFrom, "MMM d, yyyy") : "From"}
+                                            </Button>
+                                        </PopoverTrigger>
+                                        <PopoverContent className="w-auto p-0" align="start">
+                                            <CalendarComponent
+                                                mode="single"
+                                                selected={customDateFrom}
+                                                onSelect={(date) => setCustomDateFrom(date)}
+                                                initialFocus
+                                            />
+                                        </PopoverContent>
+                                    </Popover>
+                                    <span className="text-muted-foreground">—</span>
+                                    <Popover>
+                                        <PopoverTrigger asChild>
+                                            <Button 
+                                                variant="outline" 
+                                                size="sm" 
+                                                className={cn(
+                                                    "w-[140px] h-9 justify-start text-left font-normal",
+                                                    !customDateTo && "text-muted-foreground"
+                                                )}
+                                            >
+                                                <Calendar className="mr-2 h-4 w-4" />
+                                                {customDateTo ? format(customDateTo, "MMM d, yyyy") : "To"}
+                                            </Button>
+                                        </PopoverTrigger>
+                                        <PopoverContent className="w-auto p-0" align="start">
+                                            <CalendarComponent
+                                                mode="single"
+                                                selected={customDateTo}
+                                                onSelect={(date) => setCustomDateTo(date)}
+                                                disabled={(date) => customDateFrom ? date < customDateFrom : false}
+                                                initialFocus
+                                            />
+                                        </PopoverContent>
+                                    </Popover>
+                                    <Button
+                                        size="sm"
+                                        className="h-9"
+                                        onClick={() => setPage(1)}
+                                        disabled={!customDateFrom && !customDateTo}
+                                    >
+                                        Apply
+                                    </Button>
+                                </div>
                             </div>
                         )}
                         
+                        {/* Active Filters Summary */}
                         {hasActiveFilters && (
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={clearFilters}
-                            >
-                                <X className="h-4 w-4 mr-1" />
-                                Clear Filters
-                            </Button>
+                            <div className="flex items-center gap-2 flex-wrap pt-2 border-t">
+                                <span className="text-xs text-muted-foreground">Active:</span>
+                                {filter !== "all" && (
+                                    <Badge variant="secondary" className="text-xs">
+                                        {filter === "pending" ? "Pending" : filter === "overdue" ? "Overdue" : "Completed"}
+                                    </Badge>
+                                )}
+                                {statusFilter !== "all" && (
+                                    <Badge variant="secondary" className="text-xs capitalize">
+                                        {statusFilter}
+                                    </Badge>
+                                )}
+                                {dateRangePreset !== "all_time" && (
+                                    <Badge variant="secondary" className="text-xs">
+                                        {dateRangePreset === "today" ? "Today" : 
+                                         dateRangePreset === "this_week" ? "This Week" :
+                                         dateRangePreset === "this_month" ? "This Month" :
+                                         dateRangePreset === "custom" && customDateFrom && customDateTo ? `${format(customDateFrom, "MMM d")} - ${format(customDateTo, "MMM d")}` :
+                                         dateRangePreset === "custom" && customDateFrom ? `From ${format(customDateFrom, "MMM d")}` :
+                                         dateRangePreset === "custom" && customDateTo ? `Until ${format(customDateTo, "MMM d")}` :
+                                         "Custom Date"}
+                                    </Badge>
+                                )}
+                            </div>
                         )}
                     </div>
                 </CardContent>
@@ -521,9 +611,9 @@ export default function FollowUpsPage() {
             
             {/* Follow-ups List */}
             <Card>
-                <CardHeader>
+                <CardHeader className="py-3 bg-muted/30">
                     <div className="flex items-center justify-between">
-                        <CardTitle>
+                        <CardTitle className="text-base">
                             {filter === "overdue" ? "Overdue Follow-ups" : 
                              filter === "pending" ? "Pending Follow-ups" :
                              filter === "completed" ? "Completed Follow-ups" :
@@ -535,37 +625,37 @@ export default function FollowUpsPage() {
                             )}
                         </CardTitle>
                         {totalPages > 1 && (
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                                <span>
-                                    Page {page} of {totalPages}
-                                </span>
-                            </div>
+                            <span className="text-sm text-muted-foreground">
+                                Page {page} of {totalPages}
+                            </span>
                         )}
                     </div>
                 </CardHeader>
                 <CardContent className="p-0">
                     {isLoading ? (
-                        <div className="flex items-center justify-center py-12">
-                            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+                            <Loader2 className="h-8 w-8 animate-spin mb-4" />
+                            <p className="text-sm">Loading follow-ups...</p>
                         </div>
                     ) : followUps.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-12 text-center">
-                            <Calendar className="h-12 w-12 text-muted-foreground/20 mb-4" />
-                            <p className="text-lg font-medium">No follow-ups</p>
-                            <p className="text-sm text-muted-foreground mt-1">
+                        <div className="flex flex-col items-center justify-center py-16 text-center">
+                            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted mb-4">
+                                <Calendar className="h-8 w-8 text-muted-foreground" />
+                            </div>
+                            <h3 className="text-lg font-medium mb-1">No follow-ups found</h3>
+                            <p className="text-sm text-muted-foreground mb-4">
                                 {filter === "overdue"
-                                    ? "Great! No overdue follow-ups."
+                                    ? "Great! You have no overdue follow-ups."
                                     : filter === "pending"
                                     ? "No pending follow-ups scheduled."
-                                    : "You don't have any follow-ups yet."}
+                                    : hasActiveFilters
+                                    ? "Try adjusting your filters to see more results."
+                                    : "Get started by scheduling your first follow-up."}
                             </p>
-                            {filter === "all" && !hasActiveFilters && (
-                                <Button
-                                    onClick={() => setScheduleModalOpen(true)}
-                                    className="mt-4"
-                                >
+                            {(!hasActiveFilters || filter === "all") && (
+                                <Button onClick={() => setScheduleModalOpen(true)}>
                                     <Plus className="mr-2 h-4 w-4" />
-                                    Schedule Your First Follow-up
+                                    Schedule Follow-up
                                 </Button>
                             )}
                         </div>

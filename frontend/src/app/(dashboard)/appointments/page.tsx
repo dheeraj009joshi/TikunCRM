@@ -27,7 +27,9 @@ import {
     Loader2,
     Download,
     Printer,
-    FileText
+    FileText,
+    ChevronLeft,
+    ChevronRight
 } from "lucide-react"
 import { 
     AppointmentService, 
@@ -86,28 +88,46 @@ function StatsCard({
     onClick?: () => void
     isActive?: boolean
 }) {
-    const colorClasses = {
-        primary: "bg-blue-100 text-blue-600",
-        success: "bg-emerald-100 text-emerald-600",
-        warning: "bg-amber-100 text-amber-600",
-        danger: "bg-red-100 text-red-600"
+    const colorConfig = {
+        primary: {
+            icon: "bg-blue-100 text-blue-600 dark:bg-blue-900/30",
+            active: "border-blue-500 bg-blue-50 dark:bg-blue-900/10 ring-2 ring-blue-500 ring-offset-2",
+            hover: "hover:border-blue-300 hover:bg-blue-50/50"
+        },
+        success: {
+            icon: "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30",
+            active: "border-emerald-500 bg-emerald-50 dark:bg-emerald-900/10 ring-2 ring-emerald-500 ring-offset-2",
+            hover: "hover:border-emerald-300 hover:bg-emerald-50/50"
+        },
+        warning: {
+            icon: "bg-amber-100 text-amber-600 dark:bg-amber-900/30",
+            active: "border-amber-500 bg-amber-50 dark:bg-amber-900/10 ring-2 ring-amber-500 ring-offset-2",
+            hover: "hover:border-amber-300 hover:bg-amber-50/50"
+        },
+        danger: {
+            icon: "bg-red-100 text-red-600 dark:bg-red-900/30",
+            active: "border-red-500 bg-red-50 dark:bg-red-900/10 ring-2 ring-red-500 ring-offset-2",
+            hover: "hover:border-red-300 hover:bg-red-50/50"
+        }
     }
+    
+    const config = colorConfig[color]
     
     return (
         <button
             onClick={onClick}
-            className={`flex items-center gap-4 p-4 rounded-lg border transition-all ${
-                isActive 
-                    ? "border-primary bg-primary/5 ring-2 ring-primary/20" 
-                    : "border-border bg-card hover:border-primary/50"
-            } ${onClick ? "cursor-pointer" : ""}`}
+            className={cn(
+                "flex items-center gap-4 p-4 rounded-lg border transition-all text-left",
+                isActive ? config.active : config.hover,
+                onClick ? "cursor-pointer" : "cursor-default"
+            )}
         >
-            <div className={`p-3 rounded-lg ${colorClasses[color]}`}>
+            <div className={cn("flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full", config.icon)}>
                 <Icon className="h-5 w-5" />
             </div>
-            <div className="text-left">
-                <p className="text-2xl font-bold">{value}</p>
+            <div>
                 <p className="text-sm text-muted-foreground">{title}</p>
+                <p className="text-2xl font-bold">{value}</p>
             </div>
         </button>
     )
@@ -1232,217 +1252,302 @@ export default function AppointmentsPage() {
                 </div>
             )}
             
-            {/* Filters */}
-            <div className="flex items-center gap-4 flex-wrap">
-                <div className="flex items-center gap-2">
-                    <Filter className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Filter:</span>
-                </div>
-                <Select value={filter} onValueChange={(v) => setFilter(v as FilterType)}>
-                    <SelectTrigger className="w-[140px]">
-                        <SelectValue placeholder="All" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="all">All</SelectItem>
-                        <SelectItem value="today">Today</SelectItem>
-                        <SelectItem value="upcoming">Upcoming</SelectItem>
-                        <SelectItem value="overdue">Overdue</SelectItem>
-                        <SelectItem value="completed">Completed</SelectItem>
-                    </SelectContent>
-                </Select>
-                <Select value={statusFilter || "all_statuses"} onValueChange={(v) => setStatusFilter(v === "all_statuses" ? "" : (v as AppointmentStatus))}>
-                    <SelectTrigger className="w-[140px]">
-                        <SelectValue placeholder="All Statuses" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="all_statuses">All Statuses</SelectItem>
-                        <SelectItem value="scheduled">Scheduled</SelectItem>
-                        <SelectItem value="confirmed">Confirmed</SelectItem>
-                        <SelectItem value="arrived">Arrived</SelectItem>
-                        <SelectItem value="in_showroom">In Showroom</SelectItem>
-                        <SelectItem value="in_progress">In Progress</SelectItem>
-                        <SelectItem value="completed">Completed</SelectItem>
-                        <SelectItem value="sold">Sold</SelectItem>
-                        <SelectItem value="cancelled">Cancelled</SelectItem>
-                        <SelectItem value="no_show">No Show</SelectItem>
-                        <SelectItem value="rescheduled">Rescheduled</SelectItem>
-                    </SelectContent>
-                </Select>
-                
-                {/* Date Range Preset Dropdown */}
-                <Select value={dateRangePreset} onValueChange={(v) => handleDatePresetChange(v as DateRangePreset)}>
-                    <SelectTrigger className="w-[140px]">
-                        <Calendar className="mr-2 h-4 w-4" />
-                        <SelectValue placeholder="Date Range" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {DATE_RANGE_PRESETS.map((preset) => (
-                            <SelectItem key={preset.value} value={preset.value}>
-                                {preset.label}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-                
-                {/* Custom Date Range (when preset is "custom") */}
-                {dateRangePreset === "custom" && (
-                    <>
-                        {/* Date Filter Mode Toggle */}
-                        <div className="flex items-center gap-1 border rounded-md p-0.5">
-                            <Button
-                                variant={dateMode === "range" ? "default" : "ghost"}
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                onClick={() => { 
-                                    setDateMode("range"); 
-                                    setSpecificDate(undefined); 
-                                    setPage(1);
-                                }}
-                            >
-                                Range
-                            </Button>
-                            <Button
-                                variant={dateMode === "specific" ? "default" : "ghost"}
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                onClick={() => { 
-                                    setDateMode("specific"); 
-                                    setDateFrom(undefined);
-                                    setDateTo(undefined);
-                                    setPage(1);
-                                }}
-                            >
-                                Specific Day
-                            </Button>
+            {/* Filters Card */}
+            <div className="bg-card border rounded-lg p-4">
+                <div className="flex flex-col gap-4">
+                    {/* Primary Filters Row */}
+                    <div className="flex items-center gap-3 flex-wrap">
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                            <Filter className="h-4 w-4" />
+                            <span>Filters</span>
                         </div>
                         
-                        {/* Date Range Filter (when dateMode is "range") */}
-                        {dateMode === "range" && (
-                            <>
+                        <div className="h-6 w-px bg-border" />
+                        
+                        {/* Quick Filter */}
+                        <Select value={filter} onValueChange={(v) => setFilter(v as FilterType)}>
+                            <SelectTrigger className="w-[130px] h-9">
+                                <SelectValue placeholder="All" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Appointments</SelectItem>
+                                <SelectItem value="today">Today</SelectItem>
+                                <SelectItem value="upcoming">Upcoming</SelectItem>
+                                <SelectItem value="overdue">Overdue</SelectItem>
+                                <SelectItem value="completed">Completed</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        
+                        {/* Status Filter */}
+                        <Select value={statusFilter || "all_statuses"} onValueChange={(v) => setStatusFilter(v === "all_statuses" ? "" : (v as AppointmentStatus))}>
+                            <SelectTrigger className="w-[150px] h-9">
+                                <SelectValue placeholder="All Statuses" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all_statuses">All Statuses</SelectItem>
+                                <SelectItem value="scheduled">Scheduled</SelectItem>
+                                <SelectItem value="confirmed">Confirmed</SelectItem>
+                                <SelectItem value="arrived">Arrived</SelectItem>
+                                <SelectItem value="in_showroom">In Showroom</SelectItem>
+                                <SelectItem value="in_progress">In Progress</SelectItem>
+                                <SelectItem value="completed">Completed</SelectItem>
+                                <SelectItem value="sold">Sold</SelectItem>
+                                <SelectItem value="cancelled">Cancelled</SelectItem>
+                                <SelectItem value="no_show">No Show</SelectItem>
+                                <SelectItem value="rescheduled">Rescheduled</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        
+                        <div className="h-6 w-px bg-border" />
+                        
+                        {/* Date Range Preset */}
+                        <Select value={dateRangePreset} onValueChange={(v) => handleDatePresetChange(v as DateRangePreset)}>
+                            <SelectTrigger className="w-[140px] h-9">
+                                <Calendar className="mr-2 h-4 w-4" />
+                                <SelectValue placeholder="Date Range" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {DATE_RANGE_PRESETS.map((preset) => (
+                                    <SelectItem key={preset.value} value={preset.value}>
+                                        {preset.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        
+                        {/* Clear Filters */}
+                        {(dateRangePreset !== "all_time" || filter !== "all" || statusFilter) && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-9"
+                                onClick={() => {
+                                    setDateRangePreset("all_time")
+                                    setDateFrom(undefined)
+                                    setSpecificDate(undefined)
+                                    setDateTo(undefined)
+                                    setFilterState("all")
+                                    setStatusFilterState("")
+                                    setPage(1)
+                                    router.replace("/appointments")
+                                    filterStorage.setAppointments({ filter: "all", status: undefined })
+                                }}
+                            >
+                                <X className="h-4 w-4 mr-1" />
+                                Clear All
+                            </Button>
+                        )}
+                    </div>
+                    
+                    {/* Custom Date Range Section */}
+                    {dateRangePreset === "custom" && (
+                        <div className="flex items-center gap-3 flex-wrap pt-3 border-t">
+                            <span className="text-sm text-muted-foreground">Custom Date:</span>
+                            
+                            {/* Date Mode Toggle */}
+                            <div className="flex items-center gap-1 bg-muted rounded-md p-1">
+                                <Button
+                                    variant={dateMode === "range" ? "secondary" : "ghost"}
+                                    size="sm"
+                                    className="h-7 px-3 text-xs"
+                                    onClick={() => { 
+                                        setDateMode("range"); 
+                                        setSpecificDate(undefined); 
+                                    }}
+                                >
+                                    Date Range
+                                </Button>
+                                <Button
+                                    variant={dateMode === "specific" ? "secondary" : "ghost"}
+                                    size="sm"
+                                    className="h-7 px-3 text-xs"
+                                    onClick={() => { 
+                                        setDateMode("specific"); 
+                                        setDateFrom(undefined);
+                                        setDateTo(undefined);
+                                    }}
+                                >
+                                    Specific Day
+                                </Button>
+                            </div>
+                            
+                            <div className="h-6 w-px bg-border" />
+                            
+                            {/* Date Range Inputs */}
+                            {dateMode === "range" && (
                                 <div className="flex items-center gap-2">
-                                    <span className="text-sm text-muted-foreground">From:</span>
                                     <Popover open={dateFromOpen} onOpenChange={setDateFromOpen}>
                                         <PopoverTrigger asChild>
                                             <Button
                                                 variant="outline"
                                                 size="sm"
                                                 className={cn(
-                                                    "w-[140px] justify-start text-left font-normal",
+                                                    "w-[140px] h-9 justify-start text-left font-normal",
                                                     !dateFrom && "text-muted-foreground"
                                                 )}
                                             >
                                                 <Calendar className="mr-2 h-4 w-4" />
-                                                {dateFrom ? format(dateFrom, "MMM d, yyyy") : "Start date"}
+                                                {dateFrom ? format(dateFrom, "MMM d, yyyy") : "From"}
                                             </Button>
                                         </PopoverTrigger>
                                         <PopoverContent className="w-auto p-0" align="start">
                                             <CalendarPicker
                                                 mode="single"
                                                 selected={dateFrom}
-                                                onSelect={(d) => { setDateFrom(d); setDateFromOpen(false); setPage(1) }}
+                                                onSelect={(d) => { setDateFrom(d); setDateFromOpen(false); }}
                                                 initialFocus
                                             />
                                         </PopoverContent>
                                     </Popover>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-sm text-muted-foreground">To:</span>
+                                    <span className="text-muted-foreground">—</span>
                                     <Popover open={dateToOpen} onOpenChange={setDateToOpen}>
                                         <PopoverTrigger asChild>
                                             <Button
                                                 variant="outline"
                                                 size="sm"
                                                 className={cn(
-                                                    "w-[140px] justify-start text-left font-normal",
+                                                    "w-[140px] h-9 justify-start text-left font-normal",
                                                     !dateTo && "text-muted-foreground"
                                                 )}
                                             >
                                                 <Calendar className="mr-2 h-4 w-4" />
-                                                {dateTo ? format(dateTo, "MMM d, yyyy") : "End date"}
+                                                {dateTo ? format(dateTo, "MMM d, yyyy") : "To"}
                                             </Button>
                                         </PopoverTrigger>
                                         <PopoverContent className="w-auto p-0" align="start">
                                             <CalendarPicker
                                                 mode="single"
                                                 selected={dateTo}
-                                                onSelect={(d) => { setDateTo(d); setDateToOpen(false); setPage(1) }}
+                                                onSelect={(d) => { setDateTo(d); setDateToOpen(false); }}
                                                 disabled={(date) => dateFrom ? date < dateFrom : false}
                                                 initialFocus
                                             />
                                         </PopoverContent>
                                     </Popover>
-                                </div>
-                            </>
-                        )}
-                        
-                        {/* Specific Date Filter (when dateMode is "specific") */}
-                        {dateMode === "specific" && (
-                            <Popover open={specificDateOpen} onOpenChange={setSpecificDateOpen}>
-                                <PopoverTrigger asChild>
                                     <Button
-                                        variant="outline"
                                         size="sm"
-                                        className={cn(
-                                            "w-[180px] justify-start text-left font-normal",
-                                            !specificDate && "text-muted-foreground"
-                                        )}
+                                        className="h-9"
+                                        onClick={() => setPage(1)}
+                                        disabled={!dateFrom && !dateTo}
                                     >
-                                        <Calendar className="mr-2 h-4 w-4" />
-                                        {specificDate ? format(specificDate, "EEEE, MMM d, yyyy") : "Select date"}
+                                        Apply
                                     </Button>
-                                </PopoverTrigger>
-                                <PopoverContent className="w-auto p-0" align="start">
-                                    <CalendarPicker
-                                        mode="single"
-                                        selected={specificDate}
-                                        onSelect={(d) => { setSpecificDate(d); setSpecificDateOpen(false); setPage(1) }}
-                                        initialFocus
-                                    />
-                                </PopoverContent>
-                            </Popover>
-                        )}
-                    </>
-                )}
-                
-                {/* Clear Filters */}
-                {(dateRangePreset !== "all_time" || filter !== "all" || statusFilter) && (
-                    <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                            setDateRangePreset("all_time")
-                            setDateFrom(undefined)
-                            setSpecificDate(undefined)
-                            setDateTo(undefined)
-                            setFilterState("all")
-                            setStatusFilterState("")
-                            setPage(1)
-                            router.replace("/appointments")
-                            filterStorage.setAppointments({ filter: "all", status: undefined })
-                        }}
-                    >
-                        <X className="h-4 w-4 mr-1" />
-                        Clear
-                    </Button>
-                )}
+                                </div>
+                            )}
+                            
+                            {/* Specific Date Input */}
+                            {dateMode === "specific" && (
+                                <div className="flex items-center gap-2">
+                                    <Popover open={specificDateOpen} onOpenChange={setSpecificDateOpen}>
+                                        <PopoverTrigger asChild>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className={cn(
+                                                    "w-[200px] h-9 justify-start text-left font-normal",
+                                                    !specificDate && "text-muted-foreground"
+                                                )}
+                                            >
+                                                <Calendar className="mr-2 h-4 w-4" />
+                                                {specificDate ? format(specificDate, "EEEE, MMM d, yyyy") : "Select a date"}
+                                            </Button>
+                                        </PopoverTrigger>
+                                        <PopoverContent className="w-auto p-0" align="start">
+                                            <CalendarPicker
+                                                mode="single"
+                                                selected={specificDate}
+                                                onSelect={(d) => { setSpecificDate(d); setSpecificDateOpen(false); }}
+                                                initialFocus
+                                            />
+                                        </PopoverContent>
+                                    </Popover>
+                                    <Button
+                                        size="sm"
+                                        className="h-9"
+                                        onClick={() => setPage(1)}
+                                        disabled={!specificDate}
+                                    >
+                                        Apply
+                                    </Button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    
+                    {/* Active Filters Summary */}
+                    {(filter !== "all" || statusFilter || dateRangePreset !== "all_time") && (
+                        <div className="flex items-center gap-2 flex-wrap pt-2 border-t">
+                            <span className="text-xs text-muted-foreground">Active:</span>
+                            {filter !== "all" && (
+                                <Badge variant="secondary" className="text-xs">
+                                    {filter === "today" ? "Today" : filter === "upcoming" ? "Upcoming" : filter === "overdue" ? "Overdue" : "Completed"}
+                                </Badge>
+                            )}
+                            {statusFilter && (
+                                <Badge variant="secondary" className="text-xs">
+                                    {getAppointmentStatusLabel(statusFilter)}
+                                </Badge>
+                            )}
+                            {dateRangePreset !== "all_time" && (
+                                <Badge variant="secondary" className="text-xs">
+                                    {dateRangePreset === "today" ? "Today" : 
+                                     dateRangePreset === "this_week" ? "This Week" :
+                                     dateRangePreset === "this_month" ? "This Month" :
+                                     dateRangePreset === "custom" && dateMode === "specific" && specificDate ? format(specificDate, "MMM d, yyyy") :
+                                     dateRangePreset === "custom" && dateFrom && dateTo ? `${format(dateFrom, "MMM d")} - ${format(dateTo, "MMM d")}` :
+                                     dateRangePreset === "custom" && dateFrom ? `From ${format(dateFrom, "MMM d")}` :
+                                     dateRangePreset === "custom" && dateTo ? `Until ${format(dateTo, "MMM d")}` :
+                                     "Custom Date"}
+                                </Badge>
+                            )}
+                        </div>
+                    )}
+                </div>
             </div>
             
             {/* Appointments List */}
-            <div className="border rounded-lg overflow-hidden">
+            <div className="border rounded-lg overflow-hidden bg-card">
+                {/* List Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
+                    <h3 className="font-semibold">
+                        {filter === "today" ? "Today's Appointments" :
+                         filter === "upcoming" ? "Upcoming Appointments" :
+                         filter === "overdue" ? "Overdue Appointments" :
+                         filter === "completed" ? "Completed Appointments" :
+                         "All Appointments"}
+                        {!loading && appointments.length > 0 && (
+                            <span className="ml-2 text-sm font-normal text-muted-foreground">
+                                ({appointments.length} {appointments.length === 1 ? "appointment" : "appointments"})
+                            </span>
+                        )}
+                    </h3>
+                    {totalPages > 1 && !loading && (
+                        <span className="text-sm text-muted-foreground">
+                            Page {page} of {totalPages}
+                        </span>
+                    )}
+                </div>
+                
                 {loading ? (
-                    <div className="p-8 text-center text-muted-foreground">
-                        Loading appointments...
+                    <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+                        <Loader2 className="h-8 w-8 animate-spin mb-4" />
+                        <p className="text-sm">Loading appointments...</p>
                     </div>
                 ) : appointments.length === 0 ? (
-                    <div className="p-8 text-center text-muted-foreground">
-                        <CalendarClock className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                        <p>No appointments found</p>
-                        <button
-                            onClick={() => setShowCreateModal(true)}
-                            className="mt-4 text-primary hover:underline"
-                        >
-                            Schedule your first appointment
-                        </button>
+                    <div className="flex flex-col items-center justify-center py-16 text-center">
+                        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted mb-4">
+                            <CalendarClock className="h-8 w-8 text-muted-foreground" />
+                        </div>
+                        <h3 className="text-lg font-medium mb-1">No appointments found</h3>
+                        <p className="text-sm text-muted-foreground mb-4">
+                            {filter !== "all" || statusFilter || dateRangePreset !== "all_time"
+                                ? "Try adjusting your filters to see more results"
+                                : "Get started by scheduling your first appointment"}
+                        </p>
+                        <Button onClick={() => setShowCreateModal(true)}>
+                            <Plus className="h-4 w-4 mr-2" />
+                            Schedule Appointment
+                        </Button>
                     </div>
                 ) : (
                     <div className="divide-y">
@@ -1626,24 +1731,31 @@ export default function AppointmentsPage() {
             
             {/* Pagination */}
             {totalPages > 1 && (
-                <div className="flex items-center justify-center gap-2">
-                    <button
-                        onClick={() => setPage(p => Math.max(1, p - 1))}
-                        disabled={page === 1}
-                        className="px-3 py-1 text-sm border rounded-md disabled:opacity-50"
-                    >
-                        Previous
-                    </button>
-                    <span className="text-sm text-muted-foreground">
-                        Page {page} of {totalPages}
-                    </span>
-                    <button
-                        onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                        disabled={page === totalPages}
-                        className="px-3 py-1 text-sm border rounded-md disabled:opacity-50"
-                    >
-                        Next
-                    </button>
+                <div className="flex items-center justify-between px-4 py-3 border rounded-lg bg-card">
+                    <div className="text-sm text-muted-foreground">
+                        Showing page <span className="font-medium">{page}</span> of{" "}
+                        <span className="font-medium">{totalPages}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPage(p => Math.max(1, p - 1))}
+                            disabled={page === 1}
+                        >
+                            <ChevronLeft className="h-4 w-4 mr-1" />
+                            Previous
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                            disabled={page === totalPages}
+                        >
+                            Next
+                            <ChevronRight className="h-4 w-4 ml-1" />
+                        </Button>
+                    </div>
                 </div>
             )}
             
