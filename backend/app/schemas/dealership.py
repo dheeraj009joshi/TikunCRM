@@ -68,6 +68,7 @@ class DealershipUpdate(BaseModel):
     phone: Optional[str] = Field(None, max_length=20)
     email: Optional[EmailStr] = None
     website: Optional[str] = None
+    timezone: Optional[str] = Field(None, description="IANA timezone name (e.g., 'America/New_York')")
     config: Optional[Dict[str, Any]] = None
     working_hours: Optional[Dict[str, WorkingHours]] = None
     lead_assignment_rules: Optional[LeadAssignmentRules] = None

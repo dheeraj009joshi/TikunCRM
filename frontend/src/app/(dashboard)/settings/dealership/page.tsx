@@ -15,18 +15,10 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
-import { Badge } from "@/components/ui/badge"
+import { TimezonePicker } from "@/components/ui/timezone-picker"
 import { DealershipService, Dealership } from "@/services/dealership-service"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
-import { COMMON_TIMEZONES } from "@/utils/timezone"
 import { clearDealershipTimezoneCache } from "@/hooks/use-dealership-timezone"
 
 export default function DealershipSettingsPage() {
@@ -180,20 +172,13 @@ export default function DealershipSettingsPage() {
                 <CardContent className="space-y-4">
                     <div className="space-y-2">
                         <Label htmlFor="timezone">Dealership Timezone</Label>
-                        <Select value={timezone} onValueChange={setTimezone}>
-                            <SelectTrigger id="timezone">
-                                <SelectValue placeholder="Select timezone" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {COMMON_TIMEZONES.map((tz) => (
-                                    <SelectItem key={tz.value} value={tz.value}>
-                                        {tz.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
+                        <TimezonePicker
+                            value={timezone}
+                            onChange={setTimezone}
+                            placeholder="Search and select timezone..."
+                        />
                         <p className="text-xs text-muted-foreground">
-                            This timezone will be used for all date and time displays across the CRM for users in this dealership.
+                            This timezone will be used for appointment and follow-up times across the CRM for users in this dealership.
                         </p>
                     </div>
                     
