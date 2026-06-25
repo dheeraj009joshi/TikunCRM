@@ -719,9 +719,16 @@ async def list_bdc_agents(
 async def get_user_dealership_access(
     user_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_role(UserRole.SUPER_ADMIN)),
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """List dealerships assigned to a BDC user (Super Admin only)."""
+    """List dealerships assigned to a BDC user (Super Admin or the BDC user themselves)."""
+    # BDC users can only view their own dealership access
+    if current_user.role == UserRole.BDC:
+        if current_user.id != user_id:
+            raise HTTPException(status_code=403, detail="You can only view your own dealership access")
+    elif current_user.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     user_result = await db.execute(select(User).where(User.id == user_id))
     target = user_result.scalar_one_or_none()
     if not target:
