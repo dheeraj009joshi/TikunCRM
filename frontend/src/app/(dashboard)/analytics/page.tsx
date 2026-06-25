@@ -619,23 +619,26 @@ export default function AnalyticsPage() {
 
             {!loading && analysis && (
                 <>
-                    <div>
-                        <h2 className="text-lg font-semibold mb-3">Summary</h2>
-                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-                            <SummaryCard title="Total leads" value={analysis.summary.total_leads} icon={Inbox} />
-                            <SummaryCard title="Active" value={analysis.summary.active_leads} icon={Activity} />
-                            <SummaryCard title="Converted" value={analysis.summary.converted_leads} icon={CheckCircle} />
-                            <SummaryCard title="Notes" value={analysis.summary.total_notes} icon={FileText} description="In period" />
-                            <SummaryCard title="Appointments" value={analysis.summary.total_appointments} icon={Calendar} description="In period" />
-                            <SummaryCard title="Follow-ups" value={analysis.summary.total_follow_ups} icon={ClipboardList} description="In period" />
-                            <SummaryCard title="FU scheduled" value={analysis.summary.total_follow_ups_scheduled_in_period} icon={ClipboardList} description="In period" />
-                            <SummaryCard title="FU completed" value={analysis.summary.total_follow_ups_completed_in_period} icon={CheckCircle} description="In period" />
-                            <SummaryCard title="Appts scheduled" value={analysis.summary.total_appointments_scheduled_in_period} icon={Calendar} description="In period" />
-                            <SummaryCard title="Appts confirmed" value={analysis.summary.total_appointments_confirmed_in_period} icon={CheckCircle} description="In period" />
-                            <SummaryCard title="Notes (Fri)" value={analysis.summary.notes_friday} icon={FileText} description="In period" />
-                            <SummaryCard title="Outbound calls (Fri)" value={analysis.summary.outbound_calls_friday} icon={Activity} description="In period" />
-                            <SummaryCard title="Appointments (Sat)" value={analysis.summary.appointments_contacted_saturday} icon={Calendar} description="In period" />
-                            <SummaryCard title="Check-ins" value={analysis.summary.total_check_ins_in_period} icon={LogIn} description="In period" />
+                    <div className="space-y-6">
+                        {/* Core Metrics */}
+                        <div>
+                            <h2 className="text-lg font-semibold mb-3">Leads Overview</h2>
+                            <div className="grid gap-4 grid-cols-2 md:grid-cols-3">
+                                <SummaryCard title="Total Leads" value={analysis.summary.total_leads} icon={Inbox} />
+                                <SummaryCard title="Active" value={analysis.summary.active_leads} icon={Activity} />
+                                <SummaryCard title="Converted" value={analysis.summary.converted_leads} icon={CheckCircle} />
+                            </div>
+                        </div>
+
+                        {/* Activity Metrics */}
+                        <div>
+                            <h2 className="text-lg font-semibold mb-3">Activity in Period</h2>
+                            <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
+                                <SummaryCard title="Notes" value={analysis.summary.total_notes} icon={FileText} />
+                                <SummaryCard title="Appointments" value={analysis.summary.total_appointments} icon={Calendar} />
+                                <SummaryCard title="Follow-ups" value={analysis.summary.total_follow_ups} icon={ClipboardList} />
+                                <SummaryCard title="Check-ins" value={analysis.summary.total_check_ins_in_period} icon={LogIn} />
+                            </div>
                         </div>
                     </div>
 

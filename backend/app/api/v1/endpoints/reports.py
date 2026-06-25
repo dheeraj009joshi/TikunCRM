@@ -856,18 +856,23 @@ async def _resolve_dealership_and_lead_filters(
         resolved = current_user.dealership_id
     
     lead_filters = [Lead.dealership_id == resolved] if resolved else []
+    has_lead_specific_filters = False
     if assigned_to is not None:
         lead_filters.append(Lead.assigned_to == assigned_to)
+        has_lead_specific_filters = True
     if bdc_agent_id is not None:
         lead_filters.append(Lead.bdc_assigned_to_id == bdc_agent_id)
+        has_lead_specific_filters = True
     if source is not None:
         try:
             lead_filters.append(Lead.source == LeadSource(source))
+            has_lead_specific_filters = True
         except ValueError:
             pass
     if stage_id is not None:
         lead_filters.append(Lead.stage_id == stage_id)
-    return resolved, lead_filters
+        has_lead_specific_filters = True
+    return resolved, lead_filters, has_lead_specific_filters
 
 
 @router.get("/analysis", response_model=DealershipAnalysisResponse)
@@ -887,7 +892,7 @@ async def get_dealership_analysis(
     Optional date range applies to activity/note counts. All counts respect assigned_to, source, stage_id filters.
     """
     now = utc_now()
-    resolved_dealership_id, lead_filters = await _resolve_dealership_and_lead_filters(
+    resolved_dealership_id, lead_filters, has_lead_specific_filters = await _resolve_dealership_and_lead_filters(
         db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved_dealership_id:
@@ -927,6 +932,9 @@ async def get_dealership_analysis(
     lead_ids_result = await db.execute(select(Lead.id).where(lead_filters_base))
     lead_ids = [r[0] for r in lead_ids_result.fetchall()]
 
+    # If lead-specific filters were applied but no leads match, all activity counts should be 0
+    no_matching_leads = has_lead_specific_filters and not lead_ids
+
     activity_filters = [Activity.dealership_id == resolved_dealership_id]
     if lead_ids:
         activity_filters.append(Activity.lead_id.in_(lead_ids))
@@ -935,12 +943,15 @@ async def get_dealership_analysis(
     if activity_date_to is not None:
         activity_filters.append(Activity.created_at <= activity_date_to)
 
-    total_notes_result = await db.execute(
-        select(func.count()).select_from(Activity).where(
-            and_(*activity_filters, Activity.type == ActivityType.NOTE_ADDED)
+    if no_matching_leads:
+        total_notes = 0
+    else:
+        total_notes_result = await db.execute(
+            select(func.count()).select_from(Activity).where(
+                and_(*activity_filters, Activity.type == ActivityType.NOTE_ADDED)
+            )
         )
-    )
-    total_notes = total_notes_result.scalar() or 0
+        total_notes = total_notes_result.scalar() or 0
 
     appt_filters = [Appointment.dealership_id == resolved_dealership_id]
     if lead_ids:
@@ -952,18 +963,23 @@ async def get_dealership_analysis(
     if activity_date_to is not None:
         appt_filters.append(Appointment.created_at <= activity_date_to)
     appt_filters_base = and_(*appt_filters)
-    total_appointments_scheduled_in_period_result = await db.execute(
-        select(func.count()).select_from(Appointment).where(
-            and_(appt_filters_base, Appointment.status == AppointmentStatus.SCHEDULED)
+    
+    if no_matching_leads:
+        total_appointments_scheduled_in_period = 0
+        total_appointments_confirmed_in_period = 0
+    else:
+        total_appointments_scheduled_in_period_result = await db.execute(
+            select(func.count()).select_from(Appointment).where(
+                and_(appt_filters_base, Appointment.status == AppointmentStatus.SCHEDULED)
+            )
         )
-    )
-    total_appointments_scheduled_in_period = total_appointments_scheduled_in_period_result.scalar() or 0
-    total_appointments_confirmed_in_period_result = await db.execute(
-        select(func.count()).select_from(Appointment).where(
-            and_(appt_filters_base, Appointment.status == AppointmentStatus.CONFIRMED)
+        total_appointments_scheduled_in_period = total_appointments_scheduled_in_period_result.scalar() or 0
+        total_appointments_confirmed_in_period_result = await db.execute(
+            select(func.count()).select_from(Appointment).where(
+                and_(appt_filters_base, Appointment.status == AppointmentStatus.CONFIRMED)
+            )
         )
-    )
-    total_appointments_confirmed_in_period = total_appointments_confirmed_in_period_result.scalar() or 0
+        total_appointments_confirmed_in_period = total_appointments_confirmed_in_period_result.scalar() or 0
     total_appointments = total_appointments_scheduled_in_period + total_appointments_confirmed_in_period
 
     if lead_ids:
@@ -992,7 +1008,7 @@ async def get_dealership_analysis(
     notes_friday = 0
     outbound_calls_friday = 0
     appointments_contacted_saturday = 0
-    if activity_date_from is not None and activity_date_to is not None:
+    if activity_date_from is not None and activity_date_to is not None and not no_matching_leads:
         notes_fri_filters = list(activity_filters) + [Activity.type == ActivityType.NOTE_ADDED, extract("dow", Activity.created_at) == 5]
         notes_friday_result = await db.execute(
             select(func.count()).select_from(Activity).where(and_(*notes_fri_filters))
@@ -1030,7 +1046,7 @@ async def get_dealership_analysis(
 
     # Check-ins in period (showroom visits with checked_in_at in date range)
     total_check_ins_in_period = 0
-    if lead_ids and activity_date_from is not None and activity_date_to is not None:
+    if lead_ids and activity_date_from is not None and activity_date_to is not None and not no_matching_leads:
         check_in_filters = [
             ShowroomVisit.dealership_id == resolved_dealership_id,
             ShowroomVisit.lead_id.in_(lead_ids),
@@ -1435,7 +1451,7 @@ async def get_leads_over_time(
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Time-series of leads created and converted per day (or week)."""
-    resolved, lead_filters = await _resolve_dealership_and_lead_filters(
+    resolved, lead_filters, _ = await _resolve_dealership_and_lead_filters(
         db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved:
@@ -1506,7 +1522,7 @@ async def get_leads_by_stage(
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Lead counts grouped by stage."""
-    resolved, lead_filters = await _resolve_dealership_and_lead_filters(
+    resolved, lead_filters, _ = await _resolve_dealership_and_lead_filters(
         db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved:
@@ -1541,7 +1557,7 @@ async def get_leads_by_source(
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Lead counts grouped by source."""
-    resolved, lead_filters = await _resolve_dealership_and_lead_filters(
+    resolved, lead_filters, _ = await _resolve_dealership_and_lead_filters(
         db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved:
@@ -1575,7 +1591,7 @@ async def get_activities_over_time(
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Time-series of activities and notes per day (scoped to dealership and optional lead filters)."""
-    resolved, lead_filters = await _resolve_dealership_and_lead_filters(
+    resolved, lead_filters, has_lead_specific_filters = await _resolve_dealership_and_lead_filters(
         db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved:
@@ -1583,6 +1599,11 @@ async def get_activities_over_time(
     lead_filters_base = and_(*lead_filters) if lead_filters else (Lead.dealership_id == resolved)
     lead_ids_result = await db.execute(select(Lead.id).where(lead_filters_base))
     lead_ids = [r[0] for r in lead_ids_result.fetchall()]
+
+    # If lead-specific filters were applied but no leads match, return empty series
+    no_matching_leads = has_lead_specific_filters and not lead_ids
+    if no_matching_leads:
+        return ActivitiesOverTimeResponse(series=[])
 
     activity_filters = [Activity.dealership_id == resolved]
     if lead_ids:
