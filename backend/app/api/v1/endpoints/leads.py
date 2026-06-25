@@ -464,6 +464,7 @@ def _build_leads_list_select(
     *,
     pool: Optional[str] = None,
     assigned_to: Optional[UUID] = None,
+    bdc_agent_id: Optional[UUID] = None,
     stage_id: Optional[UUID] = None,
     source: Optional[LeadSource] = None,
     search: Optional[str] = None,
@@ -536,6 +537,17 @@ def _build_leads_list_select(
             pass
         else:
             query = query.where(Lead.assigned_to == assigned_to)
+
+    if bdc_agent_id is not None:
+        if current_user.role not in (
+            UserRole.SUPER_ADMIN,
+            UserRole.DEALERSHIP_ADMIN,
+            UserRole.DEALERSHIP_OWNER,
+            UserRole.BDC,
+        ):
+            pass
+        else:
+            query = query.where(Lead.bdc_assigned_to_id == bdc_agent_id)
 
     if dealership_id is not None:
         may_filter = current_user.role == UserRole.SUPER_ADMIN
@@ -618,6 +630,7 @@ async def list_leads(
         description="Leads tied to this campaign (primary campaign or lead_campaigns row)",
     ),
     assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson (admin/owner only). Show only leads assigned to this user."),
+    bdc_agent_id: Optional[UUID] = Query(None, description="Filter by BDC agent. Show only leads assigned to this BDC agent."),
     date_from: Optional[datetime] = Query(None, description="Filter leads created on or after this date (ISO format)"),
     date_to: Optional[datetime] = Query(None, description="Filter leads created on or before this date (ISO format)"),
     dealership_id: Optional[UUID] = Query(
@@ -644,6 +657,7 @@ async def list_leads(
         accessible_ids,
         pool=pool,
         assigned_to=assigned_to,
+        bdc_agent_id=bdc_agent_id,
         stage_id=stage_id,
         source=source,
         search=search,

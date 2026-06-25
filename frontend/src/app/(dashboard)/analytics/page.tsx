@@ -97,6 +97,7 @@ function buildFilters(
     dateMode: "range" | "single",
     dealershipId: string | null,
     assignedTo: string | null,
+    bdcAgentId: string | null,
     source: string | null,
     stageId: string | null
 ): AnalyticsFilters {
@@ -123,6 +124,7 @@ function buildFilters(
     }
     if (dealershipId) params.dealership_id = dealershipId
     if (assignedTo) params.assigned_to = assignedTo
+    if (bdcAgentId) params.bdc_agent_id = bdcAgentId
     if (source) params.source = source
     if (stageId) params.stage_id = stageId
     return params
@@ -302,9 +304,9 @@ function downloadAnalysisPdf(
 }
 
 export default function AnalyticsPage() {
-    const { isDealershipAdmin, isDealershipOwner, isSuperAdmin } = useRole()
+    const { isDealershipAdmin, isDealershipOwner, isSuperAdmin, isBdc } = useRole()
     const { user } = useAuthStore()
-    const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin
+    const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
 
     const [analysis, setAnalysis] = React.useState<DealershipAnalysisResponse | null>(null)
     const [leadsOverTime, setLeadsOverTime] = React.useState<LeadsOverTimeResponse | null>(null)
@@ -324,22 +326,45 @@ export default function AnalyticsPage() {
     const [dateTo, setDateTo] = React.useState<string>(() => new Date().toISOString().slice(0, 10))
     const [dealershipId, setDealershipId] = React.useState<string | null>(null)
     const [assignedTo, setAssignedTo] = React.useState<string | null>(null)
+    const [bdcAgentId, setBdcAgentId] = React.useState<string | null>(null)
     const [source, setSource] = React.useState<string | null>(null)
     const [stageId, setStageId] = React.useState<string | null>(null)
 
     const [dealerships, setDealerships] = React.useState<Array<{ id: string; name: string }>>([])
     const [salespersons, setSalespersons] = React.useState<Array<{ id: string; first_name: string; last_name: string }>>([])
+    const [bdcAgents, setBdcAgents] = React.useState<Array<{ id: string; first_name: string; last_name: string }>>([])
     const [stages, setStages] = React.useState<LeadStage[]>([])
 
     React.useEffect(() => {
         if (!canView) return
-        DealershipService.getDealershipsForSelect().then(setDealerships).catch(() => setDealerships([]))
-    }, [canView])
+        if (isSuperAdmin) {
+            DealershipService.getDealershipsForSelect().then(setDealerships).catch(() => setDealerships([]))
+        } else if (isBdc && user?.id) {
+            TeamService.getUserDealershipAccess(user.id)
+                .then((res) => setDealerships(res.dealerships))
+                .catch(() => setDealerships([]))
+        }
+    }, [canView, isSuperAdmin, isBdc, user?.id])
+    
+    // Auto-select first dealership for BDC users
+    React.useEffect(() => {
+        if (isBdc && dealerships.length > 0 && !dealershipId) {
+            setDealershipId(dealerships[0].id)
+        }
+    }, [isBdc, dealerships, dealershipId])
+    
     React.useEffect(() => {
         if (!canView) return
         const did = dealershipId || (user?.dealership_id ?? undefined)
         TeamService.getSalespersons(did).then(setSalespersons).catch(() => setSalespersons([]))
     }, [canView, dealershipId, user?.dealership_id])
+    
+    React.useEffect(() => {
+        if (!canView) return
+        const did = dealershipId || (user?.dealership_id ?? undefined)
+        TeamService.listBdcAgents(did).then(setBdcAgents).catch(() => setBdcAgents([]))
+    }, [canView, dealershipId, user?.dealership_id])
+    
     React.useEffect(() => {
         LeadStageService.list().then(setStages).catch(() => setStages([]))
     }, [])
@@ -348,7 +373,7 @@ export default function AnalyticsPage() {
         if (!canView) return
         setLoading(true)
         setError(null)
-        const filters = buildFilters(dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, source, stageId)
+        const filters = buildFilters(dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, bdcAgentId, source, stageId)
         try {
             const [analysisRes, overTimeRes, byStageRes, bySourceRes, activitiesRes] = await Promise.all([
                 ReportsService.getDealershipAnalysis(filters),
@@ -371,7 +396,7 @@ export default function AnalyticsPage() {
         } finally {
             setLoading(false)
         }
-    }, [canView, dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, source, stageId])
+    }, [canView, dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, bdcAgentId, source, stageId])
 
     React.useEffect(() => {
         fetchAll()
@@ -452,15 +477,18 @@ export default function AnalyticsPage() {
                             </div>
                         </>
                     )}
-                    {isSuperAdmin && (
+                    {(isSuperAdmin || isBdc) && dealerships.length > 0 && (
                         <div className="flex flex-col gap-1">
                             <label className="text-xs text-muted-foreground">Dealership</label>
-                            <Select value={dealershipId ?? "all"} onValueChange={(v) => setDealershipId(v === "all" ? null : v)}>
+                            <Select 
+                                value={dealershipId ?? (isBdc && dealerships.length === 1 ? dealerships[0].id : "all")} 
+                                onValueChange={(v) => setDealershipId(v === "all" ? null : v)}
+                            >
                                 <SelectTrigger className="w-[180px]">
-                                    <SelectValue placeholder="All" />
+                                    <SelectValue placeholder={isBdc ? "Select dealership" : "All"} />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="all">All</SelectItem>
+                                    {isSuperAdmin && <SelectItem value="all">All</SelectItem>}
                                     {dealerships.map((d) => (
                                         <SelectItem key={d.id} value={d.id}>
                                             {d.name}
@@ -486,6 +514,24 @@ export default function AnalyticsPage() {
                             </SelectContent>
                         </Select>
                     </div>
+                    {bdcAgents.length > 0 && (
+                        <div className="flex flex-col gap-1">
+                            <label className="text-xs text-muted-foreground">BDC Agent</label>
+                            <Select value={bdcAgentId ?? "all"} onValueChange={(v) => setBdcAgentId(v === "all" ? null : v)}>
+                                <SelectTrigger className="w-[160px]">
+                                    <SelectValue placeholder="All" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All</SelectItem>
+                                    {bdcAgents.map((a) => (
+                                        <SelectItem key={a.id} value={a.id}>
+                                            {a.first_name} {a.last_name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    )}
                     <div className="flex flex-col gap-1">
                         <label className="text-xs text-muted-foreground">Source</label>
                         <Select value={source ?? "all"} onValueChange={(v) => setSource(v === "all" ? null : v)}>

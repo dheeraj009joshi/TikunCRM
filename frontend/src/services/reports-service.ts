@@ -145,6 +145,7 @@ export interface AnalyticsFilters {
     date_to?: string;
     dealership_id?: string;
     assigned_to?: string;
+    bdc_agent_id?: string;
     source?: string;
     stage_id?: string;
 }
@@ -270,6 +271,7 @@ export interface SoldCarsFilters {
     date_to?: string;
     dealership_id?: string;
     assigned_to?: string;
+    bdc_agent_id?: string;
 }
 
 /** Team touch & close report (salespeople only; excludes current user on server) */

@@ -96,8 +96,9 @@ export const TeamService = {
         return response.data;
     },
 
-    async listBdcAgents(): Promise<UserBrief[]> {
-        const response = await apiClient.get("/users/bdc-agents");
+    async listBdcAgents(dealershipId?: string): Promise<UserBrief[]> {
+        const params = dealershipId ? { dealership_id: dealershipId } : undefined;
+        const response = await apiClient.get("/users/bdc-agents", { params });
         return response.data;
     },
 

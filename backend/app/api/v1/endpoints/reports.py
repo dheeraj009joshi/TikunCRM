@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.timezone import utc_now
+from app.core.access_scope import get_accessible_dealership_ids
 from app.db.database import get_db
 from app.models.user import User, UserRole
 from app.models.appointment import Appointment, AppointmentStatus
@@ -387,15 +388,19 @@ def _append_sold_date_filters_to_lead_query(
         )
 
 
-# Helper function to check admin/owner permissions
-def require_admin_or_owner(current_user: User = Depends(deps.get_current_active_user)) -> User:
-    """Require user to be dealership admin, owner, or super admin."""
-    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
+# Helper function to check admin/owner/BDC permissions for reports
+def require_reports_access(current_user: User = Depends(deps.get_current_active_user)) -> User:
+    """Require user to be dealership admin, owner, super admin, or BDC agent."""
+    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER, UserRole.BDC]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only administrators and owners can access this endpoint"
+            detail="Reports access required"
         )
     return current_user
+
+
+# Legacy alias for backward compatibility
+require_admin_or_owner = require_reports_access
 
 
 @router.get("/salesperson/{user_id}/pending-tasks", response_model=SalespersonPendingTasksResponse)
@@ -811,21 +816,50 @@ async def get_team_activity(
     )
 
 
-def _resolve_dealership_and_lead_filters(
+async def _resolve_dealership_and_lead_filters(
+    db: AsyncSession,
     current_user: User,
     dealership_id: Optional[UUID],
     assigned_to: Optional[UUID],
     source: Optional[str],
     stage_id: Optional[UUID],
+    bdc_agent_id: Optional[UUID] = None,
 ):
-    """Returns (resolved_dealership_id, list of Lead filter conditions)."""
-    if current_user.role == UserRole.SUPER_ADMIN and dealership_id is not None:
-        resolved = dealership_id
+    """Returns (resolved_dealership_id, list of Lead filter conditions).
+    
+    For BDC users, validates dealership_id is in their accessible list.
+    """
+    resolved = None
+    
+    if current_user.role == UserRole.SUPER_ADMIN:
+        resolved = dealership_id  # Super admin can view any dealership
+    elif current_user.role == UserRole.BDC:
+        # BDC users can access multiple dealerships via user_dealership_access
+        accessible_ids = await get_accessible_dealership_ids(db, current_user)
+        if dealership_id is not None:
+            # Validate the requested dealership is in their access list
+            if accessible_ids and dealership_id in accessible_ids:
+                resolved = dealership_id
+            elif not accessible_ids:
+                resolved = None  # No access
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to this dealership"
+                )
+        elif accessible_ids and len(accessible_ids) == 1:
+            # If BDC has only one dealership, use it by default
+            resolved = accessible_ids[0]
+        # If BDC has multiple dealerships and none specified, resolved stays None
     else:
+        # Dealership admin/owner - use their dealership
         resolved = current_user.dealership_id
+    
     lead_filters = [Lead.dealership_id == resolved] if resolved else []
     if assigned_to is not None:
         lead_filters.append(Lead.assigned_to == assigned_to)
+    if bdc_agent_id is not None:
+        lead_filters.append(Lead.bdc_assigned_to_id == bdc_agent_id)
     if source is not None:
         try:
             lead_filters.append(Lead.source == LeadSource(source))
@@ -842,6 +876,7 @@ async def get_dealership_analysis(
     date_to: Optional[str] = Query(None, description="ISO date for range end"),
     dealership_id: Optional[UUID] = Query(None, description="Dealership to scope (super_admin only)"),
     assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson"),
+    bdc_agent_id: Optional[UUID] = Query(None, description="Filter by BDC agent"),
     source: Optional[str] = Query(None, description="Filter by lead source"),
     stage_id: Optional[UUID] = Query(None, description="Filter by stage"),
     db: AsyncSession = Depends(get_db),
@@ -852,13 +887,13 @@ async def get_dealership_analysis(
     Optional date range applies to activity/note counts. All counts respect assigned_to, source, stage_id filters.
     """
     now = utc_now()
-    resolved_dealership_id, lead_filters = _resolve_dealership_and_lead_filters(
-        current_user, dealership_id, assigned_to, source, stage_id
+    resolved_dealership_id, lead_filters = await _resolve_dealership_and_lead_filters(
+        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved_dealership_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Dealership context required. Set dealership_id (super_admin) or use a dealership user.",
+            detail="Dealership context required. Set dealership_id or select a specific dealership.",
         )
     lead_filters_base = and_(*lead_filters) if lead_filters else (Lead.dealership_id == resolved_dealership_id)
 
@@ -1392,6 +1427,7 @@ async def get_leads_over_time(
     date_to: Optional[str] = Query(None),
     dealership_id: Optional[UUID] = Query(None),
     assigned_to: Optional[UUID] = Query(None),
+    bdc_agent_id: Optional[UUID] = Query(None),
     source: Optional[str] = Query(None),
     stage_id: Optional[UUID] = Query(None),
     group_by: str = Query("day", description="day or week"),
@@ -1399,8 +1435,8 @@ async def get_leads_over_time(
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Time-series of leads created and converted per day (or week)."""
-    resolved, lead_filters = _resolve_dealership_and_lead_filters(
-        current_user, dealership_id, assigned_to, source, stage_id
+    resolved, lead_filters = await _resolve_dealership_and_lead_filters(
+        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dealership context required.")
@@ -1463,14 +1499,15 @@ async def get_leads_by_stage(
     date_to: Optional[str] = Query(None),
     dealership_id: Optional[UUID] = Query(None),
     assigned_to: Optional[UUID] = Query(None),
+    bdc_agent_id: Optional[UUID] = Query(None),
     source: Optional[str] = Query(None),
     stage_id: Optional[UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Lead counts grouped by stage."""
-    resolved, lead_filters = _resolve_dealership_and_lead_filters(
-        current_user, dealership_id, assigned_to, source, stage_id
+    resolved, lead_filters = await _resolve_dealership_and_lead_filters(
+        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dealership context required.")
@@ -1497,14 +1534,15 @@ async def get_leads_by_source(
     date_to: Optional[str] = Query(None),
     dealership_id: Optional[UUID] = Query(None),
     assigned_to: Optional[UUID] = Query(None),
+    bdc_agent_id: Optional[UUID] = Query(None),
     source: Optional[str] = Query(None),
     stage_id: Optional[UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Lead counts grouped by source."""
-    resolved, lead_filters = _resolve_dealership_and_lead_filters(
-        current_user, dealership_id, assigned_to, source, stage_id
+    resolved, lead_filters = await _resolve_dealership_and_lead_filters(
+        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dealership context required.")
@@ -1530,14 +1568,15 @@ async def get_activities_over_time(
     date_to: Optional[str] = Query(None),
     dealership_id: Optional[UUID] = Query(None),
     assigned_to: Optional[UUID] = Query(None),
+    bdc_agent_id: Optional[UUID] = Query(None),
     source: Optional[str] = Query(None),
     stage_id: Optional[UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Time-series of activities and notes per day (scoped to dealership and optional lead filters)."""
-    resolved, lead_filters = _resolve_dealership_and_lead_filters(
-        current_user, dealership_id, assigned_to, source, stage_id
+    resolved, lead_filters = await _resolve_dealership_and_lead_filters(
+        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dealership context required.")
@@ -1619,15 +1658,29 @@ async def get_daily_activities(
     Admins can see what each salesperson did on any given day.
     """
     # Resolve dealership
-    if current_user.role == UserRole.SUPER_ADMIN and dealership_id is not None:
+    resolved_dealership_id = None
+    if current_user.role == UserRole.SUPER_ADMIN:
         resolved_dealership_id = dealership_id
+    elif current_user.role == UserRole.BDC:
+        # BDC can access multiple dealerships
+        accessible_ids = await get_accessible_dealership_ids(db, current_user)
+        if dealership_id is not None:
+            if accessible_ids and dealership_id in accessible_ids:
+                resolved_dealership_id = dealership_id
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to this dealership"
+                )
+        elif accessible_ids and len(accessible_ids) == 1:
+            resolved_dealership_id = accessible_ids[0]
     else:
         resolved_dealership_id = current_user.dealership_id
     
     if not resolved_dealership_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Dealership context required."
+            detail="Dealership context required. Please select a dealership."
         )
     
     # Parse dates
@@ -2201,15 +2254,30 @@ async def get_team_touch_sales_metrics(
       (Sold Cars rules). Per-salesperson **leads_touched** is also distinct leads (once per lead per rep).
       When no dates are passed: all-time touches vs any historical sold date among touched leads.
     """
-    if current_user.role == UserRole.SUPER_ADMIN and dealership_id is not None:
+    # Resolve dealership
+    resolved_dealership_id = None
+    if current_user.role == UserRole.SUPER_ADMIN:
         resolved_dealership_id = dealership_id
+    elif current_user.role == UserRole.BDC:
+        # BDC can access multiple dealerships
+        accessible_ids = await get_accessible_dealership_ids(db, current_user)
+        if dealership_id is not None:
+            if accessible_ids and dealership_id in accessible_ids:
+                resolved_dealership_id = dealership_id
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to this dealership"
+                )
+        elif accessible_ids and len(accessible_ids) == 1:
+            resolved_dealership_id = accessible_ids[0]
     else:
         resolved_dealership_id = current_user.dealership_id
 
     if not resolved_dealership_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Dealership context required.",
+            detail="Dealership context required. Please select a dealership.",
         )
 
     date_from_dt: Optional[datetime] = None
@@ -2376,6 +2444,7 @@ async def get_sold_cars_report(
     date_to: Optional[str] = Query(None, description="ISO date for sold date range end (YYYY-MM-DD)"),
     dealership_id: Optional[UUID] = Query(None, description="Dealership to scope (super_admin only)"),
     assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson"),
+    bdc_agent_id: Optional[UUID] = Query(None, description="Filter by BDC agent"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
@@ -2384,8 +2453,22 @@ async def get_sold_cars_report(
     Returns leads that have been marked as converted/sold within the date range.
     """
     # Resolve dealership
-    if current_user.role == UserRole.SUPER_ADMIN and dealership_id is not None:
+    resolved_dealership_id = None
+    if current_user.role == UserRole.SUPER_ADMIN:
         resolved_dealership_id = dealership_id
+    elif current_user.role == UserRole.BDC:
+        # BDC can access multiple dealerships
+        accessible_ids = await get_accessible_dealership_ids(db, current_user)
+        if dealership_id is not None:
+            if accessible_ids and dealership_id in accessible_ids:
+                resolved_dealership_id = dealership_id
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to this dealership"
+                )
+        elif accessible_ids and len(accessible_ids) == 1:
+            resolved_dealership_id = accessible_ids[0]
     else:
         resolved_dealership_id = current_user.dealership_id
 
@@ -2438,6 +2521,8 @@ async def get_sold_cars_report(
         lead_filters.append(Lead.dealership_id == resolved_dealership_id)
     if assigned_to:
         lead_filters.append(Lead.assigned_to == assigned_to)
+    if bdc_agent_id:
+        lead_filters.append(Lead.bdc_assigned_to_id == bdc_agent_id)
 
     _append_sold_date_filters_to_lead_query(lead_filters, date_from_dt, date_to_dt)
 

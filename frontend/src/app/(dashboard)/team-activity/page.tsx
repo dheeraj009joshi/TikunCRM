@@ -662,7 +662,7 @@ function SalespersonActivityCard({
 }
 
 export default function TeamActivityPage() {
-    const { isSuperAdmin, isDealershipLevel } = useRole()
+    const { isSuperAdmin, isDealershipLevel, isBdc } = useRole()
     const user = useAuthStore((state) => state.user)
     
     const [isLoading, setIsLoading] = React.useState(true)
@@ -737,9 +737,16 @@ export default function TeamActivityPage() {
                     if (ds.length > 0 && !selectedDealershipId) {
                         setSelectedDealershipId(ds[0].id)
                     }
+                } else if (isBdc && user?.id) {
+                    // BDC users - load their accessible dealerships
+                    const access = await TeamService.getUserDealershipAccess(user.id)
+                    setDealerships(access.dealerships as Dealership[])
+                    if (access.dealerships.length > 0 && !selectedDealershipId) {
+                        setSelectedDealershipId(access.dealerships[0].id)
+                    }
                 }
                 
-                const dealershipId = isSuperAdmin ? selectedDealershipId : user?.dealership_id
+                const dealershipId = (isSuperAdmin || isBdc) ? selectedDealershipId : user?.dealership_id
                 if (dealershipId) {
                     const sp = await TeamService.getSalespersons(dealershipId)
                     setSalespersons(sp)
@@ -751,11 +758,11 @@ export default function TeamActivityPage() {
             }
         }
         loadDropdowns()
-    }, [isSuperAdmin, user?.dealership_id, selectedDealershipId])
+    }, [isSuperAdmin, isBdc, user?.id, user?.dealership_id, selectedDealershipId])
     
     // Fetch data
     const fetchData = React.useCallback(async () => {
-        const dealershipId = isSuperAdmin ? selectedDealershipId : user?.dealership_id
+        const dealershipId = (isSuperAdmin || isBdc) ? selectedDealershipId : user?.dealership_id
         if (!dealershipId) return
         
         setIsLoading(true)
@@ -773,7 +780,7 @@ export default function TeamActivityPage() {
                 date_from: fromDate.toISOString(),
                 date_to: toDate.toISOString(),
             }
-            if (isSuperAdmin && selectedDealershipId) {
+            if ((isSuperAdmin || isBdc) && selectedDealershipId) {
                 filters.dealership_id = selectedDealershipId
             }
             if (selectedUserId && selectedUserId !== "all") {
@@ -791,7 +798,7 @@ export default function TeamActivityPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [isSuperAdmin, selectedDealershipId, user?.dealership_id, getDateRange, selectedUserId, selectedActivityTypes])
+    }, [isSuperAdmin, isBdc, selectedDealershipId, user?.dealership_id, getDateRange, selectedUserId, selectedActivityTypes])
     
     React.useEffect(() => {
         fetchData()
@@ -897,7 +904,7 @@ export default function TeamActivityPage() {
     }, [getDateRange])
     
     // Access control
-    if (!isSuperAdmin && !isDealershipLevel) {
+    if (!isSuperAdmin && !isDealershipLevel && !isBdc) {
         return (
             <div className="flex items-center justify-center h-[60vh]">
                 <p className="text-muted-foreground">You don't have access to this page.</p>
@@ -996,8 +1003,8 @@ export default function TeamActivityPage() {
                             </div>
                         )}
                         
-                        {/* Dealership Filter (Super Admin) */}
-                        {isSuperAdmin && dealerships.length > 0 && (
+                        {/* Dealership Filter (Super Admin / BDC) */}
+                        {(isSuperAdmin || isBdc) && dealerships.length > 0 && (
                             <div className="space-y-2">
                                 <label className="text-sm font-medium">Dealership</label>
                                 <Select value={selectedDealershipId} onValueChange={setSelectedDealershipId}>

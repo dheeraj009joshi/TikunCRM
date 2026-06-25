@@ -93,8 +93,8 @@ function SummaryCard({
 }
 
 export default function SoldCarsPage() {
-    const { isSuperAdmin, isDealershipAdmin, isDealershipOwner } = useRole()
-    const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin
+    const { isSuperAdmin, isDealershipAdmin, isDealershipOwner, isBdc } = useRole()
+    const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
     const user = useAuthStore((state) => state.user)
     
     const [isLoading, setIsLoading] = React.useState(true)
@@ -106,11 +106,13 @@ export default function SoldCarsPage() {
     const [customDateFrom, setCustomDateFrom] = React.useState<Date | undefined>(undefined)
     const [customDateTo, setCustomDateTo] = React.useState<Date | undefined>(undefined)
     const [selectedSalesperson, setSelectedSalesperson] = React.useState<string>("all")
+    const [selectedBdcAgent, setSelectedBdcAgent] = React.useState<string>("all")
     const [selectedDealershipId, setSelectedDealershipId] = React.useState<string>("")
     
     // Dropdown data
     const [dealerships, setDealerships] = React.useState<Dealership[]>([])
     const [salespersons, setSalespersons] = React.useState<UserBrief[]>([])
+    const [bdcAgents, setBdcAgents] = React.useState<UserBrief[]>([])
     const [loadingDropdowns, setLoadingDropdowns] = React.useState(true)
     
     // Calculate date range from preset
@@ -171,12 +173,23 @@ export default function SoldCarsPage() {
                     if (ds.length > 0 && !selectedDealershipId) {
                         setSelectedDealershipId(ds[0].id)
                     }
+                } else if (isBdc && user?.id) {
+                    // BDC users - load their accessible dealerships
+                    const access = await TeamService.getUserDealershipAccess(user.id)
+                    setDealerships(access.dealerships as Dealership[])
+                    if (access.dealerships.length > 0 && !selectedDealershipId) {
+                        setSelectedDealershipId(access.dealerships[0].id)
+                    }
                 }
                 
-                const dealershipId = isSuperAdmin ? selectedDealershipId : user?.dealership_id
+                const dealershipId = (isSuperAdmin || isBdc) ? selectedDealershipId : user?.dealership_id
                 if (dealershipId) {
-                    const sp = await TeamService.getSalespersons(dealershipId)
+                    const [sp, bdc] = await Promise.all([
+                        TeamService.getSalespersons(dealershipId),
+                        TeamService.listBdcAgents(dealershipId),
+                    ])
                     setSalespersons(sp)
+                    setBdcAgents(bdc)
                 }
             } catch (err) {
                 console.error("Failed to load dropdowns:", err)
@@ -185,12 +198,12 @@ export default function SoldCarsPage() {
             }
         }
         loadDropdowns()
-    }, [isSuperAdmin, user?.dealership_id, selectedDealershipId])
+    }, [isSuperAdmin, isBdc, user?.id, user?.dealership_id, selectedDealershipId])
     
     // Fetch data
     const fetchData = React.useCallback(async () => {
-        const dealershipId = isSuperAdmin ? selectedDealershipId : user?.dealership_id
-        if (isSuperAdmin && !dealershipId) return
+        const dealershipId = (isSuperAdmin || isBdc) ? selectedDealershipId : user?.dealership_id
+        if ((isSuperAdmin || isBdc) && !dealershipId) return
         
         setIsLoading(true)
         setError(null)
@@ -205,11 +218,14 @@ export default function SoldCarsPage() {
                 filters.date_to = endOfDay(to).toISOString()
             }
             
-            if (isSuperAdmin && selectedDealershipId) {
+            if ((isSuperAdmin || isBdc) && selectedDealershipId) {
                 filters.dealership_id = selectedDealershipId
             }
             if (selectedSalesperson && selectedSalesperson !== "all") {
                 filters.assigned_to = selectedSalesperson
+            }
+            if (selectedBdcAgent && selectedBdcAgent !== "all") {
+                filters.bdc_agent_id = selectedBdcAgent
             }
             
             const response = await ReportsService.getSoldCars(filters)
@@ -220,7 +236,7 @@ export default function SoldCarsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [isSuperAdmin, selectedDealershipId, user?.dealership_id, getDateRange, selectedSalesperson])
+    }, [isSuperAdmin, isBdc, selectedDealershipId, user?.dealership_id, getDateRange, selectedSalesperson, selectedBdcAgent])
     
     React.useEffect(() => {
         if (canView) {
@@ -445,8 +461,8 @@ export default function SoldCarsPage() {
                             </>
                         )}
                         
-                        {/* Dealership Filter (super admin only) */}
-                        {isSuperAdmin && dealerships.length > 0 && (
+                        {/* Dealership Filter (super admin / BDC) */}
+                        {(isSuperAdmin || isBdc) && dealerships.length > 0 && (
                             <div className="space-y-2">
                                 <label className="text-sm font-medium">Dealership</label>
                                 <Select value={selectedDealershipId} onValueChange={setSelectedDealershipId}>
@@ -481,6 +497,26 @@ export default function SoldCarsPage() {
                                 </SelectContent>
                             </Select>
                         </div>
+                        
+                        {/* BDC Agent Filter */}
+                        {bdcAgents.length > 0 && (
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">BDC Agent</label>
+                                <Select value={selectedBdcAgent} onValueChange={setSelectedBdcAgent}>
+                                    <SelectTrigger className="w-[200px]">
+                                        <SelectValue placeholder="All BDC agents" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All BDC Agents</SelectItem>
+                                        {bdcAgents.map((a) => (
+                                            <SelectItem key={a.id} value={a.id}>
+                                                {a.first_name} {a.last_name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
                         
                         {/* Actions */}
                         <div className="flex items-center gap-2 ml-auto">

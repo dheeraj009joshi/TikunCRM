@@ -55,6 +55,7 @@ import {
     type TeamTouchSalesMetricsFilters,
 } from "@/services/reports-service"
 import { DealershipService, type Dealership } from "@/services/dealership-service"
+import { TeamService } from "@/services/team-service"
 import { cn } from "@/lib/utils"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -112,8 +113,8 @@ function csvEscape(cell: string): string {
 }
 
 export default function TeamSalesTouchReportPage() {
-    const { isSuperAdmin, isDealershipAdmin, isDealershipOwner } = useRole()
-    const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin
+    const { isSuperAdmin, isDealershipAdmin, isDealershipOwner, isBdc } = useRole()
+    const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
     const user = useAuthStore((state) => state.user)
 
     const [isLoading, setIsLoading] = React.useState(true)
@@ -182,6 +183,11 @@ export default function TeamSalesTouchReportPage() {
                     const ds = await DealershipService.listDealerships({ is_active: true })
                     setDealerships(ds)
                     setSelectedDealershipId((prev) => (prev || (ds[0]?.id ?? "")))
+                } else if (isBdc && user?.id) {
+                    // BDC users - load their accessible dealerships
+                    const access = await TeamService.getUserDealershipAccess(user.id)
+                    setDealerships(access.dealerships as Dealership[])
+                    setSelectedDealershipId((prev) => (prev || (access.dealerships[0]?.id ?? "")))
                 }
             } catch (err) {
                 console.error("Failed to load dealerships:", err)
@@ -190,11 +196,11 @@ export default function TeamSalesTouchReportPage() {
             }
         }
         if (canView) loadDealerships()
-    }, [isSuperAdmin, canView])
+    }, [isSuperAdmin, isBdc, user?.id, canView])
 
     const fetchData = React.useCallback(async () => {
-        const dealershipId = isSuperAdmin ? selectedDealershipId : user?.dealership_id
-        if (isSuperAdmin && !dealershipId) return
+        const dealershipId = (isSuperAdmin || isBdc) ? selectedDealershipId : user?.dealership_id
+        if ((isSuperAdmin || isBdc) && !dealershipId) return
 
         setIsLoading(true)
         setError(null)
@@ -202,7 +208,7 @@ export default function TeamSalesTouchReportPage() {
         try {
             const { from, to } = getDateRange()
             const filters: TeamTouchSalesMetricsFilters = {}
-            if (isSuperAdmin && dealershipId) {
+            if ((isSuperAdmin || isBdc) && dealershipId) {
                 filters.dealership_id = dealershipId
             }
             if (from && to) {
@@ -219,7 +225,7 @@ export default function TeamSalesTouchReportPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [isSuperAdmin, selectedDealershipId, user?.dealership_id, getDateRange])
+    }, [isSuperAdmin, isBdc, selectedDealershipId, user?.dealership_id, getDateRange])
 
     React.useEffect(() => {
         if (canView) {
@@ -437,7 +443,7 @@ export default function TeamSalesTouchReportPage() {
                     <CardTitle className="text-base">Filters</CardTitle>
                 </CardHeader>
                 <CardContent className="flex flex-wrap items-end gap-3">
-                    {isSuperAdmin && (
+                    {(isSuperAdmin || isBdc) && dealerships.length > 0 && (
                         <div className="min-w-[200px] flex-1">
                             <label className="mb-1.5 block text-sm font-medium">Dealership</label>
                             <Select

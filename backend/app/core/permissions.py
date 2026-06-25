@@ -143,6 +143,7 @@ ROLE_PERMISSIONS: dict[UserRole, Set[Permission]] = {
         Permission.SEND_EMAIL,
         Permission.SEND_SMS,
         Permission.LOG_CALL,
+        Permission.VIEW_DEALERSHIP_REPORTS,
     },
 
     UserRole.SALESPERSON: {

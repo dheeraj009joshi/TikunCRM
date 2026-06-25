@@ -628,16 +628,91 @@ async def update_user(
 
 @router.get("/bdc-agents", response_model=List[UserBrief])
 async def list_bdc_agents(
+    dealership_id: Optional[UUID] = Query(None, description="Filter BDC agents by dealership access"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_role(UserRole.SUPER_ADMIN)),
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """List all BDC agents (Super Admin only)."""
-    result = await db.execute(
-        select(User)
-        .where(User.role == UserRole.BDC, User.is_active == True)
-        .order_by(User.first_name, User.last_name)
-    )
-    return result.scalars().all()
+    """
+    List BDC agents.
+    
+    - Super Admin: Can see all BDC agents, optionally filtered by dealership
+    - Dealership Admin/Owner: Can see BDC agents with access to their dealership
+    - BDC: Can see other BDC agents with access to the same dealerships
+    """
+    from app.core.access_scope import get_accessible_dealership_ids
+    
+    if current_user.role == UserRole.SUPER_ADMIN:
+        if dealership_id:
+            # Filter by specific dealership
+            result = await db.execute(
+                select(User)
+                .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
+                .where(
+                    User.role == UserRole.BDC,
+                    User.is_active == True,
+                    UserDealershipAccess.dealership_id == dealership_id,
+                )
+                .order_by(User.first_name, User.last_name)
+            )
+        else:
+            # Return all BDC agents
+            result = await db.execute(
+                select(User)
+                .where(User.role == UserRole.BDC, User.is_active == True)
+                .order_by(User.first_name, User.last_name)
+            )
+        return result.scalars().all()
+    
+    elif current_user.role in (UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
+        # Return BDC agents with access to current user's dealership
+        target_dealership = dealership_id or current_user.dealership_id
+        if not target_dealership:
+            return []
+        result = await db.execute(
+            select(User)
+            .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
+            .where(
+                User.role == UserRole.BDC,
+                User.is_active == True,
+                UserDealershipAccess.dealership_id == target_dealership,
+            )
+            .order_by(User.first_name, User.last_name)
+        )
+        return result.scalars().all()
+    
+    elif current_user.role == UserRole.BDC:
+        # BDC can see other BDC agents with access to the same dealerships
+        accessible_ids = await get_accessible_dealership_ids(db, current_user)
+        if not accessible_ids:
+            return []
+        target_dealership = dealership_id if dealership_id in accessible_ids else None
+        if target_dealership:
+            result = await db.execute(
+                select(User)
+                .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
+                .where(
+                    User.role == UserRole.BDC,
+                    User.is_active == True,
+                    UserDealershipAccess.dealership_id == target_dealership,
+                )
+                .order_by(User.first_name, User.last_name)
+            )
+        else:
+            result = await db.execute(
+                select(User)
+                .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
+                .where(
+                    User.role == UserRole.BDC,
+                    User.is_active == True,
+                    UserDealershipAccess.dealership_id.in_(accessible_ids),
+                )
+                .distinct()
+                .order_by(User.first_name, User.last_name)
+            )
+        return result.scalars().all()
+    
+    # Other roles don't have access
+    raise HTTPException(status_code=403, detail="Access denied")
 
 
 @router.get("/{user_id}/dealership-access", response_model=UserDealershipAccessResponse)

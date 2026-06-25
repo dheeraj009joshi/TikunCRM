@@ -131,6 +131,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         "send_email",
         "send_sms",
         "log_call",
+        "view_dealership_reports",
     ],
 }
 
@@ -163,6 +164,7 @@ export function useRole() {
     const canManageUsers = hasPermission("create_user")
     const canManageDealerships = hasPermission("create_dealership")
     const canViewSystemReports = hasPermission("view_system_reports")
+    const canViewDealershipReports = hasPermission("view_dealership_reports")
 
     return {
         user,
@@ -185,6 +187,7 @@ export function useRole() {
         canManageUsers,
         canManageDealerships,
         canViewSystemReports,
+        canViewDealershipReports,
     }
 }
 

@@ -157,6 +157,8 @@ export interface LeadListParams {
     fresh_only?: boolean;
     /** Filter by salesperson (admin/owner only) */
     assigned_to?: string;
+    /** Filter by BDC agent */
+    bdc_agent_id?: string;
     /** Filter leads created on or after this date (ISO format) */
     date_from?: string;
     /** Filter leads created on or before this date (ISO format) */

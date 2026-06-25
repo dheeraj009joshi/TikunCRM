@@ -188,6 +188,8 @@ export default function LeadsPage() {
     )
     const [campaignOptions, setCampaignOptions] = React.useState<CampaignFilterOption[]>([])
     const [teamMembers, setTeamMembers] = React.useState<{ id: string; first_name: string; last_name: string }[]>([])
+    const [bdcAgents, setBdcAgents] = React.useState<{ id: string; first_name: string; last_name: string }[]>([])
+    const [bdcAgentFilter, setBdcAgentFilter] = React.useState<string>("all")
     const [isLoading, setIsLoading] = React.useState(true)
     
     // Date filter state
@@ -382,6 +384,14 @@ export default function LeadsPage() {
             .catch(() => setTeamMembers([]))
     }, [isDealershipLevel, isSuperAdmin, authUser?.dealership_id])
 
+    // Load BDC agents for admin/owner BDC filter
+    React.useEffect(() => {
+        if (!isDealershipLevel && !isSuperAdmin) return
+        TeamService.listBdcAgents(authUser?.dealership_id ?? undefined)
+            .then((list) => setBdcAgents(list))
+            .catch(() => setBdcAgents([]))
+    }, [isDealershipLevel, isSuperAdmin, authUser?.dealership_id])
+
     React.useEffect(() => {
         LeadService.getCampaignFilterOptions().then(setCampaignOptions).catch(() => setCampaignOptions([]))
     }, [])
@@ -445,6 +455,7 @@ export default function LeadsPage() {
             params.stage_id = status
         }
         if (assignedTo && assignedTo !== "all") params.assigned_to = assignedTo
+        if (bdcAgentFilter && bdcAgentFilter !== "all") params.bdc_agent_id = bdcAgentFilter
         if (dealershipFilter && dealershipFilter !== "all") params.dealership_id = dealershipFilter
 
         if (dateMode === "single" && specificDate) {
@@ -464,6 +475,7 @@ export default function LeadsPage() {
         stages,
         status,
         assignedTo,
+        bdcAgentFilter,
         dealershipFilter,
         dateMode,
         specificDate,
@@ -500,6 +512,7 @@ export default function LeadsPage() {
             if (source && source !== "all") baseParams.source = source
             if (campaignFilter !== "all") baseParams.campaign_mapping_id = campaignFilter
             if (assignedTo && assignedTo !== "all") baseParams.assigned_to = assignedTo
+            if (bdcAgentFilter && bdcAgentFilter !== "all") baseParams.bdc_agent_id = bdcAgentFilter
             if (dealershipFilter && dealershipFilter !== "all") baseParams.dealership_id = dealershipFilter
 
             // Date range filters
@@ -566,7 +579,7 @@ export default function LeadsPage() {
         } finally {
             setIsLoadingPipeline(false)
         }
-    }, [viewMode, search, source, selectedStageIds, stages, assignedTo, dateMode, specificDate, dateFrom, dateTo, campaignFilter])
+    }, [viewMode, search, source, selectedStageIds, stages, assignedTo, bdcAgentFilter, dateMode, specificDate, dateFrom, dateTo, campaignFilter])
 
     const loadMoreForStage = React.useCallback(
         async (stageId: string) => {
@@ -585,6 +598,7 @@ export default function LeadsPage() {
                 if (source && source !== "all") params.source = source
                 if (campaignFilter !== "all") params.campaign_mapping_id = campaignFilter
                 if (assignedTo && assignedTo !== "all") params.assigned_to = assignedTo
+                if (bdcAgentFilter && bdcAgentFilter !== "all") params.bdc_agent_id = bdcAgentFilter
                 if (viewMode === "unassigned") params.pool = "unassigned"
                 else if (viewMode === "mine") params.pool = "mine"
                 else if (viewMode === "fresh") params.fresh_only = true
@@ -611,7 +625,7 @@ export default function LeadsPage() {
                 setLoadingMoreStageId(null)
             }
         },
-        [stagePagination, loadingMoreStageId, stages, search, source, viewMode, assignedTo, campaignFilter]
+        [stagePagination, loadingMoreStageId, stages, search, source, viewMode, assignedTo, bdcAgentFilter, campaignFilter]
     )
 
     React.useEffect(() => {
@@ -1034,6 +1048,27 @@ export default function LeadsPage() {
                                         {teamMembers.map((u) => (
                                             <SelectItem key={u.id} value={u.id}>
                                                 {u.first_name} {u.last_name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            )}
+                            {(isDealershipLevel || isSuperAdmin) && bdcAgents.length > 0 && (
+                                <Select
+                                    value={bdcAgentFilter}
+                                    onValueChange={(v) => {
+                                        setBdcAgentFilter(v)
+                                        setPage(1)
+                                    }}
+                                >
+                                    <SelectTrigger className="w-44">
+                                        <SelectValue placeholder="BDC Agent" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All BDC agents</SelectItem>
+                                        {bdcAgents.map((a) => (
+                                            <SelectItem key={a.id} value={a.id}>
+                                                {a.first_name} {a.last_name}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>

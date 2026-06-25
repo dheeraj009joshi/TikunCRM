@@ -153,7 +153,7 @@ const allSidebarItems: SidebarItem[] = [
     {
         name: "Reports",
         icon: FileBarChart,
-        roles: ["super_admin", "dealership_admin", "dealership_owner"],
+        roles: ["super_admin", "dealership_admin", "dealership_owner", "bdc"],
         children: [
             { name: "Analytics", icon: BarChart3, href: "/analytics" },
             { name: "Team Activity", icon: Activity, href: "/team-activity" },
