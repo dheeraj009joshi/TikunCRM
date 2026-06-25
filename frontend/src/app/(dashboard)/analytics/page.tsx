@@ -371,6 +371,8 @@ export default function AnalyticsPage() {
 
     const fetchAll = React.useCallback(async () => {
         if (!canView) return
+        // BDC users must have a dealership selected before fetching
+        if (isBdc && !dealershipId) return
         setLoading(true)
         setError(null)
         const filters = buildFilters(dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, bdcAgentId, source, stageId)
@@ -396,7 +398,7 @@ export default function AnalyticsPage() {
         } finally {
             setLoading(false)
         }
-    }, [canView, dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, bdcAgentId, source, stageId])
+    }, [canView, isBdc, dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, bdcAgentId, source, stageId])
 
     React.useEffect(() => {
         fetchAll()
