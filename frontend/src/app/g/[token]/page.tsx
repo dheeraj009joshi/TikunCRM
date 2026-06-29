@@ -14,13 +14,54 @@ import {
     FileText,
     ShieldAlert,
     Calendar,
+    CheckCircle2,
+    XCircle,
 } from "lucide-react"
 import { GuestService, type GuestPublicProfile } from "@/services/guest-service"
+import type { AssessmentItemState } from "@/services/eligibility-service"
 
 function scoreColor(score: number): string {
     if (score >= 70) return "text-emerald-600"
     if (score >= 40) return "text-amber-600"
     return "text-rose-600"
+}
+
+/** The actual answer/value for a criterion, e.g. "Yes", "$3,000", "Credit 720". */
+function itemValueLabel(item: AssessmentItemState): { text: string; known: boolean } {
+    const asNumber = (raw: unknown) => {
+        const n = Number(raw)
+        return Number.isFinite(n) ? n : null
+    }
+
+    if (item.input_type === "boolean") {
+        return { text: item.is_met ? "Yes" : "No", known: true }
+    }
+
+    if (item.input_type === "number") {
+        const stored =
+            item.value && typeof item.value === "object"
+                ? (item.value as { number?: unknown }).number
+                : undefined
+        const raw = stored ?? item.auto_value
+        if (raw == null || raw === "") return { text: "—", known: false }
+        const n = asNumber(raw)
+        if (n == null) return { text: String(raw), known: true }
+        const isMoney = item.auto_field === "down_payment"
+        return { text: isMoney ? `$${n.toLocaleString()}` : n.toLocaleString(), known: true }
+    }
+
+    if (item.input_type === "select") {
+        const stored =
+            item.value && typeof item.value === "object"
+                ? (item.value as { option?: unknown }).option
+                : undefined
+        const sel = stored ?? item.auto_value
+        if (sel == null || sel === "") return { text: "—", known: false }
+        const opt = (item.config.options || []).find((o) => String(o.value) === String(sel))
+        return { text: opt?.label || String(sel), known: true }
+    }
+
+    return { text: item.is_met ? "Yes" : "No", known: true }
 }
 
 function ScoreRing({ score }: { score: number }) {
@@ -53,7 +94,17 @@ function ScoreRing({ score }: { score: number }) {
     )
 }
 
-function Row({ icon: Icon, label, value }: { icon: React.ComponentType<{ className?: string }>; label: string; value?: string | number | null }) {
+function Row({
+    icon: Icon,
+    label,
+    value,
+    href,
+}: {
+    icon: React.ComponentType<{ className?: string }>
+    label: string
+    value?: string | number | null
+    href?: string | null
+}) {
     if (value == null || value === "") return null
     return (
         <div className="flex items-center gap-3 py-2.5">
@@ -62,7 +113,13 @@ function Row({ icon: Icon, label, value }: { icon: React.ComponentType<{ classNa
             </div>
             <div className="min-w-0">
                 <p className="text-[11px] uppercase tracking-wide text-gray-400">{label}</p>
-                <p className="text-sm font-medium text-gray-900 break-words">{value}</p>
+                {href ? (
+                    <a href={href} className="text-sm font-medium text-primary break-words hover:underline">
+                        {value}
+                    </a>
+                ) : (
+                    <p className="text-sm font-medium text-gray-900 break-words">{value}</p>
+                )}
             </div>
         </div>
     )
@@ -139,9 +196,30 @@ export default function PublicGuestPage() {
                             {profile.eligibility.items.map((item) => (
                                 <div key={item.criterion_id} className="flex items-center justify-between text-sm">
                                     <span className="text-gray-600">{item.label}</span>
-                                    <span className={item.is_met ? "font-medium text-emerald-600" : "text-gray-400"}>
-                                        {item.is_met ? `+${Number(item.points).toFixed(0)}` : "—"}
-                                    </span>
+                                    {item.input_type === "boolean" ? (
+                                        item.is_met ? (
+                                            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                                        ) : (
+                                            <XCircle className="h-5 w-5 text-rose-500" />
+                                        )
+                                    ) : (
+                                        (() => {
+                                            const v = itemValueLabel(item)
+                                            return (
+                                                <span
+                                                    className={
+                                                        !v.known
+                                                            ? "text-gray-400"
+                                                            : item.is_met
+                                                              ? "font-semibold text-emerald-600"
+                                                              : "font-medium text-gray-700"
+                                                    }
+                                                >
+                                                    {v.text}
+                                                </span>
+                                            )
+                                        })()
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -157,8 +235,18 @@ export default function PublicGuestPage() {
 
                 {/* Contact & details */}
                 <div className="divide-y rounded-2xl bg-white px-5 py-2 shadow-sm">
-                    <Row icon={Phone} label="Phone" value={profile.phone} />
-                    <Row icon={Mail} label="Email" value={profile.email} />
+                    <Row
+                        icon={Phone}
+                        label="Phone"
+                        value={profile.phone}
+                        href={profile.phone ? `tel:${profile.phone.replace(/[^\d+]/g, "")}` : null}
+                    />
+                    <Row
+                        icon={Mail}
+                        label="Email"
+                        value={profile.email}
+                        href={profile.email ? `mailto:${profile.email}` : null}
+                    />
                     <Row icon={MapPin} label="Address" value={[profile.address, location].filter(Boolean).join(" · ")} />
                     <Row icon={Car} label="Vehicle of interest" value={profile.vehicle_of_interest} />
                     <Row
