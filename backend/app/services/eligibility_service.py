@@ -58,11 +58,28 @@ class EligibilityService:
 
     @staticmethod
     async def list_criteria(
-        db: AsyncSession, dealership_id: Optional[UUID], active_only: bool = False
+        db: AsyncSession,
+        dealership_id: Optional[UUID],
+        active_only: bool = False,
+        include_global: bool = True,
     ) -> List[EligibilityCriterion]:
+        """List criteria for a dealership.
+
+        By default also includes *global* criteria (dealership_id IS NULL), which
+        act as defaults that apply to every dealership unless overridden.
+        """
         stmt = select(EligibilityCriterion)
         if dealership_id is not None:
-            stmt = stmt.where(EligibilityCriterion.dealership_id == dealership_id)
+            if include_global:
+                stmt = stmt.where(
+                    (EligibilityCriterion.dealership_id == dealership_id)
+                    | (EligibilityCriterion.dealership_id.is_(None))
+                )
+            else:
+                stmt = stmt.where(EligibilityCriterion.dealership_id == dealership_id)
+        else:
+            # No dealership context → only the global criteria.
+            stmt = stmt.where(EligibilityCriterion.dealership_id.is_(None))
         if active_only:
             stmt = stmt.where(EligibilityCriterion.is_active == True)  # noqa: E712
         stmt = stmt.order_by(

@@ -1,8 +1,25 @@
 "use client"
 
 import * as React from "react"
+import { useRouter } from "next/navigation"
 import QRCode from "react-qr-code"
-import { Loader2, FileText, QrCode, Copy, Check, ShieldOff, UserCheck } from "lucide-react"
+import {
+    Loader2,
+    FileText,
+    QrCode,
+    Copy,
+    Check,
+    ShieldOff,
+    UserCheck,
+    User,
+    Phone,
+    Mail,
+    MapPin,
+    DollarSign,
+    Car,
+    Repeat,
+    SlidersHorizontal,
+} from "lucide-react"
 import {
     Dialog,
     DialogContent,
@@ -17,6 +34,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
+import { useRole } from "@/hooks/use-role"
 import {
     GuestService,
     type Guest,
@@ -32,18 +50,43 @@ interface GuestFormModalProps {
     onComplete?: () => void
 }
 
-const FIELDS: { key: keyof Guest; label: string; type?: string; full?: boolean }[] = [
-    { key: "full_name", label: "Full name" },
-    { key: "phone", label: "Phone" },
-    { key: "email", label: "Email" },
-    { key: "down_payment", label: "Down payment", type: "number" },
-    { key: "address", label: "Address", full: true },
-    { key: "city", label: "City" },
-    { key: "state", label: "State" },
-    { key: "postal_code", label: "Postal code" },
-    { key: "vehicle_of_interest", label: "Vehicle of interest", full: true },
-    { key: "trade_in", label: "Trade-in" },
+type FieldDef = {
+    key: keyof Guest
+    label: string
+    type?: string
+    full?: boolean
+    icon?: React.ComponentType<{ className?: string }>
+}
+
+const SECTIONS: { title: string; fields: FieldDef[] }[] = [
+    {
+        title: "Contact",
+        fields: [
+            { key: "full_name", label: "Full name", icon: User, full: true },
+            { key: "phone", label: "Phone", icon: Phone },
+            { key: "email", label: "Email", icon: Mail },
+            { key: "address", label: "Address", icon: MapPin, full: true },
+            { key: "city", label: "City" },
+            { key: "state", label: "State" },
+            { key: "postal_code", label: "Postal code" },
+        ],
+    },
+    {
+        title: "Deal details",
+        fields: [
+            { key: "down_payment", label: "Down payment", type: "number", icon: DollarSign },
+            { key: "vehicle_of_interest", label: "Vehicle of interest", icon: Car, full: true },
+            { key: "trade_in", label: "Trade-in", icon: Repeat },
+        ],
+    },
 ]
+
+const STATUS_LABEL: Record<string, string> = {
+    draft: "Draft",
+    ready: "Ready",
+    checked_in: "Checked in",
+    completed: "Completed",
+}
 
 export function GuestFormModal({
     isOpen,
@@ -62,6 +105,9 @@ export function GuestFormModal({
     const [copied, setCopied] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const createdRef = React.useRef(false)
+    const router = useRouter()
+    const { isSuperAdmin, isDealershipLevel, isBdc } = useRole()
+    const canManageCriteria = isSuperAdmin || isDealershipLevel || isBdc
 
     React.useEffect(() => {
         if (!isOpen) {
@@ -177,78 +223,129 @@ export function GuestFormModal({
 
     return (
         <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-                <DialogHeader>
-                    <DialogTitle className="flex items-center gap-2">
-                        <UserCheck className="h-5 w-5 text-primary" />
-                        Guest Profile
-                    </DialogTitle>
-                    <DialogDescription>
-                        Review the auto-filled details, capture anything missing, and share a QR for the showroom team.
-                    </DialogDescription>
+            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto p-0 gap-0">
+                {/* Header */}
+                <DialogHeader className="space-y-0 border-b px-6 py-4">
+                    <div className="flex items-center gap-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary text-base font-semibold">
+                            {(guest?.full_name || "G").charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                            <DialogTitle className="flex items-center gap-2 text-lg">
+                                {guest?.full_name || "Guest Profile"}
+                                {guest && (
+                                    <Badge variant="secondary" className="text-[10px]">
+                                        {STATUS_LABEL[guest.status] || guest.status}
+                                    </Badge>
+                                )}
+                            </DialogTitle>
+                            <DialogDescription className="text-xs">
+                                Review the auto-filled details, capture anything missing, and share a QR for the showroom team.
+                            </DialogDescription>
+                        </div>
+                    </div>
                 </DialogHeader>
 
                 {error && (
-                    <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md">{error}</div>
+                    <div className="mx-6 mt-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
                 )}
 
                 {isLoading || !guest ? (
-                    <div className="flex h-40 items-center justify-center">
+                    <div className="flex h-48 items-center justify-center">
                         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                     </div>
                 ) : (
-                    <div className="space-y-6">
-                        {/* Details */}
-                        <div className="grid grid-cols-2 gap-3">
-                            {FIELDS.map((f) => (
-                                <div key={String(f.key)} className={`space-y-1.5 ${f.full ? "col-span-2" : ""}`}>
-                                    <Label className="text-xs">{f.label}</Label>
-                                    <Input
-                                        type={f.type || "text"}
-                                        value={(guest[f.key] as string | number | null) ?? ""}
-                                        onChange={(e) => setField(f.key, e.target.value)}
-                                    />
+                    <div className="space-y-5 px-6 py-5">
+                        {/* Detail sections */}
+                        {SECTIONS.map((section) => (
+                            <div key={section.title} className="space-y-3">
+                                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                    {section.title}
+                                </h3>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {section.fields.map((f) => {
+                                        const Icon = f.icon
+                                        return (
+                                            <div key={String(f.key)} className={`space-y-1.5 ${f.full ? "col-span-2" : ""}`}>
+                                                <Label className="text-xs text-muted-foreground">{f.label}</Label>
+                                                <div className="relative">
+                                                    {Icon && (
+                                                        <Icon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                                                    )}
+                                                    <Input
+                                                        type={f.type || "text"}
+                                                        className={Icon ? "pl-9" : ""}
+                                                        value={(guest[f.key] as string | number | null) ?? ""}
+                                                        onChange={(e) => setField(f.key, e.target.value)}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
                                 </div>
-                            ))}
-                            <div className="space-y-1.5 col-span-2">
-                                <Label className="text-xs">Notes</Label>
-                                <Textarea
-                                    rows={2}
-                                    value={guest.notes ?? ""}
-                                    onChange={(e) => setField("notes", e.target.value)}
-                                />
                             </div>
+                        ))}
+
+                        <div className="space-y-1.5">
+                            <Label className="text-xs text-muted-foreground">Notes</Label>
+                            <Textarea
+                                rows={2}
+                                value={guest.notes ?? ""}
+                                onChange={(e) => setField("notes", e.target.value)}
+                                placeholder="Anything the showroom team should know…"
+                            />
                         </div>
 
                         {/* Documents on file */}
                         <div className="space-y-2">
-                            <Label className="text-xs flex items-center gap-1.5">
+                            <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                                 <FileText className="h-3.5 w-3.5" /> Documents on file
-                            </Label>
+                            </h3>
                             {documents.length === 0 ? (
-                                <p className="text-xs text-muted-foreground">
+                                <p className="rounded-md border border-dashed px-3 py-2.5 text-xs text-muted-foreground">
                                     No documents uploaded yet. Upload them from the lead&apos;s Stips tab.
                                 </p>
                             ) : (
                                 <div className="flex flex-wrap gap-2">
                                     {documents.map((d) => (
-                                        <Badge key={d.id} variant="secondary" className="text-[11px]">
-                                            {d.category_name}: {d.file_name}
-                                        </Badge>
+                                        <div key={d.id} className="flex items-center gap-1.5 rounded-md border bg-muted/40 px-2.5 py-1.5 text-xs">
+                                            <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                                            <span className="font-medium">{d.category_name}</span>
+                                            <span className="text-muted-foreground">· {d.file_name}</span>
+                                        </div>
                                     ))}
                                 </div>
                             )}
                         </div>
 
                         {/* Eligibility */}
-                        <EligibilityPanel entityType="guest" entityId={guest.id} title="Guest Trust Score" />
+                        <div className="space-y-2">
+                            {canManageCriteria && (
+                                <div className="flex justify-end">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => {
+                                            onClose()
+                                            router.push("/settings/eligibility")
+                                        }}
+                                    >
+                                        <SlidersHorizontal className="h-3.5 w-3.5 mr-1.5" />
+                                        Manage criteria
+                                    </Button>
+                                </div>
+                            )}
+                            <EligibilityPanel entityType="guest" entityId={guest.id} title="Guest Trust Score" />
+                        </div>
 
                         {/* QR share */}
                         {shareUrl && !guest.share_revoked && (
-                            <div className="flex flex-col items-center gap-3 rounded-lg border p-4">
-                                <div className="bg-white p-3 rounded-md">
+                            <div className="flex flex-col items-center gap-3 rounded-xl border bg-muted/20 p-5">
+                                <div className="rounded-lg bg-white p-3 shadow-sm">
                                     <QRCode value={shareUrl} size={160} />
                                 </div>
+                                <p className="text-xs text-muted-foreground">Scan to open the guest&apos;s shareable profile</p>
                                 <div className="flex w-full max-w-md items-center gap-2">
                                     <Input readOnly value={shareUrl} className="text-xs" />
                                     <Button type="button" variant="outline" size="icon" onClick={handleCopy}>
@@ -263,7 +360,7 @@ export function GuestFormModal({
                     </div>
                 )}
 
-                <DialogFooter className="gap-2 sm:gap-2">
+                <DialogFooter className="gap-2 border-t px-6 py-4 sm:gap-2">
                     <Button variant="outline" onClick={handleFinish} disabled={isSaving || isSharing}>
                         Done
                     </Button>

@@ -363,9 +363,14 @@ function EligibilitySettingsInner() {
                         )}
 
                         {form.input_type === "number" && (
-                            <div className="space-y-3 rounded-md border p-3">
+                            <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
                                 <div className="space-y-2">
-                                    <Label>Scoring method</Label>
+                                    <Label className="text-sm">Numeric scoring</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        {form.method === "threshold"
+                                            ? "Threshold: full points if the value meets the operator, otherwise zero."
+                                            : "Scaled: points scale proportionally between min and max."}
+                                    </p>
                                     <Select value={form.method} onValueChange={(v) => setField("method", v as "threshold" | "scaled")}>
                                         <SelectTrigger><SelectValue /></SelectTrigger>
                                         <SelectContent>
@@ -420,39 +425,62 @@ function EligibilitySettingsInner() {
                         )}
 
                         {form.input_type === "select" && (
-                            <div className="space-y-2 rounded-md border p-3">
+                            <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
                                 <div className="flex items-center justify-between">
-                                    <Label>Options (each carries a weight fraction 0–1)</Label>
+                                    <div>
+                                        <Label className="text-sm">Dropdown options</Label>
+                                        <p className="text-xs text-muted-foreground">
+                                            Each option earns <span className="font-medium">weight × fraction</span> points. Use 1 for full credit, 0.5 for half, etc.
+                                        </p>
+                                    </div>
                                     <Button type="button" variant="outline" size="sm" onClick={addOption}>
-                                        <Plus className="h-3.5 w-3.5" /> Option
+                                        <Plus className="h-3.5 w-3.5" /> Add
                                     </Button>
                                 </div>
-                                {form.options.length === 0 && (
-                                    <p className="text-xs text-muted-foreground">No options yet.</p>
-                                )}
-                                {form.options.map((opt, i) => (
-                                    <div key={i} className="flex items-center gap-2">
-                                        <Input
-                                            className="flex-1"
-                                            placeholder="Label"
-                                            value={opt.label}
-                                            onChange={(e) => updateOption(i, { label: e.target.value, value: opt.value || e.target.value.toLowerCase().replace(/\s+/g, "_") })}
-                                        />
-                                        <Input
-                                            className="w-24"
-                                            type="number"
-                                            step="0.1"
-                                            min="0"
-                                            max="1"
-                                            placeholder="0–1"
-                                            value={opt.fraction}
-                                            onChange={(e) => updateOption(i, { fraction: Number(e.target.value) })}
-                                        />
-                                        <Button type="button" variant="ghost" size="icon" onClick={() => removeOption(i)}>
-                                            <X className="h-4 w-4" />
-                                        </Button>
+
+                                {form.options.length === 0 ? (
+                                    <p className="rounded-md border border-dashed py-4 text-center text-xs text-muted-foreground">
+                                        No options yet. Add one to get started.
+                                    </p>
+                                ) : (
+                                    <div className="space-y-2">
+                                        <div className="grid grid-cols-[1fr_5rem_4rem_2rem] items-center gap-2 px-1 text-[11px] font-medium uppercase text-muted-foreground">
+                                            <span>Option</span>
+                                            <span className="text-center">Fraction</span>
+                                            <span className="text-center">Points</span>
+                                            <span />
+                                        </div>
+                                        {form.options.map((opt, i) => {
+                                            const pts = (Number(form.weight) || 0) * (Number(opt.fraction) || 0)
+                                            return (
+                                                <div key={i} className="grid grid-cols-[1fr_5rem_4rem_2rem] items-center gap-2">
+                                                    <Input
+                                                        className="h-9"
+                                                        placeholder="e.g. Employed"
+                                                        value={opt.label}
+                                                        onChange={(e) => updateOption(i, { label: e.target.value, value: opt.value || e.target.value.toLowerCase().replace(/\s+/g, "_") })}
+                                                    />
+                                                    <Input
+                                                        className="h-9 text-center"
+                                                        type="number"
+                                                        step="0.1"
+                                                        min="0"
+                                                        max="1"
+                                                        placeholder="0–1"
+                                                        value={opt.fraction}
+                                                        onChange={(e) => updateOption(i, { fraction: Number(e.target.value) })}
+                                                    />
+                                                    <span className="text-center text-xs font-semibold tabular-nums text-muted-foreground">
+                                                        {pts ? pts.toFixed(0) : "0"}
+                                                    </span>
+                                                    <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => removeOption(i)}>
+                                                        <X className="h-4 w-4" />
+                                                    </Button>
+                                                </div>
+                                            )
+                                        })}
                                     </div>
-                                ))}
+                                )}
                             </div>
                         )}
 

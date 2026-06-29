@@ -44,8 +44,20 @@ async def create_guest(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """Create a guest profile, auto-filling from the lead/customer when available."""
+    """Create a guest profile, auto-filling from the lead/customer when available.
+
+    Idempotent per appointment: if a guest already exists for the given
+    appointment, the existing one is returned (so reopening shows the same QR)."""
     data = body.model_dump(exclude_unset=True)
+
+    if data.get("appointment_id"):
+        existing = await db.execute(
+            select(Guest).where(Guest.appointment_id == data["appointment_id"])
+        )
+        existing_guest = existing.scalar_one_or_none()
+        if existing_guest:
+            return existing_guest
+
     guest = Guest(
         created_by=current_user.id,
         dealership_id=data.get("dealership_id") or current_user.dealership_id,

@@ -22,6 +22,7 @@ import {
     MoreVertical,
     User,
     Users,
+    UserCheck,
     X,
     Store,
     Loader2,
@@ -965,6 +966,7 @@ export default function AppointmentsPage() {
     const [showCompleteModal, setShowCompleteModal] = React.useState(false)
     const [showRescheduleModal, setShowRescheduleModal] = React.useState(false)
     const [selectedAppointment, setSelectedAppointment] = React.useState<Appointment | null>(null)
+    const [guestModal, setGuestModal] = React.useState<{ leadId: string; appointmentId: string } | null>(null)
     
     // Load data
     const loadData = React.useCallback(async () => {
@@ -1703,8 +1705,8 @@ export default function AppointmentsPage() {
                                             )}
                                         </div>
                                         
-                                        {/* Actions Dropdown - show for all non-terminal statuses */}
-                                        {!isAppointmentStatusTerminal(appointment.status) && (
+                                        {/* Actions Dropdown */}
+                                        {(!isAppointmentStatusTerminal(appointment.status) || appointment.lead_id) && (
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
                                                     <Button variant="ghost" size="sm">
@@ -1712,6 +1714,12 @@ export default function AppointmentsPage() {
                                                     </Button>
                                                 </DropdownMenuTrigger>
                                                 <DropdownMenuContent align="end">
+                                                    {appointment.lead_id && (
+                                                        <DropdownMenuItem onClick={() => setGuestModal({ leadId: appointment.lead_id!, appointmentId: appointment.id })}>
+                                                            <UserCheck className="mr-2 h-4 w-4 text-primary" />
+                                                            Guest Profile & QR
+                                                        </DropdownMenuItem>
+                                                    )}
                                                     {appointment.status === "scheduled" && (
                                                         <DropdownMenuItem onClick={() => handleConfirm(appointment)}>
                                                             <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
@@ -1807,6 +1815,15 @@ export default function AppointmentsPage() {
                 appointment={selectedAppointment}
                 onSuccess={loadData}
             />
+            {guestModal && (
+                <GuestFormModal
+                    isOpen
+                    leadId={guestModal.leadId}
+                    appointmentId={guestModal.appointmentId}
+                    onClose={() => setGuestModal(null)}
+                    onComplete={() => setGuestModal(null)}
+                />
+            )}
             <RescheduleAppointmentModal
                 isOpen={showRescheduleModal}
                 onClose={() => { setShowRescheduleModal(false); setSelectedAppointment(null) }}
