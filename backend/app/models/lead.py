@@ -4,10 +4,11 @@ A customer can have many leads over time.
 """
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -162,6 +163,9 @@ class Lead(Base):
 
     interested_in: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     budget_range: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Typed down payment for the eligibility engine (legacy meta_data["downpayment"] is fallback)
+    down_payment: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
 
     # --- Timestamps ---
     first_contacted_at: Mapped[Optional[datetime]] = mapped_column(

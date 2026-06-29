@@ -17,6 +17,7 @@ import {
     Tag,
     GitBranch,
     MessageSquare,
+    Gauge,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -29,6 +30,7 @@ interface SettingSection {
     icon: React.ComponentType<{ className?: string }>
     adminOnly?: boolean
     superAdminOnly?: boolean
+    allowBdc?: boolean
     highlight?: boolean
 }
 
@@ -107,6 +109,14 @@ const settingsSections: SettingSection[] = [
         adminOnly: true,
     },
     {
+        title: "Eligibility Criteria",
+        description: "Configure the weighted Trust Score factors for leads, customers, and guests",
+        href: "/settings/eligibility",
+        icon: Gauge,
+        adminOnly: true,
+        allowBdc: true,
+    },
+    {
         title: "Security",
         description: "Password, two-factor authentication, and sessions",
         href: "/settings/security",
@@ -115,12 +125,16 @@ const settingsSections: SettingSection[] = [
 ]
 
 export default function SettingsPage() {
-    const { isSuperAdmin, isDealershipAdmin, isDealershipOwner, isDealershipLevel } = useRole()
+    const { isSuperAdmin, isDealershipLevel, isBdc } = useRole()
     const isAdmin = isSuperAdmin || isDealershipLevel
     
     const filteredSections = settingsSections.filter(section => {
         if (section.superAdminOnly && !isSuperAdmin) return false
-        if (section.adminOnly && !isAdmin) return false
+        if (section.adminOnly && !isAdmin) {
+            // Some admin sections are also available to BDC agents.
+            if (section.allowBdc && isBdc) return true
+            return false
+        }
         return true
     })
 

@@ -24,6 +24,7 @@ import { Lead, getLeadFullName } from "@/services/lead-service"
 import { getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
+import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
 
 export default function Customer360Page() {
     const params = useParams()
@@ -150,6 +151,9 @@ export default function Customer360Page() {
                     </CardContent>
                 </Card>
             </div>
+
+            {/* Trust Score */}
+            <EligibilityPanel entityType="customer" entityId={customerId} />
 
             {/* Leads History */}
             <Card>

@@ -5,7 +5,7 @@ import { useRouter, usePathname } from "next/navigation"
 import { useAuthStore } from "@/stores/auth-store"
 import { registerFCMToken } from "@/hooks/use-fcm-notifications"
 
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password"]
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/g/"]
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const router = useRouter()

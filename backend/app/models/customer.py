@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -54,6 +54,10 @@ class Customer(Base):
     job_title: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     preferred_contact_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     preferred_contact_time: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Eligibility capture fields (used by the eligibility scoring engine)
+    credit_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    has_license: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
     # Tracking
     source_first_touch: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

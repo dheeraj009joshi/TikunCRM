@@ -36,6 +36,7 @@ import {
     MoreHorizontal,
     Download,
     FileStack,
+    Gauge,
     Upload,
     ExternalLink,
     FileText,
@@ -103,6 +104,7 @@ import { EmailComposerModal } from "@/components/emails/email-composer-modal"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
 import { EditFollowUpModal } from "@/components/follow-ups/edit-follow-up-modal"
 import { BookAppointmentModal } from "@/components/appointments/book-appointment-modal"
+import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
 import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal } from "@/services/appointment-service"
 import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
 import { StipsService, StipsCategory, StipDocument } from "@/services/stips-service"
@@ -3385,6 +3387,13 @@ export default function LeadDetailsPage() {
                                         <FileStack className="h-4 w-4" />
                                         Stips
                                     </TabsTrigger>
+                                    <TabsTrigger 
+                                        value="eligibility"
+                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
+                                    >
+                                        <Gauge className="h-4 w-4" />
+                                        Trust Score
+                                    </TabsTrigger>
                                 </TabsList>
                                 <div className="shrink-0 flex flex-col items-end gap-1.5 min-w-[140px]">
                                     <DropdownMenu>
@@ -4703,6 +4712,13 @@ export default function LeadDetailsPage() {
                                         </Tabs>
                                     </>
                                 )}
+                            </TabsContent>
+
+                            <TabsContent value="eligibility" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                                <EligibilityPanel
+                                    entityType="lead"
+                                    entityId={leadId}
+                                />
                             </TabsContent>
                         </Tabs>
 

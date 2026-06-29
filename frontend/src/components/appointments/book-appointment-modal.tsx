@@ -25,6 +25,7 @@ import { useSkateAlertStore } from "@/stores/skate-alert-store"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
 import { useRole } from "@/hooks/use-role"
 import { cn } from "@/lib/utils"
+import { GuestFormModal } from "@/components/guests/guest-form-modal"
 
 interface BookAppointmentModalProps {
     isOpen: boolean
@@ -55,9 +56,13 @@ export function BookAppointmentModal({
     leadName,
     onSuccess 
 }: BookAppointmentModalProps) {
-    const { isDealershipAdmin, isDealershipOwner, isSuperAdmin } = useRole()
+    const { isDealershipAdmin, isDealershipOwner, isSuperAdmin, isBdc } = useRole()
     const isAdmin = isDealershipAdmin || isDealershipOwner || isSuperAdmin
     
+    // Guest profile handoff (BDC): after booking, capture the guest and share a QR.
+    const [view, setView] = React.useState<"form" | "guest">("form")
+    const [bookedAppointmentId, setBookedAppointmentId] = React.useState<string | null>(null)
+
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const [calendarOpen, setCalendarOpen] = React.useState(false)
@@ -98,6 +103,8 @@ export function BookAppointmentModal({
             setAssignedTo("auto")
             setLeadPrimaryName(null)
             setLeadSecondaryName(null)
+            setView("form")
+            setBookedAppointmentId(null)
             
             // If admin, fetch lead to get dealership, team, and primary/secondary for display
             if (isAdmin && leadId) {
@@ -160,8 +167,15 @@ export function BookAppointmentModal({
                     () => handleSubmit(undefined, true) // Retry with confirmation
                 )
             } else {
-                onSuccess?.()
-                onClose()
+                // BDC flow: open the guest profile handoff instead of closing immediately.
+                if (isBdc) {
+                    const appointmentId = (result as { id?: string })?.id || null
+                    setBookedAppointmentId(appointmentId)
+                    setView("guest")
+                } else {
+                    onSuccess?.()
+                    onClose()
+                }
             }
         } catch (err: any) {
             const skate = getSkateAttemptDetail(err)
@@ -178,6 +192,24 @@ export function BookAppointmentModal({
     }
 
     if (!isOpen) return null
+
+    if (view === "guest") {
+        return (
+            <GuestFormModal
+                isOpen
+                leadId={leadId}
+                appointmentId={bookedAppointmentId}
+                onClose={() => {
+                    onSuccess?.()
+                    onClose()
+                }}
+                onComplete={() => {
+                    onSuccess?.()
+                    onClose()
+                }}
+            />
+        )
+    }
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center">

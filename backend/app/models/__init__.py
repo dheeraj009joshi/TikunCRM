@@ -40,6 +40,15 @@ from app.models.auto_whatsapp import (
     AutoWhatsAppJobStatus,
     AutoWhatsAppLogAction,
 )
+from app.models.eligibility import (
+    EligibilityCriterion,
+    EligibilityAssessment,
+    EligibilityAssessmentItem,
+    EligibilityInputType,
+    EligibilityValueSource,
+    EligibilityEntityType,
+)
+from app.models.guest import Guest, GuestStatus
 
 __all__ = [
     "Customer",
@@ -100,4 +109,12 @@ __all__ = [
     "AutoWhatsAppProfileStatus",
     "AutoWhatsAppJobStatus",
     "AutoWhatsAppLogAction",
+    "EligibilityCriterion",
+    "EligibilityAssessment",
+    "EligibilityAssessmentItem",
+    "EligibilityInputType",
+    "EligibilityValueSource",
+    "EligibilityEntityType",
+    "Guest",
+    "GuestStatus",
 ]
