@@ -48,6 +48,7 @@ import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
 import { formatDateInDealershipTimezone, getTimezoneAbbreviation } from "@/utils/timezone"
 import { useAuthStore } from "@/stores/auth-store"
 import { useRole } from "@/hooks/use-role"
+import { GuestFormModal } from "@/components/guests/guest-form-modal"
 import { UserAvatar } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -192,6 +193,11 @@ function CreateAppointmentModal({
     const [location, setLocation] = React.useState("")
     const [notes, setNotes] = React.useState("")
     const [leadId, setLeadId] = React.useState(preselectedLead?.id || "")
+
+    // Guest profile handoff: after booking, capture the guest and share a QR.
+    const [view, setView] = React.useState<"form" | "guest">("form")
+    const [bookedAppointmentId, setBookedAppointmentId] = React.useState<string | null>(null)
+    const [bookedLeadId, setBookedLeadId] = React.useState<string | null>(null)
     
     // Load leads for selector: salesperson sees only their leads + unassigned; admin sees all
     React.useEffect(() => {
@@ -237,6 +243,9 @@ function CreateAppointmentModal({
             setCalendarOpen(false)
             setAssignedTo("auto")
             setLeadAssignedToUser(null)
+            setView("form")
+            setBookedAppointmentId(null)
+            setBookedLeadId(null)
         }
     }, [isOpen, preselectedLead])
 
@@ -303,7 +312,7 @@ function CreateAppointmentModal({
             const scheduledAt = new Date(selectedDate)
             scheduledAt.setHours(hours, minutes, 0, 0)
             
-            await AppointmentService.create({
+            const result = await AppointmentService.create({
                 title: title.trim() || "Appointment",
                 description: notes || undefined,
                 appointment_type: "in_person", // Always in person
@@ -313,9 +322,18 @@ function CreateAppointmentModal({
                 lead_id: leadId,
                 assigned_to: isAdmin ? (assignedTo !== "auto" ? assignedTo : undefined) : undefined,
             })
-            
-            onSuccess()
-            onClose()
+
+            const appointmentId = (result as { id?: string })?.id || null
+            if (appointmentId) {
+                // Appointment created → open the guest profile handoff.
+                setBookedAppointmentId(appointmentId)
+                setBookedLeadId(leadId)
+                setView("guest")
+            } else {
+                // No id (e.g. a SKATE confirmation prompt) → preserve prior behavior.
+                onSuccess()
+                onClose()
+            }
         } catch (err: any) {
             setError(err.response?.data?.detail || "Failed to create appointment")
         } finally {
@@ -324,6 +342,24 @@ function CreateAppointmentModal({
     }
     
     if (!isOpen) return null
+
+    if (view === "guest" && bookedLeadId) {
+        return (
+            <GuestFormModal
+                isOpen
+                leadId={bookedLeadId}
+                appointmentId={bookedAppointmentId}
+                onClose={() => {
+                    onSuccess()
+                    onClose()
+                }}
+                onComplete={() => {
+                    onSuccess()
+                    onClose()
+                }}
+            />
+        )
+    }
     
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center">

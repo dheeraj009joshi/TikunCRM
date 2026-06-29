@@ -56,7 +56,7 @@ export function BookAppointmentModal({
     leadName,
     onSuccess 
 }: BookAppointmentModalProps) {
-    const { isDealershipAdmin, isDealershipOwner, isSuperAdmin, isBdc } = useRole()
+    const { isDealershipAdmin, isDealershipOwner, isSuperAdmin } = useRole()
     const isAdmin = isDealershipAdmin || isDealershipOwner || isSuperAdmin
     
     // Guest profile handoff (BDC): after booking, capture the guest and share a QR.
@@ -167,15 +167,10 @@ export function BookAppointmentModal({
                     () => handleSubmit(undefined, true) // Retry with confirmation
                 )
             } else {
-                // BDC flow: open the guest profile handoff instead of closing immediately.
-                if (isBdc) {
-                    const appointmentId = (result as { id?: string })?.id || null
-                    setBookedAppointmentId(appointmentId)
-                    setView("guest")
-                } else {
-                    onSuccess?.()
-                    onClose()
-                }
+                // Open the guest profile handoff instead of closing immediately.
+                const appointmentId = (result as { id?: string })?.id || null
+                setBookedAppointmentId(appointmentId)
+                setView("guest")
             }
         } catch (err: any) {
             const skate = getSkateAttemptDetail(err)
