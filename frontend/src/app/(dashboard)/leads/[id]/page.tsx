@@ -3335,23 +3335,23 @@ export default function LeadDetailsPage() {
                                         </Popover>
                                     </div>
                                 )}
-                            <div className="px-6 flex items-center justify-between gap-4">
-                                <TabsList className="bg-transparent h-auto p-0 gap-1">
+                            <div className="px-6 flex items-center justify-between gap-3">
+                                <TabsList className="bg-transparent h-auto p-0 gap-1 flex-1 min-w-0 justify-start flex-nowrap overflow-x-auto no-scrollbar">
                                     <TabsTrigger 
                                         value="timeline"
-                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
                             >
                                 Activity Timeline
                                     </TabsTrigger>
                                     <TabsTrigger 
                                         value="notes"
-                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
                                     >
                                         Notes
                                     </TabsTrigger>
                                     <TabsTrigger 
                                         value="appointments"
-                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5 transition-colors duration-200"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5 transition-colors duration-200"
                                     >
                                         Appointments
                                         {appointmentBadgeCount > 0 && (
@@ -3369,7 +3369,7 @@ export default function LeadDetailsPage() {
                                     </TabsTrigger>
                                     <TabsTrigger 
                                         value="followups"
-                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 flex items-center gap-1.5"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
                                     >
                                         Follow-ups
                                         {followUpBadgeCount > 0 && (
@@ -3387,14 +3387,14 @@ export default function LeadDetailsPage() {
                                     </TabsTrigger>
                                     <TabsTrigger 
                                         value="stips"
-                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
                                     >
                                         <FileStack className="h-4 w-4" />
                                         Stips
                                     </TabsTrigger>
                                     <TabsTrigger 
                                         value="eligibility"
-                                        className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
                                     >
                                         <Gauge className="h-4 w-4" />
                                         Trust Score

@@ -211,3 +211,13 @@
 .rdp-button_next:hover {
   background-color: var(--accent);
 }
+
+/* Hide scrollbars for horizontally scrollable strips (e.g. tab bars) */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
