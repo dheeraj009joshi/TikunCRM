@@ -46,7 +46,8 @@ import {
     Plus,
     History,
     Check,
-    Star
+    Star,
+    QrCode
 } from "lucide-react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -105,6 +106,7 @@ import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-u
 import { EditFollowUpModal } from "@/components/follow-ups/edit-follow-up-modal"
 import { BookAppointmentModal } from "@/components/appointments/book-appointment-modal"
 import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
+import { GuestFormModal } from "@/components/guests/guest-form-modal"
 import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal } from "@/services/appointment-service"
 import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
 import { StipsService, StipsCategory, StipDocument } from "@/services/stips-service"
@@ -504,6 +506,9 @@ export default function LeadDetailsPage() {
     
     // Appointment booking
     const [showBookAppointment, setShowBookAppointment] = React.useState(false)
+
+    // Guest profile & QR
+    const [showGuestModal, setShowGuestModal] = React.useState(false)
     
     // Assignment modals
     const [showDealershipModal, setShowDealershipModal] = React.useState(false)
@@ -4715,6 +4720,18 @@ export default function LeadDetailsPage() {
                             </TabsContent>
 
                             <TabsContent value="eligibility" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                                <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border bg-muted/30 p-4">
+                                    <div className="min-w-0">
+                                        <p className="text-sm font-medium">Guest Profile &amp; QR</p>
+                                        <p className="text-xs text-muted-foreground">
+                                            Create a shareable guest profile for the showroom team and generate a QR code.
+                                        </p>
+                                    </div>
+                                    <Button size="sm" className="shrink-0" onClick={() => setShowGuestModal(true)}>
+                                        <QrCode className="h-4 w-4 mr-1.5" />
+                                        Guest Profile &amp; QR
+                                    </Button>
+                                </div>
                                 <EligibilityPanel
                                     entityType="lead"
                                     entityId={leadId}
@@ -4904,6 +4921,16 @@ export default function LeadDetailsPage() {
                         fetchActivities()
                         fetchLeadAppointmentsAndFollowUps()
                     }}
+                />
+            )}
+
+            {/* Guest Profile & QR Modal */}
+            {lead && showGuestModal && (
+                <GuestFormModal
+                    isOpen={showGuestModal}
+                    onClose={() => setShowGuestModal(false)}
+                    leadId={lead.id}
+                    dealershipId={lead.dealership_id || null}
                 />
             )}
 
