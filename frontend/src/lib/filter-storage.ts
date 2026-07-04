@@ -37,7 +37,7 @@ export type NotificationsFilterState = {
 }
 
 export type BdcExportFilterState = {
-  allDealerships?: boolean
+  allDealerships?: string
   dealershipId?: string
   bdcAgentId?: string
   assignedTo?: string

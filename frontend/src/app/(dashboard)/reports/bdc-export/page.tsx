@@ -332,7 +332,7 @@ export default function BdcExportReportPage() {
         TeamService.getSalespersons(scopeId).then(setSalespersons).catch(() => setSalespersons([]))
         TeamService.listBdcAgents(scopeId).then(setBdcAgents).catch(() => setBdcAgents([]))
         if (dealershipId && !allDealerships) {
-            LeadStageService.getStages(dealershipId).then(setStages).catch(() => setStages([]))
+            LeadStageService.list(dealershipId).then(setStages).catch(() => setStages([]))
         } else {
             setStages([])
         }
@@ -698,7 +698,7 @@ export default function BdcExportReportPage() {
                                     </TableCell>
                                 </TableRow>
                             ) : !preview?.items.length ? (
-                                <TableEmpty colSpan={allDealerships ? 10 : 9} message="Run Preview to see matching leads." />
+                                <TableEmpty title="Run Preview to see matching leads." />
                             ) : (
                                 preview.items.map((row) => (
                                     <TableRow

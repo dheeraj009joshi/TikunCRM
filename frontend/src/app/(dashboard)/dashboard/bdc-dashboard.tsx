@@ -65,15 +65,13 @@ function getScopedMetrics(stats: BdcStats, selectedDealershipId: string | null) 
     }
 }
 
-function filterByDealership<T extends { dealership_id?: string; dealership?: { id?: string }; lead?: { dealership_id?: string } }>(
+function filterByDealership<T>(
     items: T[],
-    selectedDealershipId: string | null
+    selectedDealershipId: string | null,
+    resolveDealershipId: (item: T) => string | undefined | null
 ): T[] {
     if (!selectedDealershipId) return items
-    return items.filter((item) => {
-        const id = item.dealership_id ?? item.dealership?.id ?? item.lead?.dealership_id
-        return id === selectedDealershipId
-    })
+    return items.filter((item) => resolveDealershipId(item) === selectedDealershipId)
 }
 
 function followUpLeadName(fu: FollowUp): string {
@@ -238,10 +236,18 @@ export function BdcDashboard() {
             setStats(statsData)
             setFreshLeads(freshData.items || [])
             setFreshLeadsTop(freshTopData.items || [])
-            setOverdueFollowUps(filterByDealership(overdueFuData.items || [], selectedDealershipId))
-            setTodayFollowUps(filterByDealership(todayFuData.items || [], selectedDealershipId))
-            setTodayAppointments(filterByDealership(todayApptData.items || [], selectedDealershipId))
-            setUpcomingAppointments(filterByDealership(upcomingApptData.items || [], selectedDealershipId))
+            setOverdueFollowUps(
+                filterByDealership(overdueFuData.items || [], selectedDealershipId, (fu) => fu.assigned_to_user?.dealership_id)
+            )
+            setTodayFollowUps(
+                filterByDealership(todayFuData.items || [], selectedDealershipId, (fu) => fu.assigned_to_user?.dealership_id)
+            )
+            setTodayAppointments(
+                filterByDealership(todayApptData.items || [], selectedDealershipId, (a) => a.dealership_id ?? a.dealership?.id)
+            )
+            setUpcomingAppointments(
+                filterByDealership(upcomingApptData.items || [], selectedDealershipId, (a) => a.dealership_id ?? a.dealership?.id)
+            )
 
             const accessibleIds = new Set(statsData.dealerships.map((d) => d.id))
             const visits = (showroomCurrent.visits || []).filter((v) => {

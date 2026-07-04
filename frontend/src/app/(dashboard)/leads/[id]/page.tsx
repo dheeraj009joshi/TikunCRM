@@ -102,7 +102,6 @@ import { AssignToDealershipModal, AssignToSalespersonModal, AssignSecondaryCusto
 import { LogContactModal } from "@/components/leads/log-contact-modal"
 import { StageStepper } from "@/components/leads/stage-stepper"
 import { NextBestAction } from "@/components/leads/next-best-action"
-import { DealDesk } from "@/components/deals/deal-desk"
 import { getCustomerFullName } from "@/services/customer-service"
 import { EmailComposerModal } from "@/components/emails/email-composer-modal"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
@@ -2214,8 +2213,6 @@ export default function LeadDetailsPage() {
                             onViewAppointments={() => setActiveActivityTab("appointments")}
                         />
                     )}
-                    {/* Deal Desk: test drive → booking → delivery */}
-                    {!isMentionOnly && <DealDesk leadId={leadId} />}
                     {/* Profile Card */}
                     <Card className="overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
                         <CardContent className="p-6">
