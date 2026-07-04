@@ -20,10 +20,6 @@ type DealershipSwitcherProps = {
 
 export function DealershipSwitcher({ collapsed = false }: DealershipSwitcherProps) {
     const { user } = useAuthStore()
-
-    if (user?.role === "bdc") {
-        return null
-    }
     const [options, setOptions] = React.useState<DealershipOption[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const [isSwitching, setIsSwitching] = React.useState(false)
@@ -84,7 +80,7 @@ export function DealershipSwitcher({ collapsed = false }: DealershipSwitcherProp
                     type="button"
                     disabled={isSwitching}
                     className={cn(
-                        "flex w-full items-center rounded-md border border-input bg-muted/40 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
+                        "flex w-full items-center rounded-md border border-input bg-background text-left text-sm shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground",
                         collapsed ? "justify-center p-2" : "gap-2 px-3 py-2",
                         isSwitching && "opacity-70"
                     )}

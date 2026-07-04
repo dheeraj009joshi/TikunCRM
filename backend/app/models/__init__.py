@@ -49,6 +49,8 @@ from app.models.eligibility import (
     EligibilityEntityType,
 )
 from app.models.guest import Guest, GuestStatus
+from app.models.saved_view import SavedView
+from app.models.task import Task, TaskType, TaskPriority, TaskStatus
 
 __all__ = [
     "Customer",
@@ -117,4 +119,9 @@ __all__ = [
     "EligibilityEntityType",
     "Guest",
     "GuestStatus",
+    "SavedView",
+    "Task",
+    "TaskType",
+    "TaskPriority",
+    "TaskStatus",
 ]

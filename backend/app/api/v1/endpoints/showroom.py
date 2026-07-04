@@ -35,6 +35,119 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_LINKABLE_APPOINTMENT_STATUSES = (
+    AppointmentStatus.SCHEDULED,
+    AppointmentStatus.CONFIRMED,
+)
+
+
+async def _resolve_check_in_appointment(
+    db: AsyncSession,
+    lead_id: UUID,
+    dealership_id: UUID,
+    appointment_id: Optional[UUID] = None,
+) -> Optional[Appointment]:
+    """Return the appointment to link on check-in (explicit id or sole today appt)."""
+    if appointment_id:
+        result = await db.execute(
+            select(Appointment).where(Appointment.id == appointment_id)
+        )
+        appointment = result.scalar_one_or_none()
+        if (
+            appointment
+            and appointment.lead_id == lead_id
+            and (
+                appointment.dealership_id is None
+                or appointment.dealership_id == dealership_id
+            )
+        ):
+            return appointment
+        return None
+
+    now = utc_now()
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_day = start_of_day + timedelta(days=1)
+    result = await db.execute(
+        select(Appointment)
+        .where(
+            and_(
+                Appointment.lead_id == lead_id,
+                Appointment.dealership_id == dealership_id,
+                Appointment.scheduled_at >= start_of_day,
+                Appointment.scheduled_at < end_of_day,
+                Appointment.status.in_(_LINKABLE_APPOINTMENT_STATUSES),
+            )
+        )
+        .order_by(Appointment.scheduled_at.asc())
+    )
+    today_appts = result.scalars().all()
+    return today_appts[0] if len(today_appts) == 1 else None
+
+
+def _confirm_appointment_on_check_in(appointment: Appointment) -> None:
+    """Confirm today's appointment when the customer checks in."""
+    if appointment.status == AppointmentStatus.SCHEDULED:
+        appointment.status = AppointmentStatus.CONFIRMED
+    elif appointment.status == AppointmentStatus.CONFIRMED:
+        appointment.status = AppointmentStatus.ARRIVED
+
+
+async def _finalize_appointment_on_check_out(
+    db: AsyncSession,
+    visit: ShowroomVisit,
+    outcome: ShowroomOutcome,
+    check_out_data: ShowroomCheckOut,
+    current_user: User,
+) -> None:
+    """Complete or reschedule the linked appointment when the customer checks out."""
+    if not visit.appointment_id:
+        return
+
+    result = await db.execute(
+        select(Appointment).where(Appointment.id == visit.appointment_id)
+    )
+    appointment = result.scalar_one_or_none()
+    if not appointment:
+        return
+
+    if (
+        outcome == ShowroomOutcome.RESCHEDULE
+        and check_out_data.reschedule_scheduled_at
+    ):
+        new_at = check_out_data.reschedule_scheduled_at
+        if new_at.tzinfo is None:
+            new_at = new_at.replace(tzinfo=timezone.utc)
+        appointment.scheduled_at = new_at
+        appointment.status = AppointmentStatus.SCHEDULED
+        appointment.completed_at = None
+        return
+
+    if outcome == ShowroomOutcome.SOLD:
+        appointment.status = AppointmentStatus.SOLD
+    else:
+        appointment.status = AppointmentStatus.COMPLETED
+    appointment.completed_at = utc_now()
+    if check_out_data.notes:
+        appointment.outcome_notes = check_out_data.notes
+
+    if appointment.lead_id:
+        performer_name = f"{current_user.first_name} {current_user.last_name}"
+        await ActivityService.log_activity(
+            db,
+            activity_type=ActivityType.APPOINTMENT_COMPLETED,
+            description=f"Appointment completed: {appointment.title or 'Appointment'}",
+            user_id=current_user.id,
+            lead_id=appointment.lead_id,
+            dealership_id=appointment.dealership_id,
+            meta_data={
+                "appointment_id": str(appointment.id),
+                "status": appointment.status.value,
+                "outcome_notes": appointment.outcome_notes,
+                "performer_name": performer_name,
+                "source": "showroom_check_out",
+            },
+        )
+
 
 async def enrich_visit(db: AsyncSession, visit: ShowroomVisit) -> dict:
     """Add lead and user info to visit response"""
@@ -136,10 +249,17 @@ async def check_in(
             detail="Assign this lead to a dealership before checking in. Use Edit on the lead to set the dealership, or assign from the Unassigned Pool.",
         )
     
+    linked_appointment = await _resolve_check_in_appointment(
+        db,
+        check_in_data.lead_id,
+        dealership_id,
+        check_in_data.appointment_id,
+    )
+
     # Create visit
     visit = ShowroomVisit(
         lead_id=check_in_data.lead_id,
-        appointment_id=check_in_data.appointment_id,
+        appointment_id=linked_appointment.id if linked_appointment else None,
         dealership_id=dealership_id,
         checked_in_by=current_user.id,
         notes=check_in_data.notes,
@@ -173,15 +293,9 @@ async def check_in(
         },
     )
     
-    # If check-in is linked to an appointment, set appointment status to ARRIVED
-    if check_in_data.appointment_id:
-        appt_result = await db.execute(
-            select(Appointment).where(Appointment.id == check_in_data.appointment_id)
-        )
-        appointment = appt_result.scalar_one_or_none()
-        if appointment and appointment.lead_id == check_in_data.lead_id and appointment.dealership_id == dealership_id:
-            appointment.status = AppointmentStatus.ARRIVED
-    
+    if linked_appointment:
+        _confirm_appointment_on_check_in(linked_appointment)
+
     await db.commit()
     await db.refresh(visit)
 
@@ -198,8 +312,8 @@ async def check_in(
             str(dealership_id),
             "status_changed",
             {
-                "status": "in_showroom",
-                "old_status": old_status.value if old_status else None,
+                "status": in_showroom_stage.name if in_showroom_stage else "in_showroom",
+                "old_status": old_stage.name if old_stage else None,
                 "source": "showroom_check_in",
             },
         )
@@ -257,23 +371,11 @@ async def check_out(
         db, target_stage_name, visit.dealership_id
     )
 
-    # When outcome is RESCHEDULE and visit has linked appointment, reschedule it
-    if (
-        check_out_data.outcome == ShowroomOutcome.RESCHEDULE
-        and visit.appointment_id
-        and check_out_data.reschedule_scheduled_at
-    ):
-        apt_result = await db.execute(
-            select(Appointment).where(Appointment.id == visit.appointment_id)
-        )
-        appointment = apt_result.scalar_one_or_none()
-        if appointment:
-            new_at = check_out_data.reschedule_scheduled_at
-            if new_at.tzinfo is None:
-                new_at = new_at.replace(tzinfo=timezone.utc)
-            appointment.scheduled_at = new_at
-            appointment.status = AppointmentStatus.SCHEDULED
+    await _finalize_appointment_on_check_out(
+        db, visit, check_out_data.outcome, check_out_data, current_user
+    )
 
+    old_stage = None
     if lead and target_stage:
         old_stage = await LeadStageService.get_stage(db, lead.stage_id)
         old_stage_name = old_stage.display_name if old_stage else "?"
@@ -308,6 +410,24 @@ async def check_out(
             },
         )
 
+    if lead and check_out_data.notes:
+        performer_name = f"{current_user.first_name} {current_user.last_name}"
+        await ActivityService.log_activity(
+            db,
+            activity_type=ActivityType.NOTE_ADDED,
+            description=f"Showroom checkout note by {performer_name}",
+            user_id=current_user.id,
+            lead_id=lead.id,
+            dealership_id=visit.dealership_id,
+            meta_data={
+                "content": check_out_data.notes,
+                "performer_name": performer_name,
+                "source": "showroom_check_out",
+                "outcome": check_out_data.outcome.value,
+                "visit_id": str(visit.id),
+            },
+        )
+
     await db.commit()
     await db.refresh(visit)
 
@@ -325,8 +445,8 @@ async def check_out(
                 str(visit.dealership_id),
                 "status_changed",
                 {
-                    "status": new_status.value,
-                    "old_status": old_status.value if old_status else None,
+                    "status": target_stage.name if target_stage else None,
+                    "old_status": old_stage.name if old_stage else None,
                     "source": "showroom_check_out",
                     "outcome": check_out_data.outcome.value,
                 },

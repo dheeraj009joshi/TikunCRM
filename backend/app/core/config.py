@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = True
     # APScheduler (email sync, sheets sync, reminders, etc.). None = auto: off in development, on otherwise.
-    background_scheduler_enabled: Optional[bool] = True
+    background_scheduler_enabled: Optional[bool] = None
     
     # Server
     host: str = "0.0.0.0"
@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # Short-lived JWT after POST /auth/verify-config-access (sensitive CRM config screens)
     config_unlock_token_expire_minutes: int = 30
     
+    # Redis (optional). When set, dashboard/report caching and rate limiting use Redis;
+    # otherwise an in-process cache is used (fine for a single worker).
+    redis_url: Optional[str] = None
+
     # CORS — comma-separated list. The browser Origin from FRONTEND_URL is always merged in
     # so production works even when operators forget to add tikuncrm.com here.
     cors_origins: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000"

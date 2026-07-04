@@ -30,8 +30,11 @@ import {
     Printer,
     FileText,
     ChevronLeft,
-    ChevronRight
+    ChevronRight,
+    List,
+    CalendarDays
 } from "lucide-react"
+import { AppointmentCalendar } from "@/components/appointments/appointment-calendar"
 import { 
     AppointmentService, 
     Appointment, 
@@ -961,6 +964,33 @@ export default function AppointmentsPage() {
         }
     }, [getDateRangeFromPreset])
     
+    // List vs calendar view
+    const [viewMode, setViewMode] = React.useState<"list" | "calendar">(() => {
+        if (typeof window === "undefined") return "list"
+        return (localStorage.getItem("appointments-view-mode") as "list" | "calendar") || "list"
+    })
+    const setViewModePersist = (mode: "list" | "calendar") => {
+        setViewMode(mode)
+        try { localStorage.setItem("appointments-view-mode", mode) } catch { /* ignore */ }
+    }
+    const [calendarAppointments, setCalendarAppointments] = React.useState<Appointment[]>([])
+    const calendarRangeRef = React.useRef<{ from: Date; to: Date } | null>(null)
+
+    const loadCalendarRange = React.useCallback(async (from: Date, to: Date) => {
+        calendarRangeRef.current = { from, to }
+        try {
+            const res = await AppointmentService.list({
+                page: 1,
+                page_size: 200,
+                date_from: from.toISOString(),
+                date_to: to.toISOString(),
+            })
+            setCalendarAppointments(res.items)
+        } catch (err) {
+            console.error("Failed to load calendar appointments:", err)
+        }
+    }, [])
+
     // Modals
     const [showCreateModal, setShowCreateModal] = React.useState(false)
     const [showCompleteModal, setShowCompleteModal] = React.useState(false)
@@ -1028,6 +1058,22 @@ export default function AppointmentsPage() {
         loadData()
     }, [loadData])
     
+    const handleCalendarReschedule = React.useCallback(
+        async (appointment: Appointment, newStart: Date) => {
+            try {
+                await AppointmentService.update(appointment.id, { scheduled_at: newStart.toISOString() })
+                if (calendarRangeRef.current) {
+                    await loadCalendarRange(calendarRangeRef.current.from, calendarRangeRef.current.to)
+                }
+                loadData()
+            } catch (err) {
+                console.error("Failed to reschedule appointment:", err)
+                alert("Failed to reschedule appointment")
+            }
+        },
+        [loadCalendarRange, loadData]
+    )
+
     function handleComplete(appointment: Appointment) {
         setSelectedAppointment(appointment)
         setShowCompleteModal(true)
@@ -1213,6 +1259,30 @@ export default function AppointmentsPage() {
                     <p className="text-muted-foreground">Schedule and manage your appointments</p>
                 </div>
                 <div className="flex items-center gap-2">
+                    <div className="flex items-center rounded-md border p-0.5">
+                        <button
+                            type="button"
+                            onClick={() => setViewModePersist("list")}
+                            className={cn(
+                                "flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition-colors",
+                                viewMode === "list" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            <List className="h-3.5 w-3.5" />
+                            List
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setViewModePersist("calendar")}
+                            className={cn(
+                                "flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition-colors",
+                                viewMode === "calendar" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            <CalendarDays className="h-3.5 w-3.5" />
+                            Calendar
+                        </button>
+                    </div>
                     <Button
                         variant="outline"
                         size="sm"
@@ -1543,6 +1613,17 @@ export default function AppointmentsPage() {
                 </div>
             </div>
             
+            {viewMode === "calendar" ? (
+                <AppointmentCalendar
+                    appointments={calendarAppointments}
+                    onRangeChange={loadCalendarRange}
+                    onReschedule={handleCalendarReschedule}
+                    onSelectAppointment={(apt) => {
+                        if (apt.lead_id) router.push(`/leads/${apt.lead_id}`)
+                    }}
+                />
+            ) : (
+            <>
             {/* Appointments List */}
             <div className="border rounded-lg overflow-hidden bg-card">
                 {/* List Header */}
@@ -1801,6 +1882,8 @@ export default function AppointmentsPage() {
                         </Button>
                     </div>
                 </div>
+            )}
+            </>
             )}
             
             {/* Modals */}

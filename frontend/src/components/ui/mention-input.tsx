@@ -3,7 +3,9 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { UserAvatar } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
 import apiClient from "@/lib/api-client"
+import { useAuthStore } from "@/stores/auth-store"
 
 interface MentionableUser {
     id: string
@@ -25,6 +27,35 @@ interface MentionInputProps {
     disabled?: boolean
     onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
     dealershipId?: string | null
+    leadId?: string | null
+}
+
+function getRoleLabel(role: string): string {
+    switch (role) {
+        case "bdc":
+            return "BDC"
+        case "salesperson":
+            return "Sales"
+        case "dealership_admin":
+            return "Admin"
+        case "dealership_owner":
+            return "Owner"
+        case "super_admin":
+            return "Super Admin"
+        default:
+            return role.replace(/_/g, " ")
+    }
+}
+
+function sortMentionableUsers(users: MentionableUser[]): MentionableUser[] {
+    return [...users].sort((a, b) => {
+        const aIsBdc = a.role === "bdc" ? 0 : 1
+        const bIsBdc = b.role === "bdc" ? 0 : 1
+        if (aIsBdc !== bIsBdc) return aIsBdc - bIsBdc
+        const aName = `${a.first_name} ${a.last_name || ""}`.trim().toLowerCase()
+        const bName = `${b.first_name} ${b.last_name || ""}`.trim().toLowerCase()
+        return aName.localeCompare(bName)
+    })
 }
 
 export function MentionInput({
@@ -36,8 +67,12 @@ export function MentionInput({
     rows = 3,
     disabled = false,
     onKeyDown,
-    dealershipId
+    dealershipId,
+    leadId,
 }: MentionInputProps) {
+    const authDealershipId = useAuthStore((state) => state.user?.dealership_id)
+    const resolvedDealershipId = dealershipId || authDealershipId || undefined
+
     const [mentionableUsers, setMentionableUsers] = React.useState<MentionableUser[]>([])
     const [showSuggestions, setShowSuggestions] = React.useState(false)
     const [suggestionFilter, setSuggestionFilter] = React.useState("")
@@ -48,48 +83,49 @@ export function MentionInput({
     const textareaRef = React.useRef<HTMLTextAreaElement>(null)
     const suggestionsRef = React.useRef<HTMLDivElement>(null)
     
-    // Fetch mentionable users on mount or when dealershipId changes
     React.useEffect(() => {
         async function fetchUsers() {
             try {
-                const params = dealershipId ? { dealership_id: dealershipId } : undefined
-                const response = await apiClient.get("/users/mentionable", { params })
-                setMentionableUsers(response.data)
+                const params: Record<string, string> = {}
+                if (resolvedDealershipId) params.dealership_id = resolvedDealershipId
+                if (leadId) params.lead_id = leadId
+                const response = await apiClient.get("/users/mentionable", {
+                    params: Object.keys(params).length > 0 ? params : undefined,
+                })
+                setMentionableUsers(sortMentionableUsers(response.data))
             } catch (error) {
                 console.error("Failed to fetch mentionable users:", error)
             }
         }
         fetchUsers()
-    }, [dealershipId])
+    }, [resolvedDealershipId, leadId])
     
-    // Filter users based on current mention query
     const filteredUsers = React.useMemo(() => {
-        if (!suggestionFilter) return mentionableUsers.slice(0, 5)
+        const sorted = sortMentionableUsers(mentionableUsers)
+        if (!suggestionFilter) return sorted.slice(0, 8)
         
         const lowerFilter = suggestionFilter.toLowerCase()
-        return mentionableUsers
+        return sorted
             .filter(user => 
                 user.first_name.toLowerCase().includes(lowerFilter) ||
                 (user.last_name && user.last_name.toLowerCase().includes(lowerFilter)) ||
-                user.email.toLowerCase().includes(lowerFilter)
+                user.email.toLowerCase().includes(lowerFilter) ||
+                getRoleLabel(user.role).toLowerCase().includes(lowerFilter)
             )
-            .slice(0, 5)
+            .slice(0, 8)
     }, [mentionableUsers, suggestionFilter])
     
-    // Detect @ mentions in the text
     const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const newValue = e.target.value
         const position = e.target.selectionStart || 0
         setCursorPosition(position)
         onChange(newValue)
         
-        // Check if we're in a mention context
         const textBeforeCursor = newValue.slice(0, position)
         const lastAtIndex = textBeforeCursor.lastIndexOf("@")
         
         if (lastAtIndex !== -1) {
             const textAfterAt = textBeforeCursor.slice(lastAtIndex + 1)
-            // Only show suggestions if there's no space after @
             if (!textAfterAt.includes(" ") && !textAfterAt.includes("\n")) {
                 setSuggestionFilter(textAfterAt)
                 setShowSuggestions(true)
@@ -102,7 +138,6 @@ export function MentionInput({
         setSuggestionFilter("")
     }
     
-    // Handle keyboard navigation in suggestions
     const handleKeyDownInternal = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (showSuggestions && filteredUsers.length > 0) {
             if (e.key === "ArrowDown") {
@@ -124,33 +159,27 @@ export function MentionInput({
             }
         }
         
-        // Pass through to parent handler
         if (onKeyDown) {
             onKeyDown(e)
         }
     }
     
-    // Insert selected user mention
     const selectUser = (user: MentionableUser) => {
         const textBeforeCursor = value.slice(0, cursorPosition)
         const textAfterCursor = value.slice(cursorPosition)
         
-        // Find the @ symbol position
         const lastAtIndex = textBeforeCursor.lastIndexOf("@")
         if (lastAtIndex === -1) return
         
-        // Replace the @query with @fullname
         const fullName = `${user.first_name} ${user.last_name || ""}`.trim()
         const newValue = textBeforeCursor.slice(0, lastAtIndex) + `@${fullName} ` + textAfterCursor
         
         onChange(newValue)
         
-        // Track mentioned user
         const newMentionedIds = new Set(mentionedUserIds)
         newMentionedIds.add(user.id)
         setMentionedUserIds(newMentionedIds)
         
-        // Notify parent of mentioned users
         if (onMentionedUsersChange) {
             onMentionedUsersChange(Array.from(newMentionedIds))
         }
@@ -158,13 +187,11 @@ export function MentionInput({
         setShowSuggestions(false)
         setSuggestionFilter("")
         
-        // Refocus textarea
         setTimeout(() => {
             textareaRef.current?.focus()
         }, 0)
     }
     
-    // Parse mentioned users from text (for when value changes externally)
     React.useEffect(() => {
         const mentionPattern = /@([A-Za-z]+ [A-Za-z]+|[A-Za-z]+)/g
         const matches = value.match(mentionPattern) || []
@@ -206,7 +233,6 @@ export function MentionInput({
                 )}
             />
             
-            {/* Mention Suggestions Dropdown - positioned above the input to avoid being cut off */}
             {showSuggestions && filteredUsers.length > 0 && (
                 <div
                     ref={suggestionsRef}
@@ -232,14 +258,17 @@ export function MentionInput({
                                 lastName={user.last_name || undefined}
                                 size="sm"
                             />
-                            <div className="flex-1 text-left">
-                                <div className="font-medium">
+                            <div className="flex-1 text-left min-w-0">
+                                <div className="font-medium truncate">
                                     {user.first_name} {user.last_name || ""}
                                 </div>
-                                <div className="text-xs text-muted-foreground">
+                                <div className="text-xs text-muted-foreground truncate">
                                     {user.email}
                                 </div>
                             </div>
+                            <Badge variant="secondary" size="sm" className="shrink-0 text-[10px]">
+                                {getRoleLabel(user.role)}
+                            </Badge>
                         </button>
                     ))}
                     <div className="border-t mt-1 pt-1 px-2 py-1 text-xs text-muted-foreground">
@@ -248,7 +277,6 @@ export function MentionInput({
                 </div>
             )}
             
-            {/* Mentioned users indicator */}
             {mentionedUserIds.size > 0 && (
                 <div className="mt-1 text-xs text-muted-foreground">
                     {mentionedUserIds.size} user{mentionedUserIds.size > 1 ? "s" : ""} will be notified

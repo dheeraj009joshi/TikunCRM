@@ -6,11 +6,9 @@ import QRCode from "react-qr-code"
 import {
     Loader2,
     FileText,
-    QrCode,
     Copy,
     Check,
     ShieldOff,
-    UserCheck,
     User,
     Phone,
     Mail,
@@ -39,6 +37,7 @@ import {
     GuestService,
     type Guest,
     type GuestDocument,
+    type GuestUpdatePayload,
 } from "@/services/guest-service"
 
 interface GuestFormModalProps {
@@ -88,6 +87,32 @@ const STATUS_LABEL: Record<string, string> = {
     completed: "Completed",
 }
 
+function guestToPayload(guest: Guest): GuestUpdatePayload {
+    return {
+        full_name: guest.full_name ?? null,
+        phone: guest.phone ?? null,
+        email: guest.email ?? null,
+        address: guest.address ?? null,
+        city: guest.city ?? null,
+        state: guest.state ?? null,
+        postal_code: guest.postal_code ?? null,
+        down_payment:
+            guest.down_payment != null && guest.down_payment !== ("" as unknown)
+                ? Number(guest.down_payment)
+                : null,
+        vehicle_of_interest: guest.vehicle_of_interest ?? null,
+        trade_in: guest.trade_in ?? null,
+        notes: guest.notes ?? null,
+    }
+}
+
+function shareUrlForGuest(guest: Guest): string | null {
+    if (guest.share_token && !guest.share_revoked) {
+        return `${window.location.origin}/g/${guest.share_token}`
+    }
+    return null
+}
+
 export function GuestFormModal({
     isOpen,
     onClose,
@@ -99,38 +124,68 @@ export function GuestFormModal({
     const [guest, setGuest] = React.useState<Guest | null>(null)
     const [documents, setDocuments] = React.useState<GuestDocument[]>([])
     const [isLoading, setIsLoading] = React.useState(false)
-    const [isSaving, setIsSaving] = React.useState(false)
-    const [isSharing, setIsSharing] = React.useState(false)
+    const [saveStatus, setSaveStatus] = React.useState<"idle" | "saving" | "saved" | "error">("idle")
     const [shareUrl, setShareUrl] = React.useState<string | null>(null)
     const [copied, setCopied] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
-    const createdRef = React.useRef(false)
+    const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+    const guestRef = React.useRef<Guest | null>(null)
     const router = useRouter()
     const { isSuperAdmin, isDealershipLevel, isBdc } = useRole()
     const canManageCriteria = isSuperAdmin || isDealershipLevel || isBdc
 
+    guestRef.current = guest
+
+    const persistGuest = React.useCallback(async (nextGuest: Guest) => {
+        setSaveStatus("saving")
+        setError(null)
+        try {
+            const updated = await GuestService.update(nextGuest.id, guestToPayload(nextGuest))
+            setGuest(updated)
+            guestRef.current = updated
+            const url = shareUrlForGuest(updated)
+            if (url) setShareUrl(url)
+            setSaveStatus("saved")
+        } catch (e) {
+            console.error("Failed to save guest", e)
+            setSaveStatus("error")
+            setError("Failed to save guest details")
+        }
+    }, [])
+
+    const scheduleSave = React.useCallback(() => {
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = setTimeout(() => {
+            const current = guestRef.current
+            if (current) void persistGuest(current)
+        }, 600)
+    }, [persistGuest])
+
     React.useEffect(() => {
         if (!isOpen) {
+            if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
             setGuest(null)
             setDocuments([])
             setShareUrl(null)
             setError(null)
-            createdRef.current = false
+            setSaveStatus("idle")
             return
         }
-        if (createdRef.current) return
-        createdRef.current = true
+
+        let cancelled = false
         setIsLoading(true)
-        GuestService.create({
+        setError(null)
+
+        GuestService.getOrCreate({
             lead_id: leadId,
             appointment_id: appointmentId || null,
             dealership_id: dealershipId || null,
         })
             .then(async (g) => {
+                if (cancelled) return
                 setGuest(g)
-                if (g.share_token && !g.share_revoked) {
-                    setShareUrl(`${window.location.origin}/g/${g.share_token}`)
-                }
+                guestRef.current = g
+                setShareUrl(shareUrlForGuest(g))
                 try {
                     setDocuments(await GuestService.getDocuments(g.id))
                 } catch {
@@ -138,68 +193,36 @@ export function GuestFormModal({
                 }
             })
             .catch((e) => {
-                console.error("Failed to create guest profile", e)
-                setError("Failed to start guest profile")
+                if (cancelled) return
+                console.error("Failed to load guest profile", e)
+                setError("Failed to load guest profile")
             })
-            .finally(() => setIsLoading(false))
+            .finally(() => {
+                if (!cancelled) setIsLoading(false)
+            })
+
+        return () => {
+            cancelled = true
+            if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+        }
     }, [isOpen, leadId, appointmentId, dealershipId])
 
-    const setField = (key: keyof Guest, value: string) =>
-        setGuest((prev) => (prev ? { ...prev, [key]: value } : prev))
-
-    const handleSave = async () => {
-        if (!guest) return
-        setIsSaving(true)
-        setError(null)
-        try {
-            const updated = await GuestService.update(guest.id, {
-                full_name: guest.full_name ?? null,
-                phone: guest.phone ?? null,
-                email: guest.email ?? null,
-                address: guest.address ?? null,
-                city: guest.city ?? null,
-                state: guest.state ?? null,
-                postal_code: guest.postal_code ?? null,
-                down_payment:
-                    guest.down_payment != null && guest.down_payment !== ("" as unknown)
-                        ? Number(guest.down_payment)
-                        : null,
-                vehicle_of_interest: guest.vehicle_of_interest ?? null,
-                trade_in: guest.trade_in ?? null,
-                notes: guest.notes ?? null,
-            })
-            setGuest(updated)
-        } catch (e) {
-            console.error("Failed to save guest", e)
-            setError("Failed to save guest details")
-        } finally {
-            setIsSaving(false)
-        }
-    }
-
-    const handleShare = async () => {
-        if (!guest) return
-        setIsSharing(true)
-        setError(null)
-        try {
-            await handleSave()
-            const res = await GuestService.share(guest.id)
-            setShareUrl(`${window.location.origin}/g/${res.share_token}`)
-            setGuest((prev) => (prev ? { ...prev, share_token: res.share_token, share_revoked: false } : prev))
-        } catch (e) {
-            console.error("Failed to share guest", e)
-            setError("Failed to generate QR")
-        } finally {
-            setIsSharing(false)
-        }
+    const setField = (key: keyof Guest, value: string) => {
+        setGuest((prev) => {
+            if (!prev) return prev
+            const next = { ...prev, [key]: value }
+            guestRef.current = next
+            return next
+        })
+        scheduleSave()
     }
 
     const handleRevoke = async () => {
         if (!guest) return
         try {
-            await GuestService.revokeShare(guest.id)
+            const updated = await GuestService.revokeShare(guest.id)
+            setGuest(updated)
             setShareUrl(null)
-            setGuest((prev) => (prev ? { ...prev, share_revoked: true } : prev))
         } catch (e) {
             console.error("Failed to revoke share", e)
         }
@@ -217,20 +240,27 @@ export function GuestFormModal({
     }
 
     const handleFinish = () => {
-        onComplete?.()
-        onClose()
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+        const current = guestRef.current
+        if (current) void persistGuest(current).finally(() => {
+            onComplete?.()
+            onClose()
+        })
+        else {
+            onComplete?.()
+            onClose()
+        }
     }
 
     return (
-        <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+        <Dialog open={isOpen} onOpenChange={(open) => !open && handleFinish()}>
             <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto p-0 gap-0">
-                {/* Header */}
                 <DialogHeader className="space-y-0 border-b px-6 py-4">
                     <div className="flex items-center gap-3">
                         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary text-base font-semibold">
                             {(guest?.full_name || "G").charAt(0).toUpperCase()}
                         </div>
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                             <DialogTitle className="flex items-center gap-2 text-lg">
                                 {guest?.full_name || "Guest Profile"}
                                 {guest && (
@@ -240,9 +270,17 @@ export function GuestFormModal({
                                 )}
                             </DialogTitle>
                             <DialogDescription className="text-xs">
-                                Review the auto-filled details, capture anything missing, and share a QR for the showroom team.
+                                Review and update guest details — changes save automatically. The QR code is permanent for this lead.
                             </DialogDescription>
                         </div>
+                        {saveStatus === "saving" && (
+                            <span className="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…
+                            </span>
+                        )}
+                        {saveStatus === "saved" && (
+                            <span className="text-xs text-emerald-600 shrink-0">Saved</span>
+                        )}
                     </div>
                 </DialogHeader>
 
@@ -256,7 +294,6 @@ export function GuestFormModal({
                     </div>
                 ) : (
                     <div className="space-y-5 px-6 py-5">
-                        {/* Detail sections */}
                         {SECTIONS.map((section) => (
                             <div key={section.title} className="space-y-3">
                                 <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -296,7 +333,6 @@ export function GuestFormModal({
                             />
                         </div>
 
-                        {/* Documents on file */}
                         <div className="space-y-2">
                             <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                                 <FileText className="h-3.5 w-3.5" /> Documents on file
@@ -318,7 +354,6 @@ export function GuestFormModal({
                             )}
                         </div>
 
-                        {/* Eligibility */}
                         <div className="space-y-2">
                             {canManageCriteria && (
                                 <div className="flex justify-end">
@@ -327,7 +362,7 @@ export function GuestFormModal({
                                         variant="outline"
                                         size="sm"
                                         onClick={() => {
-                                            onClose()
+                                            handleFinish()
                                             router.push("/settings/eligibility")
                                         }}
                                     >
@@ -339,7 +374,6 @@ export function GuestFormModal({
                             <EligibilityPanel entityType="guest" entityId={guest.id} title="Guest Trust Score" />
                         </div>
 
-                        {/* QR share */}
                         {shareUrl && !guest.share_revoked && (
                             <div className="flex flex-col items-center gap-3 rounded-xl border bg-muted/20 p-5">
                                 <div className="rounded-lg bg-white p-3 shadow-sm">
@@ -361,16 +395,8 @@ export function GuestFormModal({
                 )}
 
                 <DialogFooter className="gap-2 border-t px-6 py-4 sm:gap-2">
-                    <Button variant="outline" onClick={handleFinish} disabled={isSaving || isSharing}>
+                    <Button onClick={handleFinish} disabled={saveStatus === "saving"}>
                         Done
-                    </Button>
-                    <Button variant="secondary" onClick={handleSave} disabled={!guest || isSaving || isSharing}>
-                        {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                        Save Details
-                    </Button>
-                    <Button onClick={handleShare} disabled={!guest || isSharing}>
-                        {isSharing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <QrCode className="h-4 w-4 mr-2" />}
-                        {shareUrl ? "Regenerate QR" : "Generate QR & Share"}
                     </Button>
                 </DialogFooter>
             </DialogContent>

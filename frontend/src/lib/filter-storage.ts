@@ -9,6 +9,7 @@ export const leadsFilterKey = PREFIX + "leads"
 export const appointmentsFilterKey = PREFIX + "appointments"
 export const followUpsFilterKey = PREFIX + "followups"
 export const notificationsFilterKey = PREFIX + "notifications"
+export const bdcExportFilterKey = PREFIX + "bdc_export"
 
 export type LeadsFilterState = {
   filter?: string
@@ -33,6 +34,27 @@ export type FollowUpsFilterState = {
 export type NotificationsFilterState = {
   filter?: string
   type?: string
+}
+
+export type BdcExportFilterState = {
+  allDealerships?: boolean
+  dealershipId?: string
+  bdcAgentId?: string
+  assignedTo?: string
+  stageId?: string
+  source?: string
+  search?: string
+  activeOnly?: string
+  leadDateFrom?: string
+  leadDateTo?: string
+  soldDateFrom?: string
+  soldDateTo?: string
+  apptDateFrom?: string
+  apptDateTo?: string
+  apptFunnel?: string
+  hasAppointment?: string
+  selectedApptStatuses?: string
+  soldOnly?: string
 }
 
 function getItem<T>(key: string): T | null {
@@ -82,5 +104,12 @@ export const filterStorage = {
   },
   setNotifications(state: NotificationsFilterState): void {
     setItem(notificationsFilterKey, state)
+  },
+
+  getBdcExport(): BdcExportFilterState | null {
+    return getItem<BdcExportFilterState>(bdcExportFilterKey)
+  },
+  setBdcExport(state: BdcExportFilterState): void {
+    setItem(bdcExportFilterKey, state)
   },
 }

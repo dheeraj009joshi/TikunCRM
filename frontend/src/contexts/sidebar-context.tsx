@@ -8,6 +8,9 @@ interface SidebarContextValue {
     collapsed: boolean
     setCollapsed: (value: boolean) => void
     toggle: () => void
+    /** Mobile drawer open state */
+    mobileOpen: boolean
+    setMobileOpen: (value: boolean) => void
 }
 
 const SidebarContext = React.createContext<SidebarContextValue | null>(null)
@@ -39,9 +42,11 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
         })
     }, [])
 
+    const [mobileOpen, setMobileOpen] = React.useState(false)
+
     const value = React.useMemo(
-        () => ({ collapsed, setCollapsed, toggle }),
-        [collapsed, setCollapsed, toggle]
+        () => ({ collapsed, setCollapsed, toggle, mobileOpen, setMobileOpen }),
+        [collapsed, setCollapsed, toggle, mobileOpen]
     )
 
     return (

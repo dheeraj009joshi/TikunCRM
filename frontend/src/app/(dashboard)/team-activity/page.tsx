@@ -65,7 +65,7 @@ import { WhatsAppIcon } from "@/components/icons/whatsapp"
 import { ACTIVITY_TYPE_INFO, type ActivityType } from "@/services/activity-service"
 import { LeadService } from "@/services/lead-service"
 import { LocalTime } from "@/components/ui/local-time"
-import { Textarea } from "@/components/ui/textarea"
+import { MentionInput } from "@/components/ui/mention-input"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { jsPDF } from "jspdf"
@@ -151,15 +151,18 @@ function SummaryCard({
 
 function ActivityItem({ 
     activity, 
-    onReplySubmitted 
+    onReplySubmitted,
+    dealershipId,
 }: { 
     activity: DailyActivityItem
     onReplySubmitted?: () => void
+    dealershipId?: string | null
 }) {
     const { toast } = useToast()
     const isNote = activity.type === "note_added"
     const [isReplying, setIsReplying] = React.useState(false)
     const [replyContent, setReplyContent] = React.useState("")
+    const [replyMentionedUserIds, setReplyMentionedUserIds] = React.useState<string[]>([])
     const [isSubmitting, setIsSubmitting] = React.useState(false)
     
     const handleReplyClick = () => {
@@ -169,6 +172,7 @@ function ActivityItem({
     const handleCancelReply = () => {
         setIsReplying(false)
         setReplyContent("")
+        setReplyMentionedUserIds([])
     }
     
     const handleSubmitReply = async () => {
@@ -178,12 +182,14 @@ function ActivityItem({
         try {
             await LeadService.addNote(activity.lead_id, replyContent.trim(), {
                 parent_id: activity.id,
+                mentioned_user_ids: replyMentionedUserIds.length > 0 ? replyMentionedUserIds : undefined,
             })
             toast({
                 title: "Reply added",
                 description: "Your reply has been posted successfully.",
             })
             setReplyContent("")
+            setReplyMentionedUserIds([])
             setIsReplying(false)
             onReplySubmitted?.()
         } catch (error: any) {
@@ -248,12 +254,15 @@ function ActivityItem({
                 {/* Inline Reply Input */}
                 {isReplying && (
                     <div className="mt-3 space-y-2">
-                        <Textarea
-                            placeholder="Write your reply..."
+                        <MentionInput
+                            placeholder="Write your reply... Use @ to mention someone"
                             value={replyContent}
-                            onChange={(e) => setReplyContent(e.target.value)}
+                            onChange={setReplyContent}
+                            onMentionedUsersChange={setReplyMentionedUserIds}
                             className="min-h-[80px] text-sm"
-                            autoFocus
+                            rows={3}
+                            dealershipId={dealershipId}
+                            leadId={activity.lead_id}
                         />
                         <div className="flex items-center gap-2">
                             <Button
@@ -293,15 +302,18 @@ function NoteThread({
     parentNote,
     replies,
     onReplySubmitted,
+    dealershipId,
 }: {
     parentNote: DailyActivityItem
     replies: DailyActivityItem[]
     onReplySubmitted?: () => void
+    dealershipId?: string | null
 }) {
     const { toast } = useToast()
     const [isExpanded, setIsExpanded] = React.useState(false)
     const [isReplying, setIsReplying] = React.useState(false)
     const [replyContent, setReplyContent] = React.useState("")
+    const [replyMentionedUserIds, setReplyMentionedUserIds] = React.useState<string[]>([])
     const [isSubmitting, setIsSubmitting] = React.useState(false)
     
     const handleSubmitReply = async () => {
@@ -311,12 +323,14 @@ function NoteThread({
         try {
             await LeadService.addNote(parentNote.lead_id, replyContent.trim(), {
                 parent_id: parentNote.id,
+                mentioned_user_ids: replyMentionedUserIds.length > 0 ? replyMentionedUserIds : undefined,
             })
             toast({
                 title: "Reply added",
                 description: "Your reply has been posted successfully.",
             })
             setReplyContent("")
+            setReplyMentionedUserIds([])
             setIsReplying(false)
             setIsExpanded(true)
             onReplySubmitted?.()
@@ -384,12 +398,15 @@ function NoteThread({
                     {/* Inline Reply Input */}
                     {isReplying && (
                         <div className="mt-3 space-y-2">
-                            <Textarea
-                                placeholder="Write your reply..."
+                            <MentionInput
+                                placeholder="Write your reply... Use @ to mention someone"
                                 value={replyContent}
-                                onChange={(e) => setReplyContent(e.target.value)}
+                                onChange={setReplyContent}
+                                onMentionedUsersChange={setReplyMentionedUserIds}
                                 className="min-h-[80px] text-sm"
-                                autoFocus
+                                rows={3}
+                                dealershipId={dealershipId}
+                                leadId={parentNote.lead_id}
                             />
                             <div className="flex items-center gap-2">
                                 <Button
@@ -415,6 +432,7 @@ function NoteThread({
                                     onClick={() => {
                                         setIsReplying(false)
                                         setReplyContent("")
+                                        setReplyMentionedUserIds([])
                                     }}
                                     disabled={isSubmitting}
                                 >
@@ -466,10 +484,12 @@ function SalespersonActivityCard({
     summary,
     defaultOpen = false,
     onReplySubmitted,
+    dealershipId,
 }: {
     summary: SalespersonDailySummary
     defaultOpen?: boolean
     onReplySubmitted?: () => void
+    dealershipId?: string | null
 }) {
     const [isOpen, setIsOpen] = React.useState(defaultOpen)
     const totalActivities = summary.activities.length
@@ -588,6 +608,7 @@ function SalespersonActivityCard({
                                                 parentNote={note}
                                                 replies={repliesMap[note.id] || []}
                                                 onReplySubmitted={onReplySubmitted}
+                                                dealershipId={dealershipId}
                                             />
                                         ))}
                                     </div>
@@ -648,6 +669,7 @@ function SalespersonActivityCard({
                                                 key={activity.id} 
                                                 activity={activity} 
                                                 onReplySubmitted={onReplySubmitted}
+                                                dealershipId={dealershipId}
                                             />
                                         ))}
                                     </div>
@@ -1149,6 +1171,11 @@ export default function TeamActivityPage() {
                                     summary={sp}
                                     defaultOpen={index === 0 && sp.activities.length > 0}
                                     onReplySubmitted={fetchData}
+                                    dealershipId={
+                                        (isSuperAdmin || isBdc)
+                                            ? selectedDealershipId || data.dealership_id
+                                            : user?.dealership_id
+                                    }
                                 />
                             ))}
                         </div>

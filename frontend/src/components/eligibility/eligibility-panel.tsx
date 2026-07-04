@@ -72,6 +72,64 @@ function ScoreGauge({ score }: { score: number }) {
     )
 }
 
+function NumberCriterionInput({
+    item,
+    readOnly,
+    isSaving,
+    onCommit,
+}: {
+    item: AssessmentItemState
+    readOnly: boolean
+    isSaving: boolean
+    onCommit: (value: number) => void
+}) {
+    const initial =
+        (item.value?.number as number | undefined) ??
+        (typeof item.auto_value === "number" ? item.auto_value : undefined)
+    const [localValue, setLocalValue] = React.useState(initial?.toString() ?? "")
+    const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+    React.useEffect(() => {
+        const next =
+            (item.value?.number as number | undefined) ??
+            (typeof item.auto_value === "number" ? item.auto_value : undefined)
+        setLocalValue(next?.toString() ?? "")
+    }, [item.criterion_id, item.value?.number, item.auto_value])
+
+    React.useEffect(() => () => {
+        if (timerRef.current) clearTimeout(timerRef.current)
+    }, [])
+
+    const scheduleCommit = (raw: string) => {
+        if (timerRef.current) clearTimeout(timerRef.current)
+        if (raw.trim() === "") return
+        const parsed = Number(raw)
+        if (Number.isNaN(parsed)) return
+        timerRef.current = setTimeout(() => onCommit(parsed), 500)
+    }
+
+    return (
+        <Input
+            type="number"
+            disabled={readOnly || isSaving}
+            value={localValue}
+            className="mt-2 h-8 w-40"
+            placeholder="Enter value"
+            onChange={(e) => {
+                setLocalValue(e.target.value)
+                scheduleCommit(e.target.value)
+            }}
+            onBlur={(e) => {
+                if (timerRef.current) clearTimeout(timerRef.current)
+                const raw = e.target.value
+                if (raw.trim() === "") return
+                const parsed = Number(raw)
+                if (!Number.isNaN(parsed)) onCommit(parsed)
+            }}
+        />
+    )
+}
+
 export function EligibilityPanel({
     entityType,
     entityId,
@@ -180,17 +238,12 @@ export function EligibilityPanel({
 
                                                     {/* Number input */}
                                                     {item.input_type === "number" && (
-                                                        <Input
-                                                            type="number"
-                                                            disabled={readOnly || savingId === item.criterion_id}
-                                                            defaultValue={
-                                                                (item.value?.number as number | undefined) ??
-                                                                (typeof item.auto_value === "number" ? item.auto_value : undefined)
-                                                            }
-                                                            className="mt-2 h-8 w-40"
-                                                            placeholder="Enter value"
-                                                            onBlur={(e) =>
-                                                                commit(item.criterion_id, { value: { number: Number(e.target.value) } })
+                                                        <NumberCriterionInput
+                                                            item={item}
+                                                            readOnly={readOnly}
+                                                            isSaving={savingId === item.criterion_id}
+                                                            onCommit={(n) =>
+                                                                commit(item.criterion_id, { value: { number: n } })
                                                             }
                                                         />
                                                     )}

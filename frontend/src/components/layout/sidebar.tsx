@@ -35,6 +35,7 @@ import {
     FileBarChart,
     Target,
     Send,
+    QrCode,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -50,6 +51,7 @@ import { LeadStageService } from "@/services/lead-stage-service"
 import apiClient from "@/lib/api-client"
 import { GlobalSearchModal } from "@/components/search/global-search-modal"
 import { DealershipSwitcher } from "@/components/layout/dealership-switcher"
+import { BdcDealershipSwitcher } from "@/components/layout/bdc-dealership-switcher"
 
 interface SidebarLink {
     name: string
@@ -131,12 +133,17 @@ const allSidebarItems: SidebarItem[] = [
         href: "/follow-ups" 
     },
     {
+        name: "Tasks",
+        icon: ClipboardCheck,
+        href: "/tasks"
+    },
+    {
         name: "Conversations",
         icon: MessagesSquare,
         children: [
+            { name: "Inbox", icon: Inbox, href: "/inbox" },
             { name: "WhatsApp", icon: MessageCircle, href: "/whatsapp" },
-            { name: "Text", icon: MessageSquare, href: "/sms" },
-            { name: "Calls", icon: Phone, href: "/calls" },
+            { name: "Email", icon: MessageSquare, href: "/communications" },
         ],
     },
     {
@@ -158,6 +165,7 @@ const allSidebarItems: SidebarItem[] = [
             { name: "Analytics", icon: BarChart3, href: "/analytics" },
             { name: "Team Activity", icon: Activity, href: "/team-activity" },
             { name: "Sold Cars", icon: Car, href: "/sold-cars" },
+            { name: "BDC Export", icon: QrCode, href: "/reports/bdc-export" },
             { name: "Team touch & close", icon: Target, href: "/reports/team-sales-touch" },
         ],
     },
@@ -200,8 +208,16 @@ export function Sidebar() {
     const { user, logout } = useAuthStore()
     const { role, isSuperAdmin, isDealershipAdmin, isSalesperson } = useRole()
     const sidebarContext = useSidebarOptional()
-    const collapsed = sidebarContext?.collapsed ?? false
+    const mobileOpen = sidebarContext?.mobileOpen ?? false
+    // Mobile drawer always shows the expanded sidebar
+    const collapsed = (sidebarContext?.collapsed ?? false) && !mobileOpen
     const [showSearch, setShowSearch] = React.useState(false)
+
+    // Close mobile drawer on navigation
+    React.useEffect(() => {
+        sidebarContext?.setMobileOpen(false)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pathname])
     const [badgeCounts, setBadgeCounts] = React.useState<BadgeCounts>({
         appointments: 0,
         followUps: 0,
@@ -422,9 +438,11 @@ export function Sidebar() {
     }, [])
     useWebSocketEvent("whatsapp:read", handleWhatsAppRead, [handleWhatsAppRead])
     
-    // Expand Conversations when on WhatsApp, SMS, or Calls
-    const isConversationsActive = pathname === "/whatsapp" || pathname === "/sms" || pathname === "/calls"
-    const reportPaths = ["/analytics", "/team-activity", "/sold-cars", "/reports/team-sales-touch"]
+    // Expand Conversations when on any conversation surface
+    const isConversationsActive = ["/whatsapp", "/inbox", "/communications", "/sms", "/calls"].some(
+        (p) => pathname === p || pathname.startsWith(`${p}/`)
+    )
+    const reportPaths = ["/analytics", "/team-activity", "/sold-cars", "/reports/team-sales-touch", "/reports/bdc-export"]
     const isReportsSectionActive = reportPaths.some(
         (p) => pathname === p || pathname.startsWith(`${p}/`)
     )
@@ -497,13 +515,23 @@ export function Sidebar() {
     }, [])
 
     return (
+        <>
+        {/* Mobile drawer backdrop */}
+        {mobileOpen && (
+            <div
+                className="fixed inset-0 z-40 bg-black/50 md:hidden"
+                onClick={() => sidebarContext?.setMobileOpen(false)}
+                aria-hidden="true"
+            />
+        )}
         <aside
             className={cn(
-                "fixed left-0 top-0 z-40 flex h-screen flex-col border-r bg-background transition-[width] duration-200",
-                collapsed ? "w-16" : "w-64"
+                "fixed left-0 top-0 z-50 flex h-screen w-72 flex-col border-r bg-background transition-transform duration-200 md:z-40 md:transition-[width]",
+                collapsed ? "md:w-16" : "md:w-64",
+                mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
             )}
         >
-            <div className="flex min-h-0 flex-1 flex-col px-2 py-4">
+            <div className="flex h-full min-h-0 flex-col px-2 py-4">
                 {/* Logo - click navigates to dashboard */}
                 <Link
                     href="/dashboard"
@@ -543,7 +571,7 @@ export function Sidebar() {
                 </button>
 
                 {/* Navigation - scrollable when many items */}
-                <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overflow-x-hidden py-1">
+                <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overflow-x-hidden overscroll-contain py-1">
                     {sidebarItems.map((item) => {
                         if (item.children) {
                             const isOpen = expandedGroup === item.name
@@ -669,36 +697,31 @@ export function Sidebar() {
                     })}
                 </nav>
 
-                {/* Collapse toggle */}
-                {sidebarContext && (
-                    <div className={cn("shrink-0 border-t pt-2", collapsed ? "px-0 flex justify-center" : "px-2")}>
+                {/* Footer: collapse, dealership scope, user */}
+                <div className="mt-auto shrink-0 space-y-2 border-t pt-3">
+                    {sidebarContext && (
                         <button
                             type="button"
                             onClick={sidebarContext.toggle}
                             className={cn(
-                                "flex items-center justify-center rounded-md py-2 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors",
-                                collapsed ? "w-full" : "w-full gap-2"
+                                "flex w-full items-center rounded-md border border-transparent px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-border hover:bg-muted/50 hover:text-foreground",
+                                collapsed && "justify-center px-2"
                             )}
                             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                         >
-                            {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-                            {!collapsed && <span className="text-xs">Collapse</span>}
+                            {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4 shrink-0" />}
+                            {!collapsed && <span className="ml-2 text-xs font-medium">Collapse sidebar</span>}
                         </button>
-                    </div>
-                )}
+                    )}
 
-                {/* Dealership switcher (multi-dealership emails only) */}
-                <div className={cn("mt-2 shrink-0", collapsed ? "px-0" : "px-2")}>
                     <DealershipSwitcher collapsed={collapsed} />
-                </div>
+                    {user?.role === "bdc" && <BdcDealershipSwitcher collapsed={collapsed} />}
 
-                {/* User / Bottom Section */}
-                <div className="mt-2 shrink-0 border-t pt-4">
-                    <div className={cn("flex items-center py-2", collapsed ? "flex-col justify-center gap-2 px-0" : "px-2")}>
+                    <div className={cn("flex items-center rounded-md bg-muted/30 px-2 py-2", collapsed && "flex-col justify-center gap-2 px-1")}>
                         <UserAvatar user={user || undefined} size={collapsed ? "sm" : "md"} />
                         {!collapsed && (
                             <>
-                                <div className="ml-3 flex-1 overflow-hidden min-w-0">
+                                <div className="ml-3 min-w-0 flex-1 overflow-hidden">
                                     <p className="truncate text-sm font-medium text-foreground">
                                         {user?.first_name} {user?.last_name}
                                     </p>
@@ -708,7 +731,7 @@ export function Sidebar() {
                                 </div>
                                 <button
                                     onClick={handleLogout}
-                                    className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
+                                    className="ml-1 shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
                                     title="Logout"
                                 >
                                     <LogOut className="h-4 w-4" />
@@ -718,7 +741,7 @@ export function Sidebar() {
                         {collapsed && (
                             <button
                                 onClick={handleLogout}
-                                className="text-muted-foreground hover:text-foreground transition-colors"
+                                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
                                 title="Logout"
                             >
                                 <LogOut className="h-4 w-4" />
@@ -730,5 +753,6 @@ export function Sidebar() {
 
             <GlobalSearchModal open={showSearch} onOpenChange={setShowSearch} />
         </aside>
+        </>
     )
 }

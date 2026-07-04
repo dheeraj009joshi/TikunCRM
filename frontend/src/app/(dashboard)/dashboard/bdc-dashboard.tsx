@@ -17,6 +17,8 @@ import {
     Sparkles,
     Phone,
     ChevronRight,
+    Store,
+    Mail,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, MetricCard } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -30,13 +32,49 @@ import {
     TableRow,
 } from "@/components/ui/table"
 import { DashboardService, BdcStats, BdcDealershipBreakdown } from "@/services/dashboard-service"
-import { LeadService, Lead, getLeadFullName, getLeadPhone } from "@/services/lead-service"
+import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
 import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
 import { FollowUpService, FollowUp } from "@/services/follow-up-service"
-import { useStatsRefresh, useWebSocketEvent } from "@/hooks/use-websocket"
+import { ShowroomService } from "@/services/showroom-service"
+import { getStageLabel, getStageColor } from "@/services/lead-stage-service"
+import { useStatsRefresh, useShowroomUpdates, useWebSocketEvent } from "@/hooks/use-websocket"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone, formatRelativeTimeInTimezone } from "@/utils/timezone"
 import { cn } from "@/lib/utils"
+import { useBdcDealership } from "@/contexts/bdc-dealership-context"
+import { BdcDealershipSwitcher } from "@/components/layout/bdc-dealership-switcher"
+
+function getScopedMetrics(stats: BdcStats, selectedDealershipId: string | null) {
+    if (!selectedDealershipId) {
+        return {
+            unassigned: stats.unassigned_to_salesperson,
+            fresh: stats.fresh_leads ?? 0,
+            pendingFollowUps: stats.todays_follow_ups,
+            overdueFollowUps: stats.overdue_follow_ups,
+        }
+    }
+    const row = stats.dealerships.find((d) => d.id === selectedDealershipId)
+    if (!row) {
+        return { unassigned: 0, fresh: 0, pendingFollowUps: 0, overdueFollowUps: 0 }
+    }
+    return {
+        unassigned: row.unassigned_leads,
+        fresh: row.fresh_leads,
+        pendingFollowUps: row.todays_follow_ups,
+        overdueFollowUps: row.overdue_follow_ups,
+    }
+}
+
+function filterByDealership<T extends { dealership_id?: string; dealership?: { id?: string }; lead?: { dealership_id?: string } }>(
+    items: T[],
+    selectedDealershipId: string | null
+): T[] {
+    if (!selectedDealershipId) return items
+    return items.filter((item) => {
+        const id = item.dealership_id ?? item.dealership?.id ?? item.lead?.dealership_id
+        return id === selectedDealershipId
+    })
+}
 
 function followUpLeadName(fu: FollowUp): string {
     const c = fu.lead?.customer
@@ -150,12 +188,17 @@ function DealershipRow({ d, maxUnassigned }: { d: BdcDealershipBreakdown; maxUna
 }
 
 export function BdcDashboard() {
+    const { selectedDealershipId, selectedDealershipName } = useBdcDealership()
     const [stats, setStats] = React.useState<BdcStats | null>(null)
     const [freshLeads, setFreshLeads] = React.useState<Lead[]>([])
+    const [freshLeadsTop, setFreshLeadsTop] = React.useState<Lead[]>([])
     const [overdueFollowUps, setOverdueFollowUps] = React.useState<FollowUp[]>([])
     const [todayFollowUps, setTodayFollowUps] = React.useState<FollowUp[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [upcomingAppointments, setUpcomingAppointments] = React.useState<Appointment[]>([])
+    const [showroomInShowroom, setShowroomInShowroom] = React.useState(0)
+    const [showroomCheckedInToday, setShowroomCheckedInToday] = React.useState(0)
+    const [showroomSoldToday, setShowroomSoldToday] = React.useState(0)
     const [isLoading, setIsLoading] = React.useState(true)
     const { timezone } = useBrowserTimezone()
 
@@ -163,18 +206,22 @@ export function BdcDashboard() {
         const now = new Date()
         const todayFrom = startOfDay(now).toISOString()
         const todayTo = endOfDay(now).toISOString()
+        const leadFilters = selectedDealershipId ? { dealership_id: selectedDealershipId } : {}
 
         try {
             const [
                 statsData,
                 freshData,
+                freshTopData,
                 overdueFuData,
                 todayFuData,
                 todayApptData,
                 upcomingApptData,
+                showroomCurrent,
             ] = await Promise.all([
                 DashboardService.getBdcStats(),
-                LeadService.listLeads({ fresh_only: true, page_size: 8 }).catch(() => ({ items: [] })),
+                LeadService.listLeads({ fresh_only: true, page_size: 8, ...leadFilters }).catch(() => ({ items: [] })),
+                LeadService.listLeads({ fresh_only: true, page_size: 5, ...leadFilters }).catch(() => ({ items: [] })),
                 FollowUpService.listFollowUps({ overdue: true, status: "pending", page_size: 8 }).catch(() => ({
                     items: [],
                 })),
@@ -184,29 +231,47 @@ export function BdcDashboard() {
                     date_to: todayTo,
                     page_size: 8,
                 }).catch(() => ({ items: [] })),
-                AppointmentService.list({ today_only: true, page_size: 8 }).catch(() => ({ items: [] })),
-                AppointmentService.list({ upcoming_only: true, page_size: 6 }).catch(() => ({ items: [] })),
+                AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] })),
+                AppointmentService.list({ upcoming_only: true, page_size: 3 }).catch(() => ({ items: [] })),
+                ShowroomService.getCurrent().catch(() => ({ count: 0, visits: [] })),
             ])
             setStats(statsData)
             setFreshLeads(freshData.items || [])
-            setOverdueFollowUps(overdueFuData.items || [])
-            setTodayFollowUps(todayFuData.items || [])
-            setTodayAppointments(todayApptData.items || [])
-            setUpcomingAppointments(upcomingApptData.items || [])
+            setFreshLeadsTop(freshTopData.items || [])
+            setOverdueFollowUps(filterByDealership(overdueFuData.items || [], selectedDealershipId))
+            setTodayFollowUps(filterByDealership(todayFuData.items || [], selectedDealershipId))
+            setTodayAppointments(filterByDealership(todayApptData.items || [], selectedDealershipId))
+            setUpcomingAppointments(filterByDealership(upcomingApptData.items || [], selectedDealershipId))
+
+            const accessibleIds = new Set(statsData.dealerships.map((d) => d.id))
+            const visits = (showroomCurrent.visits || []).filter((v) => {
+                if (selectedDealershipId) return v.dealership_id === selectedDealershipId
+                return accessibleIds.has(v.dealership_id)
+            })
+            setShowroomInShowroom(visits.length)
+            const startToday = startOfDay(now)
+            setShowroomCheckedInToday(
+                visits.filter((v) => new Date(v.checked_in_at) >= startToday).length
+            )
+            setShowroomSoldToday(
+                visits.filter((v) => v.outcome === "sold").length
+            )
         } catch (error) {
             console.error("Failed to fetch BDC dashboard:", error)
         } finally {
             setIsLoading(false)
         }
-    }, [])
+    }, [selectedDealershipId])
 
     useStatsRefresh(loadData)
+    useShowroomUpdates(loadData)
     useWebSocketEvent("lead:created", () => loadData(), [loadData])
     useWebSocketEvent("lead:updated", () => loadData(), [loadData])
     useWebSocketEvent("badges:refresh", () => loadData(), [loadData])
     useWebSocketEvent("stats:refresh", () => loadData(), [loadData])
 
     React.useEffect(() => {
+        setIsLoading(true)
         loadData()
     }, [loadData])
 
@@ -228,40 +293,335 @@ export function BdcDashboard() {
 
     const maxUnassigned = Math.max(...stats.dealerships.map((d) => d.unassigned_leads), 1)
     const freshCount = stats.fresh_leads ?? 0
+    const scoped = getScopedMetrics(stats, selectedDealershipId)
+    const unassignedHref = selectedDealershipId
+        ? `/leads?dealership_id=${selectedDealershipId}&filter=unassigned`
+        : "/leads?filter=unassigned"
+    const freshHref = selectedDealershipId
+        ? `/leads?dealership_id=${selectedDealershipId}&filter=fresh`
+        : "/leads?filter=fresh"
 
     return (
         <div className="space-y-8 p-6 pb-10">
-            {/* Hero header */}
-            <div className="rounded-2xl border bg-gradient-to-br from-primary/5 via-background to-background p-6 shadow-sm">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div>
-                        <h1 className="text-3xl font-bold tracking-tight">BDC Dashboard</h1>
-                        <p className="mt-2 max-w-2xl text-muted-foreground">
-                            Your command center across{" "}
-                            <strong className="text-foreground">{stats.dealership_count} dealerships</strong>.
-                            Tap any metric to jump straight into action.
-                        </p>
-                        {stats.dealerships.length > 0 && (
-                            <div className="mt-3 flex flex-wrap gap-2">
-                                {stats.dealerships.map((d) => (
-                                    <Badge key={d.id} variant="secondary" className="font-normal">
-                                        <Building2 className="mr-1 h-3 w-3" />
-                                        {d.name}
-                                    </Badge>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                    <Button size="lg" asChild>
-                        <Link href="/leads">
-                            <Inbox className="mr-2 h-4 w-4" />
-                            All leads
+            {/* Header — aligned with dealership admin dashboard */}
+            <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                    <h1 className="text-3xl font-bold tracking-tight">BDC Dashboard</h1>
+                    <p className="text-muted-foreground">
+                        {selectedDealershipId
+                            ? `Managing ${selectedDealershipName} — assign leads and track performance.`
+                            : `Manage leads across ${stats.dealership_count} dealerships and track performance.`}
+                    </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                    <BdcDealershipSwitcher className="min-w-[180px]" />
+                    {scoped.unassigned > 0 && (
+                        <Link href={unassignedHref}>
+                            <Button variant="outline" className="border-amber-500 text-amber-600 hover:bg-amber-50">
+                                <AlertTriangle className="mr-2 h-4 w-4" />
+                                {scoped.unassigned} Leads Need Assignment
+                            </Button>
                         </Link>
-                    </Button>
+                    )}
+                    <Link href={selectedDealershipId ? `/leads?dealership_id=${selectedDealershipId}` : "/leads"}>
+                        <Button leftIcon={<Inbox className="h-4 w-4" />}>
+                            View All Leads
+                        </Button>
+                    </Link>
                 </div>
             </div>
 
-            {/* Primary actions — click-through */}
+            {/* Dealership live status */}
+            {showroomInShowroom > 0 && (
+                <Card className="border-teal-200 bg-teal-50 dark:border-teal-900 dark:bg-teal-950">
+                    <CardContent className="flex flex-wrap items-center gap-4 p-4">
+                        <div className="rounded-full bg-teal-100 p-3 dark:bg-teal-900">
+                            <Store className="h-6 w-6 text-teal-600" />
+                        </div>
+                        <div className="flex-1">
+                            <p className="text-3xl font-bold text-teal-700 dark:text-teal-300">
+                                {showroomInShowroom}
+                            </p>
+                            <p className="text-sm text-teal-600 dark:text-teal-400">
+                                Customers in Dealership Right Now
+                                {selectedDealershipId ? ` · ${selectedDealershipName}` : ""}
+                            </p>
+                        </div>
+                        <div className="text-right mr-4">
+                            <p className="text-lg font-semibold text-teal-700 dark:text-teal-300">
+                                {showroomCheckedInToday} today
+                            </p>
+                            <p className="text-sm text-teal-600 dark:text-teal-400">
+                                {showroomSoldToday} sold
+                            </p>
+                        </div>
+                        <Link href="/showroom">
+                            <Button variant="outline" className="border-teal-300 text-teal-700">
+                                View Dealership
+                            </Button>
+                        </Link>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Follow-up alerts */}
+            {(scoped.pendingFollowUps > 0 || scoped.overdueFollowUps > 0) && (
+                <div className="flex flex-wrap gap-4">
+                    {scoped.pendingFollowUps > 0 && (
+                        <Card className="flex-1 min-w-[280px] border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950">
+                            <CardContent className="flex items-center gap-4 p-4">
+                                <div className="rounded-full bg-amber-100 p-2 dark:bg-amber-900">
+                                    <Clock className="h-5 w-5 text-amber-600" />
+                                </div>
+                                <div>
+                                    <p className="font-semibold text-amber-700 dark:text-amber-300">
+                                        {scoped.pendingFollowUps} Follow-ups Due Today
+                                    </p>
+                                    <p className="text-sm text-amber-600 dark:text-amber-400">
+                                        Scheduled for today
+                                    </p>
+                                </div>
+                                <Link href="/follow-ups?filter=pending&date_preset=today" className="ml-auto">
+                                    <Button variant="outline" size="sm" className="border-amber-300 text-amber-700">
+                                        View All
+                                    </Button>
+                                </Link>
+                            </CardContent>
+                        </Card>
+                    )}
+                    {scoped.overdueFollowUps > 0 && (
+                        <Card className="flex-1 min-w-[280px] border-rose-200 bg-rose-50 dark:border-rose-900 dark:bg-rose-950">
+                            <CardContent className="flex items-center gap-4 p-4">
+                                <div className="rounded-full bg-rose-100 p-2 dark:bg-rose-900">
+                                    <AlertTriangle className="h-5 w-5 text-rose-600" />
+                                </div>
+                                <div>
+                                    <p className="font-semibold text-rose-700 dark:text-rose-300">
+                                        {scoped.overdueFollowUps} Overdue Follow-ups
+                                    </p>
+                                    <p className="text-sm text-rose-600 dark:text-rose-400">
+                                        Requires immediate attention
+                                    </p>
+                                </div>
+                                <Link href="/follow-ups?filter=overdue" className="ml-auto">
+                                    <Button variant="outline" size="sm" className="border-rose-300 text-rose-700">
+                                        View All
+                                    </Button>
+                                </Link>
+                            </CardContent>
+                        </Card>
+                    )}
+                </div>
+            )}
+
+            {/* Today's & upcoming appointments */}
+            {(todayAppointments.length > 0 || upcomingAppointments.length > 0) && (
+                <div className="grid gap-4 md:grid-cols-2">
+                    {todayAppointments.length > 0 && (
+                        <Card className="border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950">
+                            <CardHeader className="flex flex-row items-center justify-between pb-2">
+                                <div className="flex items-center gap-2">
+                                    <div className="rounded-full bg-blue-100 p-2 dark:bg-blue-900">
+                                        <CalendarClock className="h-5 w-5 text-blue-600" />
+                                    </div>
+                                    <CardTitle className="text-base font-semibold text-blue-700 dark:text-blue-300">
+                                        Today&apos;s Appointments ({todayAppointments.length})
+                                    </CardTitle>
+                                </div>
+                                <Link href="/appointments?filter=today">
+                                    <Button variant="outline" size="sm" className="border-blue-300 text-blue-700">
+                                        View All
+                                    </Button>
+                                </Link>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="space-y-2">
+                                    {todayAppointments.slice(0, 4).map((apt) => (
+                                        <Link key={apt.id} href={apt.lead_id ? `/leads/${apt.lead_id}` : "/appointments"}>
+                                            <div className="flex items-center justify-between bg-white dark:bg-blue-900/50 rounded-lg p-3 hover:bg-blue-100 dark:hover:bg-blue-800/50 transition-colors cursor-pointer">
+                                                <div className="flex items-center gap-3 min-w-0">
+                                                    <div className="text-center min-w-[50px] shrink-0">
+                                                        <p className="text-sm font-bold text-blue-600">
+                                                            {formatDateInTimezone(apt.scheduled_at, timezone, { timeStyle: "short" })}
+                                                        </p>
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <p className="font-medium text-sm truncate">{apt.title}</p>
+                                                        {apt.lead?.customer && (
+                                                            <p className="text-xs text-muted-foreground truncate">
+                                                                with {apt.lead.customer.full_name || `${apt.lead.customer.first_name || ""} ${apt.lead.customer.last_name || ""}`.trim()}
+                                                            </p>
+                                                        )}
+                                                        {apt.dealership?.name && (
+                                                            <p className="text-xs text-muted-foreground truncate">{apt.dealership.name}</p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <Badge variant="outline" className="shrink-0 ml-2">
+                                                    {getAppointmentStatusLabel(apt.status)}
+                                                </Badge>
+                                            </div>
+                                        </Link>
+                                    ))}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {upcomingAppointments.length > 0 && (
+                        <Card className="border-purple-200 bg-purple-50 dark:border-purple-900 dark:bg-purple-950">
+                            <CardHeader className="flex flex-row items-center justify-between pb-2">
+                                <div className="flex items-center gap-2">
+                                    <div className="rounded-full bg-purple-100 p-2 dark:bg-purple-900">
+                                        <Clock className="h-5 w-5 text-purple-600" />
+                                    </div>
+                                    <CardTitle className="text-base font-semibold text-purple-700 dark:text-purple-300">
+                                        Upcoming Appointments
+                                    </CardTitle>
+                                </div>
+                                <Link href="/appointments?status=scheduled">
+                                    <Button variant="outline" size="sm" className="border-purple-300 text-purple-700">
+                                        View All
+                                    </Button>
+                                </Link>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="space-y-2">
+                                    {upcomingAppointments.map((apt) => (
+                                        <Link key={apt.id} href={apt.lead_id ? `/leads/${apt.lead_id}` : "/appointments"}>
+                                            <div className="flex items-center justify-between bg-white dark:bg-purple-900/50 rounded-lg p-3 hover:bg-purple-100 dark:hover:bg-purple-800/50 transition-colors cursor-pointer">
+                                                <div className="flex items-center gap-3 min-w-0">
+                                                    <div className="text-center min-w-[70px] shrink-0">
+                                                        <p className="text-xs text-purple-500">
+                                                            {formatDateInTimezone(apt.scheduled_at, timezone, { dateStyle: "short" })}
+                                                        </p>
+                                                        <p className="text-sm font-bold text-purple-600">
+                                                            {formatDateInTimezone(apt.scheduled_at, timezone, { timeStyle: "short" })}
+                                                        </p>
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <p className="font-medium text-sm truncate">{apt.title}</p>
+                                                        {apt.dealership?.name && (
+                                                            <p className="text-xs text-muted-foreground truncate">{apt.dealership.name}</p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <Badge variant="outline" className="shrink-0 ml-2">
+                                                    {getAppointmentStatusLabel(apt.status)}
+                                                </Badge>
+                                            </div>
+                                        </Link>
+                                    ))}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+                </div>
+            )}
+
+            {/* Fresh leads table */}
+            {scoped.fresh > 0 && freshLeadsTop.length > 0 && (
+                <Card className="border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                        <div className="flex items-center gap-2">
+                            <div className="rounded-full bg-emerald-100 p-2 dark:bg-emerald-900">
+                                <Inbox className="h-5 w-5 text-emerald-600" />
+                            </div>
+                            <div>
+                                <CardTitle className="text-base font-semibold text-emerald-700 dark:text-emerald-300">
+                                    Fresh Leads (untouched)
+                                </CardTitle>
+                                <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">
+                                    No activity yet — assign and reach out
+                                </p>
+                            </div>
+                        </div>
+                        <Link href={freshHref}>
+                            <Button variant="outline" size="sm" className="border-emerald-300 text-emerald-700">
+                                View Fresh Leads
+                            </Button>
+                        </Link>
+                    </CardHeader>
+                    <CardContent>
+                        <Table>
+                            <TableHeader>
+                                <TableRow className="bg-emerald-100/50 dark:bg-emerald-900/30 border-0">
+                                    <TableHead className="text-emerald-800 dark:text-emerald-200">Lead</TableHead>
+                                    <TableHead className="text-emerald-800 dark:text-emerald-200">Status</TableHead>
+                                    <TableHead className="text-emerald-800 dark:text-emerald-200">Assigned</TableHead>
+                                    <TableHead className="text-emerald-800 dark:text-emerald-200">Contact</TableHead>
+                                    <TableHead className="text-right text-emerald-800 dark:text-emerald-200">Actions</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {freshLeadsTop.map((lead) => (
+                                    <TableRow
+                                        key={lead.id}
+                                        className="cursor-pointer hover:bg-emerald-100/50 dark:hover:bg-emerald-900/30 border-emerald-200/50"
+                                        onClick={() => { window.location.href = `/leads/${lead.id}` }}
+                                    >
+                                        <TableCell>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 text-sm font-bold dark:bg-emerald-900 dark:text-emerald-300">
+                                                    {(lead.customer?.first_name || "?").charAt(0)}
+                                                </div>
+                                                <div>
+                                                    <p className="font-medium text-sm text-emerald-900 dark:text-emerald-100">
+                                                        {getLeadFullName(lead)}
+                                                    </p>
+                                                    <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                                                        {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
+                                                    </p>
+                                                    {lead.dealership?.name && (
+                                                        <p className="text-xs text-emerald-600/80">{lead.dealership.name}</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Badge size="sm" style={{ backgroundColor: getStageColor(lead.stage), color: "#fff" }}>
+                                                {getStageLabel(lead.stage)}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                            <p className="text-xs">
+                                                {lead.assigned_to_user
+                                                    ? `${lead.assigned_to_user.first_name} ${lead.assigned_to_user.last_name}`
+                                                    : "—"}
+                                            </p>
+                                        </TableCell>
+                                        <TableCell>
+                                            <div className="flex flex-col gap-1">
+                                                {getLeadPhone(lead) && (
+                                                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                                        <Phone className="h-3 w-3" />
+                                                        {getLeadPhone(lead)}
+                                                    </span>
+                                                )}
+                                                {getLeadEmail(lead) && (
+                                                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                                        <Mail className="h-3 w-3" />
+                                                        {getLeadEmail(lead)}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <Link href={`/leads/${lead.id}`} onClick={(e) => e.stopPropagation()}>
+                                                <Button variant="outline" size="sm" className="border-emerald-300 text-emerald-700">
+                                                    Open
+                                                </Button>
+                                            </Link>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Existing BDC dashboard sections */}
             <div>
                 <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
                     Needs your attention

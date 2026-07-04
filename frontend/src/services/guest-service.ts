@@ -92,6 +92,16 @@ export const GuestService = {
         return res.data
     },
 
+    async getByLead(leadId: string): Promise<Guest> {
+        const res = await apiClient.get(`${PREFIX}/by-lead/${leadId}`)
+        return res.data
+    },
+
+    /** Return existing guest for a lead or create one (idempotent). */
+    async getOrCreate(payload: GuestCreatePayload & { lead_id: string }): Promise<Guest> {
+        return this.create(payload)
+    },
+
     async get(id: string): Promise<Guest> {
         const res = await apiClient.get(`${PREFIX}/${id}`)
         return res.data

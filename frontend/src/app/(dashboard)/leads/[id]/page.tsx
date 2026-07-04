@@ -100,6 +100,9 @@ import { TeamService, UserBrief } from "@/services/team-service"
 import { useAuthStore } from "@/stores/auth-store"
 import { AssignToDealershipModal, AssignToSalespersonModal, AssignSecondaryCustomerModal } from "@/components/leads/assignment-modal"
 import { LogContactModal } from "@/components/leads/log-contact-modal"
+import { StageStepper } from "@/components/leads/stage-stepper"
+import { NextBestAction } from "@/components/leads/next-best-action"
+import { DealDesk } from "@/components/deals/deal-desk"
 import { getCustomerFullName } from "@/services/customer-service"
 import { EmailComposerModal } from "@/components/emails/email-composer-modal"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
@@ -107,7 +110,7 @@ import { EditFollowUpModal } from "@/components/follow-ups/edit-follow-up-modal"
 import { BookAppointmentModal } from "@/components/appointments/book-appointment-modal"
 import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
 import { GuestFormModal } from "@/components/guests/guest-form-modal"
-import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal } from "@/services/appointment-service"
+import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal, getLinkableAppointmentsForCheckIn } from "@/services/appointment-service"
 import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
 import { StipsService, StipsCategory, StipDocument } from "@/services/stips-service"
 import { useLeadUpdateEvents, useActivityEvents } from "@/hooks/use-websocket"
@@ -561,6 +564,8 @@ export default function LeadDetailsPage() {
     const [replyingTo, setReplyingTo] = React.useState<string | null>(null)
     const [replyContent, setReplyContent] = React.useState("")
     const [mentionedUserIds, setMentionedUserIds] = React.useState<string[]>([])
+    const [replyMentionedUserIds, setReplyMentionedUserIds] = React.useState<string[]>([])
+    const [stageMentionedUserIds, setStageMentionedUserIds] = React.useState<string[]>([])
     // Ref for pending SKATE confirmation data
     const pendingNoteSkateRef = React.useRef<{ content: string; userIds?: string[] } | null>(null)
     // Which note threads have replies expanded (click to load replies)
@@ -573,6 +578,20 @@ export default function LeadDetailsPage() {
     const [activeActivityTab, setActiveActivityTab] = React.useState<"timeline" | "notes" | "appointments" | "followups" | "stips">(
         noteIdFromUrl ? "notes" : "timeline"
     )
+    // Timeline lens: filter the unified timeline by channel
+    const [timelineLens, setTimelineLens] = React.useState<"all" | "calls" | "emails" | "messages" | "notes" | "stages">("all")
+    const lensedActivities = React.useMemo(() => {
+        if (timelineLens === "all") return activities
+        return activities.filter((a) => {
+            if (timelineLens === "calls") return a.type === "call_logged"
+            if (timelineLens === "emails") return a.type === "email_sent" || a.type === "email_received"
+            if (timelineLens === "messages")
+                return ["sms_sent", "sms_received", "whatsapp_sent", "whatsapp_received"].includes(a.type)
+            if (timelineLens === "notes") return a.type === "note_added"
+            if (timelineLens === "stages") return a.type === "status_changed"
+            return true
+        })
+    }, [activities, timelineLens])
     // Stips: categories, documents, and upload state
     const [stipsCategories, setStipsCategories] = React.useState<StipsCategory[]>([])
     const [stipsDocuments, setStipsDocuments] = React.useState<StipDocument[]>([])
@@ -858,7 +877,8 @@ export default function LeadDetailsPage() {
             setCurrentVisit(visit)
             setShowCheckInAppointmentModal(false)
             setLeadAppointmentsForCheckIn([])
-            fetchActivities() // Refresh to show check-in activity
+            fetchActivities()
+            fetchLeadAppointmentsAndFollowUps()
         } catch (error: any) {
             const detail = error.response?.data?.detail
             const message = typeof detail === "string" ? detail : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? JSON.stringify(d)).join(" ") : "Failed to check in"
@@ -882,11 +902,7 @@ export default function LeadDetailsPage() {
                 date_from: startOfToday.toISOString(),
                 page_size: 50,
             })
-            const linkable = res.items.filter(
-                (a) =>
-                    ["scheduled", "confirmed"].includes(a.status) &&
-                    new Date(a.scheduled_at) >= now
-            )
+            const linkable = getLinkableAppointmentsForCheckIn(res.items, now)
             if (linkable.length === 0) {
                 await doCheckIn(null)
             } else if (linkable.length === 1) {
@@ -1850,10 +1866,26 @@ export default function LeadDetailsPage() {
 
     const handleConfirmStageNotes = async () => {
         if (pendingStageForNotes == null) return
-        await handleStatusChange(pendingStageForNotes, stageNotes.trim() || undefined)
+        const notesText = stageNotes.trim()
+        const hasMentions = stageMentionedUserIds.length > 0
+
+        if (hasMentions && notesText) {
+            await handleStatusChange(pendingStageForNotes)
+            try {
+                await LeadService.addNote(leadId, notesText, {
+                    mentioned_user_ids: stageMentionedUserIds,
+                })
+                fetchActivities()
+            } catch (error) {
+                console.error("Failed to add stage note with mentions:", error)
+            }
+        } else {
+            await handleStatusChange(pendingStageForNotes, notesText || undefined)
+        }
         setShowStageNotesModal(false)
         setPendingStageForNotes(null)
         setStageNotes("")
+        setStageMentionedUserIds([])
     }
 
     const handleDeleteLead = async () => {
@@ -2126,6 +2158,21 @@ export default function LeadDetailsPage() {
                 </div>
             )}
 
+            {/* Pipeline stage stepper */}
+            {!isMentionOnly && stages.length > 0 && (
+                <div className="shrink-0 mb-3">
+                    <StageStepper
+                        stages={stages}
+                        currentStageName={lead.stage?.name}
+                        onSelect={onStatusSelect}
+                        disabled={isUpdatingStatus}
+                        hiddenStages={STAGES_HIDDEN_FROM_STATUS_UI.concat(
+                            isSalesperson ? ["lost", "converted", "qualified", "couldnt_qualify"] : []
+                        )}
+                    />
+                </div>
+            )}
+
             {/* In Dealership Banner */}
             {currentVisit && (
                 <div className="shrink-0 rounded-lg border border-teal-300 bg-teal-50 dark:border-teal-800 dark:bg-teal-950/30 px-4 py-3 flex items-center justify-between">
@@ -2154,6 +2201,21 @@ export default function LeadDetailsPage() {
             <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0 overflow-hidden">
                 {/* Left Column: Profile & Info */}
                 <div className="lg:col-span-1 space-y-6 overflow-y-auto">
+                    {/* Next best action */}
+                    {!isMentionOnly && (
+                        <NextBestAction
+                            lead={lead}
+                            followUps={leadFollowUps}
+                            appointments={leadAppointments}
+                            onCall={getLeadPhone(lead) ? handleCallClick : undefined}
+                            onScheduleFollowUp={() => setShowScheduleFollowUp(true)}
+                            onBookAppointment={() => setShowBookAppointment(true)}
+                            onViewFollowUps={() => setActiveActivityTab("followups")}
+                            onViewAppointments={() => setActiveActivityTab("appointments")}
+                        />
+                    )}
+                    {/* Deal Desk: test drive → booking → delivery */}
+                    {!isMentionOnly && <DealDesk leadId={leadId} />}
                     {/* Profile Card */}
                     <Card className="overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
                         <CardContent className="p-6">
@@ -3444,19 +3506,52 @@ export default function LeadDetailsPage() {
                             </div>
 
                             <TabsContent value="timeline" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                                {/* Timeline lenses */}
+                                <div className="mb-4 flex flex-wrap items-center gap-1.5">
+                                    {(
+                                        [
+                                            { key: "all", label: "All" },
+                                            { key: "calls", label: "Calls" },
+                                            { key: "emails", label: "Emails" },
+                                            { key: "messages", label: "Messages" },
+                                            { key: "notes", label: "Notes" },
+                                            { key: "stages", label: "Stage changes" },
+                                        ] as const
+                                    ).map((lens) => (
+                                        <button
+                                            key={lens.key}
+                                            type="button"
+                                            onClick={() => setTimelineLens(lens.key)}
+                                            className={cn(
+                                                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                                                timelineLens === lens.key
+                                                    ? "border-primary bg-primary/10 text-primary"
+                                                    : "border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                                            )}
+                                        >
+                                            {lens.label}
+                                        </button>
+                                    ))}
+                                </div>
                                 {isLoadingActivities ? (
                                     <div className="flex items-center justify-center py-12">
                                         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                                     </div>
-                                ) : activities.length === 0 ? (
+                                ) : lensedActivities.length === 0 ? (
                                     <div className="text-center py-12 text-muted-foreground">
                                         <Clock className="h-12 w-12 mx-auto opacity-10 mb-2" />
-                                        <p className="text-sm font-medium">No activities yet</p>
-                                        <p className="text-xs">All lead activities will appear here</p>
+                                        <p className="text-sm font-medium">
+                                            {timelineLens === "all" ? "No activities yet" : "Nothing matches this filter"}
+                                        </p>
+                                        <p className="text-xs">
+                                            {timelineLens === "all"
+                                                ? "All lead activities will appear here"
+                                                : "Try another lens or switch back to All"}
+                                        </p>
                                     </div>
                                 ) : (
                                     <div className="space-y-4">
-                                        {activities.map((activity, index) => {
+                                        {lensedActivities.map((activity, index) => {
                                             const updatedFieldsLabels: string[] = activity.type === "lead_updated" && Array.isArray(activity.meta_data?.updated_fields_labels) ? (activity.meta_data.updated_fields_labels as string[]) : [];
                                             const showUpdatedFields: boolean = updatedFieldsLabels.length > 0 && !/^Secondary customer (added|removed|changed to):/.test(String(activity.description));
                                             const updatedFieldsLabelText: string = updatedFieldsLabels.join(", ");
@@ -3477,7 +3572,7 @@ export default function LeadDetailsPage() {
                                             return (
                                             <div key={activity.id} className="flex gap-3 relative">
                                                 {/* Timeline line */}
-                                                {index < activities.length - 1 && (
+                                                {index < lensedActivities.length - 1 && (
                                                     <div className="absolute left-[15px] top-8 bottom-0 w-px bg-border" />
                                                 )}
                                                 
@@ -3632,9 +3727,10 @@ export default function LeadDetailsPage() {
                                         try {
                                             await LeadService.addNote(lead.id, replyContent, {
                                                 parent_id: parentId,
-                                                mentioned_user_ids: mentionedUserIds.length > 0 ? mentionedUserIds : undefined
+                                                mentioned_user_ids: replyMentionedUserIds.length > 0 ? replyMentionedUserIds : undefined
                                             })
                                             setReplyContent("")
+                                            setReplyMentionedUserIds([])
                                             setReplyingTo(null)
                                             setMentionedUserIds([])
                                             setExpandedReplies(prev => new Set(prev).add(parentId)) // expand thread so new reply is visible
@@ -3762,11 +3858,12 @@ export default function LeadDetailsPage() {
                                                                 <MentionInput
                                                                     value={replyContent}
                                                                     onChange={setReplyContent}
-                                                                    onMentionedUsersChange={setMentionedUserIds}
+                                                                    onMentionedUsersChange={setReplyMentionedUserIds}
                                                                     placeholder="Write a reply... Use @ to mention someone"
                                                                     rows={2}
                                                                     disabled={isAddingNote}
                                                                     dealershipId={lead.dealership_id}
+                                                                    leadId={leadId}
                                                                 />
                                                                 <div className="flex justify-end gap-2 mt-2">
                                                                     <Button
@@ -4724,7 +4821,7 @@ export default function LeadDetailsPage() {
                                     <div className="min-w-0">
                                         <p className="text-sm font-medium">Guest Profile &amp; QR</p>
                                         <p className="text-xs text-muted-foreground">
-                                            Create a shareable guest profile for the showroom team and generate a QR code.
+                                            View the guest profile and permanent QR code for the showroom team. Changes save automatically.
                                         </p>
                                     </div>
                                     <Button size="sm" className="shrink-0" onClick={() => setShowGuestModal(true)}>
@@ -4801,6 +4898,7 @@ export default function LeadDetailsPage() {
                                     rows={2}
                                     disabled={isAddingNote}
                                     dealershipId={lead.dealership_id}
+                                    leadId={leadId}
                                 />
                                 <div className="flex justify-end">
                                     <Button 
@@ -5459,20 +5557,23 @@ export default function LeadDetailsPage() {
             </Dialog>
 
             {/* Optional notes when setting terminal stage (e.g. Qualified / Not qualified) */}
-            <Dialog open={showStageNotesModal} onOpenChange={(open) => { if (!open) { setShowStageNotesModal(false); setPendingStageForNotes(null); setStageNotes("") } }}>
+            <Dialog open={showStageNotesModal} onOpenChange={(open) => { if (!open) { setShowStageNotesModal(false); setPendingStageForNotes(null); setStageNotes(""); setStageMentionedUserIds([]) } }}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
                         <DialogTitle>Add notes (optional)</DialogTitle>
                         <DialogDescription>
-                            Add notes for this status change. The assigned salesperson will see them if you are closing this lead.
+                            Add notes for this status change. Use @ to mention team members or BDC agents — they will be notified.
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 py-4">
-                        <Textarea
-                            placeholder="e.g. Reason for decision, follow-up instructions..."
+                        <MentionInput
+                            placeholder="e.g. Reason for decision, follow-up instructions... Use @ to mention someone"
                             value={stageNotes}
-                            onChange={(e) => setStageNotes(e.target.value)}
+                            onChange={setStageNotes}
+                            onMentionedUsersChange={setStageMentionedUserIds}
                             rows={3}
+                            dealershipId={lead?.dealership_id}
+                            leadId={leadId}
                         />
                     </div>
                     <DialogFooter>

@@ -301,6 +301,59 @@ export interface TeamTouchSalesMetricsFilters {
     dealership_id?: string;
 }
 
+/** BDC flexible export report filters */
+export interface BdcExportFilters {
+    dealership_id?: string;
+    all_dealerships?: boolean;
+    bdc_agent_id?: string;
+    assigned_to?: string;
+    stage_id?: string;
+    source?: string;
+    is_active?: boolean;
+    search?: string;
+    lead_date_from?: string;
+    lead_date_to?: string;
+    sold_date_from?: string;
+    sold_date_to?: string;
+    appointment_date_from?: string;
+    appointment_date_to?: string;
+    appointment_statuses?: string;
+    appointment_funnel?: string;
+    has_appointment?: boolean;
+    sold_only?: boolean;
+    converted_only?: boolean;
+}
+
+export interface BdcExportRow {
+    lead_id: string;
+    full_name: string;
+    email: string;
+    phone: string;
+    stage: string;
+    source: string;
+    lead_created: string;
+    dealership: string;
+    bdc_agent: string;
+    salesperson: string;
+    is_active: boolean;
+    converted_at: string;
+    latest_appt_status: string;
+    latest_appt_date: string;
+    appt_count: number;
+    showroom_check_in: string;
+    lead_trust_score?: number | null;
+    guest_trust_score?: number | null;
+    guest_qr_url: string;
+    guest_auto_generated: boolean;
+}
+
+export interface BdcExportPreviewResponse {
+    total: number;
+    items: BdcExportRow[];
+    auto_generated_count: number;
+    missing_guest_count: number;
+}
+
 export const ReportsService = {
     /**
      * Get pending tasks for a salesperson
@@ -401,6 +454,21 @@ export const ReportsService = {
     ): Promise<TeamTouchSalesMetricsResponse> {
         const response = await apiClient.get("/reports/team-touch-sales-metrics", {
             params: filters,
+        });
+        return response.data;
+    },
+
+    async previewBdcExport(filters?: BdcExportFilters, limit = 100): Promise<BdcExportPreviewResponse> {
+        const response = await apiClient.get("/reports/bdc/preview", {
+            params: { ...filters, limit },
+        });
+        return response.data;
+    },
+
+    async downloadBdcExport(filters?: BdcExportFilters, format: "zip" | "xlsx" | "pdf" = "zip"): Promise<Blob> {
+        const response = await apiClient.get("/reports/bdc/export", {
+            params: { ...filters, format },
+            responseType: "blob",
         });
         return response.data;
     },

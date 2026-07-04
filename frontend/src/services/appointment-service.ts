@@ -260,3 +260,20 @@ export function getAppointmentTypeIcon(type: AppointmentType): string {
     }
     return icons[type] || "calendar"
 }
+
+/** Appointments on today's calendar that can be linked when checking in to the dealership. */
+export function getLinkableAppointmentsForCheckIn(
+    appointments: Appointment[],
+    now: Date = new Date()
+): Appointment[] {
+    const startOfToday = new Date(now)
+    startOfToday.setHours(0, 0, 0, 0)
+    const endOfToday = new Date(now)
+    endOfToday.setHours(23, 59, 59, 999)
+    return appointments.filter(
+        (a) =>
+            (a.status === "scheduled" || a.status === "confirmed") &&
+            new Date(a.scheduled_at) >= startOfToday &&
+            new Date(a.scheduled_at) <= endOfToday
+    )
+}

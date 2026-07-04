@@ -3,11 +3,14 @@
 import * as React from "react"
 import { Sidebar } from "@/components/layout/sidebar"
 import { Header } from "@/components/layout/header"
+import { BottomNav } from "@/components/layout/bottom-nav"
+import { ErrorBoundary } from "@/components/ui/error-state"
 import { EmailConfigReminderModal } from "@/components/email-config-reminder-modal"
 import { SkateAlertDialog } from "@/components/skate-alert-dialog"
 import { SkateConfirmDialog } from "@/components/skate-confirm-dialog"
 import { WebSocketProvider } from "@/components/providers/websocket-provider"
 import { SidebarProvider, useSidebarOptional } from "@/contexts/sidebar-context"
+import { BdcDealershipProvider } from "@/contexts/bdc-dealership-context"
 import { CallLeadProvider, useCallLeadOptional } from "@/contexts/call-lead-context"
 import { Softphone } from "@/components/softphone"
 import { useAuthStore } from "@/stores/auth-store"
@@ -59,12 +62,14 @@ export default function DashboardLayout({
         <WebSocketProvider>
             <CallLeadProvider>
                 <SidebarProvider>
-                    <DashboardContent
-                    showReminder={showReminder}
-                    onReminderClose={handleReminderClose}
-                >
-                    {children}
-                    </DashboardContent>
+                    <BdcDealershipProvider>
+                        <DashboardContent
+                            showReminder={showReminder}
+                            onReminderClose={handleReminderClose}
+                        >
+                            {children}
+                        </DashboardContent>
+                    </BdcDealershipProvider>
                 </SidebarProvider>
             </CallLeadProvider>
         </WebSocketProvider>
@@ -87,12 +92,13 @@ function DashboardContent({
     return (
         <div className="flex min-h-screen bg-background text-foreground">
             <Sidebar />
-            <div className={collapsed ? "flex min-w-0 flex-1 flex-col pl-16 transition-[padding] duration-200" : "flex min-w-0 flex-1 flex-col pl-64 transition-[padding] duration-200"}>
+            <div className={collapsed ? "flex min-w-0 flex-1 flex-col transition-[padding] duration-200 md:pl-16" : "flex min-w-0 flex-1 flex-col transition-[padding] duration-200 md:pl-64"}>
                 <Header />
-                <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-6">
-                    {children}
+                <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 pb-20 sm:p-6 md:pb-6">
+                    <ErrorBoundary>{children}</ErrorBoundary>
                 </main>
             </div>
+            <BottomNav />
             <EmailConfigReminderModal open={showReminder} onOpenChange={onReminderClose} />
             <SkateAlertDialog />
             <SkateConfirmDialog />

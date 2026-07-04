@@ -208,4 +208,7 @@ function MetricCard({
     return cardContent
 }
 
-export { Card, CardHeader, CardFooter, CardTitle, CardDescription, CardContent, MetricCard }
+// Canonical name going forward; MetricCard kept for existing call sites
+const StatCard = MetricCard
+
+export { Card, CardHeader, CardFooter, CardTitle, CardDescription, CardContent, MetricCard, StatCard }

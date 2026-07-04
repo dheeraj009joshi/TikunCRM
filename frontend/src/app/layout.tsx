@@ -4,8 +4,9 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ServiceWorkerRegistration } from "@/components/pwa/service-worker-registration";
 import { Toaster } from "@/components/ui/toaster";
+import { QueryProvider } from "@/components/providers/query-provider";
 
-const inter = Inter({ subsets: ["latin"] });
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 const APP_NAME = "TikunCRM";
 const APP_DESCRIPTION = "Next-gen CRM for multi-level lead management";
@@ -54,7 +55,6 @@ export const viewport: Viewport = {
   themeColor: "#2563eb",
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
 };
 
 import { AuthGuard } from "@/components/auth/auth-guard"
@@ -66,19 +66,21 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.className} antialiased`} suppressHydrationWarning>
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="dark"
-          enableSystem
-          disableTransitionOnChange
-        >
-          <ServiceWorkerRegistration />
-          <AuthGuard>
-            {children}
-          </AuthGuard>
-          <Toaster />
-        </ThemeProvider>
+      <body className={`${inter.variable} ${inter.className} antialiased`} suppressHydrationWarning>
+                <ThemeProvider
+                    attribute="class"
+                    defaultTheme="dark"
+                    enableSystem
+                    disableTransitionOnChange
+                >
+                    <QueryProvider>
+                        <ServiceWorkerRegistration />
+                        <AuthGuard>
+                            {children}
+                        </AuthGuard>
+                        <Toaster />
+                    </QueryProvider>
+                </ThemeProvider>
       </body>
     </html>
   );

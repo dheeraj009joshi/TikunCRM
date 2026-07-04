@@ -49,6 +49,13 @@ const settingsSections: SettingSection[] = [
         icon: FileText,
     },
     {
+        title: "Dealership Email",
+        description: "Configure the dealership-wide email account for outbound mail",
+        href: "/settings/dealership-email",
+        icon: Send,
+        adminOnly: true,
+    },
+    {
         title: "WhatsApp Templates",
         description: "Manage WhatsApp message templates for campaigns",
         href: "/settings/whatsapp-templates",

@@ -1004,6 +1004,18 @@ async def create_lead(
     from app.services.ai_outbound_service import maybe_enqueue_ai_outbound
     background_tasks.add_task(_enqueue_ai_call_background, lead.id)
 
+    # One guest profile + static QR token per lead (showroom handoff)
+    try:
+        from app.services.guest_service import GuestService
+        await GuestService.ensure_for_lead(
+            db,
+            lead.id,
+            created_by=current_user.id,
+            dealership_id=dealership_id,
+        )
+    except Exception:
+        logger.exception("Failed to create guest profile for lead %s", lead.id)
+
     return lead
 
 

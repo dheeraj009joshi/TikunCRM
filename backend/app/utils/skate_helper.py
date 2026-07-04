@@ -116,10 +116,14 @@ async def check_note_skate_condition(
     if lead.assigned_to == current_user.id:
         return None
     
-    # Check if assigned user is mentioned
+    # Check if assigned user or BDC agent is mentioned
     if mentioned_user_ids:
-        if lead.assigned_to in mentioned_user_ids or str(lead.assigned_to) in [str(uid) for uid in mentioned_user_ids]:
+        mention_id_strs = [str(uid) for uid in mentioned_user_ids]
+        if lead.assigned_to in mentioned_user_ids or str(lead.assigned_to) in mention_id_strs:
             return None  # Assigned user is mentioned, not a SKATE
+        bdc_id = getattr(lead, "bdc_assigned_to_id", None)
+        if bdc_id and (bdc_id in mentioned_user_ids or str(bdc_id) in mention_id_strs):
+            return None  # Assigned BDC agent is mentioned, not a SKATE
     
     # This is a SKATE scenario - get assigned user details
     assigned_result = await db.execute(select(User).where(User.id == lead.assigned_to))

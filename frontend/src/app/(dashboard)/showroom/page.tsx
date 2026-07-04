@@ -66,7 +66,7 @@ import {
     getOutcomeColor 
 } from "@/services/showroom-service"
 import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
-import { AppointmentService, Appointment } from "@/services/appointment-service"
+import { AppointmentService, Appointment, getLinkableAppointmentsForCheckIn } from "@/services/appointment-service"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
@@ -219,11 +219,7 @@ export default function ShowroomPage() {
                 date_from: startOfToday.toISOString(),
                 page_size: 50,
             })
-            const linkable = res.items.filter(
-                (a) =>
-                    ["scheduled", "confirmed"].includes(a.status) &&
-                    new Date(a.scheduled_at) >= now
-            )
+            const linkable = getLinkableAppointmentsForCheckIn(res.items, now)
             if (linkable.length === 0) {
                 await doCheckIn(null)
             } else if (linkable.length === 1) {

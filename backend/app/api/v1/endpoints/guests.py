@@ -38,31 +38,63 @@ async def _get_guest_or_404(db: AsyncSession, guest_id: UUID) -> Guest:
     return guest
 
 
+@router.get("/by-lead/{lead_id}", response_model=GuestResponse)
+async def get_guest_by_lead(
+    lead_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Fetch the guest profile linked to a lead (one profile per lead)."""
+    guest = await GuestService.get_by_lead_id(db, lead_id)
+    if not guest:
+        raise HTTPException(status_code=404, detail="Guest not found for this lead")
+    GuestService.ensure_share_token(guest)
+    await db.commit()
+    await db.refresh(guest)
+    return guest
+
+
 @router.post("", response_model=GuestResponse)
 async def create_guest(
     body: GuestCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """Create a guest profile, auto-filling from the lead/customer when available.
+    """Create or return a guest profile, auto-filling from the lead/customer when available.
 
-    Idempotent per appointment: if a guest already exists for the given
-    appointment, the existing one is returned (so reopening shows the same QR)."""
+    Idempotent per lead and per appointment: reopening always shows the same profile and QR."""
     data = body.model_dump(exclude_unset=True)
+    lead_id = data.get("lead_id")
+    appointment_id = data.get("appointment_id")
 
-    if data.get("appointment_id"):
-        existing = await db.execute(
-            select(Guest).where(Guest.appointment_id == data["appointment_id"])
-        )
-        existing_guest = existing.scalar_one_or_none()
+    if appointment_id:
+        existing_guest = await GuestService.get_by_appointment_id(db, appointment_id)
         if existing_guest:
+            GuestService.ensure_share_token(existing_guest)
+            await db.commit()
+            await db.refresh(existing_guest)
             return existing_guest
+
+    if lead_id:
+        guest = await GuestService.ensure_for_lead(
+            db,
+            lead_id,
+            created_by=current_user.id,
+            dealership_id=data.get("dealership_id") or current_user.dealership_id,
+            appointment_id=appointment_id,
+        )
+        if current_user.role == UserRole.BDC and guest.dealership_id:
+            if not await user_can_access_dealership(db, current_user, guest.dealership_id):
+                raise HTTPException(status_code=403, detail="Not authorized for this dealership")
+        await db.commit()
+        await db.refresh(guest)
+        return guest
 
     guest = Guest(
         created_by=current_user.id,
         dealership_id=data.get("dealership_id") or current_user.dealership_id,
-        appointment_id=data.get("appointment_id"),
-        lead_id=data.get("lead_id"),
+        appointment_id=appointment_id,
+        lead_id=lead_id,
         customer_id=data.get("customer_id"),
         full_name=data.get("full_name"),
         phone=data.get("phone"),
@@ -75,13 +107,13 @@ async def create_guest(
         vehicle_of_interest=data.get("vehicle_of_interest"),
         trade_in=data.get("trade_in"),
         notes=data.get("notes"),
-        status=GuestStatus.DRAFT.value,
+        status=GuestStatus.READY.value,
     )
+    GuestService.ensure_share_token(guest)
 
     if guest.lead_id:
         await GuestService.autofill_from_lead(db, guest, guest.lead_id)
 
-    # BDC access check on the resolved dealership
     if current_user.role == UserRole.BDC and guest.dealership_id:
         if not await user_can_access_dealership(db, current_user, guest.dealership_id):
             raise HTTPException(status_code=403, detail="Not authorized for this dealership")
@@ -134,12 +166,10 @@ async def share_guest(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """Generate (or rotate) the opaque share token and return the public URL."""
+    """Return the public share URL. Reuses the existing token so the QR stays static."""
     guest = await _get_guest_or_404(db, guest_id)
-    guest.share_token = GuestService.generate_token()
+    GuestService.ensure_share_token(guest)
     guest.share_revoked = False
-    if guest.status == GuestStatus.DRAFT.value:
-        guest.status = GuestStatus.READY.value
     await db.commit()
     await db.refresh(guest)
     share_url = f"{settings.frontend_url.rstrip('/')}/g/{guest.share_token}"

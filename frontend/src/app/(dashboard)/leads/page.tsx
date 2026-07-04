@@ -27,6 +27,8 @@ import {
     Star,
     FileStack,
     ExternalLink,
+    Columns3,
+    Flame,
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -102,6 +104,8 @@ import {
     clearStoredLeadsOpenPreference,
 } from "@/lib/leads-open-preference"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
+import { SavedViewsBar } from "@/components/leads/saved-views-bar"
+import type { SavedView } from "@/services/saved-view-service"
 
 // Lead stages are now loaded dynamically from the API
 // LEAD_STATUSES kept as fallback for initial render
@@ -121,6 +125,39 @@ const LEAD_SOURCES = [
 
 type ViewMode = "mine" | "unassigned" | "all" | "converted" | "fresh" | "manager_review" | "multi_campaign"
 type DisplayView = "list" | "pipeline"
+
+/** Optional (toggleable) table columns. Customer and Actions are always shown. */
+const OPTIONAL_COLUMNS: { key: string; label: string }[] = [
+    { key: "status", label: "Status" },
+    { key: "source", label: "Source" },
+    { key: "heat", label: "Heat" },
+    { key: "down_payment", label: "Down Payment" },
+    { key: "assigned_to", label: "Assigned To" },
+    { key: "notes", label: "Notes" },
+    { key: "last_action", label: "Last action" },
+    { key: "created", label: "Created" },
+]
+const DEFAULT_COLUMNS = OPTIONAL_COLUMNS.map((c) => c.key)
+const COLUMNS_STORAGE_KEY = "tikuncrm-leads-columns"
+
+/** Heat indicator derived from interest score + recency; server heat_score wins when present */
+function getLeadHeat(lead: Lead): { score: number; level: "hot" | "warm" | "cold" } {
+    const serverScore = (lead as Lead & { heat_score?: number }).heat_score
+    let score = serverScore ?? lead.interest_score ?? 0
+    if (serverScore == null) {
+        // Client-side approximation until server-side heat scoring lands
+        if (lead.last_activity_at) {
+            const days = (Date.now() - new Date(lead.last_activity_at).getTime()) / 86400000
+            if (days < 1) score += 30
+            else if (days < 3) score += 20
+            else if (days < 7) score += 10
+        }
+        if (lead.is_starred) score += 15
+        if ((lead.activity_count ?? 0) > 5) score += 10
+    }
+    const level = score >= 40 ? "hot" : score >= 15 ? "warm" : "cold"
+    return { score, level }
+}
 
 export default function LeadsPage() {
     const router = useRouter()
@@ -410,6 +447,69 @@ export default function LeadsPage() {
     const [leadToDelete, setLeadToDelete] = React.useState<Lead | null>(null)
     const [isDeleting, setIsDeleting] = React.useState(false)
     
+    // Visible columns (persisted)
+    const [visibleColumns, setVisibleColumns] = React.useState<string[]>(() => {
+        if (typeof window === "undefined") return DEFAULT_COLUMNS
+        try {
+            const raw = localStorage.getItem(COLUMNS_STORAGE_KEY)
+            if (raw) {
+                const parsed = JSON.parse(raw)
+                if (Array.isArray(parsed)) return parsed.filter((k) => DEFAULT_COLUMNS.includes(k))
+            }
+        } catch {}
+        return DEFAULT_COLUMNS
+    })
+    const showCol = React.useCallback((key: string) => visibleColumns.includes(key), [visibleColumns])
+    const toggleColumn = React.useCallback((key: string, on: boolean) => {
+        setVisibleColumns((prev) => {
+            const next = on ? [...prev, key] : prev.filter((k) => k !== key)
+            try {
+                localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(next))
+            } catch {}
+            return next
+        })
+    }, [])
+
+    // Saved views
+    const [activeViewId, setActiveViewId] = React.useState<string | null>(null)
+    const getCurrentViewFilters = React.useCallback((): Record<string, string> => {
+        const f: Record<string, string> = { filter: viewMode }
+        if (status !== "all") f.status = status
+        if (source !== "all") f.source = source
+        if (assignedTo !== "all") f.assigned_to = assignedTo
+        if (bdcAgentFilter !== "all") f.bdc_agent_id = bdcAgentFilter
+        if (campaignFilter !== "all") f.campaign = campaignFilter
+        if (dealershipFilter !== "all") f.dealership_id = dealershipFilter
+        if (displayView === "pipeline") f.view = "pipeline"
+        return f
+    }, [viewMode, status, source, assignedTo, bdcAgentFilter, campaignFilter, dealershipFilter, displayView])
+
+    const applySavedView = React.useCallback(
+        (view: SavedView) => {
+            setActiveViewId(view.id)
+            const f = view.filters || {}
+            // bdc_agent_id lives outside the URL sync
+            setBdcAgentFilter(f.bdc_agent_id || "all")
+            const params = new URLSearchParams()
+            params.set("filter", f.filter || "all")
+            if (f.status) params.set("status", f.status)
+            if (f.source) params.set("source", f.source)
+            if (f.assigned_to) params.set("assigned_to", f.assigned_to)
+            if (f.campaign) params.set("campaign", f.campaign)
+            if (f.dealership_id) params.set("dealership_id", f.dealership_id)
+            if (f.view === "pipeline") params.set("view", "pipeline")
+            router.push(`/leads?${params.toString()}`)
+            if (view.columns && view.columns.length > 0) {
+                const cols = view.columns.filter((k) => DEFAULT_COLUMNS.includes(k))
+                setVisibleColumns(cols)
+                try {
+                    localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(cols))
+                } catch {}
+            }
+        },
+        [router]
+    )
+
     // Export state
     const [exportModalOpen, setExportModalOpen] = React.useState(false)
     const [exportOptions, setExportOptions] = React.useState({
@@ -801,6 +901,15 @@ export default function LeadsPage() {
                     </Button>
                 )}
             </div>
+
+            {/* Saved views */}
+            <SavedViewsBar
+                entityType="leads"
+                getCurrentFilters={getCurrentViewFilters}
+                getCurrentColumns={() => visibleColumns}
+                onApply={applySavedView}
+                activeViewId={activeViewId}
+            />
 
             {/* Lead filter tabs + List/Pipeline toggle */}
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1230,6 +1339,33 @@ export default function LeadsPage() {
                                     Drag leads between stages to update their pipeline position.
                                 </p>
                             )}
+                            {displayView === "list" && (
+                                <Popover>
+                                    <PopoverTrigger asChild>
+                                        <Button variant="outline" size="sm">
+                                            <Columns3 className="h-4 w-4 mr-2" />
+                                            Columns
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-52 p-2" align="end">
+                                        <p className="mb-2 px-1 text-sm font-medium">Visible columns</p>
+                                        <div className="space-y-1">
+                                            {OPTIONAL_COLUMNS.map((col) => (
+                                                <label
+                                                    key={col.key}
+                                                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/50"
+                                                >
+                                                    <Checkbox
+                                                        checked={showCol(col.key)}
+                                                        onCheckedChange={(checked) => toggleColumn(col.key, checked === true)}
+                                                    />
+                                                    <span className="text-sm">{col.label}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </PopoverContent>
+                                </Popover>
+                            )}
                             <Button
                                 variant="outline"
                                 size="sm"
@@ -1265,21 +1401,22 @@ export default function LeadsPage() {
                     <TableHeader>
                         <TableRow className="bg-muted/50">
                             <TableHead>Customer</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead>Source</TableHead>
-                            <TableHead>Down Payment</TableHead>
+                            {showCol("status") && <TableHead>Status</TableHead>}
+                            {showCol("source") && <TableHead>Source</TableHead>}
+                            {showCol("heat") && <TableHead>Heat</TableHead>}
+                            {showCol("down_payment") && <TableHead>Down Payment</TableHead>}
                             {isBdc && <TableHead>Dealership</TableHead>}
-                            <TableHead>Assigned To</TableHead>
-                            <TableHead className="max-w-[140px]">Notes</TableHead>
-                            <TableHead className="max-w-[180px]">Last action</TableHead>
-                            <TableHead>Created</TableHead>
+                            {showCol("assigned_to") && <TableHead>Assigned To</TableHead>}
+                            {showCol("notes") && <TableHead className="max-w-[140px]">Notes</TableHead>}
+                            {showCol("last_action") && <TableHead className="max-w-[180px]">Last action</TableHead>}
+                            {showCol("created") && <TableHead>Created</TableHead>}
                             <TableHead className="w-20">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {isLoading ? (
                             <TableRow className="border-0 hover:bg-transparent">
-                                <TableCell colSpan={isBdc ? 10 : 9} className="py-0">
+                                <TableCell colSpan={visibleColumns.length + (isBdc ? 3 : 2)} className="py-0">
                                     <div className="flex flex-col items-center justify-center py-16">
                                         <Loader2 className="h-10 w-10 text-primary animate-spin" />
                                         <p className="mt-4 text-sm font-medium text-muted-foreground">Loading leads...</p>
@@ -1394,16 +1531,50 @@ export default function LeadsPage() {
                                             </div>
                                         </div>
                                     </TableCell>
+                                    {showCol("status") && (
                                     <TableCell>
                                         <Badge variant="outline" style={{ borderColor: getStageColor(lead.stage), color: getStageColor(lead.stage) }}>
                                             {getStageLabel(lead.stage)}
                                         </Badge>
                                     </TableCell>
+                                    )}
+                                    {showCol("source") && (
                                     <TableCell>
                                         <Badge variant={getSourceVariant(lead.source)} size="sm">
                                             {(lead.source_display ?? lead.source)?.replace(/_/g, ' ') ?? ''}
                                         </Badge>
                                     </TableCell>
+                                    )}
+                                    {showCol("heat") && (
+                                    <TableCell>
+                                        {(() => {
+                                            const heat = getLeadHeat(lead)
+                                            return (
+                                                <span
+                                                    className={cn(
+                                                        "inline-flex items-center gap-1 text-xs font-semibold",
+                                                        heat.level === "hot"
+                                                            ? "text-rose-500"
+                                                            : heat.level === "warm"
+                                                              ? "text-amber-500"
+                                                              : "text-muted-foreground"
+                                                    )}
+                                                    title={`Heat score: ${heat.score}`}
+                                                >
+                                                    <Flame
+                                                        className={cn(
+                                                            "h-3.5 w-3.5",
+                                                            heat.level === "hot" && "fill-rose-500/30",
+                                                            heat.level === "warm" && "fill-amber-500/20"
+                                                        )}
+                                                    />
+                                                    {heat.level === "hot" ? "Hot" : heat.level === "warm" ? "Warm" : "Cold"}
+                                                </span>
+                                            )
+                                        })()}
+                                    </TableCell>
+                                    )}
+                                    {showCol("down_payment") && (
                                     <TableCell>
                                         {(() => {
                                             const meta = lead.meta_data as Record<string, unknown> | undefined
@@ -1417,6 +1588,7 @@ export default function LeadsPage() {
                                             )
                                         })()}
                                     </TableCell>
+                                    )}
                                     {isBdc && (
                                         <TableCell>
                                             {lead.dealership ? (
@@ -1431,6 +1603,7 @@ export default function LeadsPage() {
                                             )}
                                         </TableCell>
                                     )}
+                                    {showCol("assigned_to") && (
                                     <TableCell>
                                         <div className="space-y-1">
                                             {!isBdc && lead.dealership ? (
@@ -1455,6 +1628,8 @@ export default function LeadsPage() {
                                             ) : null}
                                         </div>
                                     </TableCell>
+                                    )}
+                                    {showCol("notes") && (
                                     <TableCell className="max-w-[140px]">
                                         {(() => {
                                             const noteText = lead.notes?.trim() || lead.last_note_content?.trim() || null;
@@ -1466,6 +1641,8 @@ export default function LeadsPage() {
                                             );
                                         })()}
                                     </TableCell>
+                                    )}
+                                    {showCol("last_action") && (
                                     <TableCell className="max-w-[180px]">
                                         {lead.last_activity_description ? (
                                             <div className="space-y-0.5">
@@ -1482,12 +1659,15 @@ export default function LeadsPage() {
                                             <span className="text-xs text-muted-foreground">—</span>
                                         )}
                                     </TableCell>
+                                    )}
+                                    {showCol("created") && (
                                     <TableCell>
                                         <div className="flex items-center gap-1 text-xs text-muted-foreground">
                                             <Calendar className="h-3 w-3" />
                                             {formatDateInTimezone(lead.created_at, timezone, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                                         </div>
                                     </TableCell>
+                                    )}
                                     <TableCell>
                                         <DropdownMenu>
                                             <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
