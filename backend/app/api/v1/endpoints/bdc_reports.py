@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.api.v1.endpoints.reports import require_reports_access
-from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
 from app.services.bdc_report_service import BdcReportFilters, BdcReportService
@@ -227,26 +226,31 @@ async def export_bdc_report(
         converted_only=converted_only,
     )
     try:
-        rows, _ = await BdcReportService.fetch_rows(
+        rows, total = await BdcReportService.fetch_rows(
             db, current_user, filters, limit=None, ensure_guests=True
+        )
+        dealership_ids = await BdcReportService.resolve_dealership_ids(
+            db, current_user, filters.dealership_id, filters.all_dealerships
+        )
+        meta = await BdcReportService.build_report_meta(
+            db, current_user, filters, dealership_ids, len(rows)
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
-    stamp = utc_now().strftime("%Y%m%d_%H%M%S")
     if format == "pdf":
-        content = BdcReportService.build_pdf(rows)
-        filename = f"bdc-report_{stamp}.pdf"
+        content = BdcReportService.build_pdf(rows, meta)
+        filename = BdcReportService.build_export_filename(meta, "pdf")
         media_type = "application/pdf"
     elif format == "xlsx":
-        content = BdcReportService.build_xlsx(rows)
-        filename = f"bdc-report_{stamp}.xlsx"
+        content = BdcReportService.build_xlsx(rows, meta)
+        filename = BdcReportService.build_export_filename(meta, "xlsx")
         media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     else:
-        content = BdcReportService.build_zip(rows)
-        filename = f"bdc-report_{stamp}.zip"
+        content = BdcReportService.build_zip(rows, meta)
+        filename = BdcReportService.build_export_filename(meta, "zip")
         media_type = "application/zip"
 
     return Response(

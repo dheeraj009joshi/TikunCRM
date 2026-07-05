@@ -465,11 +465,25 @@ export const ReportsService = {
         return response.data;
     },
 
-    async downloadBdcExport(filters?: BdcExportFilters, format: "zip" | "xlsx" | "pdf" = "zip"): Promise<Blob> {
+    async downloadBdcExport(
+        filters?: BdcExportFilters,
+        format: "zip" | "xlsx" | "pdf" = "zip"
+    ): Promise<{ blob: Blob; filename: string }> {
         const response = await apiClient.get("/reports/bdc/export", {
             params: { ...filters, format },
             responseType: "blob",
         });
-        return response.data;
+        const disposition = response.headers["content-disposition"] as string | undefined;
+        let filename = `bdc-report.${format === "xlsx" ? "xlsx" : format === "pdf" ? "pdf" : "zip"}`;
+        if (disposition) {
+            const quoted = disposition.match(/filename="([^"]+)"/);
+            const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+            if (quoted?.[1]) {
+                filename = quoted[1];
+            } else if (encoded?.[1]) {
+                filename = decodeURIComponent(encoded[1]);
+            }
+        }
+        return { blob: response.data, filename };
     },
 };

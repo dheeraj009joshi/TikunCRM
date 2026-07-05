@@ -51,6 +51,39 @@ APPOINTMENT_FUNNELS: Dict[str, List[str]] = {
     "cancelled": [AppointmentStatus.CANCELLED.value, AppointmentStatus.RESCHEDULED.value],
 }
 
+APPOINTMENT_FUNNEL_LABELS: Dict[str, str] = {
+    "scheduled": "Scheduled / Confirmed",
+    "show_up": "Show up (arrived+)",
+    "completed": "Completed",
+    "sold": "Sold (appointment)",
+    "no_show": "No show",
+    "cancelled": "Cancelled / Rescheduled",
+}
+
+LEAD_SOURCE_LABELS: Dict[str, str] = {
+    "manual": "Manual",
+    "website": "Website",
+    "google_sheets": "Google Sheets",
+    "meta_ads": "Meta Ads",
+    "referral": "Referral",
+    "walk_in": "Walk-in",
+    "whatsapp_inbound": "WhatsApp",
+}
+
+PDF_TABLE_HEADERS = [
+    "Lead Name",
+    "Phone",
+    "Stage",
+    "Dealership",
+    "BDC Agent",
+    "Salesperson",
+    "Appt Status",
+    "Appt Date & Time",
+    "Trust Score",
+    "QR Code",
+    "Auto-Generated",
+]
+
 EXPORT_HEADERS = [
     "Lead ID",
     "Full Name",
@@ -97,6 +130,15 @@ class BdcReportFilters:
     has_appointment: Optional[bool] = None
     sold_only: bool = False
     converted_only: bool = False
+
+
+@dataclass
+class BdcReportMeta:
+    generated_at: datetime
+    generated_by: str
+    total_leads: int
+    scope_label: str
+    filter_items: List[Tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -439,6 +481,163 @@ class BdcReportService:
         return rows, total
 
     @staticmethod
+    def _format_display_datetime(dt: datetime) -> str:
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        hour = dt.strftime("%I").lstrip("0") or "12"
+        return f"{dt.strftime('%A, %b %d, %Y')} at {hour}:{dt.strftime('%M %p')}"
+
+    @staticmethod
+    def _format_filter_date(dt: Optional[datetime]) -> str:
+        if not dt:
+            return ""
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        return dt.strftime("%b %d, %Y")
+
+    @staticmethod
+    def _format_filter_date_range(
+        date_from: Optional[datetime],
+        date_to: Optional[datetime],
+    ) -> Optional[str]:
+        start = BdcReportService._format_filter_date(date_from)
+        end = BdcReportService._format_filter_date(date_to)
+        if start and end:
+            return f"{start} – {end}"
+        if start:
+            return f"From {start}"
+        if end:
+            return f"Through {end}"
+        return None
+
+    @staticmethod
+    async def build_report_meta(
+        db: AsyncSession,
+        current_user: User,
+        filters: BdcReportFilters,
+        dealership_ids: List[UUID],
+        total_leads: int,
+    ) -> BdcReportMeta:
+        dealership_names: List[str] = []
+        if dealership_ids:
+            dr = await db.execute(select(Dealership).where(Dealership.id.in_(dealership_ids)))
+            dealership_names = sorted({d.name for d in dr.scalars().all() if d.name})
+
+        if filters.all_dealerships:
+            if len(dealership_names) == 1:
+                scope_label = dealership_names[0]
+            elif dealership_names:
+                scope_label = f"All Dealerships ({len(dealership_names)})"
+            else:
+                scope_label = "All Dealerships"
+        elif filters.dealership_id and dealership_names:
+            scope_label = dealership_names[0]
+        elif filters.dealership_id:
+            scope_label = str(filters.dealership_id)[:8]
+        else:
+            scope_label = dealership_names[0] if len(dealership_names) == 1 else "Selected Dealerships"
+
+        filter_items: List[Tuple[str, str]] = [("Dealership scope", scope_label)]
+
+        user_ids: List[UUID] = []
+        if filters.bdc_agent_id:
+            user_ids.append(filters.bdc_agent_id)
+        if filters.assigned_to:
+            user_ids.append(filters.assigned_to)
+        users: Dict[UUID, User] = {}
+        if user_ids:
+            ur = await db.execute(select(User).where(User.id.in_(user_ids)))
+            users = {u.id: u for u in ur.scalars().all()}
+
+        if filters.bdc_agent_id:
+            agent = users.get(filters.bdc_agent_id)
+            filter_items.append(("BDC agent", agent.full_name if agent else str(filters.bdc_agent_id)[:8]))
+        if filters.assigned_to:
+            sp = users.get(filters.assigned_to)
+            filter_items.append(("Salesperson", sp.full_name if sp else str(filters.assigned_to)[:8]))
+        if filters.stage_id:
+            sr = await db.execute(select(LeadStage).where(LeadStage.id == filters.stage_id))
+            stage = sr.scalar_one_or_none()
+            filter_items.append(("Lead stage", stage.display_name if stage else str(filters.stage_id)[:8]))
+        if filters.source:
+            filter_items.append(
+                ("Lead source", LEAD_SOURCE_LABELS.get(filters.source, filters.source.replace("_", " ").title()))
+            )
+        if filters.search:
+            filter_items.append(("Search", filters.search))
+        if filters.is_active is True:
+            filter_items.append(("Lead status", "Active only"))
+        elif filters.is_active is False:
+            filter_items.append(("Lead status", "Inactive only"))
+
+        lead_range = BdcReportService._format_filter_date_range(
+            filters.lead_date_from, filters.lead_date_to
+        )
+        if lead_range:
+            filter_items.append(("Lead created", lead_range))
+
+        sold_range = BdcReportService._format_filter_date_range(
+            filters.sold_date_from, filters.sold_date_to
+        )
+        if sold_range:
+            filter_items.append(("Sold / converted date", sold_range))
+
+        appt_range = BdcReportService._format_filter_date_range(
+            filters.appointment_date_from, filters.appointment_date_to
+        )
+        if appt_range:
+            filter_items.append(("Appointment date", appt_range))
+
+        if filters.appointment_funnel:
+            filter_items.append(
+                (
+                    "Appointment funnel",
+                    APPOINTMENT_FUNNEL_LABELS.get(
+                        filters.appointment_funnel,
+                        filters.appointment_funnel.replace("_", " ").title(),
+                    ),
+                )
+            )
+        if filters.appointment_statuses:
+            labels = [s.replace("_", " ").title() for s in filters.appointment_statuses]
+            filter_items.append(("Appointment statuses", ", ".join(labels)))
+        if filters.has_appointment is True:
+            filter_items.append(("Has appointment", "Yes"))
+        elif filters.has_appointment is False:
+            filter_items.append(("Has appointment", "No"))
+        if filters.sold_only:
+            filter_items.append(("Outcome", "Sold only"))
+        elif filters.converted_only:
+            filter_items.append(("Outcome", "Converted only"))
+
+        extra_filters = [item for item in filter_items if item[0] != "Dealership scope"]
+        if not extra_filters:
+            filter_items.append(("Additional filters", "None (all leads in scope)"))
+
+        return BdcReportMeta(
+            generated_at=utc_now(),
+            generated_by=current_user.full_name or current_user.email or "Unknown",
+            total_leads=total_leads,
+            scope_label=scope_label,
+            filter_items=filter_items,
+        )
+
+    @staticmethod
+    def build_export_filename(meta: BdcReportMeta, ext: str) -> str:
+        scope = BdcReportService._sanitize_filename_part(meta.scope_label, 45)
+        date_part = meta.generated_at.strftime("%Y-%m-%d")
+        return f"BDC Export - {scope} - {date_part}.{ext}"
+
+    @staticmethod
+    def _format_trust_score(row: BdcReportRow) -> str:
+        parts: List[str] = []
+        if row.lead_trust_score is not None:
+            parts.append(f"Lead: {int(round(row.lead_trust_score))}")
+        if row.guest_trust_score is not None:
+            parts.append(f"Guest: {int(round(row.guest_trust_score))}")
+        return " / ".join(parts)
+
+    @staticmethod
     def _qr_png_bytes(url: str) -> bytes:
         qr = qrcode.QRCode(version=1, box_size=4, border=2)
         qr.add_data(url)
@@ -501,23 +700,82 @@ class BdcReportService:
             n += 1
 
     @staticmethod
-    def build_xlsx(rows: Sequence[BdcReportRow]) -> bytes:
+    def build_xlsx(rows: Sequence[BdcReportRow], meta: Optional[BdcReportMeta] = None) -> bytes:
         wb = Workbook()
         ws = wb.active
         ws.title = "BDC Export"
 
         highlight_fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
-        header_font = Font(bold=True)
+        header_fill = PatternFill(start_color="3B82F6", end_color="3B82F6", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        title_font = Font(bold=True, size=14)
+        label_font = Font(bold=True)
 
+        col_count = len(EXPORT_HEADERS)
+        current_row = 1
+
+        if meta:
+            ws.cell(row=current_row, column=1, value="BDC Export Report").font = title_font
+            ws.merge_cells(
+                start_row=current_row,
+                start_column=1,
+                end_row=current_row,
+                end_column=col_count,
+            )
+            current_row += 1
+
+            summary = (
+                f"Generated: {BdcReportService._format_display_datetime(meta.generated_at)}"
+                f"  |  By: {meta.generated_by}"
+                f"  |  {meta.total_leads} lead{'s' if meta.total_leads != 1 else ''}"
+            )
+            ws.cell(row=current_row, column=1, value=summary)
+            ws.merge_cells(
+                start_row=current_row,
+                start_column=1,
+                end_row=current_row,
+                end_column=col_count,
+            )
+            current_row += 2
+
+            ws.cell(row=current_row, column=1, value="Applied Filters").font = Font(bold=True, size=11)
+            ws.merge_cells(
+                start_row=current_row,
+                start_column=1,
+                end_row=current_row,
+                end_column=col_count,
+            )
+            current_row += 1
+
+            for label, value in meta.filter_items:
+                ws.cell(row=current_row, column=1, value=label).font = label_font
+                ws.cell(row=current_row, column=2, value=value)
+                ws.merge_cells(
+                    start_row=current_row,
+                    start_column=2,
+                    end_row=current_row,
+                    end_column=col_count,
+                )
+                current_row += 1
+
+            current_row += 1
+
+        header_row = current_row
         for col_idx, header in enumerate(EXPORT_HEADERS, start=1):
-            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell = ws.cell(row=header_row, column=col_idx, value=header)
             cell.font = header_font
+            cell.fill = header_fill
 
         ws.column_dimensions[get_column_letter(len(EXPORT_HEADERS))].width = 14
         ws.column_dimensions["S"].width = 40
         ws.column_dimensions["T"].width = 22
 
-        for row_idx, row in enumerate(rows, start=2):
+        for row_idx, row in enumerate(rows, start=header_row + 1):
+            appt_display = (
+                BdcReportService._format_appt_for_filename(row.latest_appt_date)
+                if row.latest_appt_date
+                else ""
+            )
             values = [
                 row.lead_id,
                 row.full_name,
@@ -532,7 +790,7 @@ class BdcReportService:
                 "Yes" if row.is_active else "No",
                 row.converted_at,
                 row.latest_appt_status,
-                row.latest_appt_date,
+                appt_display or row.latest_appt_date,
                 row.appt_count,
                 row.showroom_check_in,
                 row.lead_trust_score if row.lead_trust_score is not None else "",
@@ -564,37 +822,60 @@ class BdcReportService:
         return buf.getvalue()
 
     @staticmethod
-    def build_zip(rows: Sequence[BdcReportRow]) -> bytes:
-        xlsx_bytes = BdcReportService.build_xlsx(rows)
-        pdf_bytes = BdcReportService.build_pdf(rows)
+    def build_zip(rows: Sequence[BdcReportRow], meta: Optional[BdcReportMeta] = None) -> bytes:
+        xlsx_bytes = BdcReportService.build_xlsx(rows, meta)
+        pdf_bytes = BdcReportService.build_pdf(rows, meta)
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("bdc-report.pdf", pdf_bytes)
-            zf.writestr("bdc-report.xlsx", xlsx_bytes)
+            zf.writestr("BDC Export Report.pdf", pdf_bytes)
+            zf.writestr("BDC Export Report.xlsx", xlsx_bytes)
             used_qr_names: set[str] = set()
             for row in rows:
                 if not row.guest_qr_url:
                     continue
                 png_name = BdcReportService._qr_png_filename(row, used_qr_names)
                 zf.writestr(f"qr-codes/{png_name}", BdcReportService._qr_png_bytes(row.guest_qr_url))
-            readme = (
-                "BDC Export Report\n"
-                "=================\n\n"
-                "bdc-report.pdf — printable report with QR codes in each row.\n"
-                "bdc-report.xlsx — spreadsheet with embedded QR images.\n"
-                "qr-codes/ — individual PNG QR images per lead.\n"
-                "  File names: {Lead Name} - {Weekday} - {Mon D, YYYY} - {H:MM AM/PM}.png\n\n"
-                "Rows highlighted in yellow had guest profiles auto-generated during export.\n"
+            readme_lines = [
+                "BDC Export Report",
+                "=================",
+                "",
+            ]
+            if meta:
+                readme_lines.extend(
+                    [
+                        f"Generated: {BdcReportService._format_display_datetime(meta.generated_at)}",
+                        f"Exported by: {meta.generated_by}",
+                        f"Total leads: {meta.total_leads}",
+                        "",
+                        "Applied Filters",
+                        "---------------",
+                    ]
+                )
+                for label, value in meta.filter_items:
+                    readme_lines.append(f"  {label}: {value}")
+                readme_lines.append("")
+            readme_lines.extend(
+                [
+                    "Contents",
+                    "--------",
+                    "BDC Export Report.pdf — printable report with QR codes in each row.",
+                    "BDC Export Report.xlsx — spreadsheet with embedded QR images.",
+                    "qr-codes/ — individual PNG QR images per lead.",
+                    "  File names: {Lead Name} - {Weekday} - {Mon D, YYYY} - {H:MM AM/PM}.png",
+                    "",
+                    "Rows highlighted in yellow had guest profiles auto-generated during export.",
+                ]
             )
-            zf.writestr("README.txt", readme)
+            zf.writestr("README.txt", "\n".join(readme_lines))
         return zip_buf.getvalue()
 
     @staticmethod
-    def build_pdf(rows: Sequence[BdcReportRow]) -> bytes:
+    def build_pdf(rows: Sequence[BdcReportRow], meta: Optional[BdcReportMeta] = None) -> bytes:
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import landscape, A4
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import mm
-        from reportlab.platypus import Image as RLImage, SimpleDocTemplate, Table, TableStyle
+        from reportlab.platypus import Image as RLImage, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
         buf = io.BytesIO()
         doc = SimpleDocTemplate(
@@ -603,30 +884,100 @@ class BdcReportService:
             leftMargin=8 * mm,
             rightMargin=8 * mm,
             topMargin=10 * mm,
-            bottomMargin=10 * mm,
+            bottomMargin=12 * mm,
         )
 
-        headers = [
-            "Name",
-            "Phone",
-            "Stage",
-            "Dealership",
-            "BDC",
-            "Salesperson",
-            "Appt Status",
-            "Trust",
-            "QR",
-            "Auto-gen",
-        ]
-        table_data: List[List[Any]] = [headers]
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            "ReportTitle",
+            parent=styles["Heading1"],
+            fontName="Helvetica-Bold",
+            fontSize=16,
+            leading=20,
+            spaceAfter=4,
+            textColor=colors.HexColor("#0F172A"),
+        )
+        subtitle_style = ParagraphStyle(
+            "ReportSubtitle",
+            parent=styles["Normal"],
+            fontName="Helvetica",
+            fontSize=8,
+            leading=11,
+            textColor=colors.HexColor("#475569"),
+            spaceAfter=2,
+        )
+        section_style = ParagraphStyle(
+            "SectionHeading",
+            parent=styles["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=10,
+            leading=13,
+            spaceBefore=4,
+            spaceAfter=4,
+            textColor=colors.HexColor("#0F172A"),
+        )
+        note_style = ParagraphStyle(
+            "ReportNote",
+            parent=styles["Normal"],
+            fontName="Helvetica-Oblique",
+            fontSize=7,
+            leading=9,
+            textColor=colors.HexColor("#64748B"),
+            spaceAfter=4,
+        )
+
+        elements: List[Any] = []
+
+        if meta:
+            elements.append(Paragraph("BDC Export Report", title_style))
+            elements.append(
+                Paragraph(
+                    f"Generated {BdcReportService._format_display_datetime(meta.generated_at)}"
+                    f" &nbsp;|&nbsp; Exported by <b>{meta.generated_by}</b>"
+                    f" &nbsp;|&nbsp; <b>{meta.total_leads}</b> lead{'s' if meta.total_leads != 1 else ''}",
+                    subtitle_style,
+                )
+            )
+            elements.append(Spacer(1, 3 * mm))
+            elements.append(Paragraph("Applied Filters", section_style))
+
+            filter_data = [[label, value] for label, value in meta.filter_items]
+            filter_table = Table(filter_data, colWidths=[42 * mm, 225 * mm])
+            filter_table.setStyle(
+                TableStyle(
+                    [
+                        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                        ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 8),
+                        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#334155")),
+                        ("TEXTCOLOR", (1, 0), (1, -1), colors.HexColor("#0F172A")),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                        ("TOPPADDING", (0, 0), (-1, -1), 2),
+                        ("LINEBELOW", (0, -1), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+                    ]
+                )
+            )
+            elements.append(filter_table)
+            elements.append(Spacer(1, 2 * mm))
+            elements.append(
+                Paragraph(
+                    "Yellow rows indicate guest profiles that were auto-generated during export.",
+                    note_style,
+                )
+            )
+            elements.append(Spacer(1, 4 * mm))
+
+        table_data: List[List[Any]] = [PDF_TABLE_HEADERS]
         highlight_rows: List[int] = []
 
         for idx, row in enumerate(rows):
-            trust = ""
-            if row.lead_trust_score is not None:
-                trust = str(int(round(row.lead_trust_score)))
-            if row.guest_trust_score is not None:
-                trust += f" / G:{int(round(row.guest_trust_score))}"
+            trust = BdcReportService._format_trust_score(row)
+            appt_display = (
+                BdcReportService._format_appt_for_filename(row.latest_appt_date)
+                if row.latest_appt_date
+                else ""
+            )
 
             qr_cell: Any = ""
             if row.guest_qr_url:
@@ -641,37 +992,62 @@ class BdcReportService:
                 highlight_rows.append(idx + 1)
 
             table_data.append([
-                row.full_name[:28],
-                row.phone[:14],
-                row.stage[:16],
-                row.dealership[:18],
-                row.bdc_agent[:14],
-                row.salesperson[:14],
-                row.latest_appt_status[:14],
-                trust,
+                row.full_name[:32],
+                row.phone[:16],
+                row.stage[:18],
+                row.dealership[:20],
+                row.bdc_agent[:16],
+                row.salesperson[:16],
+                row.latest_appt_status[:16],
+                appt_display[:34],
+                trust[:22],
                 qr_cell,
                 "Yes" if row.guest_auto_generated else "",
             ])
 
-        col_widths = [32 * mm, 22 * mm, 20 * mm, 24 * mm, 20 * mm, 20 * mm, 20 * mm, 14 * mm, 18 * mm, 12 * mm]
+        col_widths = [
+            28 * mm,
+            20 * mm,
+            18 * mm,
+            22 * mm,
+            18 * mm,
+            18 * mm,
+            16 * mm,
+            34 * mm,
+            18 * mm,
+            16 * mm,
+            14 * mm,
+        ]
         table = Table(table_data, colWidths=col_widths, repeatRows=1)
         style_commands = [
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#3B82F6")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1D4ED8")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTSIZE", (0, 0), (-1, 0), 7),
-            ("FONTSIZE", (0, 1), (-1, -1), 6),
+            ("FONTSIZE", (0, 1), (-1, -1), 6.5),
             ("ALIGN", (0, 0), (-1, -1), "LEFT"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#CBD5E1")),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]
         for row_i in highlight_rows:
             style_commands.append(
                 ("BACKGROUND", (0, row_i), (-1, row_i), colors.HexColor("#FFF3CD"))
             )
         table.setStyle(TableStyle(style_commands))
-        doc.build([table])
+        elements.append(table)
+
+        def _draw_page_footer(canvas: Any, doc_obj: Any) -> None:
+            canvas.saveState()
+            canvas.setFont("Helvetica", 7)
+            canvas.setFillColor(colors.HexColor("#64748B"))
+            canvas.drawString(8 * mm, 6 * mm, "BDC Export Report")
+            canvas.drawRightString(doc_obj.pagesize[0] - 8 * mm, 6 * mm, f"Page {canvas.getPageNumber()}")
+            canvas.restoreState()
+
+        doc.build(elements, onFirstPage=_draw_page_footer, onLaterPages=_draw_page_footer)
         return buf.getvalue()
 
     @staticmethod

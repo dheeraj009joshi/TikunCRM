@@ -406,12 +406,11 @@ export default function BdcExportReportPage() {
         setExporting(true)
         setError(null)
         try {
-            const blob = await ReportsService.downloadBdcExport(buildFilters(filterState), format)
-            const ext = format === "xlsx" ? "xlsx" : format === "pdf" ? "pdf" : "zip"
+            const { blob, filename } = await ReportsService.downloadBdcExport(buildFilters(filterState), format)
             const url = URL.createObjectURL(blob)
             const a = document.createElement("a")
             a.href = url
-            a.download = `bdc-report-${new Date().toISOString().slice(0, 10)}.${ext}`
+            a.download = filename
             a.click()
             URL.revokeObjectURL(url)
             await loadPreview()

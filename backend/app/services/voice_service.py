@@ -504,6 +504,19 @@ class VoiceService:
         )
         
         call_log.activity_logged = True
+
+        if call_log.lead_id:
+            lead_result = await self.db.execute(
+                select(Lead).where(Lead.id == call_log.lead_id)
+            )
+            lead = lead_result.scalar_one_or_none()
+            if lead:
+                now = utc_now()
+                lead.last_activity_at = now
+                lead.last_contacted_at = now
+                if not lead.first_contacted_at:
+                    lead.first_contacted_at = now
+
         await self.db.flush()
         logger.info(f"Logged activity for call {call_log.id}")
 

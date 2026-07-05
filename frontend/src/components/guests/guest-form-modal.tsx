@@ -6,9 +6,11 @@ import QRCode from "react-qr-code"
 import {
     Loader2,
     FileText,
+    Calendar,
     Copy,
     Check,
     ShieldOff,
+    Download,
     User,
     Phone,
     Mail,
@@ -33,6 +35,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
 import { useRole } from "@/hooks/use-role"
+import { AppointmentService } from "@/services/appointment-service"
+import {
+    exportGuestQrPng,
+    formatAppointmentLabel,
+} from "@/lib/qr-export"
 import {
     GuestService,
     type Guest,
@@ -126,10 +133,12 @@ export function GuestFormModal({
     const [isLoading, setIsLoading] = React.useState(false)
     const [saveStatus, setSaveStatus] = React.useState<"idle" | "saving" | "saved" | "error">("idle")
     const [shareUrl, setShareUrl] = React.useState<string | null>(null)
+    const [appointmentAt, setAppointmentAt] = React.useState<string | null>(null)
     const [copied, setCopied] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
     const guestRef = React.useRef<Guest | null>(null)
+    const qrContainerRef = React.useRef<HTMLDivElement>(null)
     const router = useRouter()
     const { isSuperAdmin, isDealershipLevel, isBdc } = useRole()
     const canManageCriteria = isSuperAdmin || isDealershipLevel || isBdc
@@ -167,6 +176,7 @@ export function GuestFormModal({
             setGuest(null)
             setDocuments([])
             setShareUrl(null)
+            setAppointmentAt(null)
             setError(null)
             setSaveStatus("idle")
             return
@@ -191,6 +201,36 @@ export function GuestFormModal({
                 } catch {
                     /* documents are best-effort */
                 }
+
+                const resolvedApptId = appointmentId || g.appointment_id
+                let scheduledAt: string | null = null
+                if (resolvedApptId) {
+                    try {
+                        const appt = await AppointmentService.get(resolvedApptId)
+                        scheduledAt = appt.scheduled_at
+                    } catch {
+                        /* fall back to lead appointments */
+                    }
+                }
+                if (!scheduledAt) {
+                    try {
+                        const res = await AppointmentService.list({ lead_id: leadId, page_size: 20 })
+                        const items = res.items || []
+                        const upcoming = items
+                            .filter((a) => ["scheduled", "confirmed"].includes(a.status))
+                            .sort(
+                                (a, b) =>
+                                    new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
+                            )[0]
+                        const latest = [...items].sort(
+                            (a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime()
+                        )[0]
+                        scheduledAt = upcoming?.scheduled_at ?? latest?.scheduled_at ?? null
+                    } catch {
+                        scheduledAt = null
+                    }
+                }
+                if (!cancelled) setAppointmentAt(scheduledAt)
             })
             .catch((e) => {
                 if (cancelled) return
@@ -236,6 +276,21 @@ export function GuestFormModal({
             setTimeout(() => setCopied(false), 1500)
         } catch {
             /* clipboard may be unavailable */
+        }
+    }
+
+    const handleExportQr = async () => {
+        const svg = qrContainerRef.current?.querySelector("svg")
+        if (!svg || !guest) return
+        try {
+            await exportGuestQrPng({
+                svg,
+                guestName: guest.full_name || "Guest",
+                appointmentAt,
+            })
+        } catch (e) {
+            console.error("Failed to export QR", e)
+            setError("Failed to export QR code")
         }
     }
 
@@ -376,7 +431,14 @@ export function GuestFormModal({
 
                         {shareUrl && !guest.share_revoked && (
                             <div className="flex flex-col items-center gap-3 rounded-xl border bg-muted/20 p-5">
-                                <div className="rounded-lg bg-white p-3 shadow-sm">
+                                <div className="text-center space-y-1">
+                                    <p className="text-sm font-semibold">{guest.full_name || "Guest"}</p>
+                                    <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                                        <Calendar className="h-3.5 w-3.5 shrink-0" />
+                                        {formatAppointmentLabel(appointmentAt)}
+                                    </p>
+                                </div>
+                                <div ref={qrContainerRef} className="rounded-lg bg-white p-3 shadow-sm">
                                     <QRCode value={shareUrl} size={160} />
                                 </div>
                                 <p className="text-xs text-muted-foreground">Scan to open the guest&apos;s shareable profile</p>
@@ -386,9 +448,14 @@ export function GuestFormModal({
                                         {copied ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
                                     </Button>
                                 </div>
-                                <Button type="button" variant="ghost" size="sm" onClick={handleRevoke}>
-                                    <ShieldOff className="h-4 w-4 mr-1.5" /> Revoke link
-                                </Button>
+                                <div className="flex flex-wrap items-center justify-center gap-2">
+                                    <Button type="button" variant="secondary" size="sm" onClick={handleExportQr}>
+                                        <Download className="h-4 w-4 mr-1.5" /> Export QR
+                                    </Button>
+                                    <Button type="button" variant="ghost" size="sm" onClick={handleRevoke}>
+                                        <ShieldOff className="h-4 w-4 mr-1.5" /> Revoke link
+                                    </Button>
+                                </div>
                             </div>
                         )}
                     </div>

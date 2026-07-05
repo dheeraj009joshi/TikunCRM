@@ -22,6 +22,8 @@ interface NextBestActionProps {
     lead: Lead
     followUps: FollowUpLike[]
     appointments: AppointmentLike[]
+    /** True when timeline shows outreach even if first_contacted_at is unset (e.g. Twilio calls). */
+    hasBeenContacted?: boolean
     onCall?: () => void
     onScheduleFollowUp?: () => void
     onBookAppointment?: () => void
@@ -79,7 +81,10 @@ function computeSuggestion(props: NextBestActionProps): Suggestion | null {
     }
 
     // 3. Never contacted
-    if (!lead.first_contacted_at) {
+    const contacted = Boolean(
+        lead.first_contacted_at || lead.last_contacted_at || props.hasBeenContacted
+    )
+    if (!contacted) {
         return {
             title: "Make first contact",
             reason: "This lead hasn't been contacted yet. Response within the first hour dramatically raises connect rates.",

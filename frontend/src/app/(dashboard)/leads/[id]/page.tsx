@@ -591,6 +591,12 @@ export default function LeadDetailsPage() {
             return true
         })
     }, [activities, timelineLens])
+    const hasBeenContacted = React.useMemo(() => {
+        if (lead?.first_contacted_at || lead?.last_contacted_at) return true
+        return activities.some((a) =>
+            ["call_logged", "email_sent", "sms_sent", "whatsapp_sent"].includes(a.type)
+        )
+    }, [lead, activities])
     // Stips: categories, documents, and upload state
     const [stipsCategories, setStipsCategories] = React.useState<StipsCategory[]>([])
     const [stipsDocuments, setStipsDocuments] = React.useState<StipDocument[]>([])
@@ -2206,6 +2212,7 @@ export default function LeadDetailsPage() {
                             lead={lead}
                             followUps={leadFollowUps}
                             appointments={leadAppointments}
+                            hasBeenContacted={hasBeenContacted}
                             onCall={getLeadPhone(lead) ? handleCallClick : undefined}
                             onScheduleFollowUp={() => setShowScheduleFollowUp(true)}
                             onBookAppointment={() => setShowBookAppointment(true)}
