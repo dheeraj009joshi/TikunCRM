@@ -685,7 +685,7 @@ export default function BdcExportReportPage() {
                                 <TableHead>Salesperson</TableHead>
                                 <TableHead>Latest appt</TableHead>
                                 <TableHead>Check-in</TableHead>
-                                <TableHead>Trust</TableHead>
+                                <TableHead>Guest Trust</TableHead>
                                 <TableHead>Guest QR</TableHead>
                             </TableRow>
                         </TableHeader>
@@ -726,12 +726,7 @@ export default function BdcExportReportPage() {
                                         </TableCell>
                                         <TableCell className="text-sm">{row.showroom_check_in}</TableCell>
                                         <TableCell className="text-sm tabular-nums">
-                                            {row.lead_trust_score != null ? Math.round(row.lead_trust_score) : "—"}
-                                            {row.guest_trust_score != null && (
-                                                <span className="block text-[10px] text-muted-foreground">
-                                                    Guest: {Math.round(row.guest_trust_score)}
-                                                </span>
-                                            )}
+                                            {row.guest_trust_score != null ? Math.round(row.guest_trust_score) : "—"}
                                         </TableCell>
                                         <TableCell>
                                             {row.guest_qr_url ? (

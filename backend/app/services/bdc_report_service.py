@@ -79,7 +79,7 @@ PDF_TABLE_HEADERS = [
     "Sales",
     "Status",
     "Appointment",
-    "Trust",
+    "Guest Trust",
     "QR",
     "Auto",
 ]
@@ -104,7 +104,6 @@ EXPORT_HEADERS = [
     "Latest Appt Date",
     "Appt Count",
     "Showroom Check-in",
-    "Lead Trust Score",
     "Guest Trust Score",
     "Guest QR URL",
     "Guest Auto-Generated",
@@ -633,12 +632,9 @@ class BdcReportService:
 
     @staticmethod
     def _format_trust_score(row: BdcReportRow) -> str:
-        parts: List[str] = []
-        if row.lead_trust_score is not None:
-            parts.append(f"Lead: {int(round(row.lead_trust_score))}")
         if row.guest_trust_score is not None:
-            parts.append(f"Guest: {int(round(row.guest_trust_score))}")
-        return " / ".join(parts)
+            return f"{int(round(row.guest_trust_score))}"
+        return ""
 
     @staticmethod
     def _qr_png_bytes(url: str) -> bytes:
@@ -780,9 +776,9 @@ class BdcReportService:
             cell.font = header_font
             cell.fill = header_fill
 
+        qr_url_col = EXPORT_HEADERS.index("Guest QR URL") + 1
+        ws.column_dimensions[get_column_letter(qr_url_col)].width = 40
         ws.column_dimensions[get_column_letter(len(EXPORT_HEADERS))].width = 14
-        ws.column_dimensions["S"].width = 40
-        ws.column_dimensions["T"].width = 22
 
         for row_idx, row in enumerate(rows, start=header_row + 1):
             appt_display = (
@@ -807,7 +803,6 @@ class BdcReportService:
                 appt_display or row.latest_appt_date,
                 row.appt_count,
                 row.showroom_check_in,
-                row.lead_trust_score if row.lead_trust_score is not None else "",
                 row.guest_trust_score if row.guest_trust_score is not None else "",
                 row.guest_qr_url,
                 "Yes" if row.guest_auto_generated else "No",
@@ -872,12 +867,9 @@ class BdcReportService:
 
     @staticmethod
     def _format_trust_score_pdf(row: BdcReportRow) -> str:
-        parts: List[str] = []
-        if row.lead_trust_score is not None:
-            parts.append(f"Lead {int(round(row.lead_trust_score))}")
         if row.guest_trust_score is not None:
-            parts.append(f"Guest {int(round(row.guest_trust_score))}")
-        return "<br/>".join(parts) if parts else "—"
+            return f"{int(round(row.guest_trust_score))}"
+        return "—"
 
     @staticmethod
     def _pdf_column_widths() -> List[float]:
