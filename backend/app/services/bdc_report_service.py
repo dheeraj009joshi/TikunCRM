@@ -710,7 +710,9 @@ class BdcReportService:
 
         highlight_fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
         header_fill = PatternFill(start_color="3B82F6", end_color="3B82F6", fill_type="solid")
+        brand_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
         header_font = Font(bold=True, color="FFFFFF")
+        brand_font = Font(bold=True, size=16, color="FFFFFF")
         title_font = Font(bold=True, size=14)
         label_font = Font(bold=True)
 
@@ -718,13 +720,22 @@ class BdcReportService:
         current_row = 1
 
         if meta:
-            ws.cell(row=current_row, column=1, value="BDC Export Report").font = title_font
+            brand_cell = ws.cell(
+                row=current_row,
+                column=1,
+                value=f"{settings.app_name}  —  BDC Export Report",
+            )
+            brand_cell.font = brand_font
+            brand_cell.fill = brand_fill
             ws.merge_cells(
                 start_row=current_row,
                 start_column=1,
                 end_row=current_row,
                 end_column=col_count,
             )
+            ws.row_dimensions[current_row].height = 26
+            for col_idx in range(1, col_count + 1):
+                ws.cell(row=current_row, column=col_idx).fill = brand_fill
             current_row += 1
 
             summary = (
@@ -892,8 +903,8 @@ class BdcReportService:
                 png_name = BdcReportService._qr_png_filename(row, used_qr_names)
                 zf.writestr(f"qr-codes/{png_name}", BdcReportService._qr_png_bytes(row.guest_qr_url))
             readme_lines = [
-                "BDC Export Report",
-                "=================",
+                f"{settings.app_name} — BDC Export Report",
+                "=" * (len(settings.app_name) + 22),
                 "",
             ]
             if meta:
@@ -965,6 +976,24 @@ class BdcReportService:
             leading=12,
             textColor=colors.HexColor("#DBEAFE"),
         )
+        brand_style = ParagraphStyle(
+            "BrandMark",
+            parent=styles["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=15,
+            leading=18,
+            textColor=colors.white,
+            alignment=2,  # right
+        )
+        brand_tag_style = ParagraphStyle(
+            "BrandTag",
+            parent=styles["Normal"],
+            fontName="Helvetica",
+            fontSize=7,
+            leading=10,
+            textColor=colors.HexColor("#BFDBFE"),
+            alignment=2,  # right
+        )
         panel_title = ParagraphStyle(
             "PanelTitle",
             parent=styles["Heading2"],
@@ -1024,12 +1053,17 @@ class BdcReportService:
                 f"  ·  Exported by <b>{BdcReportService._pdf_escape(meta.generated_by)}</b>"
                 f"  ·  <b>{meta.total_leads}</b> lead{'s' if meta.total_leads != 1 else ''}"
             )
+            left_cell = [
+                Paragraph("BDC Export Report", banner_title),
+                Paragraph(meta_line, banner_sub),
+            ]
+            right_cell = [
+                Paragraph(BdcReportService._pdf_escape(settings.app_name), brand_style),
+                Paragraph("Automotive CRM", brand_tag_style),
+            ]
             banner = Table(
-                [[
-                    Paragraph("BDC Export Report", banner_title),
-                    Paragraph(meta_line, banner_sub),
-                ]],
-                colWidths=[content_w],
+                [[left_cell, right_cell]],
+                colWidths=[content_w * 0.68, content_w * 0.32],
             )
             banner.setStyle(
                 TableStyle(
@@ -1039,6 +1073,7 @@ class BdcReportService:
                         ("RIGHTPADDING", (0, 0), (-1, -1), 14),
                         ("TOPPADDING", (0, 0), (-1, -1), 12),
                         ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                         ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#1E40AF")),
                     ]
                 )
@@ -1180,9 +1215,13 @@ class BdcReportService:
                 page_w - side_margin,
                 10 * mm,
             )
+            canvas.setFont("Helvetica-Bold", 7)
+            canvas.setFillColor(colors.HexColor("#334155"))
+            canvas.drawString(side_margin, 6 * mm, f"{settings.app_name}")
             canvas.setFont("Helvetica", 7)
             canvas.setFillColor(colors.HexColor("#64748B"))
-            canvas.drawString(side_margin, 6 * mm, "BDC Export Report · TikunCRM")
+            brand_w = canvas.stringWidth(f"{settings.app_name}", "Helvetica-Bold", 7)
+            canvas.drawString(side_margin + brand_w, 6 * mm, "  ·  BDC Export Report")
             if meta:
                 canvas.drawCentredString(
                     page_w / 2,

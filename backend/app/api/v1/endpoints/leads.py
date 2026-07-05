@@ -3280,6 +3280,16 @@ async def export_leads_csv(
         headers.extend(["Appointment Count", "Next Appointment"])
 
     writer = csv.writer(output)
+
+    # Branded report header rows (TikunCRM)
+    from app.core.config import settings as _settings
+    writer.writerow([f"{_settings.app_name} - Leads Export"])
+    writer.writerow([
+        f"Generated: {utc_now().strftime('%Y-%m-%d %H:%M UTC')}",
+        f"Total leads: {len(leads)}",
+    ])
+    writer.writerow([])
+
     writer.writerow(headers)
 
     # Fetch additional data if needed
@@ -3362,7 +3372,7 @@ async def export_leads_csv(
     output.seek(0)
 
     # Generate filename with timestamp
-    filename = f"leads_export_{utc_now().strftime('%Y%m%d_%H%M%S')}.csv"
+    filename = f"{_settings.app_name}_Leads_Export_{utc_now().strftime('%Y%m%d_%H%M%S')}.csv"
 
     return StreamingResponse(
         iter([output.getvalue()]),
