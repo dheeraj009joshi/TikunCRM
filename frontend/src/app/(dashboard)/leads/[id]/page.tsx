@@ -108,6 +108,7 @@ import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-u
 import { EditFollowUpModal } from "@/components/follow-ups/edit-follow-up-modal"
 import { BookAppointmentModal } from "@/components/appointments/book-appointment-modal"
 import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
+import { TrustScoreBadge } from "@/components/eligibility/trust-score-badge"
 import { GuestFormModal } from "@/components/guests/guest-form-modal"
 import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal, getLinkableAppointmentsForCheckIn } from "@/services/appointment-service"
 import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
@@ -2238,6 +2239,13 @@ export default function LeadDetailsPage() {
                                         >
                                             <Star className="h-5 w-5 fill-yellow-400 text-yellow-400" aria-hidden />
                                         </span>
+                                    )}
+                                    {lead.guest_id && (
+                                        <TrustScoreBadge
+                                            score={lead.guest_trust_score}
+                                            label="Guest Trust"
+                                            className="text-xs px-2 py-1"
+                                        />
                                     )}
                                 </h1>
                                 

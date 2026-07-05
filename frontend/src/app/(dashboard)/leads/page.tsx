@@ -105,6 +105,7 @@ import {
 } from "@/lib/leads-open-preference"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
 import { SavedViewsBar } from "@/components/leads/saved-views-bar"
+import { TrustScoreBadge } from "@/components/eligibility/trust-score-badge"
 import type { SavedView } from "@/services/saved-view-service"
 
 // Lead stages are now loaded dynamically from the API
@@ -1512,6 +1513,12 @@ export default function LeadsPage() {
                                                         >
                                                             Recycled
                                                         </Badge>
+                                                    )}
+                                                    {lead.guest_id && (
+                                                        <TrustScoreBadge
+                                                            score={lead.guest_trust_score}
+                                                            label="Trust"
+                                                        />
                                                     )}
                                                 </p>
                                                 <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">

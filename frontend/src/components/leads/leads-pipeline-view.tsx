@@ -24,6 +24,7 @@ import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { cn } from "@/lib/utils"
 import { rememberLeadsListLocation } from "@/lib/leads-list-return"
+import { TrustScoreBadge } from "@/components/eligibility/trust-score-badge"
 
 function PipelineLeadCard({ lead, isDragging }: { lead: Lead; isDragging?: boolean }) {
     const { timezone } = useBrowserTimezone()
@@ -45,7 +46,12 @@ function PipelineLeadCard({ lead, isDragging }: { lead: Lead; isDragging?: boole
             >
                 <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1">
-                        <p className="font-medium text-sm truncate">{name}</p>
+                        <p className="font-medium text-sm truncate flex items-center gap-1.5 flex-wrap">
+                            <span className="truncate">{name}</span>
+                            {lead.guest_id && (
+                                <TrustScoreBadge score={lead.guest_trust_score} label="Trust" />
+                            )}
+                        </p>
                         {phone && (
                             <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5 truncate">
                                 <Phone className="h-3 w-3 shrink-0" />

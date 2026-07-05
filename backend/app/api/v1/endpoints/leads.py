@@ -455,6 +455,17 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             lead_dict["last_note_content"] = None
         enriched_items.append(lead_dict)
 
+    # Guest trust scores (assessment is on the guest entity; auto criteria use linked customer)
+    from app.services.eligibility_service import EligibilityService
+
+    guest_trust_by_lead = await EligibilityService.batch_guest_trust_by_lead_ids(db, lead_ids)
+    for lead_dict in enriched_items:
+        lead_uuid = UUID(lead_dict["id"])
+        guest_info = guest_trust_by_lead.get(lead_uuid)
+        if guest_info:
+            lead_dict["guest_id"] = guest_info["guest_id"]
+            lead_dict["guest_trust_score"] = guest_info["guest_trust_score"]
+
     return enriched_items
 
 
@@ -1595,7 +1606,15 @@ async def get_lead(
             }
             for campaign in campaigns
         ]
-        
+
+    from app.services.eligibility_service import EligibilityService
+
+    guest_trust_by_lead = await EligibilityService.batch_guest_trust_by_lead_ids(db, [lead.id])
+    guest_info = guest_trust_by_lead.get(lead.id)
+    if guest_info:
+        response_data["guest_id"] = guest_info["guest_id"]
+        response_data["guest_trust_score"] = guest_info["guest_trust_score"]
+
     return response_data
 
 

@@ -61,6 +61,11 @@ class GuestService:
         if existing:
             if appointment_id and not existing.appointment_id:
                 existing.appointment_id = appointment_id
+            # Keep guest tied to the lead's customer so trust criteria use the right person
+            lead_res = await db.execute(select(Lead).where(Lead.id == lead_id))
+            lead = lead_res.scalar_one_or_none()
+            if lead and lead.customer_id and existing.customer_id != lead.customer_id:
+                existing.customer_id = lead.customer_id
             GuestService.ensure_share_token(existing)
             return existing
 

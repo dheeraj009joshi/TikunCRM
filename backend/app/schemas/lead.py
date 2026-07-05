@@ -230,6 +230,8 @@ class LeadResponse(BaseModel):
     returned_to_pool_at: Optional[datetime] = None
     previous_assigned_to_id: Optional[UUID] = None
     previous_assigned_to_user: Optional[UserBrief] = None
+    guest_id: Optional[str] = None
+    guest_trust_score: Optional[float] = None
 
     # Convenience: flattened customer fields for backward compat
     @property

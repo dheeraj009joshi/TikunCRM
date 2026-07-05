@@ -98,6 +98,10 @@ export interface Lead {
     last_activity_at?: string | null;
     /** When last activity was a note, the note body (list response) */
     last_note_content?: string | null;
+    /** Guest profile linked to this lead (showroom QR handoff) */
+    guest_id?: string | null;
+    /** Trust score from the guest eligibility assessment, when present */
+    guest_trust_score?: number | null;
     // Extended info (available in detail view)
     assigned_to_user?: UserBrief;
     secondary_salesperson?: UserBrief;

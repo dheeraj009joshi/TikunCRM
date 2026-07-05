@@ -71,18 +71,21 @@ LEAD_SOURCE_LABELS: Dict[str, str] = {
 }
 
 PDF_TABLE_HEADERS = [
-    "Lead Name",
+    "Lead",
     "Phone",
     "Stage",
     "Dealership",
-    "BDC Agent",
-    "Salesperson",
-    "Appt Status",
-    "Appt Date & Time",
-    "Trust Score",
-    "QR Code",
-    "Auto-Generated",
+    "BDC",
+    "Sales",
+    "Status",
+    "Appointment",
+    "Trust",
+    "QR",
+    "Auto",
 ]
+
+# Landscape A4 usable width with 10mm side margins
+PDF_CONTENT_WIDTH_MM = 277
 
 EXPORT_HEADERS = [
     "Lead ID",
@@ -822,6 +825,59 @@ class BdcReportService:
         return buf.getvalue()
 
     @staticmethod
+    def _pdf_escape(text: str) -> str:
+        return (
+            (text or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
+    @staticmethod
+    def _pdf_cell(text: str, style: Any) -> Any:
+        from reportlab.platypus import Paragraph
+
+        safe = BdcReportService._pdf_escape(text.strip() if text else "")
+        return Paragraph(safe or "—", style)
+
+    @staticmethod
+    def _format_appt_for_pdf(iso_date: str) -> str:
+        """Compact two-line appointment label for PDF cells."""
+        if not iso_date or not iso_date.strip():
+            return "—"
+        try:
+            raw = iso_date.strip()
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            date_line = f"{dt.strftime('%a')}, {dt.strftime('%b')} {dt.day}, {dt.strftime('%Y')}"
+            hour = dt.strftime("%I").lstrip("0") or "12"
+            time_line = f"{hour}:{dt.strftime('%M %p')}"
+            return f"{date_line}<br/>{time_line}"
+        except (ValueError, TypeError):
+            return "—"
+
+    @staticmethod
+    def _format_trust_score_pdf(row: BdcReportRow) -> str:
+        parts: List[str] = []
+        if row.lead_trust_score is not None:
+            parts.append(f"Lead {int(round(row.lead_trust_score))}")
+        if row.guest_trust_score is not None:
+            parts.append(f"Guest {int(round(row.guest_trust_score))}")
+        return "<br/>".join(parts) if parts else "—"
+
+    @staticmethod
+    def _pdf_column_widths() -> List[float]:
+        from reportlab.lib.units import mm
+
+        # Must sum to PDF_CONTENT_WIDTH_MM
+        ratios = [14, 10, 9, 12, 9, 9, 8, 13, 7, 6, 5]
+        total = sum(ratios)
+        return [(PDF_CONTENT_WIDTH_MM * r / total) * mm for r in ratios]
+
+    @staticmethod
     def build_zip(rows: Sequence[BdcReportRow], meta: Optional[BdcReportMeta] = None) -> bytes:
         xlsx_bytes = BdcReportService.build_xlsx(rows, meta)
         pdf_bytes = BdcReportService.build_pdf(rows, meta)
@@ -877,174 +933,267 @@ class BdcReportService:
         from reportlab.lib.units import mm
         from reportlab.platypus import Image as RLImage, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+        page_w, _page_h = landscape(A4)
+        content_w = PDF_CONTENT_WIDTH_MM * mm
+        side_margin = (page_w - content_w) / 2
+
         buf = io.BytesIO()
         doc = SimpleDocTemplate(
             buf,
             pagesize=landscape(A4),
-            leftMargin=8 * mm,
-            rightMargin=8 * mm,
-            topMargin=10 * mm,
-            bottomMargin=12 * mm,
+            leftMargin=side_margin,
+            rightMargin=side_margin,
+            topMargin=8 * mm,
+            bottomMargin=14 * mm,
         )
 
         styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            "ReportTitle",
+        banner_title = ParagraphStyle(
+            "BannerTitle",
             parent=styles["Heading1"],
             fontName="Helvetica-Bold",
-            fontSize=16,
-            leading=20,
-            spaceAfter=4,
-            textColor=colors.HexColor("#0F172A"),
-        )
-        subtitle_style = ParagraphStyle(
-            "ReportSubtitle",
-            parent=styles["Normal"],
-            fontName="Helvetica",
-            fontSize=8,
-            leading=11,
-            textColor=colors.HexColor("#475569"),
+            fontSize=18,
+            leading=22,
+            textColor=colors.white,
             spaceAfter=2,
         )
-        section_style = ParagraphStyle(
-            "SectionHeading",
+        banner_sub = ParagraphStyle(
+            "BannerSub",
+            parent=styles["Normal"],
+            fontName="Helvetica",
+            fontSize=8.5,
+            leading=12,
+            textColor=colors.HexColor("#DBEAFE"),
+        )
+        panel_title = ParagraphStyle(
+            "PanelTitle",
             parent=styles["Heading2"],
             fontName="Helvetica-Bold",
-            fontSize=10,
-            leading=13,
-            spaceBefore=4,
-            spaceAfter=4,
+            fontSize=9,
+            leading=12,
+            textColor=colors.HexColor("#1E293B"),
+            spaceAfter=6,
+        )
+        filter_label = ParagraphStyle(
+            "FilterLabel",
+            fontName="Helvetica-Bold",
+            fontSize=7.5,
+            leading=10,
+            textColor=colors.HexColor("#64748B"),
+        )
+        filter_value = ParagraphStyle(
+            "FilterValue",
+            fontName="Helvetica",
+            fontSize=7.5,
+            leading=10,
             textColor=colors.HexColor("#0F172A"),
         )
         note_style = ParagraphStyle(
             "ReportNote",
             parent=styles["Normal"],
-            fontName="Helvetica-Oblique",
+            fontName="Helvetica",
+            fontSize=7,
+            leading=10,
+            textColor=colors.HexColor("#92400E"),
+        )
+        header_cell = ParagraphStyle(
+            "HeaderCell",
+            fontName="Helvetica-Bold",
+            fontSize=7.5,
+            leading=9,
+            textColor=colors.white,
+        )
+        body_cell = ParagraphStyle(
+            "BodyCell",
+            fontName="Helvetica",
             fontSize=7,
             leading=9,
-            textColor=colors.HexColor("#64748B"),
-            spaceAfter=4,
+            textColor=colors.HexColor("#1E293B"),
+        )
+        body_cell_center = ParagraphStyle(
+            "BodyCellCenter",
+            parent=body_cell,
+            alignment=1,
         )
 
         elements: List[Any] = []
 
         if meta:
-            elements.append(Paragraph("BDC Export Report", title_style))
-            elements.append(
-                Paragraph(
-                    f"Generated {BdcReportService._format_display_datetime(meta.generated_at)}"
-                    f" &nbsp;|&nbsp; Exported by <b>{meta.generated_by}</b>"
-                    f" &nbsp;|&nbsp; <b>{meta.total_leads}</b> lead{'s' if meta.total_leads != 1 else ''}",
-                    subtitle_style,
-                )
+            meta_line = (
+                f"Generated {BdcReportService._format_display_datetime(meta.generated_at)}"
+                f"  ·  Exported by <b>{BdcReportService._pdf_escape(meta.generated_by)}</b>"
+                f"  ·  <b>{meta.total_leads}</b> lead{'s' if meta.total_leads != 1 else ''}"
             )
-            elements.append(Spacer(1, 3 * mm))
-            elements.append(Paragraph("Applied Filters", section_style))
-
-            filter_data = [[label, value] for label, value in meta.filter_items]
-            filter_table = Table(filter_data, colWidths=[42 * mm, 225 * mm])
-            filter_table.setStyle(
+            banner = Table(
+                [[
+                    Paragraph("BDC Export Report", banner_title),
+                    Paragraph(meta_line, banner_sub),
+                ]],
+                colWidths=[content_w],
+            )
+            banner.setStyle(
                 TableStyle(
                     [
-                        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                        ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
-                        ("FONTSIZE", (0, 0), (-1, -1), 8),
-                        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#334155")),
-                        ("TEXTCOLOR", (1, 0), (1, -1), colors.HexColor("#0F172A")),
-                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                        ("TOPPADDING", (0, 0), (-1, -1), 2),
-                        ("LINEBELOW", (0, -1), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#1E3A8A")),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 14),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+                        ("TOPPADDING", (0, 0), (-1, -1), 12),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+                        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#1E40AF")),
                     ]
                 )
             )
-            elements.append(filter_table)
-            elements.append(Spacer(1, 2 * mm))
-            elements.append(
-                Paragraph(
-                    "Yellow rows indicate guest profiles that were auto-generated during export.",
-                    note_style,
-                )
-            )
+            elements.append(banner)
             elements.append(Spacer(1, 4 * mm))
 
-        table_data: List[List[Any]] = [PDF_TABLE_HEADERS]
+            filter_rows = [
+                [
+                    BdcReportService._pdf_cell(label, filter_label),
+                    BdcReportService._pdf_cell(value, filter_value),
+                ]
+                for label, value in meta.filter_items
+            ]
+            filter_inner = Table(
+                filter_rows,
+                colWidths=[38 * mm, content_w - 38 * mm - 20 * mm],
+            )
+            filter_inner.setStyle(
+                TableStyle(
+                    [
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("TOPPADDING", (0, 0), (-1, -1), 3),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                        ("LINEBELOW", (0, 0), (-1, -2), 0.25, colors.HexColor("#E2E8F0")),
+                    ]
+                )
+            )
+            filter_panel = Table(
+                [[Paragraph("Applied Filters", panel_title)], [filter_inner]],
+                colWidths=[content_w],
+            )
+            filter_panel.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+                        ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor("#CBD5E1")),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                        ("TOPPADDING", (0, 0), (0, 0), 8),
+                        ("BOTTOMPADDING", (0, -1), (-1, -1), 10),
+                    ]
+                )
+            )
+            elements.append(filter_panel)
+            elements.append(Spacer(1, 3 * mm))
+
+            note_box = Table(
+                [[Paragraph("Yellow rows = guest profiles auto-generated during this export.", note_style)]],
+                colWidths=[content_w],
+            )
+            note_box.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFFBEB")),
+                        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#FDE68A")),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                        ("TOPPADDING", (0, 0), (-1, -1), 6),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                    ]
+                )
+            )
+            elements.append(note_box)
+            elements.append(Spacer(1, 5 * mm))
+
+        col_widths = BdcReportService._pdf_column_widths()
+        table_data: List[List[Any]] = [
+            [Paragraph(BdcReportService._pdf_escape(h), header_cell) for h in PDF_TABLE_HEADERS]
+        ]
         highlight_rows: List[int] = []
+        qr_col_idx = PDF_TABLE_HEADERS.index("QR")
 
         for idx, row in enumerate(rows):
-            trust = BdcReportService._format_trust_score(row)
             appt_display = (
-                BdcReportService._format_appt_for_filename(row.latest_appt_date)
+                BdcReportService._format_appt_for_pdf(row.latest_appt_date)
                 if row.latest_appt_date
-                else ""
+                else "—"
             )
+            trust_display = BdcReportService._format_trust_score_pdf(row)
 
-            qr_cell: Any = ""
+            qr_cell: Any = BdcReportService._pdf_cell("", body_cell_center)
             if row.guest_qr_url:
                 try:
                     png = BdcReportService._qr_png_bytes(row.guest_qr_url)
-                    qr_cell = RLImage(io.BytesIO(png), width=16 * mm, height=16 * mm)
+                    qr_cell = RLImage(io.BytesIO(png), width=11 * mm, height=11 * mm)
                 except Exception:
-                    qr_cell = row.guest_qr_url[:30]
+                    qr_cell = BdcReportService._pdf_cell("—", body_cell_center)
                     logger.exception("Failed to embed QR in PDF for lead %s", row.lead_id)
 
             if row.guest_auto_generated:
                 highlight_rows.append(idx + 1)
 
             table_data.append([
-                row.full_name[:32],
-                row.phone[:16],
-                row.stage[:18],
-                row.dealership[:20],
-                row.bdc_agent[:16],
-                row.salesperson[:16],
-                row.latest_appt_status[:16],
-                appt_display[:34],
-                trust[:22],
+                BdcReportService._pdf_cell(row.full_name, body_cell),
+                BdcReportService._pdf_cell(row.phone, body_cell),
+                BdcReportService._pdf_cell(row.stage, body_cell),
+                BdcReportService._pdf_cell(row.dealership, body_cell),
+                BdcReportService._pdf_cell(row.bdc_agent, body_cell),
+                BdcReportService._pdf_cell(row.salesperson, body_cell),
+                BdcReportService._pdf_cell(row.latest_appt_status, body_cell),
+                Paragraph(appt_display, body_cell),
+                Paragraph(trust_display, body_cell),
                 qr_cell,
-                "Yes" if row.guest_auto_generated else "",
+                BdcReportService._pdf_cell("Yes" if row.guest_auto_generated else "", body_cell_center),
             ])
 
-        col_widths = [
-            28 * mm,
-            20 * mm,
-            18 * mm,
-            22 * mm,
-            18 * mm,
-            18 * mm,
-            16 * mm,
-            34 * mm,
-            18 * mm,
-            16 * mm,
-            14 * mm,
-        ]
         table = Table(table_data, colWidths=col_widths, repeatRows=1)
-        style_commands = [
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1D4ED8")),
+        style_commands: List[Any] = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2563EB")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, 0), 7),
-            ("FONTSIZE", (0, 1), (-1, -1), 6.5),
+            ("FONTSIZE", (0, 0), (-1, 0), 7.5),
             ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("ALIGN", (qr_col_idx, 1), (qr_col_idx, -1), "CENTER"),
+            ("ALIGN", (-1, 1), (-1, -1), "CENTER"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#CBD5E1")),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E2E8F0")),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
         ]
         for row_i in highlight_rows:
             style_commands.append(
-                ("BACKGROUND", (0, row_i), (-1, row_i), colors.HexColor("#FFF3CD"))
+                ("BACKGROUND", (0, row_i), (-1, row_i), colors.HexColor("#FEF3C7"))
             )
         table.setStyle(TableStyle(style_commands))
         elements.append(table)
 
         def _draw_page_footer(canvas: Any, doc_obj: Any) -> None:
             canvas.saveState()
+            canvas.setStrokeColor(colors.HexColor("#CBD5E1"))
+            canvas.setLineWidth(0.5)
+            canvas.line(
+                side_margin,
+                10 * mm,
+                page_w - side_margin,
+                10 * mm,
+            )
             canvas.setFont("Helvetica", 7)
             canvas.setFillColor(colors.HexColor("#64748B"))
-            canvas.drawString(8 * mm, 6 * mm, "BDC Export Report")
-            canvas.drawRightString(doc_obj.pagesize[0] - 8 * mm, 6 * mm, f"Page {canvas.getPageNumber()}")
+            canvas.drawString(side_margin, 6 * mm, "BDC Export Report · TikunCRM")
+            if meta:
+                canvas.drawCentredString(
+                    page_w / 2,
+                    6 * mm,
+                    f"{meta.total_leads} leads · {meta.scope_label}",
+                )
+            canvas.drawRightString(
+                page_w - side_margin,
+                6 * mm,
+                f"Page {canvas.getPageNumber()}",
+            )
             canvas.restoreState()
 
         doc.build(elements, onFirstPage=_draw_page_footer, onLaterPages=_draw_page_footer)

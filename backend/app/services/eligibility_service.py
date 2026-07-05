@@ -403,3 +403,44 @@ class EligibilityService:
         return await EligibilityService.build_assessment_payload(
             db, entity_type, entity_id, assessment.dealership_id
         )
+
+    @staticmethod
+    async def batch_guest_trust_by_lead_ids(
+        db: AsyncSession,
+        lead_ids: List[UUID],
+    ) -> Dict[UUID, Dict[str, Any]]:
+        """Map lead_id -> guest trust info for leads that have a guest profile."""
+        from app.models.guest import Guest
+
+        if not lead_ids:
+            return {}
+
+        guest_res = await db.execute(
+            select(Guest)
+            .where(Guest.lead_id.in_(lead_ids))
+            .order_by(Guest.created_at.asc())
+        )
+        guests_by_lead: Dict[UUID, Guest] = {}
+        for guest in guest_res.scalars().all():
+            if guest.lead_id and guest.lead_id not in guests_by_lead:
+                guests_by_lead[guest.lead_id] = guest
+
+        guest_ids = [g.id for g in guests_by_lead.values()]
+        scores: Dict[UUID, float] = {}
+        if guest_ids:
+            score_res = await db.execute(
+                select(EligibilityAssessment).where(
+                    EligibilityAssessment.entity_type == EligibilityEntityType.GUEST.value,
+                    EligibilityAssessment.entity_id.in_(guest_ids),
+                )
+            )
+            for assessment in score_res.scalars().all():
+                scores[assessment.entity_id] = float(assessment.total_score)
+
+        result: Dict[UUID, Dict[str, Any]] = {}
+        for lead_id, guest in guests_by_lead.items():
+            result[lead_id] = {
+                "guest_id": str(guest.id),
+                "guest_trust_score": scores.get(guest.id),
+            }
+        return result
