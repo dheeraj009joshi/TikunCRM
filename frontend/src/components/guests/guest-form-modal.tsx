@@ -19,6 +19,8 @@ import {
     Car,
     Repeat,
     SlidersHorizontal,
+    Landmark,
+    Gauge,
 } from "lucide-react"
 import {
     Dialog,
@@ -37,6 +39,7 @@ import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
 import { useRole } from "@/hooks/use-role"
 import { AppointmentService } from "@/services/appointment-service"
 import {
+    copyGuestQrImageToClipboard,
     exportGuestQrPng,
     formatAppointmentLabel,
 } from "@/lib/qr-export"
@@ -82,7 +85,6 @@ const SECTIONS: { title: string; fields: FieldDef[] }[] = [
         fields: [
             { key: "down_payment", label: "Down payment", type: "number", icon: DollarSign },
             { key: "vehicle_of_interest", label: "Vehicle of interest", icon: Car, full: true },
-            { key: "trade_in", label: "Trade-in", icon: Repeat },
         ],
     },
 ]
@@ -95,6 +97,12 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 function guestToPayload(guest: Guest): GuestUpdatePayload {
+    const payoffNum =
+        guest.payoff != null && guest.payoff !== ("" as unknown) ? Number(guest.payoff) : null
+    const hasPayoff = payoffNum != null && !Number.isNaN(payoffNum) && payoffNum > 0
+    const milesNum =
+        guest.miles != null && guest.miles !== ("" as unknown) ? Number(guest.miles) : null
+
     return {
         full_name: guest.full_name ?? null,
         phone: guest.phone ?? null,
@@ -109,8 +117,18 @@ function guestToPayload(guest: Guest): GuestUpdatePayload {
                 : null,
         vehicle_of_interest: guest.vehicle_of_interest ?? null,
         trade_in: guest.trade_in ?? null,
+        payoff: hasPayoff ? payoffNum : null,
+        payoff_bank: hasPayoff ? guest.payoff_bank?.trim() || null : null,
+        miles: milesNum != null && !Number.isNaN(milesNum) ? milesNum : null,
         notes: guest.notes ?? null,
     }
+}
+
+function hasPayoffValue(guest: Guest): boolean {
+    const raw = guest.payoff
+    if (raw == null || raw === ("" as unknown)) return false
+    const n = Number(raw)
+    return !Number.isNaN(n) && n > 0
 }
 
 function shareUrlForGuest(guest: Guest): string | null {
@@ -134,11 +152,13 @@ export function GuestFormModal({
     const [saveStatus, setSaveStatus] = React.useState<"idle" | "saving" | "saved" | "error">("idle")
     const [shareUrl, setShareUrl] = React.useState<string | null>(null)
     const [appointmentAt, setAppointmentAt] = React.useState<string | null>(null)
-    const [copied, setCopied] = React.useState(false)
+    const [copiedLink, setCopiedLink] = React.useState(false)
+    const [copiedImage, setCopiedImage] = React.useState(false)
+    const [copyingImage, setCopyingImage] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
     const guestRef = React.useRef<Guest | null>(null)
-    const qrContainerRef = React.useRef<HTMLDivElement>(null)
+    const qrContainerRef = React.useRef<HTMLButtonElement>(null)
     const router = useRouter()
     const { isSuperAdmin, isDealershipLevel, isBdc } = useRole()
     const canManageCriteria = isSuperAdmin || isDealershipLevel || isBdc
@@ -250,11 +270,48 @@ export function GuestFormModal({
     const setField = (key: keyof Guest, value: string) => {
         setGuest((prev) => {
             if (!prev) return prev
-            const next = { ...prev, [key]: value }
+            const next: Guest = { ...prev, [key]: value }
+            if (key === "payoff") {
+                const n = Number(value)
+                if (!value.trim() || Number.isNaN(n) || n <= 0) {
+                    next.payoff_bank = null
+                }
+            }
             guestRef.current = next
             return next
         })
         scheduleSave()
+    }
+
+    const renderIconField = (
+        f: FieldDef,
+        guestData: Guest,
+        className = ""
+    ) => {
+        const Icon = f.icon
+        return (
+            <div key={String(f.key)} className={`space-y-1.5 ${f.full ? "col-span-2" : ""} ${className}`}>
+                <Label className="text-xs text-muted-foreground">{f.label}</Label>
+                <div className="relative">
+                    {Icon && (
+                        <Icon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    )}
+                    <Input
+                        type={f.type || "text"}
+                        className={Icon ? "pl-9" : ""}
+                        value={(guestData[f.key] as string | number | null) ?? ""}
+                        onChange={(e) => setField(f.key, e.target.value)}
+                        placeholder={
+                            f.key === "payoff"
+                                ? "25000"
+                                : f.key === "miles"
+                                  ? "35000"
+                                  : undefined
+                        }
+                    />
+                </div>
+            </div>
+        )
     }
 
     const handleRevoke = async () => {
@@ -268,15 +325,41 @@ export function GuestFormModal({
         }
     }
 
-    const handleCopy = async () => {
+    const handleCopyLink = async () => {
         if (!shareUrl) return
         try {
             await navigator.clipboard.writeText(shareUrl)
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
+            setCopiedLink(true)
+            setTimeout(() => setCopiedLink(false), 1500)
         } catch {
             /* clipboard may be unavailable */
         }
+    }
+
+    const handleCopyQrImage = async () => {
+        const svg = qrContainerRef.current?.querySelector("svg")
+        if (!svg || !guest || copyingImage) return
+        setCopyingImage(true)
+        setError(null)
+        try {
+            await copyGuestQrImageToClipboard({
+                svg,
+                guestName: guest.full_name || "Guest",
+                appointmentAt,
+            })
+            setCopiedImage(true)
+            setTimeout(() => setCopiedImage(false), 2000)
+        } catch (e) {
+            console.error("Failed to copy QR image", e)
+            setError("Could not copy image — try Export QR or use Chrome/Safari on HTTPS.")
+        } finally {
+            setCopyingImage(false)
+        }
+    }
+
+    const handleQrContextMenu = (e: React.MouseEvent) => {
+        e.preventDefault()
+        void handleCopyQrImage()
     }
 
     const handleExportQr = async () => {
@@ -355,25 +438,43 @@ export function GuestFormModal({
                                     {section.title}
                                 </h3>
                                 <div className="grid grid-cols-2 gap-3">
-                                    {section.fields.map((f) => {
-                                        const Icon = f.icon
-                                        return (
-                                            <div key={String(f.key)} className={`space-y-1.5 ${f.full ? "col-span-2" : ""}`}>
-                                                <Label className="text-xs text-muted-foreground">{f.label}</Label>
-                                                <div className="relative">
-                                                    {Icon && (
-                                                        <Icon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                                                    )}
-                                                    <Input
-                                                        type={f.type || "text"}
-                                                        className={Icon ? "pl-9" : ""}
-                                                        value={(guest[f.key] as string | number | null) ?? ""}
-                                                        onChange={(e) => setField(f.key, e.target.value)}
-                                                    />
-                                                </div>
-                                            </div>
-                                        )
-                                    })}
+                                    {section.fields.map((f) => renderIconField(f, guest))}
+                                    {section.title === "Deal details" && (
+                                        <>
+                                            {renderIconField(
+                                                { key: "trade_in", label: "Trade-in", icon: Repeat },
+                                                guest
+                                            )}
+                                            {renderIconField(
+                                                {
+                                                    key: "payoff",
+                                                    label: "Payoff",
+                                                    type: "number",
+                                                    icon: DollarSign,
+                                                },
+                                                guest
+                                            )}
+                                            {hasPayoffValue(guest) &&
+                                                renderIconField(
+                                                    {
+                                                        key: "payoff_bank",
+                                                        label: "Bank",
+                                                        icon: Landmark,
+                                                    },
+                                                    guest,
+                                                    "col-span-2"
+                                                )}
+                                            {renderIconField(
+                                                {
+                                                    key: "miles",
+                                                    label: "Miles",
+                                                    type: "number",
+                                                    icon: Gauge,
+                                                },
+                                                guest
+                                            )}
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         ))}
@@ -438,18 +539,58 @@ export function GuestFormModal({
                                         {formatAppointmentLabel(appointmentAt)}
                                     </p>
                                 </div>
-                                <div ref={qrContainerRef} className="rounded-lg bg-white p-3 shadow-sm">
+                                <button
+                                    type="button"
+                                    ref={qrContainerRef}
+                                    onContextMenu={handleQrContextMenu}
+                                    onClick={handleCopyQrImage}
+                                    title="Click or right-click to copy QR as image"
+                                    className="group rounded-lg bg-white p-3 shadow-sm ring-offset-background transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 cursor-copy"
+                                >
                                     <QRCode value={shareUrl} size={160} />
-                                </div>
+                                    <span className="mt-2 block text-[10px] font-medium text-muted-foreground group-hover:text-foreground">
+                                        {copyingImage
+                                            ? "Copying…"
+                                            : copiedImage
+                                              ? "Copied — paste in WhatsApp"
+                                              : "Right-click or click to copy image"}
+                                    </span>
+                                </button>
                                 <p className="text-xs text-muted-foreground">Scan to open the guest&apos;s shareable profile</p>
                                 <div className="flex w-full max-w-md items-center gap-2">
                                     <Input readOnly value={shareUrl} className="text-xs" />
-                                    <Button type="button" variant="outline" size="icon" onClick={handleCopy}>
-                                        {copied ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="icon"
+                                        onClick={handleCopyLink}
+                                        title="Copy profile link"
+                                    >
+                                        {copiedLink ? (
+                                            <Check className="h-4 w-4 text-emerald-600" />
+                                        ) : (
+                                            <Copy className="h-4 w-4" />
+                                        )}
                                     </Button>
                                 </div>
                                 <div className="flex flex-wrap items-center justify-center gap-2">
-                                    <Button type="button" variant="secondary" size="sm" onClick={handleExportQr}>
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={handleCopyQrImage}
+                                        disabled={copyingImage}
+                                    >
+                                        {copyingImage ? (
+                                            <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                                        ) : copiedImage ? (
+                                            <Check className="h-4 w-4 mr-1.5 text-emerald-600" />
+                                        ) : (
+                                            <Copy className="h-4 w-4 mr-1.5" />
+                                        )}
+                                        Copy image
+                                    </Button>
+                                    <Button type="button" variant="outline" size="sm" onClick={handleExportQr}>
                                         <Download className="h-4 w-4 mr-1.5" /> Export QR
                                     </Button>
                                     <Button type="button" variant="ghost" size="sm" onClick={handleRevoke}>

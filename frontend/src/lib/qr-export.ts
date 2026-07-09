@@ -1,4 +1,4 @@
-/** Shared helpers for guest QR PNG export (matches BDC report naming). */
+/** Shared helpers for guest QR PNG export and clipboard copy (matches BDC report naming). */
 
 export function sanitizeFilenamePart(text: string, maxLen = 60): string {
     if (!text) return ""
@@ -54,11 +54,13 @@ export function guestQrExportFilename(
     return `${name} - ${appt}.png`
 }
 
-export async function exportGuestQrPng(options: {
+export type GuestQrImageOptions = {
     svg: SVGElement
     guestName: string
     appointmentAt?: string | null
-}): Promise<void> {
+}
+
+async function renderGuestQrCanvas(options: GuestQrImageOptions): Promise<HTMLCanvasElement> {
     const { svg, guestName, appointmentAt } = options
     const qrSize = 512
     const padding = 40
@@ -68,7 +70,7 @@ export async function exportGuestQrPng(options: {
 
     const canvas = document.createElement("canvas")
     const ctx = canvas.getContext("2d")
-    if (!ctx) return
+    if (!ctx) throw new Error("Canvas not supported")
 
     const textBlockHeight = lineHeight * 2 + 24
     canvas.width = qrSize + padding * 2
@@ -99,18 +101,30 @@ export async function exportGuestQrPng(options: {
         img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgData)}`
     })
 
-    await new Promise<void>((resolve) => {
-        canvas.toBlob((blob) => {
-            if (!blob) {
-                resolve()
-                return
-            }
-            const link = document.createElement("a")
-            link.href = URL.createObjectURL(blob)
-            link.download = guestQrExportFilename(name, appointmentAt)
-            link.click()
-            URL.revokeObjectURL(link.href)
-            resolve()
-        }, "image/png")
-    })
+    return canvas
+}
+
+export async function buildGuestQrImageBlob(options: GuestQrImageOptions): Promise<Blob> {
+    const canvas = await renderGuestQrCanvas(options)
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"))
+    if (!blob) throw new Error("Failed to create image")
+    return blob
+}
+
+export async function copyGuestQrImageToClipboard(options: GuestQrImageOptions): Promise<void> {
+    const blob = await buildGuestQrImageBlob(options)
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+        throw new Error("Copy image is not supported in this browser")
+    }
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })])
+}
+
+export async function exportGuestQrPng(options: GuestQrImageOptions): Promise<void> {
+    const blob = await buildGuestQrImageBlob(options)
+    const name = options.guestName.trim() || "Guest"
+    const link = document.createElement("a")
+    link.href = URL.createObjectURL(blob)
+    link.download = guestQrExportFilename(name, options.appointmentAt)
+    link.click()
+    URL.revokeObjectURL(link.href)
 }

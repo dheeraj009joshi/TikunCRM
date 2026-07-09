@@ -26,6 +26,9 @@ export interface Guest {
     down_payment?: number | null
     vehicle_of_interest?: string | null
     trade_in?: string | null
+    payoff?: number | null
+    payoff_bank?: string | null
+    miles?: number | null
     notes?: string | null
     share_token?: string | null
     share_revoked: boolean
@@ -49,6 +52,9 @@ export interface GuestCreatePayload {
     down_payment?: number | null
     vehicle_of_interest?: string | null
     trade_in?: string | null
+    payoff?: number | null
+    payoff_bank?: string | null
+    miles?: number | null
     notes?: string | null
 }
 
@@ -78,6 +84,9 @@ export interface GuestPublicProfile {
     down_payment?: number | null
     vehicle_of_interest?: string | null
     trade_in?: string | null
+    payoff?: number | null
+    payoff_bank?: string | null
+    miles?: number | null
     notes?: string | null
     status: GuestStatus
     dealership_name?: string | null

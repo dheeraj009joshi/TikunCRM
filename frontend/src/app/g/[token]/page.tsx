@@ -16,6 +16,8 @@ import {
     Calendar,
     CheckCircle2,
     XCircle,
+    Landmark,
+    Gauge,
 } from "lucide-react"
 import { GuestService, type GuestPublicProfile } from "@/services/guest-service"
 import type { AssessmentItemState } from "@/services/eligibility-service"
@@ -255,6 +257,17 @@ export default function PublicGuestPage() {
                         value={profile.down_payment != null ? `$${Number(profile.down_payment).toLocaleString()}` : null}
                     />
                     <Row icon={Repeat} label="Trade-in" value={profile.trade_in} />
+                    <Row
+                        icon={DollarSign}
+                        label="Payoff"
+                        value={profile.payoff != null ? `$${Number(profile.payoff).toLocaleString()}` : null}
+                    />
+                    <Row icon={Landmark} label="Bank" value={profile.payoff_bank} />
+                    <Row
+                        icon={Gauge}
+                        label="Miles"
+                        value={profile.miles != null ? Number(profile.miles).toLocaleString() : null}
+                    />
                 </div>
 
                 {/* Documents */}
