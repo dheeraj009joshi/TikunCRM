@@ -78,6 +78,9 @@ class Guest(Base):
     down_payment: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     vehicle_of_interest: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     trade_in: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    payoff: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    payoff_bank: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    miles: Mapped[Optional[int]] = mapped_column(nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # --- QR sharing ---

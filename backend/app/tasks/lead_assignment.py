@@ -20,6 +20,7 @@ from app.models.activity import Activity, ActivityType
 from app.models.user import User
 from app.models.dealership import Dealership
 from app.models.notification import Notification, NotificationType
+from app.models.user_dealership_access import UserDealershipAccess
 from app.services.notification_service import NotificationService
 from app.services.follow_up_schedule_service import (
     schedule_outbound_call_follow_ups,
@@ -326,6 +327,165 @@ async def auto_assign_leads_from_activity():
             logger.error(f"Auto-assign task failed with error: {e}", exc_info=True)
 
 
+async def auto_assign_bdc_leads_from_activity():
+    """
+    Assign unclaimed BDC leads when a BDC agent performed the first qualifying activity.
+
+    Mirrors salesperson auto-assign but sets bdc_assigned_to_id instead of assigned_to.
+    """
+    logger.info("=== BDC AUTO-ASSIGN TASK STARTED ===")
+
+    session_maker = get_assignment_session_maker()
+
+    assignable_activity_types = [
+        ActivityType.NOTE_ADDED,
+        ActivityType.CALL_LOGGED,
+        ActivityType.EMAIL_SENT,
+        ActivityType.STATUS_CHANGED,
+        ActivityType.FOLLOW_UP_SCHEDULED,
+        ActivityType.APPOINTMENT_SCHEDULED,
+    ]
+
+    async with session_maker() as session:
+        try:
+            has_qualifying_activity = exists(
+                select(Activity.id).where(
+                    Activity.lead_id == Lead.id,
+                    Activity.type.in_(assignable_activity_types),
+                    Activity.user_id.isnot(None),
+                )
+            )
+
+            result = await session.execute(
+                select(Lead).where(
+                    Lead.bdc_assigned_to_id.is_(None),
+                    Lead.dealership_id.isnot(None),
+                    has_qualifying_activity,
+                )
+            )
+            unassigned_bdc_leads = result.scalars().all()
+
+            if not unassigned_bdc_leads:
+                logger.info("No unassigned BDC leads with activities found - nothing to process")
+                return
+
+            logger.info(
+                f"Found {len(unassigned_bdc_leads)} leads without BDC assignment to process"
+            )
+            assigned_count = 0
+            skipped_count = 0
+
+            for lead in unassigned_bdc_leads:
+                first_activity_result = await session.execute(
+                    select(Activity, User)
+                    .join(User, Activity.user_id == User.id)
+                    .where(
+                        Activity.lead_id == lead.id,
+                        Activity.type.in_(assignable_activity_types),
+                        Activity.user_id.isnot(None),
+                        User.role == UserRole.BDC.value,
+                    )
+                    .order_by(Activity.created_at.asc())
+                    .limit(1)
+                )
+                first_row = first_activity_result.first()
+                if not first_row:
+                    skipped_count += 1
+                    continue
+
+                first_activity, activity_user = first_row
+
+                access_result = await session.execute(
+                    select(UserDealershipAccess).where(
+                        UserDealershipAccess.user_id == activity_user.id,
+                        UserDealershipAccess.dealership_id == lead.dealership_id,
+                    )
+                )
+                if not access_result.scalar_one_or_none():
+                    skipped_count += 1
+                    continue
+
+                user_role_value = (
+                    activity_user.role.value
+                    if hasattr(activity_user.role, "value")
+                    else str(activity_user.role)
+                )
+                if user_role_value != UserRole.BDC.value:
+                    skipped_count += 1
+                    continue
+
+                logger.info(
+                    f"BDC AUTO-ASSIGNING lead {lead.id} to {activity_user.email} "
+                    f"based on {first_activity.type.value if hasattr(first_activity.type, 'value') else first_activity.type} activity"
+                )
+                lead.bdc_assigned_to_id = first_activity.user_id
+                lead.last_activity_at = utc_now()
+
+                activity = Activity(
+                    type=ActivityType.LEAD_ASSIGNED,
+                    description=(
+                        f"BDC agent auto-assigned to {activity_user.first_name} "
+                        f"{activity_user.last_name} based on first activity"
+                    ),
+                    user_id=first_activity.user_id,
+                    lead_id=lead.id,
+                    dealership_id=lead.dealership_id,
+                    meta_data={
+                        "auto_assigned": True,
+                        "reason": "first_activity",
+                        "activity_type": (
+                            first_activity.type.value
+                            if hasattr(first_activity.type, "value")
+                            else str(first_activity.type)
+                        ),
+                        "user_name": f"{activity_user.first_name} {activity_user.last_name}",
+                        "user_role": user_role_value,
+                        "action": "assign_bdc",
+                        "bdc_assigned_to_id": str(first_activity.user_id),
+                    },
+                )
+                session.add(activity)
+
+                notification_service = NotificationService(session)
+                lead_name = f"{lead.first_name} {lead.last_name or ''}".strip()
+                await notification_service.notify_lead_assigned(
+                    user_id=first_activity.user_id,
+                    lead_name=lead_name,
+                    lead_id=lead.id,
+                    assigned_by="System (BDC auto-assignment)",
+                )
+
+                await ws_manager.send_to_user(
+                    first_activity.user_id,
+                    {
+                        "type": "lead:updated",
+                        "payload": {
+                            "lead_id": str(lead.id),
+                            "update_type": "assigned",
+                            "bdc_assigned_to_id": str(first_activity.user_id),
+                        },
+                    },
+                )
+                await ws_manager.send_to_user(
+                    first_activity.user_id,
+                    {"type": "badges:refresh", "payload": {}},
+                )
+
+                assigned_count += 1
+
+            if assigned_count > 0:
+                await session.commit()
+
+            logger.info(
+                f"=== BDC AUTO-ASSIGN TASK COMPLETED === "
+                f"Processed: {len(unassigned_bdc_leads)}, Assigned: {assigned_count}, Skipped: {skipped_count}"
+            )
+
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"BDC auto-assign task failed with error: {e}", exc_info=True)
+
+
 async def unassign_stale_leads():
     """
     Unassign primary (and secondary) salesperson when the lead has had no *engagement*
@@ -537,6 +697,7 @@ def run_auto_assign_task():
     """Wrapper for scheduler to run auto-assign"""
     import asyncio
     asyncio.run(auto_assign_leads_from_activity())
+    asyncio.run(auto_assign_bdc_leads_from_activity())
 
 
 def run_stale_unassign_task():

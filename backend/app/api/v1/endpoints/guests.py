@@ -106,6 +106,9 @@ async def create_guest(
         down_payment=data.get("down_payment"),
         vehicle_of_interest=data.get("vehicle_of_interest"),
         trade_in=data.get("trade_in"),
+        payoff=data.get("payoff"),
+        payoff_bank=data.get("payoff_bank"),
+        miles=data.get("miles"),
         notes=data.get("notes"),
         status=GuestStatus.READY.value,
     )

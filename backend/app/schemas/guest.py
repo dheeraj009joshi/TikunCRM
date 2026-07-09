@@ -29,6 +29,9 @@ class GuestCreate(BaseModel):
     down_payment: Optional[Decimal] = None
     vehicle_of_interest: Optional[str] = Field(None, max_length=255)
     trade_in: Optional[str] = Field(None, max_length=255)
+    payoff: Optional[Decimal] = None
+    payoff_bank: Optional[str] = Field(None, max_length=255)
+    miles: Optional[int] = Field(None, ge=0)
     notes: Optional[str] = None
 
 
@@ -43,6 +46,9 @@ class GuestUpdate(BaseModel):
     down_payment: Optional[Decimal] = None
     vehicle_of_interest: Optional[str] = Field(None, max_length=255)
     trade_in: Optional[str] = Field(None, max_length=255)
+    payoff: Optional[Decimal] = None
+    payoff_bank: Optional[str] = Field(None, max_length=255)
+    miles: Optional[int] = Field(None, ge=0)
     notes: Optional[str] = None
     status: Optional[str] = Field(None, max_length=20)
 
@@ -73,6 +79,9 @@ class GuestResponse(BaseModel):
     down_payment: Optional[Decimal] = None
     vehicle_of_interest: Optional[str] = None
     trade_in: Optional[str] = None
+    payoff: Optional[Decimal] = None
+    payoff_bank: Optional[str] = None
+    miles: Optional[int] = None
     notes: Optional[str] = None
     share_token: Optional[str] = None
     share_revoked: bool = False
@@ -101,6 +110,9 @@ class GuestPublicResponse(BaseModel):
     down_payment: Optional[Decimal] = None
     vehicle_of_interest: Optional[str] = None
     trade_in: Optional[str] = None
+    payoff: Optional[Decimal] = None
+    payoff_bank: Optional[str] = None
+    miles: Optional[int] = None
     notes: Optional[str] = None
     status: str
     dealership_name: Optional[str] = None

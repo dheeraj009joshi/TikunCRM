@@ -279,6 +279,103 @@ async def auto_assign_lead_on_activity(
     return True
 
 
+async def auto_assign_bdc_lead_on_activity(
+    db: AsyncSession,
+    lead: Lead,
+    user: User,
+    activity_type: str,
+    notification_service=None,
+) -> bool:
+    """
+    Auto-assign a lead's BDC slot when a BDC agent performs the first activity.
+
+    Rules:
+    - Lead has no bdc_assigned_to_id
+    - Lead belongs to a dealership
+    - User must be BDC and have access to that dealership
+    """
+    if lead.bdc_assigned_to_id is not None:
+        return False
+
+    user_role_value = user.role.value if hasattr(user.role, "value") else str(user.role)
+    if user.role != UserRole.BDC or user_role_value != UserRole.BDC.value:
+        return False
+
+    if lead.dealership_id is None:
+        return False
+
+    if not await user_can_access_dealership(db, user, lead.dealership_id):
+        return False
+
+    lead.bdc_assigned_to_id = user.id
+    lead.last_activity_at = utc_now()
+
+    performer_name = f"{user.first_name} {user.last_name}"
+    cust_result = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
+    cust = cust_result.scalar_one_or_none()
+    lead_name = cust.full_name if cust else "Lead"
+
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.LEAD_ASSIGNED,
+        description=f"BDC agent auto-assigned to {performer_name} based on first {activity_type}",
+        user_id=user.id,
+        lead_id=lead.id,
+        dealership_id=lead.dealership_id,
+        meta_data={
+            "auto_assigned": True,
+            "reason": "first_activity",
+            "activity_type": activity_type,
+            "performer_name": performer_name,
+            "action": "assign_bdc",
+            "bdc_assigned_to_id": str(user.id),
+            "source": "inline-v2",
+        },
+    )
+
+    if notification_service:
+        await notification_service.notify_lead_assigned(
+            user_id=user.id,
+            lead_name=lead_name,
+            lead_id=lead.id,
+            assigned_by="System (BDC auto-assignment)",
+        )
+
+    try:
+        from app.services.notification_service import emit_lead_updated
+
+        await emit_lead_updated(
+            str(lead.id),
+            str(lead.dealership_id),
+            "assigned",
+            {
+                "bdc_assigned_to_id": str(user.id),
+                "auto_assigned_bdc": True,
+            },
+        )
+    except Exception:
+        pass
+
+    return True
+
+
+async def auto_assign_on_first_activity(
+    db: AsyncSession,
+    lead: Lead,
+    user: User,
+    activity_type: str,
+    notification_service=None,
+) -> bool:
+    """Run salesperson and BDC first-activity auto-assignment."""
+    salesperson_assigned = await auto_assign_lead_on_activity(
+        db, lead, user, activity_type, notification_service
+    )
+    bdc_assigned = await auto_assign_bdc_lead_on_activity(
+        db, lead, user, activity_type, notification_service
+    )
+    return salesperson_assigned or bdc_assigned
+
+
 async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
     """Add customer, stage, assigned_to_user, secondary_salesperson, and dealership info to leads."""
     if not leads:
@@ -1676,7 +1773,7 @@ async def update_lead_stage(
         raise HTTPException(status_code=403, detail="Only admins or owners can close leads")
 
     notification_service = NotificationService(db)
-    await auto_assign_lead_on_activity(db, lead, current_user, "stage_change", notification_service)
+    await auto_assign_on_first_activity(db, lead, current_user, "stage_change", notification_service)
 
     # Fetch old stage name for logging
     old_stage = await LeadStageService.get_stage(db, lead.stage_id)
@@ -2529,7 +2626,7 @@ async def add_lead_note(
     notification_service = NotificationService(db)
     
     # Auto-assignment: if lead is in unassigned pool and user has a dealership
-    await auto_assign_lead_on_activity(
+    await auto_assign_on_first_activity(
         db, lead, current_user, "note", notification_service
     )
     
@@ -2872,7 +2969,7 @@ async def log_call(
     notification_service = NotificationService(db)
 
     # Auto-assignment: if lead is in unassigned pool and user has a dealership
-    auto_assigned = await auto_assign_lead_on_activity(
+    auto_assigned = await auto_assign_on_first_activity(
         db, lead, current_user, "call", notification_service
     )
     
@@ -2989,7 +3086,7 @@ async def log_email(
     # Auto-assignment: if lead is in unassigned pool and user has a dealership (only for sent emails)
     auto_assigned = False
     if email_in.direction == "sent":
-        auto_assigned = await auto_assign_lead_on_activity(
+        auto_assigned = await auto_assign_on_first_activity(
             db, lead, current_user, "email", notification_service
         )
     
@@ -3085,7 +3182,7 @@ async def log_outreach(
             raise HTTPException(status_code=403, detail="Not authorized to log outreach for this lead")
 
     notification_service = NotificationService(db)
-    auto_assigned = await auto_assign_lead_on_activity(
+    auto_assigned = await auto_assign_on_first_activity(
         db, lead, current_user, "outreach", notification_service
     )
 
