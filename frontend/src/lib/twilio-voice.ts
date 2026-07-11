@@ -59,25 +59,30 @@ class TwilioVoiceManager {
   private callbacks: TwilioEventCallback = {};
   private tokenRefreshTimer: NodeJS.Timeout | null = null;
   private isInitialized = false;
+  private dealershipId: string | null = null;
 
   /**
    * Initialize the Twilio Device with an access token
    */
-  async initialize(callbacks: TwilioEventCallback = {}): Promise<void> {
+  async initialize(
+    callbacks: TwilioEventCallback = {},
+    dealershipId?: string | null
+  ): Promise<void> {
     if (this.isInitialized) {
       console.log("Twilio already initialized");
       return;
     }
 
     this.callbacks = callbacks;
+    this.dealershipId = dealershipId ?? null;
     this.notifyStateChange("connecting");
 
     try {
       // Dynamically load Twilio SDK
       const { Device } = await import("@twilio/voice-sdk");
 
-      // Get access token from backend
-      const tokenData = await voiceService.getToken();
+      // Get access token from backend (BDC may pass selected dealership)
+      const tokenData = await voiceService.getToken(this.dealershipId);
 
       // Create device
       const options = {
@@ -308,7 +313,7 @@ class TwilioVoiceManager {
    */
   private async refreshToken(): Promise<void> {
     try {
-      const tokenData = await voiceService.getToken();
+      const tokenData = await voiceService.getToken(this.dealershipId);
       
       if (this.device) {
         // Update token on existing device

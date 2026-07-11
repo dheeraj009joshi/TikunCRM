@@ -87,9 +87,13 @@ class VoiceService {
   /**
    * Get Twilio access token for WebRTC client
    */
-  async getToken(): Promise<VoiceToken> {
-    const response = await apiClient.post<VoiceToken>("/voice/token");
-    return response.data;
+  async getToken(dealershipId?: string | null): Promise<VoiceToken> {
+    const response = await apiClient.post<VoiceToken>(
+      "/voice/token",
+      {},
+      dealershipId ? { params: { dealership_id: dealershipId } } : undefined
+    )
+    return response.data
   }
 
   /**

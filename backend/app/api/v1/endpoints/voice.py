@@ -143,11 +143,16 @@ def _voice_missing_credentials() -> List[str]:
 
 @router.get("/config", response_model=VoiceConfigResponse)
 async def get_voice_config(
+    dealership_id: Optional[UUID] = Query(None),
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get voice configuration status. When voice_enabled is false, missing_credentials lists env vars to set."""
-    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+    service = get_voice_service(db)
+    resolved = await service.resolve_voice_dealership_id(
+        current_user, preferred_dealership_id=dealership_id
+    )
+    effective = await get_effective_twilio_config(db, resolved)
     enabled = effective.is_voice_ready()
     missing = None if enabled else _voice_missing_credentials()
     return VoiceConfigResponse(
@@ -161,13 +166,18 @@ async def get_voice_config(
 
 @router.get("/config/status")
 async def get_voice_config_status(
+    dealership_id: Optional[UUID] = Query(None),
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Debug: effective voice readiness (merged dealership row + env). No secret values.
     """
-    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+    service = get_voice_service(db)
+    resolved = await service.resolve_voice_dealership_id(
+        current_user, preferred_dealership_id=dealership_id
+    )
+    effective = await get_effective_twilio_config(db, resolved)
     return {
         "voice_enabled": effective.is_voice_ready(),
         "checks": {
@@ -183,21 +193,28 @@ async def get_voice_config_status(
 
 @router.post("/token", response_model=VoiceTokenResponse)
 async def get_voice_token(
+    dealership_id: Optional[UUID] = Query(
+        None,
+        description="Preferred dealership for BDC multi-store voice config",
+    ),
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Get a Twilio access token for the WebRTC softphone.
     Token is valid for 1 hour and allows making/receiving calls.
+    BDC agents (dealership_id=NULL) resolve Twilio config via accessible dealerships.
     """
-    effective = await get_effective_twilio_config(db, current_user.dealership_id)
+    service = get_voice_service(db)
+    resolved_dealership_id = await service.resolve_voice_dealership_id(
+        current_user, preferred_dealership_id=dealership_id
+    )
+    effective = await get_effective_twilio_config(db, resolved_dealership_id)
     if not effective.is_voice_ready():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Voice calling is not configured"
         )
-
-    service = get_voice_service(db)
 
     # Use the user UUID as the Twilio client identity. With multi-dealership
     # accounts the same email may belong to multiple users, so email is no
@@ -235,13 +252,6 @@ async def initiate_call(
     Initiate an outbound call to a phone number.
     The call will be connected through the WebRTC softphone.
     """
-    effective = await get_effective_twilio_config(db, current_user.dealership_id)
-    if not effective.is_voice_ready():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Voice calling is not configured"
-        )
-
     service = get_voice_service(db)
 
     from app.services.sms_service import SMSService
@@ -255,18 +265,24 @@ async def initiate_call(
     
     # Get lead info if provided
     lead = None
-    dealership_id = current_user.dealership_id
-    
     if request.lead_id:
         result = await db.execute(
             select(Lead).where(Lead.id == request.lead_id)
         )
         lead = result.scalar_one_or_none()
-        if lead:
-            dealership_id = lead.dealership_id or dealership_id
     else:
         # Try to find lead by phone number
         lead = await service.find_lead_by_phone(formatted_number)
+
+    resolved_dealership_id = await service.resolve_voice_dealership_id(
+        current_user, lead=lead
+    )
+    effective = await get_effective_twilio_config(db, resolved_dealership_id)
+    if not effective.is_voice_ready():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Voice calling is not configured"
+        )
     
     # Do not create call_log here; it is created in the outgoing webhook when Twilio sends the real CallSid.
     return InitiateCallResponse(
@@ -889,6 +905,8 @@ async def handle_call_status(
     except (TypeError, ValueError):
         duration = None
 
+    call_log = None
+    is_inbound_call = False
     try:
         service = get_voice_service(db)
         call_log = await service.update_call_status(
@@ -898,22 +916,36 @@ async def handle_call_status(
         )
 
         if call_log:
-            # Track who answered the call (for ring groups)
+            is_inbound_call = call_log.direction == CallDirection.INBOUND
+            # Attribute answerer for ring groups / BDC.
+            # Dial action usually sends DialCallStatus=completed (not in-progress).
+            # Client identity may appear in Called, To, or DialCallSid-related fields.
             answered_by_user = None
-            if called_identity and status == CallStatus.IN_PROGRESS:
-                answered_by_user = await service.get_user_by_identity(called_identity)
+            identity_candidates = [
+                called_identity,
+                form_data.get("To", ""),
+                form_data.get("Caller", ""),
+                form_data.get("ForwardedFrom", ""),
+            ]
+            if status in {CallStatus.IN_PROGRESS, CallStatus.COMPLETED} and not call_log.answered_by:
+                for candidate in identity_candidates:
+                    if not candidate:
+                        continue
+                    # Only treat client: identities (or raw UUID/email) as answerers
+                    normalized = service._normalize_identity(str(candidate))
+                    if not normalized:
+                        continue
+                    # Skip PSTN numbers (answered legs to phones shouldn't use this path)
+                    digits = "".join(c for c in normalized if c.isdigit())
+                    if len(digits) >= 10 and normalized.replace("+", "").replace("-", "").replace(" ", "").isdigit():
+                        continue
+                    answered_by_user = await service.get_user_by_identity(normalized)
+                    if answered_by_user:
+                        break
                 if answered_by_user:
-                    call_log.answered_by = answered_by_user.id
-                    # Also set user_id if not already set (ring group scenario)
-                    if not call_log.user_id:
-                        call_log.user_id = answered_by_user.id
-                    logger.info(f"Call {call_sid} answered by user {answered_by_user.id}")
-                    
-                    # Auto-assign lead if unassigned
-                    if call_log.direction == CallDirection.INBOUND:
-                        assigned = await service.auto_assign_lead_on_answer(call_log, answered_by_user)
-                        if assigned:
-                            logger.info(f"Lead auto-assigned to {answered_by_user.id} via call {call_sid}")
+                    await service.attribute_answered_user(
+                        call_log, answered_by_user, auto_assign=True
+                    )
             
             # Log activity for completed calls
             if status in [CallStatus.COMPLETED, CallStatus.BUSY, CallStatus.NO_ANSWER, CallStatus.FAILED]:
@@ -987,8 +1019,104 @@ async def handle_call_status(
             await db.rollback()
         except Exception:
             pass
+        return Response(content=empty_twiml, media_type="application/xml")
+
+    # Inbound Dial timed out / busy / failed → offer voicemail instead of hanging up
+    dial_status = (form_data.get("DialCallStatus") or "").lower()
+    offer_voicemail = dial_status in {"no-answer", "busy", "failed", "canceled"} and is_inbound_call
+    if offer_voicemail:
+        logger.info(
+            "Inbound Dial %s for CallSid=%s — returning voicemail TwiML",
+            dial_status,
+            call_sid,
+        )
+        try:
+            service = get_voice_service(db)
+            twiml = service.generate_twiml_voicemail()
+        except Exception:
+            logger.exception("Failed to build voicemail TwiML for CallSid=%s", call_sid)
+            twiml = empty_twiml
+        return Response(content=twiml, media_type="application/xml")
 
     return Response(content=empty_twiml, media_type="application/xml")
+
+
+@router.post("/webhook/client-status")
+async def handle_client_status(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Per-<Client> status callback for ring groups.
+
+    When a softphone (salesperson or BDC) answers, Twilio posts here with:
+    - ParentCallSid = inbound parent CallSid (matches call_logs.twilio_call_sid)
+    - To / Called = client:<user-uuid>
+    - CallStatus = in-progress | completed | ...
+
+    This is how we set call_log.user_id / answered_by for BDC agents who have
+    no dealership_id on their user row.
+    """
+    try:
+        form_data = await request.form()
+    except Exception as e:
+        logger.exception("Client status webhook failed to parse form: %s", e)
+        return Response(status_code=204)
+
+    call_sid = form_data.get("CallSid", "")
+    parent_call_sid = form_data.get("ParentCallSid", "")
+    call_status = (form_data.get("CallStatus") or "").lower()
+    to_identity = form_data.get("To") or form_data.get("Called") or ""
+    from_identity = form_data.get("From") or ""
+
+    logger.info(
+        "Client status webhook: CallSid=%s ParentCallSid=%s status=%s To=%s From=%s",
+        call_sid,
+        parent_call_sid,
+        call_status,
+        to_identity,
+        from_identity,
+    )
+
+    # Only attribute on answer / bridged in-progress
+    if call_status not in {"in-progress", "answered"}:
+        return Response(status_code=204)
+
+    service = get_voice_service(db)
+    call_log = await service.get_call_log_by_sid(
+        call_sid=call_sid, parent_call_sid=parent_call_sid or None
+    )
+    if not call_log:
+        logger.warning(
+            "Client status: no call_log for CallSid=%s ParentCallSid=%s",
+            call_sid,
+            parent_call_sid,
+        )
+        return Response(status_code=204)
+
+    if call_log.answered_by:
+        return Response(status_code=204)
+
+    # Softphone legs use client:<uuid>; try To first, then From
+    answered_by_user = None
+    for candidate in (to_identity, from_identity):
+        if not candidate:
+            continue
+        answered_by_user = await service.get_user_by_identity(str(candidate))
+        if answered_by_user:
+            break
+
+    if not answered_by_user:
+        logger.warning(
+            "Client status: could not resolve user from To=%s From=%s",
+            to_identity,
+            from_identity,
+        )
+        return Response(status_code=204)
+
+    await service.attribute_answered_user(call_log, answered_by_user, auto_assign=True)
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.post("/webhook/recording")
@@ -1016,10 +1144,11 @@ async def handle_recording_complete(
         duration = 0
     
     # Store Twilio recording URL immediately so playback works before Azure upload completes
-    result = await db.execute(
-        select(CallLog).where(CallLog.twilio_call_sid == call_sid)
+    service = get_voice_service(db)
+    parent_call_sid = form_data.get("ParentCallSid", "")
+    call_log = await service.get_call_log_by_sid(
+        call_sid=call_sid, parent_call_sid=parent_call_sid or None
     )
-    call_log = result.scalar_one_or_none()
     
     if call_log:
         call_log.recording_upload_status = "pending"

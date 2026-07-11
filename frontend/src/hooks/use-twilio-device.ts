@@ -6,6 +6,7 @@ import { twilioVoiceManager, DeviceState, TwilioCall, IncomingCallInfo } from "@
 import { voiceService, VoiceConfig } from "@/services/voice-service";
 import { useToast } from "./use-toast";
 import { useWebSocketEvent } from "./use-websocket";
+import { useBdcDealership } from "@/contexts/bdc-dealership-context";
 
 export interface LeadDetailsPrompt {
   callLogId: string;
@@ -47,6 +48,7 @@ interface CallInfo {
 
 export function useTwilioDevice(): UseTwilioDeviceReturn {
   const { toast } = useToast();
+  const { selectedDealershipId } = useBdcDealership();
   
   // State
   const [isEnabled, setIsEnabled] = useState(false);
@@ -133,7 +135,8 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     }
 
     try {
-      await twilioVoiceManager.initialize({
+      await twilioVoiceManager.initialize(
+        {
         onStateChange: (state) => {
           setDeviceState(state);
           if (state === "ready") {
@@ -179,7 +182,9 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
         onTokenExpiring: () => {
           console.log("Token expiring, will refresh automatically");
         },
-      });
+      },
+        selectedDealershipId
+      );
     } catch (error) {
       console.error("Failed to initialize Twilio:", error);
       toast({
@@ -188,7 +193,7 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
         variant: "destructive",
       });
     }
-  }, [isEnabled, toast, startDurationTimer, stopDurationTimer]);
+  }, [isEnabled, toast, startDurationTimer, stopDurationTimer, selectedDealershipId]);
 
   /**
    * Auto-initialize when enabled

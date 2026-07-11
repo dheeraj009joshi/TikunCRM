@@ -438,6 +438,86 @@ class VoiceService:
             select(User).where(User.email == normalized).limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def resolve_voice_dealership_id(
+        self,
+        user: User,
+        preferred_dealership_id: Optional[UUID] = None,
+        lead: Optional[Lead] = None,
+    ) -> Optional[UUID]:
+        """
+        Resolve which dealership Twilio config to use.
+
+        BDC agents have dealership_id=NULL and use user_dealership_access.
+        Prefer: explicit preference → lead.dealership_id → user.dealership_id → first accessible.
+        """
+        from app.core.access_scope import get_accessible_dealership_ids
+
+        accessible = await get_accessible_dealership_ids(self.db, user)
+
+        candidates: List[UUID] = []
+        if preferred_dealership_id:
+            candidates.append(preferred_dealership_id)
+        if lead and lead.dealership_id:
+            candidates.append(lead.dealership_id)
+        if user.dealership_id:
+            candidates.append(user.dealership_id)
+
+        for candidate in candidates:
+            if accessible is None or candidate in accessible:
+                return candidate
+
+        if accessible:
+            return accessible[0]
+        return user.dealership_id
+
+    async def get_call_log_by_sid(
+        self,
+        call_sid: Optional[str] = None,
+        parent_call_sid: Optional[str] = None,
+    ) -> Optional[CallLog]:
+        """Find call_log by Twilio CallSid or ParentCallSid (ring-group child legs)."""
+        if parent_call_sid:
+            result = await self.db.execute(
+                select(CallLog).where(CallLog.twilio_call_sid == parent_call_sid).limit(1)
+            )
+            found = result.scalar_one_or_none()
+            if found:
+                return found
+        if call_sid:
+            result = await self.db.execute(
+                select(CallLog).where(CallLog.twilio_call_sid == call_sid).limit(1)
+            )
+            found = result.scalar_one_or_none()
+            if found:
+                return found
+            # Child leg may have been stored with parent sid only — try parent column
+            result = await self.db.execute(
+                select(CallLog).where(CallLog.twilio_parent_call_sid == call_sid).limit(1)
+            )
+            return result.scalar_one_or_none()
+        return None
+
+    async def attribute_answered_user(
+        self,
+        call_log: CallLog,
+        user: User,
+        *,
+        auto_assign: bool = True,
+    ) -> None:
+        """Attach answering user to call_log (fixes ring-group user_id=NULL for BDC)."""
+        call_log.answered_by = user.id
+        if not call_log.user_id:
+            call_log.user_id = user.id
+        await self.db.flush()
+        logger.info(
+            "Attributed call_log %s to user %s (%s)",
+            call_log.id,
+            user.id,
+            user.email,
+        )
+        if auto_assign and call_log.direction == CallDirection.INBOUND:
+            await self.auto_assign_lead_on_answer(call_log, user)
     
     async def create_call_log(
         self,
@@ -570,12 +650,13 @@ class VoiceService:
         if call_log.notes:
             description += f"\nNotes: {call_log.notes}"
         
-        # Create activity
+        # Create activity — prefer answered_by so ring-group / BDC answers are attributed
+        activity_user_id = call_log.answered_by or call_log.user_id
         await ActivityService.log_activity(
             db=self.db,
             activity_type=ActivityType.CALL_LOGGED,
             description=description,
-            user_id=call_log.user_id,
+            user_id=activity_user_id,
             lead_id=call_log.lead_id,
             dealership_id=call_log.dealership_id,
             meta_data={
@@ -587,7 +668,8 @@ class VoiceService:
                 "recording_url": call_log.recording_url,
                 "from_number": call_log.from_number,
                 "to_number": call_log.to_number,
-                "outcome": call_log.outcome
+                "outcome": call_log.outcome,
+                "answered_by": str(call_log.answered_by) if call_log.answered_by else None,
             }
         )
         
@@ -617,7 +699,29 @@ class VoiceService:
     ) -> None:
         """
         Update the CALL_LOGGED activity's meta_data with recording info when recording webhook runs.
+        Also marks unanswered inbound recordings as voicemail.
         """
+        call_result = await self.db.execute(
+            select(CallLog).where(CallLog.id == call_log_id).limit(1)
+        )
+        call_log = call_result.scalar_one_or_none()
+
+        # Voicemail = recording left after inbound no-answer / busy / failed
+        is_voicemail = bool(
+            call_log
+            and call_log.direction == CallDirection.INBOUND
+            and call_log.status in {
+                CallStatus.NO_ANSWER,
+                CallStatus.BUSY,
+                CallStatus.FAILED,
+                CallStatus.CANCELED,
+            }
+        )
+        if call_log and is_voicemail:
+            call_log.outcome = "voicemail"
+            if recording_duration_seconds is not None:
+                call_log.recording_duration_seconds = recording_duration_seconds
+
         result = await self.db.execute(
             select(Activity)
             .where(
@@ -631,6 +735,7 @@ class VoiceService:
         activity = result.scalar_one_or_none()
         if not activity:
             logger.debug(f"No CALL_LOGGED activity found for call_log_id {call_log_id}")
+            await self.db.flush()
             return
         meta = dict(activity.meta_data or {})
         meta["recording_url"] = recording_url
@@ -638,6 +743,16 @@ class VoiceService:
             meta["recording_sid"] = recording_sid
         if recording_duration_seconds is not None:
             meta["recording_duration_seconds"] = recording_duration_seconds
+            meta["duration_seconds"] = recording_duration_seconds
+        if is_voicemail:
+            meta["outcome"] = "voicemail"
+            meta["is_voicemail"] = True
+            # Refresh timeline label so agents see voicemail, not bare "No Answer"
+            if activity.description and "Voicemail" not in activity.description:
+                activity.description = f"{activity.description} — Voicemail left"
+        # Backfill activity user if ring-group answer was attributed after activity create
+        if not activity.user_id and call_log and (call_log.answered_by or call_log.user_id):
+            activity.user_id = call_log.answered_by or call_log.user_id
         activity.meta_data = meta
         await self.db.flush()
         logger.info(f"Updated activity with recording for call_log {call_log_id}")
@@ -702,8 +817,8 @@ class VoiceService:
         if not user:
             return None, None
         lead = await self.find_lead_by_phone(to_number)
-        dealership_id = user.dealership_id or (lead.dealership_id if lead else None)
-        effective = await get_effective_twilio_config(self.db, user.dealership_id)
+        dealership_id = await self.resolve_voice_dealership_id(user, lead=lead)
+        effective = await get_effective_twilio_config(self.db, dealership_id)
         caller_num = effective.voice_caller_id_number or effective.sms_from_number
         call_log = await self.create_call_log(
             twilio_call_sid=call_sid,
@@ -759,6 +874,7 @@ class VoiceService:
 
         base = settings.backend_url.rstrip("/")
         status_url = f"{base}/api/v1/voice/webhook/status"
+        client_status_url = f"{base}/api/v1/voice/webhook/client-status"
         recording_url = f"{base}/api/v1/voice/webhook/recording"
 
         response = VoiceResponse()
@@ -769,9 +885,40 @@ class VoiceService:
             recording_status_callback=recording_url,
             recording_status_callback_event="completed",
         )
-        dial.client(client_identity)
+        dial.client(
+            client_identity,
+            status_callback=client_status_url,
+            status_callback_event="answered completed",
+            status_callback_method="POST",
+        )
         response.append(dial)
 
+        return str(response)
+
+    def generate_twiml_voicemail(
+        self,
+        message: str = "Sorry, no one is available to take your call. Please leave a message after the beep.",
+    ) -> str:
+        """
+        Generate TwiML for inbound voicemail.
+        Recording is posted to /webhook/recording so it attaches to the same call_log.
+        """
+        from twilio.twiml.voice_response import VoiceResponse
+
+        base = settings.backend_url.rstrip("/")
+        recording_url = f"{base}/api/v1/voice/webhook/recording"
+
+        response = VoiceResponse()
+        response.say(message)
+        response.record(
+            max_length=120,
+            play_beep=True,
+            timeout=5,
+            recording_status_callback=recording_url,
+            recording_status_callback_event="completed",
+            recording_status_callback_method="POST",
+        )
+        response.hangup()
         return str(response)
 
     def generate_twiml_ring_group(
@@ -783,27 +930,21 @@ class VoiceService:
         """
         Generate TwiML for ring group - rings multiple WebRTC clients simultaneously.
         First person to answer gets the call.
-        Falls back to voicemail if no one answers.
+        Per-client statusCallback attributes the answerer (critical for BDC user_id).
+        If nobody answers, Dial action (/webhook/status) returns voicemail TwiML.
         """
         from twilio.twiml.voice_response import VoiceResponse, Dial
 
         base = settings.backend_url.rstrip("/")
         status_url = f"{base}/api/v1/voice/webhook/status"
+        client_status_url = f"{base}/api/v1/voice/webhook/client-status"
         recording_url = f"{base}/api/v1/voice/webhook/recording"
 
         response = VoiceResponse()
-        
+
         if not user_identities:
-            # No one to ring - go straight to voicemail
-            response.say("Sorry, no one is available to take your call. Please leave a message after the beep.")
-            response.record(
-                max_length=120,
-                transcribe=True,
-                play_beep=True
-            )
-            response.hangup()
-            return str(response)
-        
+            return self.generate_twiml_voicemail()
+
         dial = Dial(
             timeout=timeout,
             record="record-from-answer-dual" if record else "do-not-record",
@@ -812,29 +953,16 @@ class VoiceService:
             recording_status_callback=recording_url,
             recording_status_callback_event="completed",
         )
-        
-        # Add all clients to dial simultaneously
+
         for identity in user_identities:
-            dial.client(identity)
-        
+            dial.client(
+                identity,
+                status_callback=client_status_url,
+                status_callback_event="answered completed",
+                status_callback_method="POST",
+            )
+
         response.append(dial)
-        
-        # Fallback if no one answers (Dial action handles this)
-        return str(response)
-    
-    def generate_twiml_voicemail(self, message: str = "Please leave a message after the beep.") -> str:
-        """Generate TwiML for voicemail"""
-        from twilio.twiml.voice_response import VoiceResponse
-        
-        response = VoiceResponse()
-        response.say(message)
-        response.record(
-            max_length=120,
-            transcribe=True,
-            play_beep=True
-        )
-        response.hangup()
-        
         return str(response)
 
 

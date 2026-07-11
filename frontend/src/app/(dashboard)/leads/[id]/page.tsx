@@ -3635,7 +3635,18 @@ export default function LeadDetailsPage() {
                                                             {activity.meta_data?.notes != null ? (
                                                                 <p className="text-muted-foreground mt-1">{String(activity.meta_data.notes)}</p>
                                                             ) : null}
-                                                            {(activity.meta_data?.call_log_id != null) && (
+                                                            {(() => {
+                                                                const meta = activity.meta_data || {}
+                                                                const durationSec = Number(meta.duration_seconds ?? 0)
+                                                                const canPlayRecording = Boolean(
+                                                                    meta.call_log_id &&
+                                                                    (meta.recording_url ||
+                                                                        meta.is_voicemail ||
+                                                                        meta.outcome === "voicemail" ||
+                                                                        durationSec > 0)
+                                                                )
+                                                                if (!canPlayRecording) return null
+                                                                return (
                                                                 <div className="mt-2">
                                                                     {recordingPlaybackLoading === activity.id ? (
                                                                         <span className="text-xs text-muted-foreground flex items-center gap-1">
@@ -3649,14 +3660,17 @@ export default function LeadDetailsPage() {
                                                                             variant="ghost"
                                                                             size="sm"
                                                                             className="h-7 text-xs text-emerald-700 dark:text-emerald-400"
-                                                                            onClick={() => loadCallRecordingForActivity(activity.id, String(activity.meta_data!.call_log_id))}
+                                                                            onClick={() => loadCallRecordingForActivity(activity.id, String(meta.call_log_id))}
                                                                         >
                                                                             <PhoneCall className="h-3 w-3 mr-1" />
-                                                                            Play recording
+                                                                            {meta.is_voicemail || meta.outcome === "voicemail"
+                                                                                ? "Play voicemail"
+                                                                                : "Play recording"}
                                                                         </Button>
                                                                     )}
                                                                 </div>
-                                                            )}
+                                                                )
+                                                            })()}
                                                         </div>
                                                     )}
                                                     {(activity.type === "email_sent" || activity.type === "email_received") && (
