@@ -24,6 +24,7 @@ from app.models.lead import Lead
 from app.services.lead_stage_service import LeadStageService
 from app.models.customer import Customer
 from app.models.user import User
+from app.models.user_dealership_access import UserDealershipAccess
 from app.models.activity import Activity, ActivityType
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,25 @@ class VoiceService:
         
         return None
 
+    async def _get_bdc_agents_for_dealership(self, dealership_id: UUID) -> List[User]:
+        """Active BDC agents with access to the given dealership."""
+        result = await self.db.execute(
+            select(User)
+            .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
+            .where(
+                User.role == UserRole.BDC,
+                User.is_active == True,
+                UserDealershipAccess.dealership_id == dealership_id,
+            )
+            .distinct()
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    def client_identity_for_user(user: User) -> str:
+        """Twilio Client identity — must match voice token identity (user UUID)."""
+        return str(user.id)
+
     async def find_users_for_incoming_call(
         self,
         lead: Optional[Lead],
@@ -172,40 +192,61 @@ class VoiceService:
     ) -> Tuple[List[User], bool]:
         """
         Find users to ring for an incoming call (ring group support).
-        
+
         Returns:
             Tuple of (list_of_users_to_ring, is_unknown_caller)
-            - If lead has assigned_to: ring only that user
-            - If lead unassigned or unknown caller: ring all active salespersons in dealership
+
+        Ring policy:
+            - Assigned lead: assigned salesperson + all BDC agents for the dealership
+            - Unassigned / unknown: dealership sales team + all BDC agents for the dealership
         """
         is_unknown_caller = lead is None
-        
-        # If lead has an assigned user, ring only them
+        target_dealership = dealership_id or (lead.dealership_id if lead else None)
+
+        users_by_id: Dict[UUID, User] = {}
+
+        # Assigned salesperson (if any)
         if lead and lead.assigned_to:
             result = await self.db.execute(
                 select(User).where(
                     User.id == lead.assigned_to,
-                    User.is_active == True
+                    User.is_active == True,
                 )
             )
-            user = result.scalar_one_or_none()
-            if user:
-                return ([user], is_unknown_caller)
-        
-        # Ring all active salespersons in the dealership
-        target_dealership = dealership_id or (lead.dealership_id if lead else None)
-        if target_dealership:
+            assigned = result.scalar_one_or_none()
+            if assigned:
+                users_by_id[assigned.id] = assigned
+        elif target_dealership:
+            # Unassigned: ring the dealership sales team
             result = await self.db.execute(
                 select(User).where(
                     User.dealership_id == target_dealership,
                     User.is_active == True,
-                    User.role.in_([UserRole.SALESPERSON, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER])
+                    User.role.in_([
+                        UserRole.SALESPERSON,
+                        UserRole.DEALERSHIP_ADMIN,
+                        UserRole.DEALERSHIP_OWNER,
+                    ]),
                 )
             )
-            users = list(result.scalars().all())
-            if users:
-                return (users, is_unknown_caller)
-        
+            for user in result.scalars().all():
+                users_by_id[user.id] = user
+
+        # Always include BDC agents with access to this dealership
+        if target_dealership:
+            for bdc in await self._get_bdc_agents_for_dealership(target_dealership):
+                users_by_id[bdc.id] = bdc
+
+        users = list(users_by_id.values())
+        if users:
+            logger.info(
+                "Incoming ring group for dealership %s: %d users (%d BDC)",
+                target_dealership,
+                len(users),
+                sum(1 for u in users if u.role == UserRole.BDC),
+            )
+            return (users, is_unknown_caller)
+
         return ([], is_unknown_caller)
 
     async def find_customer_by_phone(self, phone: str, dealership_id: Optional[UUID] = None) -> Optional[Customer]:
@@ -267,44 +308,87 @@ class VoiceService:
         answered_by_user: User
     ) -> bool:
         """
-        Auto-assign lead to user who answered if not already assigned.
-        Only salespersons can be auto-assigned leads - admins and owners are excluded.
-        Returns True if assignment was made.
+        Auto-assign lead when someone answers an inbound call.
+        - Salesperson: set assigned_to if currently unassigned
+        - BDC: set bdc_assigned_to_id if currently unset
+        Admins/owners/super admins are never auto-assigned.
+        Returns True if any assignment was made.
         """
         if not call_log.lead_id:
             return False
-        
-        # Only salespersons can be auto-assigned leads via call answer
-        # Admins, owners, and super admins should NEVER be auto-assigned leads
-        role_val = answered_by_user.role.value if hasattr(answered_by_user.role, 'value') else str(answered_by_user.role)
-        if (
-            answered_by_user.role != UserRole.SALESPERSON
-            or role_val != "salesperson"
-            or role_val in _AUTO_ASSIGN_BLOCKED_ROLES
-        ):
+
+        role_val = (
+            answered_by_user.role.value
+            if hasattr(answered_by_user.role, "value")
+            else str(answered_by_user.role)
+        )
+        if role_val in _AUTO_ASSIGN_BLOCKED_ROLES:
             logger.warning(
-                f"BLOCKED auto-assign on call: {answered_by_user.email} has role={role_val} (raw: {answered_by_user.role!r}), only SALESPERSON can be auto-assigned"
+                "BLOCKED auto-assign on call: %s has role=%s",
+                answered_by_user.email,
+                role_val,
             )
             return False
-        
+
         result = await self.db.execute(
             select(Lead).where(Lead.id == call_log.lead_id)
         )
         lead = result.scalar_one_or_none()
-        
         if not lead:
             return False
-        
-        # Only assign if lead is currently unassigned
+
+        from app.services.activity import ActivityService
+
+        # BDC agent answered → claim BDC slot if free
+        if answered_by_user.role == UserRole.BDC or role_val == UserRole.BDC.value:
+            if lead.bdc_assigned_to_id:
+                return False
+            lead.bdc_assigned_to_id = answered_by_user.id
+            await self.db.flush()
+            await ActivityService.log_activity(
+                db=self.db,
+                activity_type=ActivityType.LEAD_ASSIGNED,
+                description=(
+                    f"BDC agent auto-assigned to {answered_by_user.full_name} "
+                    f"via incoming call"
+                ),
+                user_id=answered_by_user.id,
+                lead_id=lead.id,
+                dealership_id=lead.dealership_id,
+                meta_data={
+                    "call_log_id": str(call_log.id),
+                    "assignment_method": "incoming_call_answer_bdc",
+                    "bdc_assigned_to_id": str(answered_by_user.id),
+                },
+            )
+            logger.info(
+                "Auto-assigned BDC on lead %s to user %s via call answer",
+                lead.id,
+                answered_by_user.id,
+            )
+            return True
+
+        # Only salespersons can be auto-assigned as primary salesperson
+        if (
+            answered_by_user.role != UserRole.SALESPERSON
+            or role_val != UserRole.SALESPERSON.value
+        ):
+            logger.warning(
+                "BLOCKED auto-assign on call: %s has role=%s (raw: %r), "
+                "only SALESPERSON/BDC can be auto-assigned",
+                answered_by_user.email,
+                role_val,
+                answered_by_user.role,
+            )
+            return False
+
         if lead.assigned_to:
             return False
-        
+
         lead.assigned_to = answered_by_user.id
         lead.clear_returned_to_pool_state()
         await self.db.flush()
-        
-        # Log activity for assignment
-        from app.services.activity import ActivityService
+
         await ActivityService.log_activity(
             db=self.db,
             activity_type=ActivityType.LEAD_ASSIGNED,
@@ -315,10 +399,14 @@ class VoiceService:
             meta_data={
                 "call_log_id": str(call_log.id),
                 "assignment_method": "incoming_call_answer",
-            }
+            },
         )
-        
-        logger.info(f"Auto-assigned lead {lead.id} to user {answered_by_user.id} via call answer")
+
+        logger.info(
+            "Auto-assigned lead %s to user %s via call answer",
+            lead.id,
+            answered_by_user.id,
+        )
         return True
 
     async def get_user_by_identity(self, identity: str) -> Optional[User]:

@@ -751,16 +751,19 @@ async def handle_incoming_call(
             }
         )
     
-    # Generate TwiML
+    # Generate TwiML — client identity must match voice token (user UUID)
     if users_to_ring:
-        if len(users_to_ring) == 1:
-            # Single user - use direct routing
-            twiml = service.generate_twiml_for_incoming(users_to_ring[0].email)
+        user_identities = [service.client_identity_for_user(u) for u in users_to_ring]
+        if len(user_identities) == 1:
+            twiml = service.generate_twiml_for_incoming(user_identities[0])
         else:
-            # Multiple users - use ring group (simultaneous ring)
-            user_identities = [u.email for u in users_to_ring]
             twiml = service.generate_twiml_ring_group(user_identities, timeout=30)
-            logger.info(f"Ring group for call {call_sid}: {len(users_to_ring)} users")
+            logger.info(
+                "Ring group for call %s: %d users (identities=%s)",
+                call_sid,
+                len(users_to_ring),
+                [u.email for u in users_to_ring],
+            )
     else:
         # No users available - go to voicemail
         twiml = service.generate_twiml_voicemail()
