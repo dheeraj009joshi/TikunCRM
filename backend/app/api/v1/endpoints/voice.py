@@ -993,6 +993,14 @@ async def handle_call_status(
                         )
                     except Exception as e:
                         logger.warning("call:completed broadcast failed: %s", e)
+
+            # Missed inbound ring-group → in-app + push (before commit; voicemail notify comes later)
+            dial_status_for_notify = (form_data.get("DialCallStatus") or "").lower()
+            if (
+                is_inbound_call
+                and dial_status_for_notify in {"no-answer", "busy", "failed", "canceled"}
+            ):
+                await service.notify_missed_inbound_call(call_log)
             
             # Send status update to user
             target_user_id = call_log.answered_by or call_log.user_id

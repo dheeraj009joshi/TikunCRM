@@ -465,6 +465,137 @@ class NotificationService:
             dealership_id,
         )
         return notifications
+
+    async def _already_notified_call(
+        self,
+        call_log_id: UUID,
+        notification_type: NotificationType,
+    ) -> bool:
+        """True if we already sent this call notification type for this call_log."""
+        result = await self.db.execute(
+            select(Notification.id)
+            .where(
+                Notification.related_id == call_log_id,
+                Notification.related_type == "call_log",
+                Notification.type == notification_type,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def notify_missed_inbound_call(
+        self,
+        dealership_id: UUID,
+        call_log_id: UUID,
+        from_number: str,
+        lead_id: Optional[UUID] = None,
+        lead_name: Optional[str] = None,
+    ) -> List[Notification]:
+        """
+        Notify dealership users + BDC that an inbound call was not answered.
+        Push + email; no SMS.
+        """
+        if await self._already_notified_call(call_log_id, NotificationType.MISSED_CALL):
+            return []
+
+        recipients = await self._get_dealership_notification_recipients(dealership_id)
+        who = lead_name or from_number or "Unknown caller"
+        title = f"Missed call: {who}"
+        message = (
+            f"No one answered an inbound call from {from_number}."
+            if from_number
+            else "No one answered an inbound call."
+        )
+        link = f"/leads/{lead_id}" if lead_id else None
+
+        notifications: List[Notification] = []
+        for user, _send_sms in recipients:
+            try:
+                notification = await self.create_notification(
+                    user_id=user.id,
+                    notification_type=NotificationType.MISSED_CALL,
+                    title=title,
+                    message=message,
+                    link=link,
+                    related_id=call_log_id,
+                    related_type="call_log",
+                    send_push=True,
+                    send_email=True,
+                    send_sms=False,
+                )
+                notifications.append(notification)
+            except Exception as e:
+                logger.error(
+                    "Failed to notify user %s about missed call %s: %s",
+                    user.id,
+                    call_log_id,
+                    e,
+                )
+
+        logger.info(
+            "Sent missed-call notifications to %s/%s users for call %s",
+            len(notifications),
+            len(recipients),
+            call_log_id,
+        )
+        return notifications
+
+    async def notify_inbound_voicemail(
+        self,
+        dealership_id: UUID,
+        call_log_id: UUID,
+        from_number: str,
+        lead_id: Optional[UUID] = None,
+        lead_name: Optional[str] = None,
+        duration_seconds: Optional[int] = None,
+    ) -> List[Notification]:
+        """
+        Notify dealership users + BDC that a caller left a voicemail.
+        Push + email; no SMS.
+        """
+        if await self._already_notified_call(call_log_id, NotificationType.VOICEMAIL):
+            return []
+
+        recipients = await self._get_dealership_notification_recipients(dealership_id)
+        who = lead_name or from_number or "Unknown caller"
+        title = f"Voicemail: {who}"
+        duration_bit = (
+            f" ({duration_seconds}s)" if duration_seconds and duration_seconds > 0 else ""
+        )
+        message = f"New voicemail from {from_number}{duration_bit}."
+        link = f"/leads/{lead_id}" if lead_id else None
+
+        notifications: List[Notification] = []
+        for user, _send_sms in recipients:
+            try:
+                notification = await self.create_notification(
+                    user_id=user.id,
+                    notification_type=NotificationType.VOICEMAIL,
+                    title=title,
+                    message=message,
+                    link=link,
+                    related_id=call_log_id,
+                    related_type="call_log",
+                    send_push=True,
+                    send_email=True,
+                    send_sms=False,
+                )
+                notifications.append(notification)
+            except Exception as e:
+                logger.error(
+                    "Failed to notify user %s about voicemail %s: %s",
+                    user.id,
+                    call_log_id,
+                    e,
+                )
+
+        logger.info(
+            "Sent voicemail notifications to %s/%s users for call %s",
+            len(notifications),
+            len(recipients),
+            call_log_id,
+        )
+        return notifications
     
     async def notify_lead_assigned_to_dealership(
         self,

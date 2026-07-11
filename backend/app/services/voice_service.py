@@ -733,29 +733,86 @@ class VoiceService:
             .limit(1)
         )
         activity = result.scalar_one_or_none()
-        if not activity:
+        if activity:
+            meta = dict(activity.meta_data or {})
+            meta["recording_url"] = recording_url
+            if recording_sid is not None:
+                meta["recording_sid"] = recording_sid
+            if recording_duration_seconds is not None:
+                meta["recording_duration_seconds"] = recording_duration_seconds
+                meta["duration_seconds"] = recording_duration_seconds
+            if is_voicemail:
+                meta["outcome"] = "voicemail"
+                meta["is_voicemail"] = True
+                # Refresh timeline label so agents see voicemail, not bare "No Answer"
+                if activity.description and "Voicemail" not in activity.description:
+                    activity.description = f"{activity.description} — Voicemail left"
+            # Backfill activity user if ring-group answer was attributed after activity create
+            if not activity.user_id and call_log and (call_log.answered_by or call_log.user_id):
+                activity.user_id = call_log.answered_by or call_log.user_id
+            activity.meta_data = meta
+            await self.db.flush()
+            logger.info(f"Updated activity with recording for call_log {call_log_id}")
+        else:
             logger.debug(f"No CALL_LOGGED activity found for call_log_id {call_log_id}")
             await self.db.flush()
+
+        if call_log and is_voicemail:
+            await self.notify_inbound_voicemail(call_log)
+
+    async def _call_lead_display_name(self, lead_id: Optional[UUID]) -> Optional[str]:
+        if not lead_id:
+            return None
+        result = await self.db.execute(
+            select(Customer.first_name, Customer.last_name)
+            .join(Lead, Lead.customer_id == Customer.id)
+            .where(Lead.id == lead_id)
+            .limit(1)
+        )
+        row = result.first()
+        if not row:
+            return None
+        name = f"{row[0] or ''} {row[1] or ''}".strip()
+        return name or None
+
+    async def notify_missed_inbound_call(self, call_log: CallLog) -> None:
+        """Notify dealership + BDC that an inbound ring group timed out."""
+        if not call_log.dealership_id:
             return
-        meta = dict(activity.meta_data or {})
-        meta["recording_url"] = recording_url
-        if recording_sid is not None:
-            meta["recording_sid"] = recording_sid
-        if recording_duration_seconds is not None:
-            meta["recording_duration_seconds"] = recording_duration_seconds
-            meta["duration_seconds"] = recording_duration_seconds
-        if is_voicemail:
-            meta["outcome"] = "voicemail"
-            meta["is_voicemail"] = True
-            # Refresh timeline label so agents see voicemail, not bare "No Answer"
-            if activity.description and "Voicemail" not in activity.description:
-                activity.description = f"{activity.description} — Voicemail left"
-        # Backfill activity user if ring-group answer was attributed after activity create
-        if not activity.user_id and call_log and (call_log.answered_by or call_log.user_id):
-            activity.user_id = call_log.answered_by or call_log.user_id
-        activity.meta_data = meta
-        await self.db.flush()
-        logger.info(f"Updated activity with recording for call_log {call_log_id}")
+        try:
+            from app.services.notification_service import NotificationService
+
+            lead_name = await self._call_lead_display_name(call_log.lead_id)
+            notif = NotificationService(self.db)
+            await notif.notify_missed_inbound_call(
+                dealership_id=call_log.dealership_id,
+                call_log_id=call_log.id,
+                from_number=call_log.from_number or "",
+                lead_id=call_log.lead_id,
+                lead_name=lead_name,
+            )
+        except Exception as e:
+            logger.warning("Missed-call notification failed for %s: %s", call_log.id, e)
+
+    async def notify_inbound_voicemail(self, call_log: CallLog) -> None:
+        """Notify dealership + BDC that a voicemail was left."""
+        if not call_log.dealership_id:
+            return
+        try:
+            from app.services.notification_service import NotificationService
+
+            lead_name = await self._call_lead_display_name(call_log.lead_id)
+            notif = NotificationService(self.db)
+            await notif.notify_inbound_voicemail(
+                dealership_id=call_log.dealership_id,
+                call_log_id=call_log.id,
+                from_number=call_log.from_number or "",
+                lead_id=call_log.lead_id,
+                lead_name=lead_name,
+                duration_seconds=call_log.recording_duration_seconds,
+            )
+        except Exception as e:
+            logger.warning("Voicemail notification failed for %s: %s", call_log.id, e)
     
     async def get_call_history(
         self,
@@ -1018,6 +1075,15 @@ async def upload_recording_to_azure_background(
                 call_log.recording_sid = recording_sid
                 call_log.recording_duration_seconds = recording_duration
                 call_log.recording_upload_status = "completed"
+                await db.commit()
+
+                service = VoiceService(db)
+                await service.update_call_activity_recording(
+                    call_log_id=call_log.id,
+                    recording_url=call_log.recording_url,
+                    recording_sid=recording_sid,
+                    recording_duration_seconds=recording_duration,
+                )
                 await db.commit()
                 return
             

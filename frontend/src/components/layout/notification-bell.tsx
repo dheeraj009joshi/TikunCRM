@@ -17,6 +17,8 @@ import {
     Loader2,
     Layers,
     MessageCircle,
+    PhoneMissed,
+    Voicemail,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
@@ -55,6 +57,8 @@ const typeIcons: Record<NotificationType, React.ComponentType<{ className?: stri
     lead_multi_campaign: Layers,
     whatsapp_new_lead: MessageCircle,
     whatsapp_received: MessageCircle,
+    missed_call: PhoneMissed,
+    voicemail: Voicemail,
 }
 
 // Color mapping for notification types
@@ -74,6 +78,8 @@ const typeColors: Record<NotificationType, string> = {
     lead_multi_campaign: "text-yellow-600 bg-yellow-100",
     whatsapp_new_lead: "text-emerald-500 bg-emerald-100",
     whatsapp_received: "text-emerald-500 bg-emerald-100",
+    missed_call: "text-red-500 bg-red-100",
+    voicemail: "text-orange-500 bg-orange-100",
 }
 
 export function NotificationBell() {

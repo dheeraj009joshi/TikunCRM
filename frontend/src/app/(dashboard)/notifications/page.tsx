@@ -20,6 +20,8 @@ import {
     X,
     Layers,
     MessageCircle,
+    PhoneMissed,
+    Voicemail,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 
@@ -77,6 +79,8 @@ const typeIcons: Record<NotificationType, React.ComponentType<{ className?: stri
     lead_multi_campaign: Layers,
     whatsapp_new_lead: MessageCircle,
     whatsapp_received: MessageCircle,
+    missed_call: PhoneMissed,
+    voicemail: Voicemail,
 }
 
 // Color mapping for notification types
@@ -96,6 +100,8 @@ const typeColors: Record<NotificationType, string> = {
     lead_multi_campaign: "text-yellow-600 bg-yellow-100 dark:bg-yellow-900/30",
     whatsapp_new_lead: "text-emerald-500 bg-emerald-100 dark:bg-emerald-900/30",
     whatsapp_received: "text-emerald-500 bg-emerald-100 dark:bg-emerald-900/30",
+    missed_call: "text-red-500 bg-red-100 dark:bg-red-900/30",
+    voicemail: "text-orange-500 bg-orange-100 dark:bg-orange-900/30",
 }
 
 // Type labels
@@ -115,6 +121,8 @@ const typeLabels: Record<NotificationType, string> = {
     lead_multi_campaign: "Duplicate lead",
     whatsapp_new_lead: "WhatsApp Lead",
     whatsapp_received: "WhatsApp Message",
+    missed_call: "Missed Call",
+    voicemail: "Voicemail",
 }
 
 export default function NotificationsPage() {
@@ -410,6 +418,8 @@ export default function NotificationsPage() {
                                 <SelectItem value="system">System</SelectItem>
                                 <SelectItem value="mention">Mention</SelectItem>
                                 <SelectItem value="lead_multi_campaign">Duplicate lead</SelectItem>
+                                <SelectItem value="missed_call">Missed Call</SelectItem>
+                                <SelectItem value="voicemail">Voicemail</SelectItem>
                             </SelectContent>
                         </Select>
                         

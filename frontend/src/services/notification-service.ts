@@ -16,7 +16,9 @@ export type NotificationType =
     | "new_lead"
     | "admin_reminder"
     | "skate_alert"
-    | "lead_multi_campaign";
+    | "lead_multi_campaign"
+    | "missed_call"
+    | "voicemail";
 
 export interface Notification {
     id: string;
@@ -68,6 +70,8 @@ export const NOTIFICATION_TYPE_INFO: Record<string, { label: string; color: stri
     lead_multi_campaign: { label: "Duplicate lead", color: "yellow", icon: "layers" },
     whatsapp_new_lead: { label: "WhatsApp Lead", color: "emerald", icon: "message-circle" },
     whatsapp_received: { label: "WhatsApp", color: "emerald", icon: "message-circle" },
+    missed_call: { label: "Missed Call", color: "red", icon: "phone-missed" },
+    voicemail: { label: "Voicemail", color: "orange", icon: "voicemail" },
 };
 
 /** Normalize API notification type (may be uppercase) for display lookup */

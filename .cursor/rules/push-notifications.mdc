@@ -27,6 +27,8 @@ All events that send email also send push notifications:
 | Appointment Missed | Yes | Yes | No |
 | Email Received | Yes | Yes | No |
 | Admin Reminder | Yes | Yes | Yes |
+| Missed Call | Yes | Yes | No |
+| Voicemail | Yes | Yes | No |
 
 ## Key Implementation Details
 
