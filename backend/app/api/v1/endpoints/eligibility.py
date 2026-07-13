@@ -163,14 +163,30 @@ async def set_assessment_item(
     await db.commit()
 
     # Best-effort websocket refresh so other lead viewers update live.
+    lead_id_for_event: Optional[UUID] = None
     if entity_type == "lead":
+        lead_id_for_event = entity_id
+    elif entity_type == "guest":
+        try:
+            from app.models.guest import Guest
+            from sqlalchemy import select as sa_select
+
+            gres = await db.execute(sa_select(Guest.lead_id).where(Guest.id == entity_id).limit(1))
+            lead_id_for_event = gres.scalar_one_or_none()
+        except Exception:
+            lead_id_for_event = None
+
+    if lead_id_for_event:
         try:
             from app.services.notification_service import emit_lead_updated
             await emit_lead_updated(
-                lead_id=str(entity_id),
+                lead_id=str(lead_id_for_event),
                 dealership_id=str(payload["dealership_id"]) if payload.get("dealership_id") else None,
                 update_type="eligibility_updated",
-                data={"total_score": float(payload["total_score"])},
+                data={
+                    "total_score": float(payload["total_score"]),
+                    "guest_trust_score": float(payload["total_score"]),
+                },
                 db=db,
             )
         except Exception as e:

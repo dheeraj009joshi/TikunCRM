@@ -141,19 +141,21 @@ export function EligibilityPanel({
     const [assessment, setAssessment] = React.useState<EligibilityAssessment | null>(null)
     const [isLoading, setIsLoading] = React.useState(true)
     const [savingId, setSavingId] = React.useState<string | null>(null)
+    const onScoreChangeRef = React.useRef(onScoreChange)
+    onScoreChangeRef.current = onScoreChange
 
     const load = React.useCallback(async () => {
         setIsLoading(true)
         try {
             const data = await EligibilityService.getAssessment(entityType, entityId)
             setAssessment(data)
-            onScoreChange?.(data.total_score)
+            onScoreChangeRef.current?.(data.total_score)
         } catch (e) {
             console.error("Failed to load eligibility assessment", e)
         } finally {
             setIsLoading(false)
         }
-    }, [entityType, entityId, onScoreChange])
+    }, [entityType, entityId])
 
     React.useEffect(() => {
         void load()
@@ -168,7 +170,7 @@ export function EligibilityPanel({
                 is_override: true,
             })
             setAssessment(updated)
-            onScoreChange?.(updated.total_score)
+            onScoreChangeRef.current?.(updated.total_score)
         } catch (e) {
             console.error("Failed to update criterion", e)
         } finally {

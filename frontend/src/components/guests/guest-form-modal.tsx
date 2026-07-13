@@ -38,6 +38,7 @@ import { Badge } from "@/components/ui/badge"
 import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
 import { useRole } from "@/hooks/use-role"
 import { AppointmentService } from "@/services/appointment-service"
+import { DealershipService } from "@/services/dealership-service"
 import {
     copyGuestQrImageToClipboard,
     exportGuestQrPng,
@@ -57,6 +58,7 @@ interface GuestFormModalProps {
     appointmentId?: string | null
     dealershipId?: string | null
     onComplete?: () => void
+    onTrustScoreChange?: (score: number) => void
 }
 
 type FieldDef = {
@@ -145,6 +147,7 @@ export function GuestFormModal({
     appointmentId,
     dealershipId,
     onComplete,
+    onTrustScoreChange,
 }: GuestFormModalProps) {
     const [guest, setGuest] = React.useState<Guest | null>(null)
     const [documents, setDocuments] = React.useState<GuestDocument[]>([])
@@ -152,6 +155,7 @@ export function GuestFormModal({
     const [saveStatus, setSaveStatus] = React.useState<"idle" | "saving" | "saved" | "error">("idle")
     const [shareUrl, setShareUrl] = React.useState<string | null>(null)
     const [appointmentAt, setAppointmentAt] = React.useState<string | null>(null)
+    const [dealershipName, setDealershipName] = React.useState<string | null>(null)
     const [copiedLink, setCopiedLink] = React.useState(false)
     const [copiedImage, setCopiedImage] = React.useState(false)
     const [copyingImage, setCopyingImage] = React.useState(false)
@@ -197,6 +201,7 @@ export function GuestFormModal({
             setDocuments([])
             setShareUrl(null)
             setAppointmentAt(null)
+            setDealershipName(null)
             setError(null)
             setSaveStatus("idle")
             return
@@ -216,6 +221,19 @@ export function GuestFormModal({
                 setGuest(g)
                 guestRef.current = g
                 setShareUrl(shareUrlForGuest(g))
+
+                const resolvedDealershipId = dealershipId || g.dealership_id || null
+                if (resolvedDealershipId) {
+                    try {
+                        const d = await DealershipService.getDealership(resolvedDealershipId)
+                        if (!cancelled) setDealershipName(d.name || null)
+                    } catch {
+                        if (!cancelled) setDealershipName(null)
+                    }
+                } else if (!cancelled) {
+                    setDealershipName(null)
+                }
+
                 try {
                     setDocuments(await GuestService.getDocuments(g.id))
                 } catch {
@@ -346,6 +364,7 @@ export function GuestFormModal({
                 svg,
                 guestName: guest.full_name || "Guest",
                 appointmentAt,
+                dealershipName,
             })
             setCopiedImage(true)
             setTimeout(() => setCopiedImage(false), 2000)
@@ -370,6 +389,7 @@ export function GuestFormModal({
                 svg,
                 guestName: guest.full_name || "Guest",
                 appointmentAt,
+                dealershipName,
             })
         } catch (e) {
             console.error("Failed to export QR", e)
@@ -527,12 +547,20 @@ export function GuestFormModal({
                                     </Button>
                                 </div>
                             )}
-                            <EligibilityPanel entityType="guest" entityId={guest.id} title="Guest Trust Score" />
+                            <EligibilityPanel
+                                entityType="guest"
+                                entityId={guest.id}
+                                title="Guest Trust Score"
+                                onScoreChange={onTrustScoreChange}
+                            />
                         </div>
 
                         {shareUrl && !guest.share_revoked && (
                             <div className="flex flex-col items-center gap-3 rounded-xl border bg-muted/20 p-5">
                                 <div className="text-center space-y-1">
+                                    {dealershipName && (
+                                        <p className="text-xs font-medium text-muted-foreground">{dealershipName}</p>
+                                    )}
                                     <p className="text-sm font-semibold">{guest.full_name || "Guest"}</p>
                                     <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
                                         <Calendar className="h-3.5 w-3.5 shrink-0" />

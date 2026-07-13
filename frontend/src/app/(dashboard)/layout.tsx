@@ -13,6 +13,7 @@ import { SidebarProvider, useSidebarOptional } from "@/contexts/sidebar-context"
 import { BdcDealershipProvider } from "@/contexts/bdc-dealership-context"
 import { CallLeadProvider, useCallLeadOptional } from "@/contexts/call-lead-context"
 import { Softphone } from "@/components/softphone"
+import { FcmRegistrar } from "@/components/providers/fcm-registrar"
 import { useAuthStore } from "@/stores/auth-store"
 
 export default function DashboardLayout({
@@ -107,6 +108,7 @@ function DashboardContent({
                 leadId={callLead?.leadId}
                 leadName={callLead?.leadName}
             />
+            <FcmRegistrar />
         </div>
     )
 }

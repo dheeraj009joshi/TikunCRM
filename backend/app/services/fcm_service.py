@@ -82,7 +82,7 @@ class FCMService:
         self._load_credentials()
         return self._project_id
 
-    async def send(
+        async def send(
         self,
         token: str,
         title: str,
@@ -90,6 +90,7 @@ class FCMService:
         url: Optional[str] = None,
         tag: Optional[str] = None,
         data: Optional[Dict[str, Any]] = None,
+        ttl_seconds: Optional[int] = None,
     ) -> bool:
         """
         Send a push notification to a single FCM token via HTTP V1 API.
@@ -101,6 +102,7 @@ class FCMService:
             url: Optional URL to open on click (web)
             tag: Optional tag for grouping
             data: Optional key-value data payload
+            ttl_seconds: Optional webpush TTL (default 86400; use ~30 for incoming calls)
 
         Returns:
             True if sent successfully, False otherwise
@@ -138,6 +140,7 @@ class FCMService:
         }
         data_payload = {k: str(v) for k, v in data_payload.items()}
 
+        ttl = str(ttl_seconds if ttl_seconds is not None else 86400)
         message = {
             "message": {
                 "token": token,
@@ -145,7 +148,7 @@ class FCMService:
                 "webpush": {
                     "headers": {
                         "Urgency": "high",
-                        "TTL": "86400",
+                        "TTL": ttl,
                     },
                 },
             }

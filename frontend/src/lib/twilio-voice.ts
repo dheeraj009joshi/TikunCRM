@@ -20,6 +20,7 @@ export interface TwilioDevice {
 export interface TwilioCall {
   accept(): void;
   reject(): void;
+  ignore(): void;
   disconnect(): void;
   mute(shouldMute?: boolean): void;
   isMuted(): boolean;
@@ -29,6 +30,7 @@ export interface TwilioCall {
   status(): string;
   parameters: {
     CallSid?: string;
+    ParentCallSid?: string;
     From?: string;
     To?: string;
   };
@@ -39,6 +41,7 @@ export type DeviceState = "offline" | "connecting" | "ready" | "busy" | "error";
 
 export interface IncomingCallInfo {
   callSid: string;
+  parentCallSid?: string;
   from: string;
   leadId?: string;
   leadName?: string;
@@ -140,6 +143,7 @@ class TwilioVoiceManager {
       
       const info: IncomingCallInfo = {
         callSid: twilioCall.parameters.CallSid || "",
+        parentCallSid: twilioCall.parameters.ParentCallSid || undefined,
         from: twilioCall.parameters.From || "Unknown",
         leadId: twilioCall.customParameters.get("lead_id"),
         leadName: twilioCall.customParameters.get("lead_name"),
@@ -245,7 +249,24 @@ class TwilioVoiceManager {
   }
 
   /**
-   * Reject an incoming call
+   * Ignore an incoming call on this device only.
+   * Does not hang up for the caller or other ring-group agents.
+   */
+  ignoreCall(): void {
+    if (this.currentCall) {
+      try {
+        this.currentCall.ignore();
+      } catch (e) {
+        console.warn("Failed to ignore call:", e);
+      }
+      this.currentCall = null;
+      this.notifyStateChange("ready");
+    }
+  }
+
+  /**
+   * Reject an incoming call (sends busy/hangup toward the dial leg).
+   * Prefer ignoreCall() for ring groups so other agents can still answer.
    */
   rejectCall(): void {
     if (this.currentCall) {
@@ -306,6 +327,22 @@ class TwilioVoiceManager {
    */
   getCurrentCall(): TwilioCall | null {
     return this.currentCall;
+  }
+
+  /**
+   * Re-register if the browser suspended Twilio while the tab was backgrounded.
+   */
+  async ensureRegistered(): Promise<void> {
+    if (!this.device || !this.isInitialized) return;
+    try {
+      const state = this.device.state;
+      if (state === "unregistered" || state === "destroyed") {
+        console.log("Twilio device not registered — re-registering after tab focus");
+        await this.device.register();
+      }
+    } catch (e) {
+      console.warn("Twilio ensureRegistered failed:", e);
+    }
   }
 
   /**

@@ -39,7 +39,8 @@ class PushService:
         url: Optional[str] = None,
         icon: Optional[str] = None,
         tag: Optional[str] = None,
-        data: Optional[Dict[str, Any]] = None
+        data: Optional[Dict[str, Any]] = None,
+        ttl_seconds: Optional[int] = None,
     ) -> int:
         """
         Send push notification to all active FCM devices for a user.
@@ -53,6 +54,7 @@ class PushService:
             icon: Optional icon URL (not used in FCM)
             tag: Optional notification tag
             data: Optional additional data
+            ttl_seconds: Optional FCM webpush TTL (use ~35s for incoming calls)
             
         Returns:
             Number of successful sends
@@ -62,6 +64,7 @@ class PushService:
             return 0
 
         success_count = 0
+        fcm_tokens: list = []
 
         try:
             from app.services.fcm_service import fcm_service, InvalidFCMTokenError
@@ -73,7 +76,7 @@ class PushService:
                     FCMToken.is_active == True
                 )
             )
-            fcm_tokens = fcm_result.scalars().all()
+            fcm_tokens = list(fcm_result.scalars().all())
             
             if not fcm_tokens:
                 logger.debug(f"No active FCM tokens for user {user_id}")
@@ -89,6 +92,7 @@ class PushService:
                         url=url,
                         tag=tag,
                         data=data,
+                        ttl_seconds=ttl_seconds,
                     )
                     if ok:
                         success_count += 1
@@ -106,6 +110,48 @@ class PushService:
         await db.commit()
         logger.info(f"Sent push to {success_count}/{len(fcm_tokens)} FCM device(s) for user {user_id}")
         return success_count
+
+    async def notify_incoming_call(
+        self,
+        db: AsyncSession,
+        user_ids: List[UUID],
+        *,
+        from_number: str,
+        lead_name: Optional[str] = None,
+        lead_id: Optional[UUID] = None,
+        call_sid: Optional[str] = None,
+        call_log_id: Optional[UUID] = None,
+    ) -> int:
+        """High-priority push so agents see/hear a ring when the CRM tab is backgrounded."""
+        who = lead_name or from_number or "Unknown caller"
+        body = f"Incoming call from {who}"
+        if lead_name and from_number:
+            body = f"{lead_name} • {from_number}"
+        url = f"/leads/{lead_id}" if lead_id else "/"
+        tag = f"incoming-call-{call_sid}" if call_sid else "incoming-call"
+        data = {
+            "type": "incoming_call",
+            "call_sid": call_sid or "",
+            "call_log_id": str(call_log_id) if call_log_id else "",
+            "lead_id": str(lead_id) if lead_id else "",
+            "from_number": from_number or "",
+        }
+        total = 0
+        for uid in user_ids:
+            try:
+                total += await self.send_to_user(
+                    db,
+                    uid,
+                    title="Incoming Call",
+                    body=body,
+                    url=url,
+                    tag=tag,
+                    data=data,
+                    ttl_seconds=35,
+                )
+            except Exception as e:
+                logger.warning("Incoming-call push failed for user %s: %s", uid, e)
+        return total
     
     async def send_to_users(
         self,
@@ -116,7 +162,8 @@ class PushService:
         url: Optional[str] = None,
         icon: Optional[str] = None,
         tag: Optional[str] = None,
-        data: Optional[Dict[str, Any]] = None
+        data: Optional[Dict[str, Any]] = None,
+        ttl_seconds: Optional[int] = None,
     ) -> Dict[str, int]:
         """
         Send push notification to multiple users via FCM.
@@ -138,6 +185,7 @@ class PushService:
                 icon=icon,
                 tag=tag,
                 data=data,
+                ttl_seconds=ttl_seconds,
             )
 
         # Count total FCM devices for response

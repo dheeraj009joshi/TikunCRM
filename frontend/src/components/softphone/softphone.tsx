@@ -43,7 +43,7 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
     pendingLeadDetails,
     makeCall,
     acceptCall,
-    rejectCall,
+    ignoreCall,
     hangup,
     toggleMute,
     sendDigits,
@@ -77,10 +77,11 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
     }
   }, [leadPhone]);
 
-  // Auto-open when there's an incoming call
+  // Keep softphone ready in the background, but do not open the dialer dialog
+  // on ring — that nests two Dialogs and breaks the incoming-call X / Esc close.
+  // IncomingCallModal is the only UI during a ring.
   useEffect(() => {
     if (incomingCall) {
-      setIsOpen(true);
       setIsMinimized(false);
     }
   }, [incomingCall]);
@@ -216,7 +217,7 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
         <IncomingCallModal
           call={incomingCall}
           onAccept={acceptCall}
-          onReject={rejectCall}
+          onIgnore={ignoreCall}
         />
 
         <LeadDetailsModal
@@ -352,7 +353,7 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
       <IncomingCallModal
         call={incomingCall}
         onAccept={acceptCall}
-        onReject={rejectCall}
+        onIgnore={ignoreCall}
       />
 
       {/* Lead details modal for unknown callers */}

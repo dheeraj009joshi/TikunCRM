@@ -1706,11 +1706,14 @@ async def get_lead(
 
     from app.services.eligibility_service import EligibilityService
 
-    guest_trust_by_lead = await EligibilityService.batch_guest_trust_by_lead_ids(db, [lead.id])
+    guest_trust_by_lead = await EligibilityService.batch_guest_trust_by_lead_ids(
+        db, [lead.id], sync_empty=True
+    )
     guest_info = guest_trust_by_lead.get(lead.id)
     if guest_info:
         response_data["guest_id"] = guest_info["guest_id"]
         response_data["guest_trust_score"] = guest_info["guest_trust_score"]
+        await db.commit()
 
     return response_data
 

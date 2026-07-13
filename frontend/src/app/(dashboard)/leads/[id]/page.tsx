@@ -4856,8 +4856,16 @@ export default function LeadDetailsPage() {
                                     </Button>
                                 </div>
                                 <EligibilityPanel
-                                    entityType="lead"
-                                    entityId={leadId}
+                                    entityType={lead.guest_id ? "guest" : "lead"}
+                                    entityId={lead.guest_id || leadId}
+                                    title={lead.guest_id ? "Guest Trust Score" : undefined}
+                                    onScoreChange={(score) => {
+                                        setLead((prev) =>
+                                            prev
+                                                ? { ...prev, guest_trust_score: score }
+                                                : prev
+                                        )
+                                    }}
                                 />
                             </TabsContent>
                         </Tabs>
@@ -5055,6 +5063,11 @@ export default function LeadDetailsPage() {
                     onClose={() => setShowGuestModal(false)}
                     leadId={lead.id}
                     dealershipId={lead.dealership_id || null}
+                    onTrustScoreChange={(score) => {
+                        setLead((prev) =>
+                            prev ? { ...prev, guest_trust_score: score } : prev
+                        )
+                    }}
                 />
             )}
 

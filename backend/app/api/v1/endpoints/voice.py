@@ -750,7 +750,8 @@ async def handle_incoming_call(
     
     await db.commit()
     
-    # Send real-time notification to all users being ringed
+    # Real-time WS + FCM push so agents still get alerted when the CRM tab is backgrounded
+    lead_name = lead.full_name if lead else None
     for user in users_to_ring:
         await ws_manager.send_to_user(
             str(user.id),
@@ -761,11 +762,27 @@ async def handle_incoming_call(
                     "call_sid": call_sid,
                     "from_number": from_number,
                     "lead_id": str(lead.id) if lead else None,
-                    "lead_name": lead.full_name if lead else None,
+                    "lead_name": lead_name,
                     "is_ring_group": len(users_to_ring) > 1,
                 }
             }
         )
+
+    if users_to_ring:
+        try:
+            from app.services.push_service import push_service
+
+            await push_service.notify_incoming_call(
+                db,
+                [u.id for u in users_to_ring],
+                from_number=from_number,
+                lead_name=lead_name,
+                lead_id=lead.id if lead else None,
+                call_sid=call_sid,
+                call_log_id=call_log.id,
+            )
+        except Exception as e:
+            logger.warning("Incoming-call FCM push failed: %s", e)
     
     # Generate TwiML — client identity must match voice token (user UUID)
     if users_to_ring:
@@ -1001,6 +1018,46 @@ async def handle_call_status(
                 and dial_status_for_notify in {"no-answer", "busy", "failed", "canceled"}
             ):
                 await service.notify_missed_inbound_call(call_log)
+                # Dial finished without an answer — dismiss remaining incoming modals
+                if call_log.dealership_id:
+                    try:
+                        await ws_manager.broadcast_to_dealership(
+                            str(call_log.dealership_id),
+                            {
+                                "type": "call:ring_ended",
+                                "payload": {
+                                    "call_log_id": str(call_log.id),
+                                    "call_sid": call_log.twilio_call_sid,
+                                    "status": dial_status_for_notify,
+                                    "lead_id": str(call_log.lead_id) if call_log.lead_id else None,
+                                },
+                            },
+                        )
+                    except Exception as e:
+                        logger.warning("call:ring_ended broadcast failed: %s", e)
+
+            # Someone answered the inbound Dial — clear modals for agents who didn't pick up
+            if (
+                is_inbound_call
+                and status == CallStatus.COMPLETED
+                and call_log.answered_by
+                and call_log.dealership_id
+            ):
+                try:
+                    await ws_manager.broadcast_to_dealership(
+                        str(call_log.dealership_id),
+                        {
+                            "type": "call:answered",
+                            "payload": {
+                                "call_log_id": str(call_log.id),
+                                "call_sid": call_log.twilio_call_sid,
+                                "answered_by": str(call_log.answered_by),
+                                "lead_id": str(call_log.lead_id) if call_log.lead_id else None,
+                            },
+                        },
+                    )
+                except Exception as e:
+                    logger.warning("call:answered (status) broadcast failed: %s", e)
             
             # Send status update to user
             target_user_id = call_log.answered_by or call_log.user_id
@@ -1124,6 +1181,27 @@ async def handle_client_status(
 
     await service.attribute_answered_user(call_log, answered_by_user, auto_assign=True)
     await db.commit()
+
+    # Tell every softphone in the dealership to dismiss the incoming modal
+    if call_log.dealership_id:
+        try:
+            await ws_manager.broadcast_to_dealership(
+                str(call_log.dealership_id),
+                {
+                    "type": "call:answered",
+                    "payload": {
+                        "call_log_id": str(call_log.id),
+                        "call_sid": call_log.twilio_call_sid,
+                        "parent_call_sid": parent_call_sid or None,
+                        "child_call_sid": call_sid or None,
+                        "answered_by": str(answered_by_user.id),
+                        "lead_id": str(call_log.lead_id) if call_log.lead_id else None,
+                    },
+                },
+            )
+        except Exception as e:
+            logger.warning("call:answered broadcast failed: %s", e)
+
     return Response(status_code=204)
 
 

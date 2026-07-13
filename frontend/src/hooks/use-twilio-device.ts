@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { twilioVoiceManager, DeviceState, TwilioCall, IncomingCallInfo } from "@/lib/twilio-voice";
 import { voiceService, VoiceConfig } from "@/services/voice-service";
+import { startIncomingRingtone, stopIncomingRingtone } from "@/lib/incoming-ringtone";
 import { useToast } from "./use-toast";
 import { useWebSocketEvent } from "./use-websocket";
 import { useBdcDealership } from "@/contexts/bdc-dealership-context";
@@ -31,6 +32,9 @@ export interface UseTwilioDeviceReturn {
   initialize: () => Promise<void>;
   makeCall: (toNumber: string, leadId?: string) => Promise<void>;
   acceptCall: () => void;
+  /** Dismiss ringing on this device only; other agents keep ringing. */
+  ignoreCall: () => void;
+  /** Alias of ignoreCall (kept for callers that still say reject). */
   rejectCall: () => void;
   hangup: () => void;
   toggleMute: () => void;
@@ -63,6 +67,73 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   
   // Refs
   const durationInterval = useRef<NodeJS.Timeout | null>(null);
+  const incomingCallRef = useRef<IncomingCallInfo | null>(null);
+  const activeCallRef = useRef<CallInfo | null>(null);
+  const acceptingRef = useRef(false);
+  incomingCallRef.current = incomingCall;
+  activeCallRef.current = currentCallInfo;
+
+  const matchesIncomingCall = useCallback(
+    (payload: {
+      call_sid?: string | null;
+      parent_call_sid?: string | null;
+      child_call_sid?: string | null;
+    }) => {
+      const incoming = incomingCallRef.current;
+      if (!incoming) return false;
+      const ids = [payload.call_sid, payload.parent_call_sid, payload.child_call_sid].filter(
+        Boolean
+      ) as string[];
+      if (ids.length === 0) return true;
+      return (
+        ids.includes(incoming.callSid) ||
+        (!!incoming.parentCallSid && ids.includes(incoming.parentCallSid))
+      );
+    },
+    []
+  );
+
+  const dismissIncomingLocally = useCallback((alsoIgnoreTwilio: boolean) => {
+    stopIncomingRingtone();
+    if (alsoIgnoreTwilio) {
+      try {
+        twilioVoiceManager.ignoreCall();
+      } catch {
+        /* already closed */
+      }
+    }
+    setIncomingCall(null);
+    if (!activeCallRef.current && !acceptingRef.current) {
+      setIsOnCall(false);
+    }
+  }, []);
+
+  // Someone else answered — clear modal for everyone still ringing
+  useWebSocketEvent(
+    "call:answered",
+    (payload: {
+      call_sid?: string;
+      parent_call_sid?: string | null;
+      child_call_sid?: string | null;
+      answered_by?: string;
+    }) => {
+      if (acceptingRef.current || activeCallRef.current) return;
+      if (!matchesIncomingCall(payload)) return;
+      dismissIncomingLocally(true);
+    },
+    [matchesIncomingCall, dismissIncomingLocally]
+  );
+
+  // Ring group finished (timeout / no-answer) — clear leftover modals
+  useWebSocketEvent(
+    "call:ring_ended",
+    (payload: { call_sid?: string; status?: string }) => {
+      if (acceptingRef.current || activeCallRef.current) return;
+      if (!matchesIncomingCall(payload)) return;
+      dismissIncomingLocally(true);
+    },
+    [matchesIncomingCall, dismissIncomingLocally]
+  );
 
   // Listen for WebSocket event when unknown caller needs lead details
   useWebSocketEvent("call:needs_lead_details", (payload: {
@@ -145,18 +216,31 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
         },
         onIncomingCall: (call, info) => {
           setIncomingCall(info);
-          setIsOnCall(true);
-          // Play ringtone or browser notification
-          if (Notification.permission === "granted") {
-            new Notification("Incoming Call", {
-              body: `Call from ${info.leadName || info.from}`,
-              icon: "/icon.png",
-              tag: "incoming-call",
-            });
+          // Ringing is not an active connected call — keep Accept/Ignore modal only
+          setIsOnCall(false);
+          startIncomingRingtone();
+          if (typeof document !== "undefined" && document.hidden && Notification.permission === "granted") {
+            try {
+              const n = new Notification("Incoming Call", {
+                body: `Call from ${info.leadName || info.from}`,
+                icon: "/icon.svg",
+                tag: `incoming-call-${info.callSid || "ring"}`,
+                requireInteraction: true,
+              });
+              n.onclick = () => {
+                window.focus();
+                n.close();
+              };
+            } catch {
+              /* Notification may fail if permission revoked mid-session */
+            }
           }
         },
         onCallConnected: (call) => {
+          acceptingRef.current = false;
+          stopIncomingRingtone();
           setIncomingCall(null);
+          setIsOnCall(true);
           startDurationTimer();
           toast({
             title: "Call Connected",
@@ -164,20 +248,31 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
           });
         },
         onCallDisconnected: (call) => {
-          setIsOnCall(false);
-          setCurrentCallInfo(null);
-          setIsMuted(false);
-          stopDurationTimer();
+          acceptingRef.current = false;
+          stopIncomingRingtone();
+          // Ending YOUR connected call clears active UI.
+          // Do NOT clear the incoming modal here — Ignore is local-only.
+          // Clear-all for others happens via call:answered / call:ring_ended.
+          if (activeCallRef.current) {
+            setCurrentCallInfo(null);
+            setIsMuted(false);
+            stopDurationTimer();
+            setIsOnCall(false);
+          }
         },
         onCallError: (error) => {
+          acceptingRef.current = false;
+          stopIncomingRingtone();
           toast({
             title: "Call Error",
             description: error.message,
             variant: "destructive",
           });
-          setIsOnCall(false);
-          setCurrentCallInfo(null);
-          stopDurationTimer();
+          if (activeCallRef.current) {
+            setCurrentCallInfo(null);
+            setIsOnCall(false);
+            stopDurationTimer();
+          }
         },
         onTokenExpiring: () => {
           console.log("Token expiring, will refresh automatically");
@@ -205,10 +300,56 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   }, [isEnabled, isInitialized, initialize]);
 
   /**
+   * When the tab becomes visible again, re-register Twilio (browsers throttle
+   * background tabs and may drop the Voice signaling connection).
+   */
+  useEffect(() => {
+    if (!isInitialized) return;
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void twilioVoiceManager.ensureRegistered();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [isInitialized]);
+
+  /**
+   * Focus CRM from an FCM incoming-call notification click (service worker).
+   */
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data || {};
+      if (data.type === "INCOMING_CALL_CLICK" || data.type === "NOTIFICATION_CLICK") {
+        void twilioVoiceManager.ensureRegistered();
+        window.focus();
+        if (typeof data.url === "string" && data.url.startsWith("/") && data.url !== window.location.pathname) {
+          // Soft navigate only if we're not already there
+          try {
+            window.history.pushState({}, "", data.url);
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          } catch {
+            window.location.href = data.url;
+          }
+        }
+      }
+    };
+    navigator.serviceWorker?.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker?.removeEventListener("message", onMessage);
+  }, []);
+
+  /**
    * Cleanup on unmount
    */
   useEffect(() => {
     return () => {
+      stopIncomingRingtone();
       stopDurationTimer();
       twilioVoiceManager.destroy();
     };
@@ -270,7 +411,8 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
    */
   const acceptCall = useCallback(() => {
     if (incomingCall) {
-      twilioVoiceManager.acceptCall();
+      acceptingRef.current = true;
+      stopIncomingRingtone();
       setCurrentCallInfo({
         direction: "inbound",
         phoneNumber: incomingCall.from,
@@ -279,16 +421,33 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
         startTime: new Date(),
       });
       setIncomingCall(null);
+      setIsOnCall(true);
+      twilioVoiceManager.acceptCall();
     }
   }, [incomingCall]);
 
   /**
-   * Reject incoming call
+   * Ignore incoming call on this device only (other agents keep ringing).
+   */
+  const ignoreCall = useCallback(() => {
+    stopIncomingRingtone();
+    twilioVoiceManager.ignoreCall();
+    setIncomingCall(null);
+    if (!activeCallRef.current) {
+      setIsOnCall(false);
+    }
+  }, []);
+
+  /**
+   * Alias of ignoreCall — must not reject/hang up the ring group for others.
    */
   const rejectCall = useCallback(() => {
-    twilioVoiceManager.rejectCall();
+    stopIncomingRingtone();
+    twilioVoiceManager.ignoreCall();
     setIncomingCall(null);
-    setIsOnCall(false);
+    if (!activeCallRef.current) {
+      setIsOnCall(false);
+    }
   }, []);
 
   /**
@@ -330,6 +489,7 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     initialize,
     makeCall,
     acceptCall,
+    ignoreCall,
     rejectCall,
     hangup,
     toggleMute,

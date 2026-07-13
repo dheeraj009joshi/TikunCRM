@@ -235,6 +235,144 @@ class EligibilityService:
         return values, dealership_id
 
     @staticmethod
+    async def _get_linked_lead_guest(
+        db: AsyncSession, entity_type: str, entity_id: UUID
+    ) -> Optional[Tuple[str, UUID]]:
+        """Return the linked lead↔guest counterpart as (entity_type, entity_id), if any."""
+        from app.models.guest import Guest
+
+        if entity_type == EligibilityEntityType.GUEST.value:
+            res = await db.execute(select(Guest).where(Guest.id == entity_id).limit(1))
+            guest = res.scalar_one_or_none()
+            if guest and guest.lead_id:
+                return (EligibilityEntityType.LEAD.value, guest.lead_id)
+            return None
+
+        if entity_type == EligibilityEntityType.LEAD.value:
+            res = await db.execute(
+                select(Guest)
+                .where(Guest.lead_id == entity_id)
+                .order_by(Guest.created_at.asc())
+                .limit(1)
+            )
+            guest = res.scalar_one_or_none()
+            if guest:
+                return (EligibilityEntityType.GUEST.value, guest.id)
+            return None
+
+        return None
+
+    @staticmethod
+    def _item_is_substantive(item: EligibilityAssessmentItem) -> bool:
+        """True if the item looks user-filled (not just an empty auto baseline)."""
+        if item.value is not None:
+            return True
+        if item.is_override:
+            return True
+        if item.checked_at is not None:
+            return True
+        return False
+
+    @staticmethod
+    async def _assessment_has_substantive_items(
+        db: AsyncSession, assessment_id: UUID
+    ) -> bool:
+        res = await db.execute(
+            select(EligibilityAssessmentItem).where(
+                EligibilityAssessmentItem.assessment_id == assessment_id
+            )
+        )
+        return any(
+            EligibilityService._item_is_substantive(item)
+            for item in res.scalars().all()
+        )
+
+    @staticmethod
+    async def _copy_assessment_items(
+        db: AsyncSession,
+        source: EligibilityAssessment,
+        target: EligibilityAssessment,
+        user_id: Optional[UUID] = None,
+    ) -> None:
+        """Copy criterion responses from source assessment onto target (upsert)."""
+        src_res = await db.execute(
+            select(EligibilityAssessmentItem).where(
+                EligibilityAssessmentItem.assessment_id == source.id
+            )
+        )
+        src_items = list(src_res.scalars().all())
+        if not src_items:
+            return
+
+        tgt_res = await db.execute(
+            select(EligibilityAssessmentItem).where(
+                EligibilityAssessmentItem.assessment_id == target.id
+            )
+        )
+        tgt_by_crit = {item.criterion_id: item for item in tgt_res.scalars().all()}
+
+        for src in src_items:
+            tgt = tgt_by_crit.get(src.criterion_id)
+            if tgt is None:
+                tgt = EligibilityAssessmentItem(
+                    assessment_id=target.id,
+                    criterion_id=src.criterion_id,
+                )
+                db.add(tgt)
+            tgt.is_met = src.is_met
+            tgt.value = src.value
+            tgt.is_override = src.is_override
+            tgt.points = src.points
+            tgt.checked_by = src.checked_by or user_id
+            tgt.checked_at = src.checked_at or utc_now()
+
+        target.raw_points = source.raw_points
+        target.max_points = source.max_points
+        target.total_score = source.total_score
+        target.last_updated_by = user_id or source.last_updated_by
+        await db.flush()
+
+    @staticmethod
+    async def ensure_lead_guest_assessment_sync(
+        db: AsyncSession,
+        entity_type: str,
+        entity_id: UUID,
+        user_id: Optional[UUID] = None,
+    ) -> None:
+        """
+        Keep lead and guest trust scores aligned.
+
+        If one side has filled criteria and the other does not, copy filled → empty.
+        If both are filled but scores differ, prefer the more recently updated side.
+        """
+        linked = await EligibilityService._get_linked_lead_guest(db, entity_type, entity_id)
+        if not linked:
+            return
+
+        other_type, other_id = linked
+        _, dealership_a = await EligibilityService._resolve_entity_auto_values(
+            db, entity_type, entity_id
+        )
+        _, dealership_b = await EligibilityService._resolve_entity_auto_values(
+            db, other_type, other_id
+        )
+
+        a = await EligibilityService.get_or_create_assessment(
+            db, entity_type, entity_id, dealership_a
+        )
+        b = await EligibilityService.get_or_create_assessment(
+            db, other_type, other_id, dealership_b or dealership_a
+        )
+
+        a_filled = await EligibilityService._assessment_has_substantive_items(db, a.id)
+        b_filled = await EligibilityService._assessment_has_substantive_items(db, b.id)
+
+        if a_filled and not b_filled:
+            await EligibilityService._copy_assessment_items(db, a, b, user_id=user_id)
+        elif b_filled and not a_filled:
+            await EligibilityService._copy_assessment_items(db, b, a, user_id=user_id)
+
+    @staticmethod
     async def get_or_create_assessment(
         db: AsyncSession,
         entity_type: str,
@@ -268,6 +406,15 @@ class EligibilityService:
         dealership_id: Optional[UUID] = None,
     ) -> dict:
         """Compute (and persist) the full assessment payload for an entity."""
+        # Align lead ↔ guest so Trust Score tab and Guest Trust badge share one score
+        if entity_type in (
+            EligibilityEntityType.LEAD.value,
+            EligibilityEntityType.GUEST.value,
+        ):
+            await EligibilityService.ensure_lead_guest_assessment_sync(
+                db, entity_type, entity_id
+            )
+
         auto_values, resolved_dealership = await EligibilityService._resolve_entity_auto_values(
             db, entity_type, entity_id
         )
@@ -367,6 +514,8 @@ class EligibilityService:
         is_override: bool,
         user_id: Optional[UUID],
         dealership_id: Optional[UUID] = None,
+        *,
+        mirror: bool = True,
     ) -> dict:
         """Upsert one criterion's state, then recompute the assessment."""
         _, resolved_dealership = await EligibilityService._resolve_entity_auto_values(
@@ -400,14 +549,41 @@ class EligibilityService:
         assessment.last_updated_by = user_id
         await db.flush()
 
-        return await EligibilityService.build_assessment_payload(
+        payload = await EligibilityService.build_assessment_payload(
             db, entity_type, entity_id, assessment.dealership_id
         )
+
+        # Keep the linked lead/guest assessment identical
+        if mirror and entity_type in (
+            EligibilityEntityType.LEAD.value,
+            EligibilityEntityType.GUEST.value,
+        ):
+            linked = await EligibilityService._get_linked_lead_guest(
+                db, entity_type, entity_id
+            )
+            if linked:
+                other_type, other_id = linked
+                await EligibilityService.set_item(
+                    db,
+                    entity_type=other_type,
+                    entity_id=other_id,
+                    criterion_id=criterion_id,
+                    is_met=is_met,
+                    value=value,
+                    is_override=is_override,
+                    user_id=user_id,
+                    dealership_id=dealership_id or assessment.dealership_id,
+                    mirror=False,
+                )
+
+        return payload
 
     @staticmethod
     async def batch_guest_trust_by_lead_ids(
         db: AsyncSession,
         lead_ids: List[UUID],
+        *,
+        sync_empty: bool = False,
     ) -> Dict[UUID, Dict[str, Any]]:
         """Map lead_id -> guest trust info for leads that have a guest profile."""
         from app.models.guest import Guest
@@ -425,6 +601,20 @@ class EligibilityService:
             if guest.lead_id and guest.lead_id not in guests_by_lead:
                 guests_by_lead[guest.lead_id] = guest
 
+        if sync_empty:
+            for lead_id, guest in guests_by_lead.items():
+                try:
+                    await EligibilityService.ensure_lead_guest_assessment_sync(
+                        db, EligibilityEntityType.GUEST.value, guest.id
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to sync trust score for lead %s / guest %s: %s",
+                        lead_id,
+                        guest.id,
+                        e,
+                    )
+
         guest_ids = [g.id for g in guests_by_lead.values()]
         scores: Dict[UUID, float] = {}
         if guest_ids:
@@ -437,10 +627,25 @@ class EligibilityService:
             for assessment in score_res.scalars().all():
                 scores[assessment.entity_id] = float(assessment.total_score)
 
+        lead_score_res = await db.execute(
+            select(EligibilityAssessment).where(
+                EligibilityAssessment.entity_type == EligibilityEntityType.LEAD.value,
+                EligibilityAssessment.entity_id.in_(list(guests_by_lead.keys())),
+            )
+        )
+        lead_scores = {
+            a.entity_id: float(a.total_score) for a in lead_score_res.scalars().all()
+        }
+
         result: Dict[UUID, Dict[str, Any]] = {}
         for lead_id, guest in guests_by_lead.items():
+            guest_score = scores.get(guest.id)
+            lead_score = lead_scores.get(lead_id)
+            display_score = guest_score
+            if (guest_score is None or float(guest_score) == 0) and lead_score and float(lead_score) > 0:
+                display_score = lead_score
             result[lead_id] = {
                 "guest_id": str(guest.id),
-                "guest_trust_score": scores.get(guest.id),
+                "guest_trust_score": display_score,
             }
         return result

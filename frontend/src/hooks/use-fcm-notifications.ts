@@ -147,6 +147,12 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
       // Handle both notification+data and data-only payloads
       const notificationData = payload.notification || {}
       const data = payload.data || {}
+      const type = data.type || ""
+
+      // Softphone already rings / shows modal when tab is focused
+      if (type === "incoming_call" && typeof document !== "undefined" && !document.hidden) {
+        return
+      }
       
       const title = notificationData.title || data.title || "TikunCRM"
       const body = notificationData.body || data.body || "You have a new notification"
@@ -162,7 +168,7 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
             icon,
             badge: icon,
             tag,
-            data: { url },
+            data: { url, type },
             requireInteraction: true,
           })
           

@@ -160,6 +160,8 @@ export function useWebSocket() {
             "whatsapp:status",
             "call:incoming",
             "call:status",
+            "call:answered",
+            "call:ring_ended",
             "notification:new",
             "lead:updated",
             "lead:created",

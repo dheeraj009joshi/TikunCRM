@@ -29,6 +29,7 @@ All events that send email also send push notifications:
 | Admin Reminder | Yes | Yes | Yes |
 | Missed Call | Yes | Yes | No |
 | Voicemail | Yes | Yes | No |
+| Incoming Call (softphone) | Yes | No | No |
 
 ## Key Implementation Details
 
