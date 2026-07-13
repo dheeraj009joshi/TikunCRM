@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, User, Mail, Phone, Target } from "lucide-react"
+import { Loader2, User, Mail, Phone, Target, Building2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -23,6 +23,7 @@ import {
 import { LeadService, Lead } from "@/services/lead-service"
 import { DealershipService } from "@/services/dealership-service"
 import { useAuthStore } from "@/stores/auth-store"
+import { useBdcDealershipOptional } from "@/contexts/bdc-dealership-context"
 import { getCountryAndDial, formatPhoneForDisplay, toE164, DIAL_CODE_OPTIONS } from "@/lib/phone-utils"
 
 interface CreateLeadModalProps {
@@ -43,10 +44,14 @@ const LEAD_SOURCES = [
 
 export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalProps) {
     const user = useAuthStore((s) => s.user)
+    const bdcCtx = useBdcDealershipOptional()
+    const isBdc = user?.role === "bdc"
+
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState("")
     const [dialCode, setDialCode] = React.useState("+1")
     const [countryCode, setCountryCode] = React.useState("US")
+    const [dealershipId, setDealershipId] = React.useState<string>("")
 
     const [formData, setFormData] = React.useState({
         first_name: "",
@@ -60,14 +65,38 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
         notes: "",
     })
 
-    // When modal opens, load dealership country and set default country/dial code
+    const bdcDealerships = bdcCtx?.dealerships ?? []
+
+    // Prefill BDC dealership from global selector when modal opens
     React.useEffect(() => {
-        if (!isOpen || !user?.dealership_id) {
+        if (!isOpen || !isBdc) {
+            if (!isOpen) setDealershipId("")
+            return
+        }
+        const preferred = bdcCtx?.selectedDealershipId
+        if (preferred && bdcDealerships.some((d) => d.id === preferred)) {
+            setDealershipId(preferred)
+        } else if (bdcDealerships.length === 1) {
+            setDealershipId(bdcDealerships[0].id)
+        } else {
+            setDealershipId("")
+        }
+    }, [isOpen, isBdc, bdcCtx?.selectedDealershipId, bdcDealerships])
+
+    // Default phone country from selected (BDC) or user's dealership
+    React.useEffect(() => {
+        if (!isOpen) {
             setDialCode("+1")
             setCountryCode("US")
             return
         }
-        DealershipService.getDealership(user.dealership_id)
+        const id = isBdc ? dealershipId || null : user?.dealership_id || null
+        if (!id) {
+            setDialCode("+1")
+            setCountryCode("US")
+            return
+        }
+        DealershipService.getDealership(id)
             .then((d) => {
                 const { countryCode: code, dialCode: dial } = getCountryAndDial(d.country ?? undefined)
                 setCountryCode(code)
@@ -77,7 +106,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                 setDialCode("+1")
                 setCountryCode("US")
             })
-    }, [isOpen, user?.dealership_id])
+    }, [isOpen, isBdc, dealershipId, user?.dealership_id])
 
     const resetForm = () => {
         setFormData({
@@ -91,6 +120,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
             budget_range: "",
             notes: "",
         })
+        setDealershipId("")
         setError("")
     }
 
@@ -113,15 +143,24 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
             return
         }
 
+        if (isBdc && !dealershipId) {
+            setError("Please select a dealership for this lead")
+            return
+        }
+
         setIsLoading(true)
         setError("")
 
-        const payload = {
+        const payload: Parameters<typeof LeadService.createLead>[0] = {
             ...formData,
-            status: "new",
             email: formData.email?.trim() || undefined,
             phone: formData.phone?.trim() ? toE164(formData.phone, dialCode) : undefined,
-            alternate_phone: formData.alternate_phone?.trim() ? toE164(formData.alternate_phone, dialCode) : undefined,
+            alternate_phone: formData.alternate_phone?.trim()
+                ? toE164(formData.alternate_phone, dialCode)
+                : undefined,
+        }
+        if (isBdc && dealershipId) {
+            payload.dealership_id = dealershipId
         }
 
         try {
@@ -129,9 +168,13 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
             resetForm()
             onSuccess?.(created)
             onClose()
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error("Failed to create lead:", err)
-            setError(err?.response?.data?.detail || "Failed to create lead. Please try again.")
+            const detail =
+                err && typeof err === "object" && "response" in err
+                    ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                    : undefined
+            setError(detail || "Failed to create lead. Please try again.")
         } finally {
             setIsLoading(false)
         }
@@ -153,7 +196,39 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                 </DialogHeader>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
-                    {/* Name Row */}
+                    {isBdc && (
+                        <div className="space-y-2">
+                            <Label htmlFor="dealership">Dealership *</Label>
+                            <Select
+                                value={dealershipId || undefined}
+                                onValueChange={setDealershipId}
+                                disabled={bdcCtx?.isLoading}
+                            >
+                                <SelectTrigger id="dealership" className="w-full">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                        <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                        <SelectValue placeholder="Select dealership" />
+                                    </div>
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {bdcDealerships.map((d) => (
+                                        <SelectItem key={d.id} value={d.id}>
+                                            {d.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                                Lead will be assigned to this dealership.
+                            </p>
+                            {!bdcCtx?.isLoading && bdcDealerships.length === 0 && (
+                                <p className="text-xs text-destructive">
+                                    You have no dealership access. Ask an admin to grant access.
+                                </p>
+                            )}
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label htmlFor="first_name">First Name *</Label>
@@ -161,7 +236,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                                 id="first_name"
                                 placeholder="John"
                                 value={formData.first_name}
-                                onChange={(e) => setFormData(prev => ({ ...prev, first_name: e.target.value }))}
+                                onChange={(e) => setFormData((prev) => ({ ...prev, first_name: e.target.value }))}
                             />
                         </div>
                         <div className="space-y-2">
@@ -170,12 +245,11 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                                 id="last_name"
                                 placeholder="Doe"
                                 value={formData.last_name}
-                                onChange={(e) => setFormData(prev => ({ ...prev, last_name: e.target.value }))}
+                                onChange={(e) => setFormData((prev) => ({ ...prev, last_name: e.target.value }))}
                             />
                         </div>
                     </div>
 
-                    {/* Contact Info - Email and Phone on separate rows so phone has full width */}
                     <div className="space-y-4">
                         <div className="space-y-2">
                             <Label htmlFor="email">Email (optional)</Label>
@@ -188,7 +262,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                                     placeholder="john@example.com"
                                     className="pl-9 w-full"
                                     value={formData.email}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                                    onChange={(e) => setFormData((prev) => ({ ...prev, email: e.target.value }))}
                                 />
                             </div>
                         </div>
@@ -229,16 +303,17 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                                     />
                                 </div>
                             </div>
-                            <p className="text-xs text-muted-foreground">Country: {countryCode} (default from dealership; you can change above)</p>
+                            <p className="text-xs text-muted-foreground">
+                                Country: {countryCode} (default from dealership; you can change above)
+                            </p>
                         </div>
                     </div>
 
-                    {/* Source */}
                     <div className="space-y-2">
                         <Label htmlFor="source">Lead Source</Label>
-                        <Select 
-                            value={formData.source} 
-                            onValueChange={(v) => setFormData(prev => ({ ...prev, source: v }))}
+                        <Select
+                            value={formData.source}
+                            onValueChange={(v) => setFormData((prev) => ({ ...prev, source: v }))}
                         >
                             <SelectTrigger>
                                 <SelectValue placeholder="Select source" />
@@ -253,7 +328,6 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                         </Select>
                     </div>
 
-                    {/* Interest */}
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label htmlFor="interested_in">Interested In</Label>
@@ -264,7 +338,9 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                                     placeholder="e.g., SUV, Sedan"
                                     className="pl-9"
                                     value={formData.interested_in}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, interested_in: e.target.value }))}
+                                    onChange={(e) =>
+                                        setFormData((prev) => ({ ...prev, interested_in: e.target.value }))
+                                    }
                                 />
                             </div>
                         </div>
@@ -274,12 +350,11 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                                 id="budget_range"
                                 placeholder="e.g., $20k - $30k"
                                 value={formData.budget_range}
-                                onChange={(e) => setFormData(prev => ({ ...prev, budget_range: e.target.value }))}
+                                onChange={(e) => setFormData((prev) => ({ ...prev, budget_range: e.target.value }))}
                             />
                         </div>
                     </div>
 
-                    {/* Notes */}
                     <div className="space-y-2">
                         <Label htmlFor="notes">Notes</Label>
                         <Textarea
@@ -287,22 +362,22 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                             placeholder="Additional information about this lead..."
                             rows={3}
                             value={formData.notes}
-                            onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
+                            onChange={(e) => setFormData((prev) => ({ ...prev, notes: e.target.value }))}
                         />
                     </div>
 
-                    {/* Error */}
                     {error && (
-                        <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-lg">
-                            {error}
-                        </div>
+                        <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-lg">{error}</div>
                     )}
 
                     <DialogFooter>
                         <Button type="button" variant="outline" onClick={handleClose}>
                             Cancel
                         </Button>
-                        <Button type="submit" disabled={isLoading}>
+                        <Button
+                            type="submit"
+                            disabled={isLoading || (isBdc && (!dealershipId || bdcDealerships.length === 0))}
+                        >
                             {isLoading && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                             Create Lead
                         </Button>

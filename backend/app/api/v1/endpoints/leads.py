@@ -983,7 +983,12 @@ async def create_lead(
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
         dealership_id = current_user.dealership_id
     elif current_user.role == UserRole.BDC:
-        if not dealership_id or not await user_can_access_dealership(db, current_user, dealership_id):
+        if not dealership_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Dealership is required when creating a lead as a BDC agent",
+            )
+        if not await user_can_access_dealership(db, current_user, dealership_id):
             raise HTTPException(status_code=403, detail="Not authorized for this dealership")
 
     # Step 1: find or create customer
@@ -1066,6 +1071,7 @@ async def create_lead(
         interested_in=lead_in.interested_in,
         budget_range=lead_in.budget_range,
         secondary_customer_id=secondary_customer_id,
+        bdc_assigned_to_id=current_user.id if current_user.role == UserRole.BDC else None,
     )
     db.add(lead)
     await db.flush()
@@ -1074,6 +1080,8 @@ async def create_lead(
     lead_name = customer.full_name
     if assigned_to:
         description = f"Lead created and auto-assigned to {current_user.first_name} {current_user.last_name}"
+    elif current_user.role == UserRole.BDC and dealership_id:
+        description = f"Lead created by BDC {current_user.email} for dealership"
     else:
         description = f"Lead created by {current_user.email}"
 
