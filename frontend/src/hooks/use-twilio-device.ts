@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { twilioVoiceManager, DeviceState, TwilioCall, IncomingCallInfo } from "@/lib/twilio-voice";
 import { voiceService, VoiceConfig } from "@/services/voice-service";
 import { startIncomingRingtone, stopIncomingRingtone } from "@/lib/incoming-ringtone";
+import { showIncomingCallPip, dismissIncomingCallPip } from "@/lib/incoming-call-pip";
 import { useToast } from "./use-toast";
 import { useWebSocketEvent } from "./use-websocket";
 import { useBdcDealership } from "@/contexts/bdc-dealership-context";
@@ -95,6 +96,7 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
 
   const dismissIncomingLocally = useCallback((alsoIgnoreTwilio: boolean) => {
     stopIncomingRingtone();
+    dismissIncomingCallPip();
     if (alsoIgnoreTwilio) {
       try {
         twilioVoiceManager.ignoreCall();
@@ -326,16 +328,26 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   }, [isInitialized]);
 
   /**
-   * Focus CRM from an FCM incoming-call notification click (service worker).
+   * Handle service worker messages:
+   * - INCOMING_CALL_CLICK / NOTIFICATION_CLICK: focus the tab
+   * - WAKE_FOR_INCOMING_CALL: immediately re-register Twilio so the
+   *   signaling WebSocket is live when the call arrives (handles case
+   *   where the tab was sleeping and the WS dropped silently).
    */
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const data = event.data || {};
+
+      if (data.type === "WAKE_FOR_INCOMING_CALL") {
+        console.log("SW woke tab for incoming call — ensuring Twilio is registered");
+        void twilioVoiceManager.ensureRegistered();
+        return;
+      }
+
       if (data.type === "INCOMING_CALL_CLICK" || data.type === "NOTIFICATION_CLICK") {
         void twilioVoiceManager.ensureRegistered();
         window.focus();
         if (typeof data.url === "string" && data.url.startsWith("/") && data.url !== window.location.pathname) {
-          // Soft navigate only if we're not already there
           try {
             window.history.pushState({}, "", data.url);
             window.dispatchEvent(new PopStateEvent("popstate"));
@@ -350,15 +362,56 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   }, []);
 
   /**
+   * Page Lifecycle API: re-register Twilio when the page resumes from
+   * a frozen/discarded state (aggressive browser power saving).
+   */
+  useEffect(() => {
+    if (!isInitialized) return;
+
+    const onResume = () => {
+      console.log("Page resumed from freeze — re-registering Twilio");
+      void twilioVoiceManager.ensureRegistered();
+    };
+
+    document.addEventListener("resume", onResume);
+    return () => document.removeEventListener("resume", onResume);
+  }, [isInitialized]);
+
+  /**
    * Cleanup on unmount
    */
   useEffect(() => {
     return () => {
       stopIncomingRingtone();
+      dismissIncomingCallPip();
       stopDurationTimer();
       twilioVoiceManager.destroy();
     };
   }, [stopDurationTimer]);
+
+  /**
+   * Show Document Picture-in-Picture popup when an incoming call arrives.
+   * The floating window stays on top of all other apps even when the CRM
+   * tab is in the background — similar to WhatsApp/Telegram desktop.
+   */
+  const acceptCallRef = useRef<() => void>(() => {});
+  const ignoreCallRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    if (!incomingCall) {
+      dismissIncomingCallPip();
+      return;
+    }
+
+    showIncomingCallPip(incomingCall, {
+      onAccept: () => acceptCallRef.current(),
+      onIgnore: () => ignoreCallRef.current(),
+    });
+
+    return () => {
+      dismissIncomingCallPip();
+    };
+  }, [incomingCall]);
 
   /**
    * Make an outbound call
@@ -418,6 +471,7 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     if (incomingCall) {
       acceptingRef.current = true;
       stopIncomingRingtone();
+      dismissIncomingCallPip();
       setCurrentCallInfo({
         direction: "inbound",
         phoneNumber: incomingCall.from,
@@ -436,12 +490,19 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
    */
   const ignoreCall = useCallback(() => {
     stopIncomingRingtone();
+    dismissIncomingCallPip();
     twilioVoiceManager.ignoreCall();
     setIncomingCall(null);
     if (!activeCallRef.current) {
       setIsOnCall(false);
     }
   }, []);
+
+  // Keep PiP button refs in sync with the latest accept/ignore callbacks
+  useEffect(() => {
+    acceptCallRef.current = acceptCall;
+    ignoreCallRef.current = ignoreCall;
+  }, [acceptCall, ignoreCall]);
 
   /**
    * Alias of ignoreCall — must not reject/hang up the ring group for others.

@@ -1,13 +1,13 @@
 /**
  * TikunCRM Firebase Messaging Service Worker
- * Version: 2.1 - Incoming call alerts when CRM tab is backgrounded
+ * Version: 2.2 - Wake sleeping tabs for incoming call PiP popup
  * 
  * This service worker handles FCM push notifications.
  * Uses raw 'push' event listener for maximum browser compatibility.
  */
 
 // SW Version for cache busting
-const SW_VERSION = '2.1';
+const SW_VERSION = '2.2';
 
 // Import Firebase scripts (required for getToken() to work)
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js');
@@ -88,6 +88,22 @@ self.addEventListener('push', (event) => {
     options.actions = [
       { action: 'open', title: 'Open CRM' },
     ];
+
+    // Wake all CRM tabs so Twilio re-registers before the signaling arrives.
+    // This ensures the floating PiP popup works even if the tab was sleeping.
+    event.waitUntil(
+      clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+        for (const client of clientList) {
+          client.postMessage({
+            type: 'WAKE_FOR_INCOMING_CALL',
+            call_sid: data.call_sid || '',
+            lead_id: data.lead_id || '',
+            from: data.from || '',
+            lead_name: data.lead_name || '',
+          });
+        }
+      })
+    );
   }
 
   console.log('[SW] Showing notification:', title, options);

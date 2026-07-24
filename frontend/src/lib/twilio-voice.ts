@@ -62,6 +62,7 @@ class TwilioVoiceManager {
   private callbacks: TwilioEventCallback = {};
   private tokenRefreshTimer: NodeJS.Timeout | null = null;
   private keepAliveTimer: NodeJS.Timeout | null = null;
+  private keepAliveWorker: Worker | null = null;
   private isInitialized = false;
   private dealershipId: string | null = null;
 
@@ -350,15 +351,13 @@ class TwilioVoiceManager {
   }
 
   /**
-   * Periodic keep-alive: re-register if the device silently lost its
-   * signaling WebSocket (common when browser throttles background tabs
-   * or network changes without a visibilitychange event).
+   * Periodic keep-alive using a Web Worker so it runs even when the browser
+   * throttles background tabs. Falls back to setInterval if Workers unavailable.
    */
   private startKeepAlive(): void {
-    if (this.keepAliveTimer) {
-      clearInterval(this.keepAliveTimer);
-    }
-    this.keepAliveTimer = setInterval(() => {
+    this.stopKeepAlive();
+
+    const doKeepAlive = () => {
       if (!this.device || !this.isInitialized) return;
       const state = this.device.state;
       if (state === "unregistered") {
@@ -367,7 +366,35 @@ class TwilioVoiceManager {
           console.warn("Twilio keep-alive re-register failed:", e);
         });
       }
-    }, 15_000); // Check every 15 seconds
+    };
+
+    if (typeof Worker !== "undefined") {
+      try {
+        this.keepAliveWorker = new Worker("/twilio-keepalive-worker.js");
+        this.keepAliveWorker.addEventListener("message", (e) => {
+          if (e.data?.type === "keepalive") doKeepAlive();
+        });
+        this.keepAliveWorker.postMessage({ type: "start" });
+        return;
+      } catch (e) {
+        console.warn("Twilio keep-alive Worker failed, falling back to setInterval:", e);
+      }
+    }
+
+    // Fallback for environments without Worker support
+    this.keepAliveTimer = setInterval(doKeepAlive, 15_000);
+  }
+
+  private stopKeepAlive(): void {
+    if (this.keepAliveWorker) {
+      this.keepAliveWorker.postMessage({ type: "stop" });
+      this.keepAliveWorker.terminate();
+      this.keepAliveWorker = null;
+    }
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = null;
+    }
   }
 
   /**
@@ -422,10 +449,7 @@ class TwilioVoiceManager {
       this.tokenRefreshTimer = null;
     }
 
-    if (this.keepAliveTimer) {
-      clearInterval(this.keepAliveTimer);
-      this.keepAliveTimer = null;
-    }
+    this.stopKeepAlive();
 
     if (this.currentCall) {
       this.currentCall.disconnect();
