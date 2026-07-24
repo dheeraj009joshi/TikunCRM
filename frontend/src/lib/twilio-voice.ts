@@ -61,6 +61,7 @@ class TwilioVoiceManager {
   private currentCall: TwilioCall | null = null;
   private callbacks: TwilioEventCallback = {};
   private tokenRefreshTimer: NodeJS.Timeout | null = null;
+  private keepAliveTimer: NodeJS.Timeout | null = null;
   private isInitialized = false;
   private dealershipId: string | null = null;
 
@@ -91,7 +92,7 @@ class TwilioVoiceManager {
       const options = {
         logLevel: 1 as const,
         codecPreferences: ["opus", "pcmu"],
-        allowIncomingWhileBusy: false,
+        allowIncomingWhileBusy: true,
         closeProtection: true,
       };
       this.device = new Device(tokenData.token, options as ConstructorParameters<typeof Device>[1]) as unknown as TwilioDevice;
@@ -107,6 +108,9 @@ class TwilioVoiceManager {
 
       // Set up token refresh before expiry
       this.scheduleTokenRefresh(tokenData.expires_in);
+
+      // Periodically verify device registration (catches silent WebSocket drops)
+      this.startKeepAlive();
 
       console.log("Twilio Voice initialized successfully");
     } catch (error) {
@@ -346,6 +350,27 @@ class TwilioVoiceManager {
   }
 
   /**
+   * Periodic keep-alive: re-register if the device silently lost its
+   * signaling WebSocket (common when browser throttles background tabs
+   * or network changes without a visibilitychange event).
+   */
+  private startKeepAlive(): void {
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+    }
+    this.keepAliveTimer = setInterval(() => {
+      if (!this.device || !this.isInitialized) return;
+      const state = this.device.state;
+      if (state === "unregistered") {
+        console.log("Twilio keep-alive: device unregistered, re-registering...");
+        this.device.register().catch((e) => {
+          console.warn("Twilio keep-alive re-register failed:", e);
+        });
+      }
+    }, 15_000); // Check every 15 seconds
+  }
+
+  /**
    * Refresh the access token
    */
   private async refreshToken(): Promise<void> {
@@ -395,6 +420,11 @@ class TwilioVoiceManager {
     if (this.tokenRefreshTimer) {
       clearTimeout(this.tokenRefreshTimer);
       this.tokenRefreshTimer = null;
+    }
+
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = null;
     }
 
     if (this.currentCall) {

@@ -215,6 +215,11 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
           }
         },
         onIncomingCall: (call, info) => {
+          // If already on an active call, auto-ignore this new incoming call
+          if (activeCallRef.current) {
+            try { twilioVoiceManager.ignoreCall(); } catch { /* noop */ }
+            return;
+          }
           setIncomingCall(info);
           // Ringing is not an active connected call — keep Accept/Ignore modal only
           setIsOnCall(false);
