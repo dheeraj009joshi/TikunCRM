@@ -42,6 +42,7 @@ export type DeviceState = "offline" | "connecting" | "ready" | "busy" | "error";
 export interface IncomingCallInfo {
   callSid: string;
   parentCallSid?: string;
+  callLogId?: string;
   from: string;
   leadId?: string;
   leadName?: string;
@@ -336,15 +337,21 @@ class TwilioVoiceManager {
 
   /**
    * Re-register if the browser suspended Twilio while the tab was backgrounded.
+   * Also handles the case where the device got stuck in "registering" state.
    */
   async ensureRegistered(): Promise<void> {
     if (!this.device || !this.isInitialized) return;
     try {
       const state = this.device.state;
-      if (state === "unregistered" || state === "destroyed") {
-        console.log("Twilio device not registered — re-registering after tab focus");
-        await this.device.register();
+      if (state === "registered") return;
+      console.log(`Twilio device state="${state}" — attempting re-register`);
+      if (state === "destroyed") {
+        // Cannot re-register a destroyed device; need full re-init
+        this.isInitialized = false;
+        this.callbacks.onStateChange?.("offline");
+        return;
       }
+      await this.device.register();
     } catch (e) {
       console.warn("Twilio ensureRegistered failed:", e);
     }

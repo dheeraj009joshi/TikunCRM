@@ -79,9 +79,16 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       call_sid?: string | null;
       parent_call_sid?: string | null;
       child_call_sid?: string | null;
+      call_log_id?: string | null;
     }) => {
       const incoming = incomingCallRef.current;
       if (!incoming) return false;
+
+      // Match by call_log_id first (most reliable for ring groups)
+      if (payload.call_log_id && incoming.callLogId && payload.call_log_id === incoming.callLogId) {
+        return true;
+      }
+
       const ids = [payload.call_sid, payload.parent_call_sid, payload.child_call_sid].filter(
         Boolean
       ) as string[];
@@ -117,6 +124,7 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       call_sid?: string;
       parent_call_sid?: string | null;
       child_call_sid?: string | null;
+      call_log_id?: string;
       answered_by?: string;
     }) => {
       if (acceptingRef.current || activeCallRef.current) return;
@@ -126,10 +134,42 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     [matchesIncomingCall, dismissIncomingLocally]
   );
 
+  // Enrich incoming call info with parent SID / callLogId from backend WS event.
+  // Twilio's SDK doesn't always provide ParentCallSid for <Client> ring groups,
+  // but our backend sends it via WS which makes call:answered matching reliable.
+  useWebSocketEvent(
+    "call:incoming",
+    (payload: {
+      call_sid?: string;
+      call_log_id?: string;
+      from_number?: string;
+      lead_id?: string;
+      lead_name?: string;
+    }) => {
+      const incoming = incomingCallRef.current;
+      if (!incoming) return;
+      // Match by from number or if parentCallSid already matches
+      const fromMatch = payload.from_number && incoming.from.includes(payload.from_number.replace(/^\+/, ""));
+      const sidMatch = payload.call_sid && (
+        incoming.parentCallSid === payload.call_sid || incoming.callSid === payload.call_sid
+      );
+      if (fromMatch || sidMatch) {
+        if (payload.call_sid && !incoming.parentCallSid) {
+          incoming.parentCallSid = payload.call_sid;
+        }
+        if (payload.call_log_id) {
+          incoming.callLogId = payload.call_log_id;
+        }
+        setIncomingCall({ ...incoming });
+      }
+    },
+    []
+  );
+
   // Ring group finished (timeout / no-answer) — clear leftover modals
   useWebSocketEvent(
     "call:ring_ended",
-    (payload: { call_sid?: string; status?: string }) => {
+    (payload: { call_sid?: string; status?: string; call_log_id?: string }) => {
       if (acceptingRef.current || activeCallRef.current) return;
       if (!matchesIncomingCall(payload)) return;
       dismissIncomingLocally(true);
@@ -214,6 +254,8 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
           setDeviceState(state);
           if (state === "ready") {
             setIsInitialized(true);
+          } else if (state === "offline") {
+            setIsInitialized(false);
           }
         },
         onIncomingCall: (call, info) => {
@@ -257,13 +299,17 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
         onCallDisconnected: (call) => {
           acceptingRef.current = false;
           stopIncomingRingtone();
-          // Ending YOUR connected call clears active UI.
-          // Do NOT clear the incoming modal here — Ignore is local-only.
-          // Clear-all for others happens via call:answered / call:ring_ended.
+          dismissIncomingCallPip();
           if (activeCallRef.current) {
+            // Was on an active connected call that ended
             setCurrentCallInfo(null);
             setIsMuted(false);
             stopDurationTimer();
+            setIsOnCall(false);
+          } else if (incomingCallRef.current) {
+            // Was still ringing (never accepted) — Twilio cancelled the leg
+            // because someone else answered or the caller hung up
+            setIncomingCall(null);
             setIsOnCall(false);
           }
         },
