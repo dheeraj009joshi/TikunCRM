@@ -156,6 +156,7 @@ export function GuestFormModal({
     const [shareUrl, setShareUrl] = React.useState<string | null>(null)
     const [appointmentAt, setAppointmentAt] = React.useState<string | null>(null)
     const [dealershipName, setDealershipName] = React.useState<string | null>(null)
+    const [dealershipTimezone, setDealershipTimezone] = React.useState<string | null>(null)
     const [copiedLink, setCopiedLink] = React.useState(false)
     const [copiedImage, setCopiedImage] = React.useState(false)
     const [copyingImage, setCopyingImage] = React.useState(false)
@@ -202,6 +203,7 @@ export function GuestFormModal({
             setShareUrl(null)
             setAppointmentAt(null)
             setDealershipName(null)
+            setDealershipTimezone(null)
             setError(null)
             setSaveStatus("idle")
             return
@@ -226,12 +228,19 @@ export function GuestFormModal({
                 if (resolvedDealershipId) {
                     try {
                         const d = await DealershipService.getDealership(resolvedDealershipId)
-                        if (!cancelled) setDealershipName(d.name || null)
+                        if (!cancelled) {
+                            setDealershipName(d.name || null)
+                            setDealershipTimezone(d.timezone || null)
+                        }
                     } catch {
-                        if (!cancelled) setDealershipName(null)
+                        if (!cancelled) {
+                            setDealershipName(null)
+                            setDealershipTimezone(null)
+                        }
                     }
                 } else if (!cancelled) {
                     setDealershipName(null)
+                    setDealershipTimezone(null)
                 }
 
                 try {
@@ -365,6 +374,7 @@ export function GuestFormModal({
                 guestName: guest.full_name || "Guest",
                 appointmentAt,
                 dealershipName,
+                dealershipTimezone,
             })
             setCopiedImage(true)
             setTimeout(() => setCopiedImage(false), 2000)
@@ -390,6 +400,7 @@ export function GuestFormModal({
                 guestName: guest.full_name || "Guest",
                 appointmentAt,
                 dealershipName,
+                dealershipTimezone,
             })
         } catch (e) {
             console.error("Failed to export QR", e)
@@ -564,7 +575,7 @@ export function GuestFormModal({
                                     <p className="text-sm font-semibold">{guest.full_name || "Guest"}</p>
                                     <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
                                         <Calendar className="h-3.5 w-3.5 shrink-0" />
-                                        {formatAppointmentLabel(appointmentAt)}
+                                        {formatAppointmentLabel(appointmentAt, dealershipTimezone)}
                                     </p>
                                 </div>
                                 <button

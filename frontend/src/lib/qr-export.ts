@@ -1,5 +1,7 @@
 /** Shared helpers for guest QR PNG export and clipboard copy (matches BDC report naming). */
 
+import { parseAsUTC } from "@/utils/timezone"
+
 export function sanitizeFilenamePart(text: string, maxLen = 60): string {
     if (!text) return ""
     let cleaned = text
@@ -10,36 +12,45 @@ export function sanitizeFilenamePart(text: string, maxLen = 60): string {
     return cleaned.slice(0, maxLen) || ""
 }
 
-/** e.g. Monday - Jul 5, 2026 - 2:30 PM */
-export function formatAppointmentForFilename(isoDate: string | null | undefined): string {
+/** e.g. Monday - Jul 5, 2026 - 2:30 PM (in dealership timezone if provided) */
+export function formatAppointmentForFilename(
+    isoDate: string | null | undefined,
+    timezone?: string | null
+): string {
     if (!isoDate?.trim()) return "No Appointment"
     try {
-        const dt = new Date(isoDate.trim())
+        const dt = parseAsUTC(isoDate.trim())
         if (Number.isNaN(dt.getTime())) return "Appointment"
-        const weekday = dt.toLocaleDateString(undefined, { weekday: "long" })
-        const month = dt.toLocaleDateString(undefined, { month: "short" })
-        const day = dt.getDate()
-        const year = dt.getFullYear()
-        const time = dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+        const opts: Intl.DateTimeFormatOptions = timezone ? { timeZone: timezone } : {}
+        const weekday = dt.toLocaleDateString("en-US", { ...opts, weekday: "long" })
+        const month = dt.toLocaleDateString("en-US", { ...opts, month: "short" })
+        const day = Number(dt.toLocaleDateString("en-US", { ...opts, day: "numeric" }))
+        const year = Number(dt.toLocaleDateString("en-US", { ...opts, year: "numeric" }))
+        const time = dt.toLocaleTimeString("en-US", { ...opts, hour: "numeric", minute: "2-digit" })
         return `${weekday} - ${month} ${day}, ${year} - ${time}`
     } catch {
         return "Appointment"
     }
 }
 
-export function formatAppointmentLabel(isoDate: string | null | undefined): string {
+export function formatAppointmentLabel(
+    isoDate: string | null | undefined,
+    timezone?: string | null
+): string {
     if (!isoDate?.trim()) return "No appointment scheduled"
     try {
-        const dt = new Date(isoDate.trim())
+        const dt = parseAsUTC(isoDate.trim())
         if (Number.isNaN(dt.getTime())) return "Appointment"
-        return dt.toLocaleString(undefined, {
+        const opts: Intl.DateTimeFormatOptions = {
             weekday: "long",
             month: "short",
             day: "numeric",
             year: "numeric",
             hour: "numeric",
             minute: "2-digit",
-        })
+            ...(timezone ? { timeZone: timezone } : {}),
+        }
+        return dt.toLocaleString("en-US", opts)
     } catch {
         return "Appointment"
     }
@@ -47,10 +58,11 @@ export function formatAppointmentLabel(isoDate: string | null | undefined): stri
 
 export function guestQrExportFilename(
     guestName: string,
-    appointmentAt: string | null | undefined
+    appointmentAt: string | null | undefined,
+    timezone?: string | null
 ): string {
     const name = sanitizeFilenamePart(guestName, 50) || "Guest"
-    const appt = sanitizeFilenamePart(formatAppointmentForFilename(appointmentAt), 80)
+    const appt = sanitizeFilenamePart(formatAppointmentForFilename(appointmentAt, timezone), 80)
     return `${name} - ${appt}.png`
 }
 
@@ -59,16 +71,17 @@ export type GuestQrImageOptions = {
     guestName: string
     appointmentAt?: string | null
     dealershipName?: string | null
+    dealershipTimezone?: string | null
 }
 
 async function renderGuestQrCanvas(options: GuestQrImageOptions): Promise<HTMLCanvasElement> {
-    const { svg, guestName, appointmentAt, dealershipName } = options
+    const { svg, guestName, appointmentAt, dealershipName, dealershipTimezone } = options
     const qrSize = 512
     const padding = 40
     const lineHeight = 36
     const name = guestName.trim() || "Guest"
     const dealer = (dealershipName || "").trim()
-    const apptLabel = formatAppointmentForFilename(appointmentAt)
+    const apptLabel = formatAppointmentForFilename(appointmentAt, dealershipTimezone)
     const textLines = dealer ? 3 : 2
 
     const canvas = document.createElement("canvas")
@@ -139,7 +152,7 @@ export async function exportGuestQrPng(options: GuestQrImageOptions): Promise<vo
     const name = options.guestName.trim() || "Guest"
     const link = document.createElement("a")
     link.href = URL.createObjectURL(blob)
-    link.download = guestQrExportFilename(name, options.appointmentAt)
+    link.download = guestQrExportFilename(name, options.appointmentAt, options.dealershipTimezone)
     link.click()
     URL.revokeObjectURL(link.href)
 }
