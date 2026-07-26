@@ -37,6 +37,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
 import { useRole } from "@/hooks/use-role"
+import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { formatDateInDealershipTimezone, getTimezoneAbbreviation } from "@/utils/timezone"
 import { AppointmentService } from "@/services/appointment-service"
 import { DealershipService } from "@/services/dealership-service"
 import {
@@ -167,6 +169,8 @@ export function GuestFormModal({
     const router = useRouter()
     const { isSuperAdmin, isDealershipLevel, isBdc } = useRole()
     const canManageCriteria = isSuperAdmin || isDealershipLevel || isBdc
+    const { dealershipTimezone: hookTimezone } = useDealershipTimezone()
+    const tzAbbr = getTimezoneAbbreviation(hookTimezone)
 
     guestRef.current = guest
 
@@ -224,37 +228,21 @@ export function GuestFormModal({
                 guestRef.current = g
                 setShareUrl(shareUrlForGuest(g))
 
-                const resolvedDealershipId = dealershipId || g.dealership_id || null
-                if (resolvedDealershipId) {
-                    try {
-                        const d = await DealershipService.getDealership(resolvedDealershipId)
-                        if (!cancelled) {
-                            setDealershipName(d.name || null)
-                            setDealershipTimezone(d.timezone || null)
-                        }
-                    } catch {
-                        if (!cancelled) {
-                            setDealershipName(null)
-                            setDealershipTimezone(null)
-                        }
-                    }
-                } else if (!cancelled) {
-                    setDealershipName(null)
-                    setDealershipTimezone(null)
-                }
-
                 try {
                     setDocuments(await GuestService.getDocuments(g.id))
                 } catch {
                     /* documents are best-effort */
                 }
 
+                // Fetch appointment to get scheduled_at and its dealership_id
                 const resolvedApptId = appointmentId || g.appointment_id
                 let scheduledAt: string | null = null
+                let apptDealershipId: string | null = null
                 if (resolvedApptId) {
                     try {
                         const appt = await AppointmentService.get(resolvedApptId)
                         scheduledAt = appt.scheduled_at
+                        apptDealershipId = appt.dealership_id || null
                     } catch {
                         /* fall back to lead appointments */
                     }
@@ -272,12 +260,36 @@ export function GuestFormModal({
                         const latest = [...items].sort(
                             (a, b) => new Date(b.scheduled_at).getTime() - new Date(a.scheduled_at).getTime()
                         )[0]
-                        scheduledAt = upcoming?.scheduled_at ?? latest?.scheduled_at ?? null
+                        const chosen = upcoming || latest
+                        scheduledAt = chosen?.scheduled_at ?? null
+                        if (!apptDealershipId && chosen?.dealership_id) {
+                            apptDealershipId = chosen.dealership_id
+                        }
                     } catch {
                         scheduledAt = null
                     }
                 }
                 if (!cancelled) setAppointmentAt(scheduledAt)
+
+                // Resolve dealership timezone: appointment > prop > guest record
+                const resolvedDealershipId = apptDealershipId || dealershipId || g.dealership_id || null
+                if (resolvedDealershipId && !cancelled) {
+                    try {
+                        const d = await DealershipService.getDealership(resolvedDealershipId)
+                        if (!cancelled) {
+                            setDealershipName(d.name || null)
+                            setDealershipTimezone(d.timezone || null)
+                        }
+                    } catch {
+                        if (!cancelled) {
+                            setDealershipName(null)
+                            setDealershipTimezone(null)
+                        }
+                    }
+                } else if (!cancelled) {
+                    setDealershipName(null)
+                    setDealershipTimezone(null)
+                }
             })
             .catch((e) => {
                 if (cancelled) return
@@ -374,7 +386,7 @@ export function GuestFormModal({
                 guestName: guest.full_name || "Guest",
                 appointmentAt,
                 dealershipName,
-                dealershipTimezone,
+                dealershipTimezone: dealershipTimezone || hookTimezone,
             })
             setCopiedImage(true)
             setTimeout(() => setCopiedImage(false), 2000)
@@ -400,7 +412,7 @@ export function GuestFormModal({
                 guestName: guest.full_name || "Guest",
                 appointmentAt,
                 dealershipName,
-                dealershipTimezone,
+                dealershipTimezone: dealershipTimezone || hookTimezone,
             })
         } catch (e) {
             console.error("Failed to export QR", e)
@@ -575,7 +587,8 @@ export function GuestFormModal({
                                     <p className="text-sm font-semibold">{guest.full_name || "Guest"}</p>
                                     <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
                                         <Calendar className="h-3.5 w-3.5 shrink-0" />
-                                        {formatAppointmentLabel(appointmentAt, dealershipTimezone)}
+                                        {formatDateInDealershipTimezone(appointmentAt, dealershipTimezone || hookTimezone)}
+                                        {tzAbbr && ` (${tzAbbr})`}
                                     </p>
                                 </div>
                                 <button
