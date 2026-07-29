@@ -186,8 +186,8 @@ function downloadAnalysisCsv(analysis: DealershipAnalysisResponse) {
             "Notes",
             "Follow-ups scheduled (period)",
             "Follow-ups completed (period)",
-            "Appts scheduled (period)",
-            "Appts confirmed (period)",
+            "Appts set (period)",
+            "Appts still confirmed (period)",
             "Notes Fri",
             "Outbound calls Fri",
             "Appts Sat",
@@ -201,7 +201,7 @@ function downloadAnalysisCsv(analysis: DealershipAnalysisResponse) {
             String(analysis.summary.total_notes),
             String(analysis.summary.total_follow_ups_scheduled_in_period),
             String(analysis.summary.total_follow_ups_completed_in_period),
-            String(analysis.summary.total_appointments_scheduled_in_period),
+            String(analysis.summary.total_appointments),
             String(analysis.summary.total_appointments_confirmed_in_period),
             String(analysis.summary.notes_friday),
             String(analysis.summary.outbound_calls_friday),
@@ -216,8 +216,8 @@ function downloadAnalysisCsv(analysis: DealershipAnalysisResponse) {
             "Notes",
             "FU scheduled",
             "FU completed",
-            "Appts scheduled",
-            "Appts confirmed",
+            "Appts set",
+            "Appts conf.",
             "Notes Fri",
             "Calls Fri",
             "Appts Sat",
@@ -281,8 +281,8 @@ function downloadAnalysisPdf(
             ["Notes (in period)", String(analysis.summary.total_notes)],
             ["Follow-ups scheduled (in period)", String(analysis.summary.total_follow_ups_scheduled_in_period)],
             ["Follow-ups completed (in period)", String(analysis.summary.total_follow_ups_completed_in_period)],
-            ["Appointments scheduled (in period)", String(analysis.summary.total_appointments_scheduled_in_period)],
-            ["Appointments confirmed (in period)", String(analysis.summary.total_appointments_confirmed_in_period)],
+            ["Appointments set (in period)", String(analysis.summary.total_appointments)],
+            ["Appointments still confirmed (in period)", String(analysis.summary.total_appointments_confirmed_in_period)],
             ["Notes (Friday)", String(analysis.summary.notes_friday)],
             ["Outbound calls (Friday)", String(analysis.summary.outbound_calls_friday)],
             ["Appointments (Saturday)", String(analysis.summary.appointments_contacted_saturday)],
@@ -296,7 +296,7 @@ function downloadAnalysisPdf(
 
     autoTable(doc, {
         startY: y,
-        head: [["Name", "Leads", "Notes", "FU sched.", "FU done", "Appts sched.", "Appts conf.", "Notes Fri", "Calls Fri", "Appts Sat", "Check-ins"]],
+        head: [["Name", "Leads", "Notes", "FU sched.", "FU done", "Appts set", "Appts conf.", "Notes Fri", "Calls Fri", "Appts Sat", "Check-ins"]],
         body: analysis.salespeople.map((r) => [
             r.user_name,
             String(r.leads_assigned),
@@ -710,7 +710,12 @@ export default function AnalyticsPage() {
                             <h2 className="text-lg font-semibold mb-3">Activity in Period</h2>
                             <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
                                 <SummaryCard title="Notes" value={analysis.summary.total_notes} icon={FileText} />
-                                <SummaryCard title="Appointments" value={analysis.summary.total_appointments} icon={Calendar} />
+                                <SummaryCard
+                                    title="Appts set"
+                                    value={analysis.summary.total_appointments}
+                                    icon={Calendar}
+                                    description="Created in period (excl. cancelled)"
+                                />
                                 <SummaryCard
                                     title="Appt Set Rate"
                                     value={formatRate(
@@ -718,7 +723,7 @@ export default function AnalyticsPage() {
                                         analysis.summary.total_leads
                                     )}
                                     icon={Calendar}
-                                    description="Appointments ÷ leads"
+                                    description="Appts set ÷ leads"
                                 />
                                 <SummaryCard title="Follow-ups" value={analysis.summary.total_follow_ups} icon={ClipboardList} />
                                 <SummaryCard title="Check-ins" value={analysis.summary.total_check_ins_in_period} icon={LogIn} />
@@ -861,7 +866,7 @@ export default function AnalyticsPage() {
                                         <TableHead className="text-right">Notes</TableHead>
                                         <TableHead className="text-right">FU sched.</TableHead>
                                         <TableHead className="text-right">FU done</TableHead>
-                                        <TableHead className="text-right">Appts sched.</TableHead>
+                                        <TableHead className="text-right">Appts set</TableHead>
                                         <TableHead className="text-right">Appts conf.</TableHead>
                                         <TableHead className="text-right">Notes Fri</TableHead>
                                         <TableHead className="text-right">Calls Fri</TableHead>

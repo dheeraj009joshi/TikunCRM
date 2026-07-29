@@ -36,6 +36,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Appointments that count as "set" for analytics (exclude cancelled / rescheduled).
+# Includes arrived/completed/sold so check-in does not remove them from the set rate.
+APPOINTMENT_SET_STATUSES = (
+    AppointmentStatus.SCHEDULED,
+    AppointmentStatus.CONFIRMED,
+    AppointmentStatus.ARRIVED,
+    AppointmentStatus.IN_SHOWROOM,
+    AppointmentStatus.IN_PROGRESS,
+    AppointmentStatus.COMPLETED,
+    AppointmentStatus.NO_SHOW,
+    AppointmentStatus.SOLD,
+)
+
 
 # Schemas
 class PendingFollowUp(BaseModel):
@@ -976,9 +989,18 @@ async def get_dealership_analysis(
     appt_filters_base = and_(*appt_filters)
     
     if no_matching_leads:
+        total_appointments = 0
         total_appointments_scheduled_in_period = 0
         total_appointments_confirmed_in_period = 0
     else:
+        # "Appts set": any appointment created in period that was not cancelled/rescheduled
+        total_appointments_result = await db.execute(
+            select(func.count()).select_from(Appointment).where(
+                and_(appt_filters_base, Appointment.status.in_(APPOINTMENT_SET_STATUSES))
+            )
+        )
+        total_appointments = total_appointments_result.scalar() or 0
+        # Status breakdown (current status among appts created in period)
         total_appointments_scheduled_in_period_result = await db.execute(
             select(func.count()).select_from(Appointment).where(
                 and_(appt_filters_base, Appointment.status == AppointmentStatus.SCHEDULED)
@@ -991,7 +1013,6 @@ async def get_dealership_analysis(
             )
         )
         total_appointments_confirmed_in_period = total_appointments_confirmed_in_period_result.scalar() or 0
-    total_appointments = total_appointments_scheduled_in_period + total_appointments_confirmed_in_period
 
     if lead_ids:
         fu_scheduled_filters = [FollowUp.lead_id.in_(lead_ids)]
@@ -1266,10 +1287,11 @@ async def get_dealership_analysis(
             if row[0]:
                 sp_data[row[0]]["appointments_confirmed"] = row[1] or 0
 
-        # Appointments: scheduled/confirmed in period
+        # Appointments set in period (all non-cancelled/rescheduled statuses)
         appt_period_filters = [
             Appointment.assigned_to.in_(sp_ids),
             Appointment.dealership_id == resolved_dealership_id,
+            Appointment.status.in_(APPOINTMENT_SET_STATUSES),
         ]
         if lead_ids:
             appt_period_filters.append(or_(Appointment.lead_id.is_(None), Appointment.lead_id.in_(lead_ids)))
@@ -1277,18 +1299,29 @@ async def get_dealership_analysis(
             appt_period_filters.append(Appointment.created_at >= activity_date_from)
         if activity_date_to is not None:
             appt_period_filters.append(Appointment.created_at <= activity_date_to)
-        appt_period_base = and_(*appt_period_filters)
-        appt_sched_period_result = await db.execute(
+        appt_set_period_result = await db.execute(
             select(Appointment.assigned_to, func.count()).select_from(Appointment).where(
-                and_(appt_period_base, Appointment.status == AppointmentStatus.SCHEDULED)
+                and_(*appt_period_filters)
             ).group_by(Appointment.assigned_to)
         )
-        for row in appt_sched_period_result.all():
+        for row in appt_set_period_result.all():
             if row[0]:
                 sp_data[row[0]]["appointments_scheduled_in_period"] = row[1] or 0
+
+        appt_conf_period_filters = [
+            Appointment.assigned_to.in_(sp_ids),
+            Appointment.dealership_id == resolved_dealership_id,
+            Appointment.status == AppointmentStatus.CONFIRMED,
+        ]
+        if lead_ids:
+            appt_conf_period_filters.append(or_(Appointment.lead_id.is_(None), Appointment.lead_id.in_(lead_ids)))
+        if activity_date_from is not None:
+            appt_conf_period_filters.append(Appointment.created_at >= activity_date_from)
+        if activity_date_to is not None:
+            appt_conf_period_filters.append(Appointment.created_at <= activity_date_to)
         appt_conf_period_result = await db.execute(
             select(Appointment.assigned_to, func.count()).select_from(Appointment).where(
-                and_(appt_period_base, Appointment.status == AppointmentStatus.CONFIRMED)
+                and_(*appt_conf_period_filters)
             ).group_by(Appointment.assigned_to)
         )
         for row in appt_conf_period_result.all():
