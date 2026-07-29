@@ -5,7 +5,7 @@ from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, and_, delete
+from sqlalchemy import select, func, and_, or_, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,16 +40,26 @@ async def _fetch_bdc_agents_for_dealerships(
     *,
     exclude_user_id: Optional[UUID] = None,
 ) -> List[User]:
-    """Active BDC agents with access to any of the given dealerships."""
+    """Active BDC agents with access to any of the given dealerships.
+
+    Includes agents linked via user_dealership_access OR User.dealership_id
+    (some older BDC accounts only have dealership_id set).
+    """
     if not dealership_ids:
         return []
+    access_user_ids = (
+        select(UserDealershipAccess.user_id)
+        .where(UserDealershipAccess.dealership_id.in_(dealership_ids))
+    )
     query = (
         select(User)
-        .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
         .where(
             User.role == UserRole.BDC,
             User.is_active == True,
-            UserDealershipAccess.dealership_id.in_(dealership_ids),
+            or_(
+                User.id.in_(access_user_ids),
+                User.dealership_id.in_(dealership_ids),
+            ),
         )
         .distinct()
         .order_by(User.first_name, User.last_name)
@@ -694,73 +704,33 @@ async def list_bdc_agents(
     
     if current_user.role == UserRole.SUPER_ADMIN:
         if dealership_id:
-            # Filter by specific dealership
-            result = await db.execute(
-                select(User)
-                .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
-                .where(
-                    User.role == UserRole.BDC,
-                    User.is_active == True,
-                    UserDealershipAccess.dealership_id == dealership_id,
-                )
-                .order_by(User.first_name, User.last_name)
-            )
-        else:
-            # Return all BDC agents
-            result = await db.execute(
-                select(User)
-                .where(User.role == UserRole.BDC, User.is_active == True)
-                .order_by(User.first_name, User.last_name)
-            )
-        return result.scalars().all()
+            return await _fetch_bdc_agents_for_dealerships(db, [dealership_id])
+        result = await db.execute(
+            select(User)
+            .where(User.role == UserRole.BDC, User.is_active == True)
+            .order_by(User.first_name, User.last_name)
+        )
+        return list(result.scalars().all())
     
     elif current_user.role in (UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
         # Return BDC agents with access to current user's dealership
         target_dealership = dealership_id or current_user.dealership_id
         if not target_dealership:
             return []
-        result = await db.execute(
-            select(User)
-            .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
-            .where(
-                User.role == UserRole.BDC,
-                User.is_active == True,
-                UserDealershipAccess.dealership_id == target_dealership,
-            )
-            .order_by(User.first_name, User.last_name)
-        )
-        return result.scalars().all()
+        return await _fetch_bdc_agents_for_dealerships(db, [target_dealership])
     
     elif current_user.role == UserRole.BDC:
         # BDC can see other BDC agents with access to the same dealerships
         accessible_ids = await get_accessible_dealership_ids(db, current_user)
         if not accessible_ids:
             return []
-        target_dealership = dealership_id if dealership_id in accessible_ids else None
-        if target_dealership:
-            result = await db.execute(
-                select(User)
-                .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
-                .where(
-                    User.role == UserRole.BDC,
-                    User.is_active == True,
-                    UserDealershipAccess.dealership_id == target_dealership,
-                )
-                .order_by(User.first_name, User.last_name)
+        if dealership_id and dealership_id in accessible_ids:
+            return await _fetch_bdc_agents_for_dealerships(
+                db, [dealership_id], exclude_user_id=current_user.id
             )
-        else:
-            result = await db.execute(
-                select(User)
-                .join(UserDealershipAccess, User.id == UserDealershipAccess.user_id)
-                .where(
-                    User.role == UserRole.BDC,
-                    User.is_active == True,
-                    UserDealershipAccess.dealership_id.in_(accessible_ids),
-                )
-                .distinct()
-                .order_by(User.first_name, User.last_name)
-            )
-        return result.scalars().all()
+        return await _fetch_bdc_agents_for_dealerships(
+            db, accessible_ids, exclude_user_id=current_user.id
+        )
     
     # Other roles don't have access
     raise HTTPException(status_code=403, detail="Access denied")

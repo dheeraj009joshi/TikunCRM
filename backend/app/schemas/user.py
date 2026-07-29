@@ -114,7 +114,7 @@ class UserBrief(BaseModel):
     id: UUID
     email: EmailStr
     first_name: str
-    last_name: str
+    last_name: Optional[str] = ""
     role: UserRole
     is_active: bool = True
     dealership_id: Optional[UUID] = None

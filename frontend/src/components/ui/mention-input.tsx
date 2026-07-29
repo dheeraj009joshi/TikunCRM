@@ -102,17 +102,21 @@ export function MentionInput({
     
     const filteredUsers = React.useMemo(() => {
         const sorted = sortMentionableUsers(mentionableUsers)
-        if (!suggestionFilter) return sorted.slice(0, 8)
-        
+        if (!suggestionFilter) return sorted.slice(0, 12)
+
         const lowerFilter = suggestionFilter.toLowerCase()
         return sorted
-            .filter(user => 
-                user.first_name.toLowerCase().includes(lowerFilter) ||
-                (user.last_name && user.last_name.toLowerCase().includes(lowerFilter)) ||
-                user.email.toLowerCase().includes(lowerFilter) ||
-                getRoleLabel(user.role).toLowerCase().includes(lowerFilter)
-            )
-            .slice(0, 8)
+            .filter((user) => {
+                const fullName = `${user.first_name} ${user.last_name || ""}`.trim().toLowerCase()
+                return (
+                    fullName.includes(lowerFilter) ||
+                    user.first_name.toLowerCase().includes(lowerFilter) ||
+                    (user.last_name && user.last_name.toLowerCase().includes(lowerFilter)) ||
+                    user.email.toLowerCase().includes(lowerFilter) ||
+                    getRoleLabel(user.role).toLowerCase().includes(lowerFilter)
+                )
+            })
+            .slice(0, 12)
     }, [mentionableUsers, suggestionFilter])
     
     const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -193,7 +197,8 @@ export function MentionInput({
     }
     
     React.useEffect(() => {
-        const mentionPattern = /@([A-Za-z]+ [A-Za-z]+|[A-Za-z]+)/g
+        // Match @First or @First Last (letters, accents, hyphens, apostrophes)
+        const mentionPattern = /@([\p{L}][\p{L}'-]*(?: [\p{L}][\p{L}']*)?)/gu
         const matches = value.match(mentionPattern) || []
         
         const matchedUserIds = new Set<string>()
@@ -239,7 +244,7 @@ export function MentionInput({
                     className="absolute left-0 bottom-full z-[100] mb-1 w-full max-w-xs rounded-md border bg-popover p-1 shadow-lg animate-in fade-in-0 zoom-in-95"
                 >
                     <div className="text-xs font-medium text-muted-foreground px-2 py-1.5">
-                        Mention a team member
+                        Mention a team member or BDC
                     </div>
                     {filteredUsers.map((user, index) => (
                         <button

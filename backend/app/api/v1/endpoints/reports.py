@@ -28,7 +28,7 @@ from app.models.lead_stage import LeadStage
 from app.models.activity import Activity, ActivityType
 from app.models.call_log import CallLog, CallDirection, CallStatus
 from app.models.sms_log import SMSLog, MessageDirection
-from app.models.showroom_visit import ShowroomVisit
+from app.models.showroom_visit import ShowroomVisit, ShowroomOutcome
 from app.models.customer import Customer
 from app.services.notification_service import NotificationService
 
@@ -946,10 +946,6 @@ async def get_dealership_analysis(
         select(func.count()).select_from(Lead).where(and_(lead_filters_in_period, Lead.is_active == True))
     )
     active_leads = active_result.scalar() or 0
-    converted_result = await db.execute(
-        select(func.count()).select_from(Lead).where(and_(lead_filters_in_period, Lead.outcome == "converted"))
-    )
-    converted_leads = converted_result.scalar() or 0
 
     # Activity/appt/check-in scoping uses all leads matching non-date filters so
     # period activity on older leads is still counted.
@@ -958,6 +954,36 @@ async def get_dealership_analysis(
 
     # If lead-specific filters were applied but no leads match, all activity counts should be 0
     no_matching_leads = has_lead_specific_filters and not lead_ids
+
+    # Converted/sold in the selected period (NOT "created in period and currently converted").
+    # Union of: (1) leads with sold/converted date in range, (2) check-ins with outcome=sold
+    # in range (same date field as the Check-ins table). Matches what JB compares.
+    if no_matching_leads:
+        converted_leads = 0
+    else:
+        converted_lead_filters = list(lead_filters) if lead_filters else [Lead.dealership_id == resolved_dealership_id]
+        converted_lead_filters.append(Lead.outcome == "converted")
+        if activity_date_from is not None or activity_date_to is not None:
+            _append_sold_date_filters_to_lead_query(
+                converted_lead_filters, activity_date_from, activity_date_to
+            )
+        converted_from_leads_q = select(Lead.id).where(and_(*converted_lead_filters))
+
+        sold_visit_filters = [
+            ShowroomVisit.dealership_id == resolved_dealership_id,
+            ShowroomVisit.outcome == ShowroomOutcome.SOLD,
+        ]
+        if lead_ids:
+            sold_visit_filters.append(ShowroomVisit.lead_id.in_(lead_ids))
+        if activity_date_from is not None:
+            sold_visit_filters.append(ShowroomVisit.checked_in_at >= activity_date_from)
+        if activity_date_to is not None:
+            sold_visit_filters.append(ShowroomVisit.checked_in_at <= activity_date_to)
+        converted_from_visits_q = select(ShowroomVisit.lead_id).where(and_(*sold_visit_filters))
+
+        converted_union = converted_from_leads_q.union(converted_from_visits_q).subquery()
+        converted_result = await db.execute(select(func.count()).select_from(converted_union))
+        converted_leads = converted_result.scalar() or 0
 
     activity_filters = [Activity.dealership_id == resolved_dealership_id]
     if lead_ids:

@@ -277,7 +277,13 @@ function downloadAnalysisPdf(
         body: [
             ["Total leads", String(analysis.summary.total_leads)],
             ["Active leads", String(analysis.summary.active_leads)],
-            ["Converted leads", String(analysis.summary.converted_leads)],
+            ["Converted leads (sold in period)", String(analysis.summary.converted_leads)],
+            [
+                "Conversion %",
+                analysis.summary.total_leads > 0
+                    ? `${((analysis.summary.converted_leads / analysis.summary.total_leads) * 100).toFixed(1)}%`
+                    : "—",
+            ],
             ["Notes (in period)", String(analysis.summary.total_notes)],
             ["Follow-ups scheduled (in period)", String(analysis.summary.total_follow_ups_scheduled_in_period)],
             ["Follow-ups completed (in period)", String(analysis.summary.total_follow_ups_completed_in_period)],
@@ -693,7 +699,7 @@ export default function AnalyticsPage() {
                         {/* Core Metrics — leads received in selected date range */}
                         <div>
                             <h2 className="text-lg font-semibold mb-3">Leads Overview</h2>
-                            <div className="grid gap-4 grid-cols-2 md:grid-cols-3">
+                            <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
                                 <SummaryCard
                                     title="Total Leads"
                                     value={analysis.summary.total_leads}
@@ -701,7 +707,21 @@ export default function AnalyticsPage() {
                                     description="Received in selected period"
                                 />
                                 <SummaryCard title="Active" value={analysis.summary.active_leads} icon={Activity} />
-                                <SummaryCard title="Converted" value={analysis.summary.converted_leads} icon={CheckCircle} />
+                                <SummaryCard
+                                    title="Converted"
+                                    value={analysis.summary.converted_leads}
+                                    icon={CheckCircle}
+                                    description="Sold in selected period"
+                                />
+                                <SummaryCard
+                                    title="Conversion %"
+                                    value={formatRate(
+                                        analysis.summary.converted_leads,
+                                        analysis.summary.total_leads
+                                    )}
+                                    icon={CheckCircle}
+                                    description="Converted ÷ leads"
+                                />
                             </div>
                         </div>
 
