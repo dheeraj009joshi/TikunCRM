@@ -2,7 +2,15 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { startOfDay, endOfDay, parseISO } from "date-fns"
+import {
+    startOfDay,
+    endOfDay,
+    parseISO,
+    startOfMonth,
+    endOfMonth,
+    subMonths,
+    format,
+} from "date-fns"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
     Table,
@@ -72,7 +80,7 @@ function SummaryCard({
     description,
 }: {
     title: string
-    value: number
+    value: number | string
     icon: React.ComponentType<{ className?: string }>
     description?: string
 }) {
@@ -83,18 +91,55 @@ function SummaryCard({
                 <Icon className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-                <div className="text-2xl font-bold">{value.toLocaleString()}</div>
+                <div className="text-2xl font-bold">
+                    {typeof value === "number" ? value.toLocaleString() : value}
+                </div>
                 {description && <p className="text-xs text-muted-foreground">{description}</p>}
             </CardContent>
         </Card>
     )
 }
 
+type DateMode = "range" | "single" | "mtd" | "last_month"
+
+function formatRate(numerator: number, denominator: number): string {
+    if (denominator <= 0) return "—"
+    return `${((numerator / denominator) * 100).toFixed(1)}%`
+}
+
+function localDateString(d: Date): string {
+    return format(d, "yyyy-MM-dd")
+}
+
+function applyDatePreset(mode: DateMode): { dateFrom: string; dateTo: string; singleDate: string } {
+    const now = new Date()
+    if (mode === "mtd") {
+        return {
+            dateFrom: localDateString(startOfMonth(now)),
+            dateTo: localDateString(now),
+            singleDate: localDateString(now),
+        }
+    }
+    if (mode === "last_month") {
+        const last = subMonths(now, 1)
+        return {
+            dateFrom: localDateString(startOfMonth(last)),
+            dateTo: localDateString(endOfMonth(last)),
+            singleDate: localDateString(endOfMonth(last)),
+        }
+    }
+    return {
+        dateFrom: localDateString(startOfDay(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000))),
+        dateTo: localDateString(now),
+        singleDate: localDateString(now),
+    }
+}
+
 function buildFilters(
     dateFrom: string,
     dateTo: string,
     singleDate: string,
-    dateMode: "range" | "single",
+    dateMode: DateMode,
     dealershipId: string | null,
     assignedTo: string | null,
     bdcAgentId: string | null,
@@ -119,6 +164,7 @@ function buildFilters(
         params.date_from = toLocalStartOfDay(singleDate)
         params.date_to = toLocalEndOfDay(singleDate)
     } else {
+        // range | mtd | last_month all use From/To
         if (dateFrom) params.date_from = toLocalStartOfDay(dateFrom)
         if (dateTo) params.date_to = toLocalEndOfDay(dateTo)
     }
@@ -316,14 +362,20 @@ export default function AnalyticsPage() {
     const [loading, setLoading] = React.useState(true)
     const [error, setError] = React.useState<string | null>(null)
 
-    const [dateMode, setDateMode] = React.useState<"range" | "single">("range")
-    const [singleDate, setSingleDate] = React.useState<string>(() => new Date().toISOString().slice(0, 10))
-    const [dateFrom, setDateFrom] = React.useState<string>(() => {
-        const d = new Date()
-        d.setDate(d.getDate() - 30)
-        return d.toISOString().slice(0, 10)
-    })
-    const [dateTo, setDateTo] = React.useState<string>(() => new Date().toISOString().slice(0, 10))
+    const [dateMode, setDateMode] = React.useState<DateMode>("mtd")
+    const [singleDate, setSingleDate] = React.useState<string>(() => applyDatePreset("mtd").singleDate)
+    const [dateFrom, setDateFrom] = React.useState<string>(() => applyDatePreset("mtd").dateFrom)
+    const [dateTo, setDateTo] = React.useState<string>(() => applyDatePreset("mtd").dateTo)
+
+    const handleDateModeChange = (mode: DateMode) => {
+        setDateMode(mode)
+        if (mode === "mtd" || mode === "last_month") {
+            const preset = applyDatePreset(mode)
+            setDateFrom(preset.dateFrom)
+            setDateTo(preset.dateTo)
+            setSingleDate(preset.singleDate)
+        }
+    }
     const [dealershipId, setDealershipId] = React.useState<string | null>(null)
     const [assignedTo, setAssignedTo] = React.useState<string | null>(null)
     const [bdcAgentId, setBdcAgentId] = React.useState<string | null>(null)
@@ -425,7 +477,7 @@ export default function AnalyticsPage() {
             <div>
                 <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
                 <p className="text-muted-foreground">
-                    Dealership-wide summary, charts, and per-salesperson analysis. Date range applies to all metrics (notes, activities, follow-ups, appointments, and Friday/Saturday counts).
+                    Dealership-wide summary, charts, and per-salesperson analysis. Date range filters leads received, appointments set, check-ins, notes, and other activity in the selected period.
                 </p>
             </div>
 
@@ -437,11 +489,13 @@ export default function AnalyticsPage() {
                 <CardContent className="flex flex-wrap items-end gap-3">
                     <div className="flex flex-col gap-1">
                         <label className="text-xs text-muted-foreground">Date</label>
-                        <Select value={dateMode} onValueChange={(v) => setDateMode(v as "range" | "single")}>
-                            <SelectTrigger className="w-[130px]">
+                        <Select value={dateMode} onValueChange={(v) => handleDateModeChange(v as DateMode)}>
+                            <SelectTrigger className="w-[160px]">
                                 <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
+                                <SelectItem value="mtd">This month (MTD)</SelectItem>
+                                <SelectItem value="last_month">Last month</SelectItem>
                                 <SelectItem value="range">Date range</SelectItem>
                                 <SelectItem value="single">Single date</SelectItem>
                             </SelectContent>
@@ -464,7 +518,12 @@ export default function AnalyticsPage() {
                                 <input
                                     type="date"
                                     value={dateFrom}
-                                    onChange={(e) => setDateFrom(e.target.value)}
+                                    onChange={(e) => {
+                                        setDateFrom(e.target.value)
+                                        if (dateMode === "mtd" || dateMode === "last_month") {
+                                            setDateMode("range")
+                                        }
+                                    }}
                                     className="rounded-md border border-input bg-background px-3 py-2 text-sm"
                                 />
                             </div>
@@ -473,7 +532,12 @@ export default function AnalyticsPage() {
                                 <input
                                     type="date"
                                     value={dateTo}
-                                    onChange={(e) => setDateTo(e.target.value)}
+                                    onChange={(e) => {
+                                        setDateTo(e.target.value)
+                                        if (dateMode === "mtd" || dateMode === "last_month") {
+                                            setDateMode("range")
+                                        }
+                                    }}
                                     className="rounded-md border border-input bg-background px-3 py-2 text-sm"
                                 />
                             </div>
@@ -588,7 +652,13 @@ export default function AnalyticsPage() {
                                                 : "All"
                                     downloadAnalysisPdf(analysis, {
                                         dateRangeLabel:
-                                            dateMode === "single" ? singleDate : `${dateFrom} to ${dateTo}`,
+                                            dateMode === "single"
+                                                ? singleDate
+                                                : dateMode === "mtd"
+                                                    ? `This month (MTD): ${dateFrom} to ${dateTo}`
+                                                    : dateMode === "last_month"
+                                                        ? `Last month: ${dateFrom} to ${dateTo}`
+                                                        : `${dateFrom} to ${dateTo}`,
                                         dealershipName,
                                         salespersonName: sp ? `${sp.first_name} ${sp.last_name}` : "All salespeople",
                                     })
@@ -620,24 +690,47 @@ export default function AnalyticsPage() {
             {!loading && analysis && (
                 <>
                     <div className="space-y-6">
-                        {/* Core Metrics */}
+                        {/* Core Metrics — leads received in selected date range */}
                         <div>
                             <h2 className="text-lg font-semibold mb-3">Leads Overview</h2>
                             <div className="grid gap-4 grid-cols-2 md:grid-cols-3">
-                                <SummaryCard title="Total Leads" value={analysis.summary.total_leads} icon={Inbox} />
+                                <SummaryCard
+                                    title="Total Leads"
+                                    value={analysis.summary.total_leads}
+                                    icon={Inbox}
+                                    description="Received in selected period"
+                                />
                                 <SummaryCard title="Active" value={analysis.summary.active_leads} icon={Activity} />
                                 <SummaryCard title="Converted" value={analysis.summary.converted_leads} icon={CheckCircle} />
                             </div>
                         </div>
 
-                        {/* Activity Metrics */}
+                        {/* Activity Metrics + conversion rates (n / leads) */}
                         <div>
                             <h2 className="text-lg font-semibold mb-3">Activity in Period</h2>
-                            <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
+                            <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
                                 <SummaryCard title="Notes" value={analysis.summary.total_notes} icon={FileText} />
                                 <SummaryCard title="Appointments" value={analysis.summary.total_appointments} icon={Calendar} />
+                                <SummaryCard
+                                    title="Appt Set Rate"
+                                    value={formatRate(
+                                        analysis.summary.total_appointments,
+                                        analysis.summary.total_leads
+                                    )}
+                                    icon={Calendar}
+                                    description="Appointments ÷ leads"
+                                />
                                 <SummaryCard title="Follow-ups" value={analysis.summary.total_follow_ups} icon={ClipboardList} />
                                 <SummaryCard title="Check-ins" value={analysis.summary.total_check_ins_in_period} icon={LogIn} />
+                                <SummaryCard
+                                    title="Check-in Rate"
+                                    value={formatRate(
+                                        analysis.summary.total_check_ins_in_period,
+                                        analysis.summary.total_leads
+                                    )}
+                                    icon={LogIn}
+                                    description="Check-ins ÷ leads"
+                                />
                             </div>
                         </div>
                     </div>

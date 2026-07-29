@@ -889,7 +889,8 @@ async def get_dealership_analysis(
 ) -> Any:
     """
     Full dealership analysis: summary totals and per-salesperson metrics.
-    Optional date range applies to activity/note counts. All counts respect assigned_to, source, stage_id filters.
+    Date range filters leads by created_at (Total/Active/Converted) and activities by their timestamps.
+    All counts respect assigned_to, source, stage_id filters.
     """
     now = utc_now()
     resolved_dealership_id, lead_filters, has_lead_specific_filters = await _resolve_dealership_and_lead_filters(
@@ -902,7 +903,7 @@ async def get_dealership_analysis(
         )
     lead_filters_base = and_(*lead_filters) if lead_filters else (Lead.dealership_id == resolved_dealership_id)
 
-    # Optional activity date range
+    # Optional date range (leads by created_at; activities by their own timestamps)
     activity_date_from = None
     activity_date_to = None
     if date_from:
@@ -916,19 +917,29 @@ async def get_dealership_analysis(
         except ValueError:
             pass
 
-    # --- Dealership summary (filtered by lead_filters) ---
-    total_leads_result = await db.execute(select(func.count()).select_from(Lead).where(lead_filters_base))
+    # Lead overview counts: respect date range via Lead.created_at
+    lead_period_filters = list(lead_filters) if lead_filters else [Lead.dealership_id == resolved_dealership_id]
+    if activity_date_from is not None:
+        lead_period_filters.append(Lead.created_at >= activity_date_from)
+    if activity_date_to is not None:
+        lead_period_filters.append(Lead.created_at <= activity_date_to)
+    lead_filters_in_period = and_(*lead_period_filters)
+
+    # --- Dealership summary (leads in period; activities use all matching leads) ---
+    total_leads_result = await db.execute(select(func.count()).select_from(Lead).where(lead_filters_in_period))
     total_leads = total_leads_result.scalar() or 0
 
     active_result = await db.execute(
-        select(func.count()).select_from(Lead).where(and_(lead_filters_base, Lead.is_active == True))
+        select(func.count()).select_from(Lead).where(and_(lead_filters_in_period, Lead.is_active == True))
     )
     active_leads = active_result.scalar() or 0
     converted_result = await db.execute(
-        select(func.count()).select_from(Lead).where(and_(lead_filters_base, Lead.outcome == "converted"))
+        select(func.count()).select_from(Lead).where(and_(lead_filters_in_period, Lead.outcome == "converted"))
     )
     converted_leads = converted_result.scalar() or 0
 
+    # Activity/appt/check-in scoping uses all leads matching non-date filters so
+    # period activity on older leads is still counted.
     lead_ids_result = await db.execute(select(Lead.id).where(lead_filters_base))
     lead_ids = [r[0] for r in lead_ids_result.fetchall()]
 
@@ -1151,8 +1162,8 @@ async def get_dealership_analysis(
     } for sp_id in sp_ids}
 
     if sp_ids:
-        # Leads per assigned_to
-        lead_sp_base = and_(lead_filters_base, Lead.assigned_to.in_(sp_ids))
+        # Leads per assigned_to (same date window as Total Leads)
+        lead_sp_base = and_(lead_filters_in_period, Lead.assigned_to.in_(sp_ids))
         lead_sp_result = await db.execute(
             select(Lead.assigned_to, func.count()).select_from(Lead).where(lead_sp_base).group_by(Lead.assigned_to)
         )
@@ -1521,13 +1532,24 @@ async def get_leads_by_stage(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
-    """Lead counts grouped by stage."""
+    """Lead counts grouped by stage (filtered by created_at when date range is set)."""
     resolved, lead_filters, _ = await _resolve_dealership_and_lead_filters(
         db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dealership context required.")
-    base = and_(*lead_filters) if lead_filters else (Lead.dealership_id == resolved)
+    filters = list(lead_filters) if lead_filters else [Lead.dealership_id == resolved]
+    if date_from:
+        try:
+            filters.append(Lead.created_at >= datetime.fromisoformat(date_from.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            filters.append(Lead.created_at <= datetime.fromisoformat(date_to.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+    base = and_(*filters)
 
     q = (
         select(Lead.stage_id, LeadStage.display_name, func.count(Lead.id).label("count"))
@@ -1556,13 +1578,24 @@ async def get_leads_by_source(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
-    """Lead counts grouped by source."""
+    """Lead counts grouped by source (filtered by created_at when date range is set)."""
     resolved, lead_filters, _ = await _resolve_dealership_and_lead_filters(
         db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
     )
     if not resolved:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dealership context required.")
-    base = and_(*lead_filters) if lead_filters else (Lead.dealership_id == resolved)
+    filters = list(lead_filters) if lead_filters else [Lead.dealership_id == resolved]
+    if date_from:
+        try:
+            filters.append(Lead.created_at >= datetime.fromisoformat(date_from.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            filters.append(Lead.created_at <= datetime.fromisoformat(date_to.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+    base = and_(*filters)
 
     q = (
         select(Lead.source, func.count(Lead.id).label("count"))
