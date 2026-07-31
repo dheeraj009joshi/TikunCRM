@@ -545,14 +545,16 @@ export default function SyncSourcesSettingsPage() {
 
             {schedulerStatus && (
                 <Card className={
-                    schedulerStatus.scheduler_running && schedulerStatus.run_background_scheduler
+                    (schedulerStatus.scheduler_healthy ??
+                        (schedulerStatus.scheduler_running && schedulerStatus.run_background_scheduler))
                         ? "border-emerald-500/40"
                         : "border-destructive/50 bg-destructive/5"
                 }>
                     <CardContent className="py-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="space-y-1">
                             <p className="text-sm font-medium flex items-center gap-2">
-                                {schedulerStatus.scheduler_running && schedulerStatus.run_background_scheduler ? (
+                                {(schedulerStatus.scheduler_healthy ??
+                                    (schedulerStatus.scheduler_running && schedulerStatus.run_background_scheduler)) ? (
                                     <>
                                         <CheckCircle className="h-4 w-4 text-emerald-600" />
                                         Background scheduler is running
@@ -569,7 +571,10 @@ export default function SyncSourcesSettingsPage() {
                                 {" · "}
                                 enabled={String(schedulerStatus.run_background_scheduler)}
                                 {" · "}
-                                leader={String(schedulerStatus.this_worker_is_scheduler_leader)}
+                                this_worker={String(schedulerStatus.scheduler_running)}
+                                {schedulerStatus.heartbeat?.fresh
+                                    ? ` · heartbeat ${Math.round(schedulerStatus.heartbeat.age_seconds ?? 0)}s ago`
+                                    : " · no recent heartbeat"}
                                 {schedulerStatus.hint ? ` · ${schedulerStatus.hint}` : ""}
                             </p>
                         </div>

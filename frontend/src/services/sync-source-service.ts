@@ -183,6 +183,15 @@ export interface SchedulerStatus {
     app_env: string;
     this_worker_is_scheduler_leader: boolean;
     scheduler_running: boolean;
+    scheduler_healthy?: boolean;
+    heartbeat?: {
+        exists?: boolean;
+        fresh?: boolean;
+        age_seconds?: number | null;
+        pid?: string;
+        note?: string;
+        error?: string;
+    };
     jobs: Array<{ id?: string; name?: string; next_run_time?: string | null; error?: string }>;
     hint?: string | null;
 }

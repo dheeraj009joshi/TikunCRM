@@ -139,11 +139,12 @@ async def get_scheduler_status(
     current_user: User = Depends(require_super_admin()),
 ) -> Any:
     """
-    Show whether the in-process background scheduler is running on this worker.
-    If enabled=false or running=false, Google Sheets will only update on Sync Now.
+    Show whether background scheduling is healthy.
+    With gunicorn -w N, any worker may answer this request; we also check a shared heartbeat.
     """
     from app.core.config import settings
     from app.tasks.scheduler import get_scheduler
+    from app.tasks.scheduler_heartbeat import read_scheduler_heartbeat
     import app.main as main_mod
 
     sched = get_scheduler()
@@ -158,20 +159,37 @@ async def get_scheduler_status(
     except Exception as e:
         jobs = [{"error": str(e)}]
 
+    heartbeat = read_scheduler_heartbeat()
+    this_running = bool(sched.running)
+    enabled = bool(settings.run_background_scheduler)
+    healthy = enabled and (this_running or heartbeat.get("fresh"))
+
+    if not enabled:
+        hint = (
+            "Scheduler disabled by config. Set BACKGROUND_SCHEDULER_ENABLED=true in backend/.env "
+            "and restart gunicorn (see backend/scripts/start_prod.sh)."
+        )
+    elif healthy:
+        hint = None
+    elif this_running:
+        hint = "Scheduler is running on this worker but no recent heartbeat yet — wait ~2 minutes."
+    else:
+        hint = (
+            "This API worker has no local scheduler (or it failed to start). "
+            "Pull latest code, restart gunicorn, then click Refresh. "
+            "Optional: use backend/scripts/start_prod.sh (-w 1)."
+        )
+
     return {
         "background_scheduler_enabled_setting": settings.background_scheduler_enabled,
-        "run_background_scheduler": settings.run_background_scheduler,
+        "run_background_scheduler": enabled,
         "app_env": settings.app_env,
         "this_worker_is_scheduler_leader": bool(getattr(main_mod, "_is_scheduler_worker", False)),
-        "scheduler_running": bool(sched.running),
+        "scheduler_running": this_running,
+        "scheduler_healthy": healthy,
+        "heartbeat": heartbeat,
         "jobs": jobs,
-        "hint": (
-            None
-            if settings.run_background_scheduler and sched.running
-            else "Scheduler is OFF on this process. On the VM set BACKGROUND_SCHEDULER_ENABLED=true "
-                 "and APP_ENV=production, then restart gunicorn with -w 1 "
-                 "(see backend/scripts/start_prod.sh)."
-        ),
+        "hint": hint,
     }
 
 
