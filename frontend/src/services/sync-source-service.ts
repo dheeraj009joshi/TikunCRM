@@ -177,37 +177,6 @@ export async function triggerSyncSource(id: string): Promise<SyncResult> {
     return response.data;
 }
 
-export interface SchedulerStatus {
-    background_scheduler_enabled_setting: boolean | null;
-    run_background_scheduler: boolean;
-    app_env: string;
-    this_worker_is_scheduler_leader: boolean;
-    scheduler_running: boolean;
-    scheduler_healthy?: boolean;
-    heartbeat?: {
-        exists?: boolean;
-        fresh?: boolean;
-        age_seconds?: number | null;
-        pid?: string;
-        note?: string;
-        error?: string;
-    };
-    jobs: Array<{ id?: string; name?: string; next_run_time?: string | null; error?: string }>;
-    hint?: string | null;
-}
-
-export async function getSchedulerStatus(): Promise<SchedulerStatus> {
-    const response = await apiClient.get<SchedulerStatus>(`${ADMIN_SYNC_PREFIX}/scheduler-status`);
-    return response.data;
-}
-
-export async function runSheetsSyncJobNow(): Promise<{ ok: boolean; result: Record<string, unknown> }> {
-    const response = await apiClient.post<{ ok: boolean; result: Record<string, unknown> }>(
-        `${ADMIN_SYNC_PREFIX}/scheduler/run-sheets-now`
-    );
-    return response.data;
-}
-
 export async function getSyncSourcePreview(id: string, limit: number = 10): Promise<SheetPreview> {
     const response = await apiClient.get<SheetPreview>(`${ADMIN_SYNC_PREFIX}/${id}/preview`, {
         params: { limit },

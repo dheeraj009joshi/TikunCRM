@@ -152,7 +152,7 @@ def setup_scheduler():
     
     logger.info("Background scheduler configured (tasks staggered to prevent blocking):")
     logger.info("  - IMAP email sync (every 2 minutes, offset: 0s)")
-    logger.info("  - Google Sheets lead sync (every 2 minutes, offset: 40s; per-source interval still applies)")
+    logger.info("  - Google Sheets lead sync (every 2 minutes, offset: 40s)")
     logger.info("  - Lead auto-assignment (every 2 minutes, offset: 80s)")
     logger.info("  - Stale lead unassignment (every hour)")
     logger.info("  - Appointment reminders (every 5 minutes)")
@@ -160,8 +160,6 @@ def setup_scheduler():
     logger.info("  - Missed appointment detection (every 30 minutes)")
     logger.info("  - WhatsApp bulk sends (every 2 minutes, offset: 100s)")
     logger.info("  - Auto WhatsApp worker (every 30 seconds, offset: 15s)")
-    for job in scheduler.get_jobs():
-        logger.info("  · job id=%s next_run=%s", job.id, job.next_run_time)
 
 
 def start_scheduler():
