@@ -60,14 +60,18 @@ def setup_scheduler():
         replace_existing=True,
     )
     
-    # Google Sheets lead sync - runs every 2 minutes, starting 40 seconds after email sync
-    from app.tasks.google_sheets_sync import run_google_sheets_sync_task
+    # Google Sheets lead sync - async job on the event loop (every 2 minutes).
+    # Per-source sync_interval_minutes still gates which sheets are actually pulled.
+    from app.tasks.google_sheets_sync import run_google_sheets_sync
     scheduler.add_job(
-        run_google_sheets_sync_task,
+        run_google_sheets_sync,
         trigger=IntervalTrigger(minutes=2, start_date=datetime.now() + timedelta(seconds=40)),
         id="google_sheets_sync",
         name="Sync leads from Google Sheets",
         replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=120,
     )
     
     # Lead auto-assignment - runs every 2 minutes, starting 80 seconds after email sync
@@ -148,7 +152,7 @@ def setup_scheduler():
     
     logger.info("Background scheduler configured (tasks staggered to prevent blocking):")
     logger.info("  - IMAP email sync (every 2 minutes, offset: 0s)")
-    logger.info("  - Google Sheets lead sync (every 2 minutes, offset: 40s)")
+    logger.info("  - Google Sheets lead sync (every 2 minutes, offset: 40s; per-source interval still applies)")
     logger.info("  - Lead auto-assignment (every 2 minutes, offset: 80s)")
     logger.info("  - Stale lead unassignment (every hour)")
     logger.info("  - Appointment reminders (every 5 minutes)")
@@ -156,6 +160,8 @@ def setup_scheduler():
     logger.info("  - Missed appointment detection (every 30 minutes)")
     logger.info("  - WhatsApp bulk sends (every 2 minutes, offset: 100s)")
     logger.info("  - Auto WhatsApp worker (every 30 seconds, offset: 15s)")
+    for job in scheduler.get_jobs():
+        logger.info("  · job id=%s next_run=%s", job.id, job.next_run_time)
 
 
 def start_scheduler():
