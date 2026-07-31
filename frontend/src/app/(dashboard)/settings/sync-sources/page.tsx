@@ -70,6 +70,9 @@ import {
     createSyncSourceWithMappings,
     SheetPreviewByUrl,
     CampaignMappingInput,
+    getSchedulerStatus,
+    runSheetsSyncJobNow,
+    type SchedulerStatus,
 } from "@/services/sync-source-service"
 import { DealershipService, Dealership } from "@/services/dealership-service"
 import { formatDistanceToNow } from "date-fns"
@@ -142,18 +145,22 @@ export default function SyncSourcesSettingsPage() {
     
     // Sync state
     const [syncingSourceId, setSyncingSourceId] = React.useState<string | null>(null)
+    const [schedulerStatus, setSchedulerStatus] = React.useState<SchedulerStatus | null>(null)
+    const [isRunningSchedulerJob, setIsRunningSchedulerJob] = React.useState(false)
     
     const { isSuperAdmin } = useRole()
     const { toast } = useToast()
 
     const loadData = React.useCallback(async () => {
         try {
-            const [sourcesData, dealershipsData] = await Promise.all([
+            const [sourcesData, dealershipsData, sched] = await Promise.all([
                 getSyncSources(),
                 DealershipService.listDealerships(),
+                getSchedulerStatus().catch(() => null),
             ])
             setSources(Array.isArray(sourcesData) ? sourcesData : [])
             setDealerships(Array.isArray(dealershipsData) ? dealershipsData : [])
+            setSchedulerStatus(sched)
         } catch (error) {
             console.error("Failed to load sync sources:", error)
             setSources([])
@@ -535,6 +542,72 @@ export default function SyncSourcesSettingsPage() {
                     Add Source
                 </Button>
             </div>
+
+            {schedulerStatus && (
+                <Card className={
+                    schedulerStatus.scheduler_running && schedulerStatus.run_background_scheduler
+                        ? "border-emerald-500/40"
+                        : "border-destructive/50 bg-destructive/5"
+                }>
+                    <CardContent className="py-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="space-y-1">
+                            <p className="text-sm font-medium flex items-center gap-2">
+                                {schedulerStatus.scheduler_running && schedulerStatus.run_background_scheduler ? (
+                                    <>
+                                        <CheckCircle className="h-4 w-4 text-emerald-600" />
+                                        Background scheduler is running
+                                    </>
+                                ) : (
+                                    <>
+                                        <AlertCircle className="h-4 w-4 text-destructive" />
+                                        Background scheduler is OFF — auto sheet sync will not run
+                                    </>
+                                )}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                                APP_ENV={schedulerStatus.app_env}
+                                {" · "}
+                                enabled={String(schedulerStatus.run_background_scheduler)}
+                                {" · "}
+                                leader={String(schedulerStatus.this_worker_is_scheduler_leader)}
+                                {schedulerStatus.hint ? ` · ${schedulerStatus.hint}` : ""}
+                            </p>
+                        </div>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={isRunningSchedulerJob}
+                            onClick={async () => {
+                                setIsRunningSchedulerJob(true)
+                                try {
+                                    await runSheetsSyncJobNow()
+                                    toast({ title: "Sheet sync job finished", description: "Refreshing source list…" })
+                                    await loadData()
+                                } catch (e: unknown) {
+                                    const detail =
+                                        e && typeof e === "object" && "response" in e
+                                            ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                                            : null
+                                    toast({
+                                        title: "Sync job failed",
+                                        description: typeof detail === "string" ? detail : "See server logs",
+                                        variant: "destructive",
+                                    })
+                                } finally {
+                                    setIsRunningSchedulerJob(false)
+                                }
+                            }}
+                        >
+                            {isRunningSchedulerJob ? (
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                                <RefreshCw className="h-4 w-4 mr-2" />
+                            )}
+                            Run all due sources now
+                        </Button>
+                    </CardContent>
+                </Card>
+            )}
 
             {sources.length === 0 ? (
                 <Card>

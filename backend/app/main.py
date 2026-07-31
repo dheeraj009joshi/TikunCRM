@@ -83,8 +83,12 @@ async def lifespan(app: FastAPI):
     
     # Only one worker should run the scheduler (optional in development — see settings.run_background_scheduler)
     if not settings.run_background_scheduler:
-        logger.info(
-            "Background scheduler disabled (APP_ENV=development by default; set BACKGROUND_SCHEDULER_ENABLED=true to enable)"
+        logger.error(
+            "BACKGROUND SCHEDULER IS DISABLED — Google Sheets / email / reminders will NOT run automatically. "
+            "Only Sync Now and API calls work. Set BACKGROUND_SCHEDULER_ENABLED=true and restart "
+            "(APP_ENV=%s, background_scheduler_enabled=%s).",
+            settings.app_env,
+            settings.background_scheduler_enabled,
         )
     elif try_acquire_scheduler_lock():
         try:
@@ -94,7 +98,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to start scheduler: {e}")
     else:
-        logger.info("Background scheduler skipped (another worker is the scheduler leader)")
+        logger.warning(
+            "Background scheduler skipped (another worker holds the lock). "
+            "If sheet sync stays stale, restart with a single worker: gunicorn -w 1 ..."
+        )
 
     # Ensure default lead stages exist (e.g. manager_review for existing deployments)
     try:

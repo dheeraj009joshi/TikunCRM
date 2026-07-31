@@ -131,6 +131,65 @@ def require_super_admin():
 
 
 # ============================================================================
+# SCHEDULER STATUS (must be before /{source_id} routes)
+# ============================================================================
+
+@router.get("/scheduler-status")
+async def get_scheduler_status(
+    current_user: User = Depends(require_super_admin()),
+) -> Any:
+    """
+    Show whether the in-process background scheduler is running on this worker.
+    If enabled=false or running=false, Google Sheets will only update on Sync Now.
+    """
+    from app.core.config import settings
+    from app.tasks.scheduler import get_scheduler
+    import app.main as main_mod
+
+    sched = get_scheduler()
+    jobs = []
+    try:
+        for job in sched.get_jobs():
+            jobs.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+            })
+    except Exception as e:
+        jobs = [{"error": str(e)}]
+
+    return {
+        "background_scheduler_enabled_setting": settings.background_scheduler_enabled,
+        "run_background_scheduler": settings.run_background_scheduler,
+        "app_env": settings.app_env,
+        "this_worker_is_scheduler_leader": bool(getattr(main_mod, "_is_scheduler_worker", False)),
+        "scheduler_running": bool(sched.running),
+        "jobs": jobs,
+        "hint": (
+            None
+            if settings.run_background_scheduler and sched.running
+            else "Scheduler is OFF on this process. On the VM set BACKGROUND_SCHEDULER_ENABLED=true "
+                 "and APP_ENV=production, then restart gunicorn with -w 1 "
+                 "(see backend/scripts/start_prod.sh)."
+        ),
+    }
+
+
+@router.post("/scheduler/run-sheets-now")
+async def run_sheets_sync_now(
+    current_user: User = Depends(require_super_admin()),
+) -> Any:
+    """
+    Immediately run the same Google Sheets sync job the scheduler uses
+    (respects each source's sync_interval_minutes).
+    """
+    from app.tasks.google_sheets_sync import run_google_sheets_sync
+
+    result = await run_google_sheets_sync()
+    return {"ok": True, "result": result}
+
+
+# ============================================================================
 # LEAD SYNC SOURCE ENDPOINTS
 # ============================================================================
 
