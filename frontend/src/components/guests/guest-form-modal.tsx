@@ -21,8 +21,6 @@ import {
     SlidersHorizontal,
     Landmark,
     Gauge,
-    MessageCircle,
-    ScanQrCode,
 } from "lucide-react"
 import {
     Dialog,
@@ -46,7 +44,6 @@ import { DealershipService } from "@/services/dealership-service"
 import {
     copyGuestQrImageToClipboard,
     exportGuestQrPng,
-    shareGuestQrOnWhatsApp,
 } from "@/lib/qr-export"
 import {
     GuestService,
@@ -164,9 +161,6 @@ export function GuestFormModal({
     const [copiedLink, setCopiedLink] = React.useState(false)
     const [copiedImage, setCopiedImage] = React.useState(false)
     const [copyingImage, setCopyingImage] = React.useState(false)
-    const [sharingWhatsApp, setSharingWhatsApp] = React.useState(false)
-    const [sharedWhatsApp, setSharedWhatsApp] = React.useState(false)
-    const [whatsAppHint, setWhatsAppHint] = React.useState<string | null>(null)
     const [error, setError] = React.useState<string | null>(null)
     const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
     const guestRef = React.useRef<Guest | null>(null)
@@ -394,10 +388,9 @@ export function GuestFormModal({
 
     const handleCopyQrImage = async () => {
         const options = qrImageOptions()
-        if (!options || copyingImage || sharingWhatsApp) return
+        if (!options || copyingImage) return
         setCopyingImage(true)
         setError(null)
-        setWhatsAppHint(null)
         try {
             await copyGuestQrImageToClipboard(options)
             setCopiedImage(true)
@@ -407,37 +400,6 @@ export function GuestFormModal({
             setError("Could not copy image — try Export QR or use Chrome/Safari on HTTPS.")
         } finally {
             setCopyingImage(false)
-        }
-    }
-
-    const handleShareWhatsApp = async () => {
-        const options = qrImageOptions()
-        if (!options || !guest || !shareUrl || copyingImage || sharingWhatsApp) return
-        setSharingWhatsApp(true)
-        setError(null)
-        setWhatsAppHint(null)
-        try {
-            const result = await shareGuestQrOnWhatsApp({
-                ...options,
-                phone: guest.phone,
-                downPayment: guest.down_payment,
-                documents,
-                shareUrl,
-            })
-            setSharedWhatsApp(true)
-            setTimeout(() => setSharedWhatsApp(false), 2500)
-            if (result.method === "whatsapp_link") {
-                setWhatsAppHint("QR image copied — paste it into the WhatsApp chat above the message.")
-            } else if (result.method === "clipboard_text") {
-                setWhatsAppHint("WhatsApp message copied. Use “Copy scanner image” if you also need the QR.")
-            } else {
-                setWhatsAppHint(null)
-            }
-        } catch (e) {
-            console.error("Failed to share on WhatsApp", e)
-            setError("Could not share on WhatsApp — try Copy scanner image, then paste into WhatsApp.")
-        } finally {
-            setSharingWhatsApp(false)
         }
     }
 
@@ -633,7 +595,7 @@ export function GuestFormModal({
                                     ref={qrContainerRef}
                                     onContextMenu={handleQrContextMenu}
                                     onClick={handleCopyQrImage}
-                                    title="Click to copy scanner image"
+                                    title="Click or right-click to copy QR card image"
                                     className="group rounded-lg bg-white p-3 shadow-sm ring-offset-background transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 cursor-copy"
                                 >
                                     <QRCode value={shareUrl} size={160} />
@@ -641,8 +603,8 @@ export function GuestFormModal({
                                         {copyingImage
                                             ? "Copying…"
                                             : copiedImage
-                                              ? "Scanner image copied"
-                                              : "Click to copy scanner image"}
+                                              ? "Copied — paste in WhatsApp"
+                                              : "Click to copy QR card"}
                                     </span>
                                 </button>
                                 <p className="text-xs text-muted-foreground">Scan to open the guest&apos;s shareable profile</p>
@@ -668,33 +630,16 @@ export function GuestFormModal({
                                         variant="secondary"
                                         size="sm"
                                         onClick={handleCopyQrImage}
-                                        disabled={copyingImage || sharingWhatsApp}
+                                        disabled={copyingImage}
                                     >
                                         {copyingImage ? (
                                             <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
                                         ) : copiedImage ? (
                                             <Check className="h-4 w-4 mr-1.5 text-emerald-600" />
                                         ) : (
-                                            <ScanQrCode className="h-4 w-4 mr-1.5" />
+                                            <Copy className="h-4 w-4 mr-1.5" />
                                         )}
-                                        Copy scanner image
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        variant="default"
-                                        size="sm"
-                                        className="bg-emerald-600 hover:bg-emerald-700"
-                                        onClick={handleShareWhatsApp}
-                                        disabled={copyingImage || sharingWhatsApp}
-                                    >
-                                        {sharingWhatsApp ? (
-                                            <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                                        ) : sharedWhatsApp ? (
-                                            <Check className="h-4 w-4 mr-1.5" />
-                                        ) : (
-                                            <MessageCircle className="h-4 w-4 mr-1.5" />
-                                        )}
-                                        Share on WhatsApp
+                                        Copy image
                                     </Button>
                                     <Button type="button" variant="outline" size="sm" onClick={handleExportQr}>
                                         <Download className="h-4 w-4 mr-1.5" /> Export QR
@@ -703,11 +648,6 @@ export function GuestFormModal({
                                         <ShieldOff className="h-4 w-4 mr-1.5" /> Revoke link
                                     </Button>
                                 </div>
-                                {whatsAppHint && (
-                                    <p className="max-w-md text-center text-xs text-emerald-700 dark:text-emerald-400">
-                                        {whatsAppHint}
-                                    </p>
-                                )}
                             </div>
                         )}
                     </div>
