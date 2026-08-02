@@ -423,10 +423,14 @@ export function GuestFormModal({
         }
     }
 
+    /** Fresh query param each copy so WhatsApp/etc. re-fetch OG preview (not the cached generic one). */
+    const shareUrlWithCacheBust = (url: string) =>
+        `${url}${url.includes("?") ? "&" : "?"}v=${Date.now()}`
+
     const handleCopyLink = async () => {
         if (!shareUrl) return
         try {
-            await navigator.clipboard.writeText(shareUrl)
+            await navigator.clipboard.writeText(shareUrlWithCacheBust(shareUrl))
             setCopiedLink(true)
             setTimeout(() => setCopiedLink(false), 1500)
         } catch {
@@ -531,7 +535,7 @@ export function GuestFormModal({
                 miles: current.miles,
                 documents: docs,
                 infoItems: eligibilityToWhatsAppInfoItems(assessment),
-                shareUrl,
+                shareUrl: shareUrlWithCacheBust(shareUrl),
             })
             setCopiedMessage(true)
             setTimeout(() => setCopiedMessage(false), 2500)
