@@ -5,14 +5,17 @@ import { useRouter, usePathname } from "next/navigation"
 import { useAuthStore } from "@/stores/auth-store"
 import { Loader2 } from "lucide-react"
 
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password", "/g/"]
+const AUTH_PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password"]
+/** Paths anyone can open without auth (includes guest QR share links) */
+const PUBLIC_PATHS = [...AUTH_PUBLIC_PATHS, "/g/"]
 const LANDING_PAGE_PATH = "/"
 const CHANGE_PASSWORD_PATH = "/change-password"
 
 /** Logged-in users should leave marketing + auth screens for the app dashboard */
 function shouldRedirectAuthenticatedToDashboard(pathname: string): boolean {
     if (pathname === LANDING_PAGE_PATH) return true
-    return PUBLIC_PATHS.some((path) => pathname.startsWith(path))
+    // Do NOT bounce staff off /g/* — they need to open guest share links
+    return AUTH_PUBLIC_PATHS.some((path) => pathname.startsWith(path))
 }
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
