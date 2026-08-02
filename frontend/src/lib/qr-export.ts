@@ -162,6 +162,34 @@ export function buildGuestWhatsAppDetailLines(options: {
     return lines
 }
 
+export function buildGuestWhatsAppMessage(options: {
+    guestName: string
+    phone?: string | null
+    appointmentAt?: string | null
+    dealershipTimezone?: string | null
+    downPayment?: number | null
+    documents?: { category_name: string }[]
+    shareUrl: string
+}): string {
+    return buildGuestWhatsAppDetailLines(options).join("\n")
+}
+
+export async function copyGuestWhatsAppMessageToClipboard(options: {
+    guestName: string
+    phone?: string | null
+    appointmentAt?: string | null
+    dealershipTimezone?: string | null
+    downPayment?: number | null
+    documents?: { category_name: string }[]
+    shareUrl: string
+}): Promise<void> {
+    const text = buildGuestWhatsAppMessage(options)
+    if (!navigator.clipboard?.writeText) {
+        throw new Error("Copy text is not supported in this browser")
+    }
+    await navigator.clipboard.writeText(text)
+}
+
 export function guestQrExportFilename(
     guestName: string,
     appointmentAt: string | null | undefined,
@@ -392,7 +420,7 @@ export type GuestQrImageOptions = {
     downPayment?: number | null
     documents?: { category_name: string }[]
     shareUrl?: string | null
-    /** Bake Customer/Info + profile URL onto the card (default true). */
+    /** Bake Customer/Info onto the PNG card (default false — keep QR card clean). */
     includeDetails?: boolean
 }
 
@@ -431,7 +459,7 @@ async function renderGuestQrCanvas(options: GuestQrImageOptions): Promise<HTMLCa
         downPayment,
         documents,
         shareUrl,
-        includeDetails = true,
+        includeDetails = false,
     } = options
     const qrSize = 512
     const padding = 40
@@ -552,7 +580,7 @@ export async function buildGuestQrImageBlob(options: GuestQrImageOptions): Promi
 export async function copyGuestQrImageToClipboard(options: GuestQrImageOptions): Promise<void> {
     const blob = await buildGuestQrImageBlob({
         ...options,
-        includeDetails: options.includeDetails ?? true,
+        includeDetails: options.includeDetails ?? false,
     })
     if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
         throw new Error("Copy image is not supported in this browser")
@@ -563,7 +591,7 @@ export async function copyGuestQrImageToClipboard(options: GuestQrImageOptions):
 export async function exportGuestQrPng(options: GuestQrImageOptions): Promise<void> {
     const blob = await buildGuestQrImageBlob({
         ...options,
-        includeDetails: options.includeDetails ?? true,
+        includeDetails: options.includeDetails ?? false,
     })
     const name = options.guestName.trim() || "Guest"
     const link = document.createElement("a")

@@ -21,6 +21,7 @@ import {
     SlidersHorizontal,
     Landmark,
     Gauge,
+    MessageSquareText,
 } from "lucide-react"
 import {
     Dialog,
@@ -42,7 +43,8 @@ import { formatDateInDealershipTimezone, getTimezoneAbbreviation } from "@/utils
 import { AppointmentService } from "@/services/appointment-service"
 import { DealershipService } from "@/services/dealership-service"
 import {
-    exportGuestQrPdf,
+    copyGuestQrImageToClipboard,
+    copyGuestWhatsAppMessageToClipboard,
     exportGuestQrPng,
 } from "@/lib/qr-export"
 import {
@@ -159,12 +161,14 @@ export function GuestFormModal({
     const [dealershipName, setDealershipName] = React.useState<string | null>(null)
     const [dealershipTimezone, setDealershipTimezone] = React.useState<string | null>(null)
     const [copiedLink, setCopiedLink] = React.useState(false)
-    const [sharedPdf, setSharedPdf] = React.useState(false)
-    const [sharingPdf, setSharingPdf] = React.useState(false)
+    const [copiedImage, setCopiedImage] = React.useState(false)
+    const [copyingImage, setCopyingImage] = React.useState(false)
+    const [copiedMessage, setCopiedMessage] = React.useState(false)
+    const [copyingMessage, setCopyingMessage] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
     const guestRef = React.useRef<Guest | null>(null)
-    const qrContainerRef = React.useRef<HTMLDivElement>(null)
+    const qrContainerRef = React.useRef<HTMLButtonElement>(null)
     const router = useRouter()
     const { isSuperAdmin, isDealershipLevel, isBdc } = useRole()
     const canManageCriteria = isSuperAdmin || isDealershipLevel || isBdc
@@ -383,29 +387,50 @@ export function GuestFormModal({
             appointmentAt,
             dealershipName,
             dealershipTimezone: dealershipTimezone || hookTimezone,
-            phone: guest.phone,
-            downPayment: guest.down_payment,
-            documents,
-            shareUrl: shareUrl || undefined,
-            includeDetails: true,
+            includeDetails: false,
         }
     }
 
-    /** One-page PDF: large QR on top (preview-scannable) + clickable profile link. */
-    const handleSharePdf = async () => {
+    /** Step 1: copy the clean QR card image (dealership / name / appointment). */
+    const handleCopyQrImage = async () => {
         const options = qrImageOptions()
-        if (!options || !shareUrl || sharingPdf) return
-        setSharingPdf(true)
+        if (!options || copyingImage || copyingMessage) return
+        setCopyingImage(true)
         setError(null)
         try {
-            await exportGuestQrPdf(options)
-            setSharedPdf(true)
-            setTimeout(() => setSharedPdf(false), 2500)
+            await copyGuestQrImageToClipboard(options)
+            setCopiedImage(true)
+            setTimeout(() => setCopiedImage(false), 2000)
         } catch (e) {
-            console.error("Failed to export guest PDF", e)
-            setError("Could not create PDF — try again in Chrome/Safari.")
+            console.error("Failed to copy QR image", e)
+            setError("Could not copy image — try Export QR or use Chrome/Safari on HTTPS.")
         } finally {
-            setSharingPdf(false)
+            setCopyingImage(false)
+        }
+    }
+
+    /** Step 2: copy Customer/Info text with clickable profile URL. */
+    const handleCopyMessage = async () => {
+        if (!guest || !shareUrl || copyingImage || copyingMessage) return
+        setCopyingMessage(true)
+        setError(null)
+        try {
+            await copyGuestWhatsAppMessageToClipboard({
+                guestName: guest.full_name || "Guest",
+                phone: guest.phone,
+                appointmentAt,
+                dealershipTimezone: dealershipTimezone || hookTimezone,
+                downPayment: guest.down_payment,
+                documents,
+                shareUrl,
+            })
+            setCopiedMessage(true)
+            setTimeout(() => setCopiedMessage(false), 2500)
+        } catch (e) {
+            console.error("Failed to copy message", e)
+            setError("Could not copy message text.")
+        } finally {
+            setCopyingMessage(false)
         }
     }
 
@@ -591,14 +616,24 @@ export function GuestFormModal({
                                         {tzAbbr && ` (${tzAbbr})`}
                                     </p>
                                 </div>
-                                <div
+                                <button
+                                    type="button"
                                     ref={qrContainerRef}
-                                    className="rounded-lg bg-white p-3 shadow-sm"
+                                    onClick={handleCopyQrImage}
+                                    title="Copy QR image"
+                                    className="group rounded-lg bg-white p-3 shadow-sm ring-offset-background transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 cursor-copy"
                                 >
                                     <QRCode value={shareUrl} size={160} />
-                                </div>
+                                    <span className="mt-2 block text-[10px] font-medium text-muted-foreground group-hover:text-foreground">
+                                        {copyingImage
+                                            ? "Copying…"
+                                            : copiedImage
+                                              ? "QR image copied — paste in WhatsApp"
+                                              : "Step 1: Copy QR image"}
+                                    </span>
+                                </button>
                                 <p className="text-xs text-muted-foreground text-center max-w-md">
-                                    Downloads a one-page PDF named with the lead + appointment. Large QR sits at the top for WhatsApp preview scanning; open the PDF to tap the clickable profile link.
+                                    Two steps: paste the QR image, then paste the message. The profile link in the message is clickable.
                                 </p>
                                 <div className="flex w-full max-w-md items-center gap-2">
                                     <Input readOnly value={shareUrl} className="text-xs" />
@@ -619,22 +654,38 @@ export function GuestFormModal({
                                 <div className="flex flex-wrap items-center justify-center gap-2">
                                     <Button
                                         type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={handleCopyQrImage}
+                                        disabled={copyingImage || copyingMessage}
+                                    >
+                                        {copyingImage ? (
+                                            <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                                        ) : copiedImage ? (
+                                            <Check className="h-4 w-4 mr-1.5 text-emerald-600" />
+                                        ) : (
+                                            <Copy className="h-4 w-4 mr-1.5" />
+                                        )}
+                                        1. Copy QR image
+                                    </Button>
+                                    <Button
+                                        type="button"
                                         size="sm"
                                         className="bg-emerald-600 hover:bg-emerald-700"
-                                        onClick={handleSharePdf}
-                                        disabled={sharingPdf}
+                                        onClick={handleCopyMessage}
+                                        disabled={copyingImage || copyingMessage}
                                     >
-                                        {sharingPdf ? (
+                                        {copyingMessage ? (
                                             <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                                        ) : sharedPdf ? (
+                                        ) : copiedMessage ? (
                                             <Check className="h-4 w-4 mr-1.5" />
                                         ) : (
-                                            <Download className="h-4 w-4 mr-1.5" />
+                                            <MessageSquareText className="h-4 w-4 mr-1.5" />
                                         )}
-                                        {sharedPdf ? "PDF ready" : "Share PDF"}
+                                        {copiedMessage ? "Message copied" : "2. Copy message"}
                                     </Button>
                                     <Button type="button" variant="outline" size="sm" onClick={handleExportQr}>
-                                        <Download className="h-4 w-4 mr-1.5" /> Export PNG
+                                        <Download className="h-4 w-4 mr-1.5" /> Export QR
                                     </Button>
                                     <Button type="button" variant="ghost" size="sm" onClick={handleRevoke}>
                                         <ShieldOff className="h-4 w-4 mr-1.5" /> Revoke link
