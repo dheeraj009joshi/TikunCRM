@@ -362,7 +362,7 @@ export function buildGuestWhatsAppDetailLines(options: GuestWhatsAppMessageOptio
 
     for (const item of options.infoItems || []) {
         if (!item?.text?.trim()) continue
-        if (isDownPaymentLike(item.text) && downMoney) continue
+        if (isDownPaymentLike(item.text) && downDisplay) continue
         pushLine(item.emoji || "📄", item.text, item.key || item.text)
     }
 
