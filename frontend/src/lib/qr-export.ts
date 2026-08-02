@@ -119,11 +119,11 @@ function documentEmoji(categoryName: string): string {
 }
 
 export type GuestWhatsAppInfoItem = {
-    /** Display label, e.g. "Georgia License" or "Credit score" */
-    label: string
-    /** Optional value shown after the label, e.g. "2000" or "720" */
-    value?: string | number | null
-    emoji?: string
+    emoji: string
+    /** Full human-readable text after the emoji, e.g. "Has license" or "Down payment: $3,000" */
+    text: string
+    /** Dedupe key */
+    key?: string
 }
 
 export type GuestWhatsAppMessageOptions = {
@@ -140,11 +140,8 @@ export type GuestWhatsAppMessageOptions = {
     email?: string | null
     /** Stip / uploaded document category names */
     documents?: { category_name: string }[]
-    /**
-     * Extra Info lines from trust score / eligibility (met criteria, license, credit, etc.)
-     * Prefer structured items; strings are treated as labels.
-     */
-    infoItems?: Array<GuestWhatsAppInfoItem | string>
+    /** Extra Info lines from trust score / eligibility — already human-readable */
+    infoItems?: GuestWhatsAppInfoItem[]
     shareUrl?: string | null
 }
 
@@ -157,11 +154,40 @@ function isDownPaymentLike(label: string): boolean {
     return k.includes("down payment") || k === "down" || k.includes("downpayment")
 }
 
+function isLicenseLike(label: string): boolean {
+    const k = normalizeInfoKey(label)
+    return k.includes("license") || k.includes("licence") || k.includes("driver")
+}
+
+function formatMoney(value: number | string | null | undefined): string | null {
+    if (value == null || String(value).trim() === "") return null
+    const n = Number(value)
+    if (Number.isNaN(n)) return null
+    return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: n % 1 === 0 ? 0 : 2,
+    }).format(n)
+}
+
 function formatNumeric(value: number | string | null | undefined): string | null {
     if (value == null || String(value).trim() === "") return null
     const n = Number(value)
     if (Number.isNaN(n)) return String(value).trim()
     return String(n)
+}
+
+function resolveSelectOptionLabel(
+    optionValue: string | null | undefined,
+    options?: Array<{ label?: string; value?: string }> | null
+): string | null {
+    if (!optionValue) return null
+    const match = (options || []).find((o) => String(o.value) === String(optionValue))
+    const label = match?.label?.trim()
+    if (label) return label
+    // Ignore cryptic single-letter codes like "t"
+    if (optionValue.length <= 2) return null
+    return optionValue
 }
 
 /** WhatsApp-style Customer + Info lines (text message + optional PDF/PNG details). */
@@ -182,85 +208,63 @@ export function buildGuestWhatsAppDetailLines(options: GuestWhatsAppMessageOptio
     lines.push("", "Info:")
 
     const seen = new Set<string>()
-    const pushInfo = (emoji: string, label: string, value?: string | number | null) => {
-        const trimmed = label.trim()
+    const pushLine = (emoji: string, text: string, key?: string) => {
+        const trimmed = text.trim()
         if (!trimmed) return
-        const key = normalizeInfoKey(trimmed)
-        if (seen.has(key)) return
-        // Also block near-duplicates like "Driver License" vs "Driver's License"
+        const dedupe = normalizeInfoKey(key || trimmed)
+        if (!dedupe || seen.has(dedupe)) return
         for (const existing of seen) {
-            if (existing.includes(key) || key.includes(existing)) {
-                if (Math.min(existing.length, key.length) >= 4) return
+            if (
+                (existing.includes(dedupe) || dedupe.includes(existing)) &&
+                Math.min(existing.length, dedupe.length) >= 6
+            ) {
+                return
             }
         }
-        seen.add(key)
-        const valueText =
-            value != null && String(value).trim() !== "" && normalizeInfoKey(String(value)) !== key
-                ? `: ${String(value).trim()}`
-                : ""
-        // If label already looks like "💰: 2000", don't double-wrap
-        if (/^[^\s]+:\s/.test(trimmed) && !valueText) {
-            lines.push(trimmed)
-            return
-        }
-        lines.push(`${emoji}: ${trimmed}${valueText}`)
+        seen.add(dedupe)
+        lines.push(`${emoji}: ${trimmed}`)
     }
 
-    const down = formatNumeric(options.downPayment)
-    if (down != null) {
-        pushInfo("💰", down)
-        seen.add("down payment")
+    const downMoney = formatMoney(options.downPayment)
+    if (downMoney) {
+        pushLine("💰", `Down payment: ${downMoney}`, "down payment")
     }
 
     if (options.vehicleOfInterest?.trim()) {
-        pushInfo("🚗", options.vehicleOfInterest.trim())
+        pushLine("🚗", `Vehicle: ${options.vehicleOfInterest.trim()}`, "vehicle")
     }
 
     if (options.tradeIn?.trim()) {
-        const payoff = formatNumeric(options.payoff)
+        const payoffMoney = formatMoney(options.payoff)
         const bank = options.payoffBank?.trim()
-        let tradeLabel = options.tradeIn.trim()
-        if (payoff != null) tradeLabel += ` (payoff ${payoff}${bank ? ` · ${bank}` : ""})`
-        pushInfo("🔄", tradeLabel)
+        let tradeText = `Trade-in: ${options.tradeIn.trim()}`
+        if (payoffMoney) tradeText += ` (payoff ${payoffMoney}${bank ? ` · ${bank}` : ""})`
+        pushLine("🔄", tradeText, "trade in")
     } else {
-        const payoff = formatNumeric(options.payoff)
-        if (payoff != null) {
+        const payoffMoney = formatMoney(options.payoff)
+        if (payoffMoney) {
             const bank = options.payoffBank?.trim()
-            pushInfo("🏦", bank ? `${bank} payoff` : "Payoff", payoff)
+            pushLine("🏦", bank ? `${bank} payoff: ${payoffMoney}` : `Payoff: ${payoffMoney}`, "payoff")
         }
     }
 
     const miles = formatNumeric(options.miles)
     if (miles != null) {
-        pushInfo("🛣️", "Miles", miles)
+        pushLine("🛣️", `Miles: ${miles}`, "miles")
     }
 
     for (const doc of options.documents || []) {
         const label = (doc.category_name || "").trim()
         if (!label) continue
-        pushInfo(documentEmoji(label), label)
+        // e.g. "Georgia License on file" / "Social Security on file"
+        const text = /on file$/i.test(label) ? label : `${label} on file`
+        pushLine(documentEmoji(label), text, label)
     }
 
-    for (const raw of options.infoItems || []) {
-        if (typeof raw === "string") {
-            const label = raw.trim()
-            if (!label) continue
-            if (isDownPaymentLike(label) && down != null) continue
-            pushInfo(documentEmoji(label), label)
-            continue
-        }
-        const label = (raw.label || "").trim()
-        if (!label) continue
-        if (isDownPaymentLike(label)) {
-            if (down != null) continue
-            const amount = formatNumeric(raw.value)
-            if (amount != null) {
-                pushInfo(raw.emoji || "💰", amount)
-                seen.add("down payment")
-                continue
-            }
-        }
-        pushInfo(raw.emoji || documentEmoji(label), label, raw.value)
+    for (const item of options.infoItems || []) {
+        if (!item?.text?.trim()) continue
+        if (isDownPaymentLike(item.text) && downMoney) continue
+        pushLine(item.emoji || "📄", item.text, item.key || item.text)
     }
 
     if (options.shareUrl?.trim()) {
@@ -284,18 +288,21 @@ export async function copyGuestWhatsAppMessageToClipboard(
     await navigator.clipboard.writeText(text)
 }
 
-/** Map trust-score / eligibility assessment into WhatsApp Info items. */
+type EligibilityItemForWhatsApp = {
+    label: string
+    is_met: boolean
+    auto_field?: string | null
+    input_type?: string
+    value?: Record<string, unknown> | null
+    auto_value?: unknown
+    config?: {
+        options?: Array<{ label?: string; value?: string; fraction?: number }>
+    } | null
+}
+
+/** Map trust-score / eligibility into clear WhatsApp Info lines. */
 export function eligibilityToWhatsAppInfoItems(
-    assessment: {
-        items?: Array<{
-            label: string
-            is_met: boolean
-            auto_field?: string | null
-            input_type?: string
-            value?: Record<string, unknown> | null
-            auto_value?: unknown
-        }>
-    } | null | undefined
+    assessment: { items?: EligibilityItemForWhatsApp[] } | null | undefined
 ): GuestWhatsAppInfoItem[] {
     if (!assessment?.items?.length) return []
 
@@ -311,45 +318,89 @@ export function eligibilityToWhatsAppInfoItems(
                 ? item.value.number
                 : typeof item.auto_value === "number"
                   ? item.auto_value
-                  : null
-        const optionFromValue =
+                  : typeof item.auto_value === "string" && item.auto_value.trim() !== "" && !Number.isNaN(Number(item.auto_value))
+                    ? Number(item.auto_value)
+                    : null
+        const optionValue =
             typeof item.value?.option === "string" ? item.value.option : null
+        const optionLabel = resolveSelectOptionLabel(optionValue, item.config?.options)
 
         if (autoField === "down_payment" || isDownPaymentLike(label)) {
-            if (numFromValue != null) items.push({ label: "Down payment", value: numFromValue, emoji: "💰" })
-            else items.push({ label, emoji: "💰" })
-            continue
-        }
-        if (autoField === "has_license" || /license|licence|driver/.test(label.toLowerCase())) {
-            items.push({ label: label || "Driver's License", emoji: "🪪" })
-            continue
-        }
-        if (autoField === "credit_score" || /credit/.test(label.toLowerCase())) {
-            items.push({
-                label: label || "Credit score",
-                value: numFromValue,
-                emoji: "📊",
-            })
-            continue
-        }
-        if (autoField === "distance_miles" || /distance|miles/.test(label.toLowerCase())) {
-            items.push({
-                label: label || "Distance",
-                value: numFromValue != null ? `${numFromValue} mi` : null,
-                emoji: "📍",
-            })
+            const money = formatMoney(numFromValue)
+            if (money) {
+                items.push({ emoji: "💰", text: `Down payment: ${money}`, key: "down payment" })
+            }
+            // No amount → skip bare "Down Payment" label (useless in chat)
             continue
         }
 
-        // Document / ID style criteria, or any other met item with a useful value
-        const emoji = documentEmoji(label)
-        if (item.input_type === "number" && numFromValue != null) {
-            items.push({ label, value: numFromValue, emoji })
-        } else if (item.input_type === "select" && optionFromValue) {
-            items.push({ label, value: optionFromValue, emoji })
-        } else {
-            items.push({ label, emoji })
+        if (autoField === "has_license" || isLicenseLike(label)) {
+            // Boolean / auto license flags → clear yes language
+            const hasLicense =
+                item.auto_value === true ||
+                item.auto_value === "true" ||
+                item.is_met
+            if (hasLicense) {
+                items.push({ emoji: "🪪", text: "Has license", key: "has license" })
+            }
+            continue
         }
+
+        if (autoField === "credit_score" || /credit/.test(label.toLowerCase())) {
+            if (numFromValue != null) {
+                items.push({
+                    emoji: "📊",
+                    text: `Credit score: ${numFromValue}`,
+                    key: "credit score",
+                })
+            }
+            continue
+        }
+
+        if (autoField === "distance_miles" || /distance/.test(label.toLowerCase())) {
+            if (numFromValue != null) {
+                items.push({
+                    emoji: "📍",
+                    text: `Distance to store: ${numFromValue} mi`,
+                    key: "distance",
+                })
+            }
+            continue
+        }
+
+        const emoji = documentEmoji(label)
+
+        if (item.input_type === "number" && numFromValue != null) {
+            const moneyish = /payment|pay|price|amount|income|salary|budget/i.test(label)
+            const valueText = moneyish ? formatMoney(numFromValue) || String(numFromValue) : String(numFromValue)
+            items.push({ emoji, text: `${label}: ${valueText}`, key: label })
+            continue
+        }
+
+        if (item.input_type === "select") {
+            // Prefer human option label; never show cryptic codes like "t"
+            if (optionLabel) {
+                items.push({ emoji, text: `${label}: ${optionLabel}`, key: label })
+            } else {
+                items.push({ emoji, text: `${label}: on file`, key: label })
+            }
+            continue
+        }
+
+        // Boolean / checkbox criteria that are met
+        if (item.input_type === "boolean" || item.input_type == null) {
+            const lower = label.toLowerCase()
+            if (lower.startsWith("has ")) {
+                items.push({ emoji, text: label, key: label })
+            } else if (/document|stip|id|ssn|insurance|proof|w2|pay stub|bank/i.test(lower)) {
+                items.push({ emoji, text: `${label} on file`, key: label })
+            } else {
+                items.push({ emoji, text: `Has ${label.charAt(0).toLowerCase()}${label.slice(1)}`, key: label })
+            }
+            continue
+        }
+
+        items.push({ emoji, text: `${label}: yes`, key: label })
     }
     return items
 }
