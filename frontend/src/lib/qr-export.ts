@@ -159,15 +159,110 @@ function isLicenseLike(label: string): boolean {
     return k.includes("license") || k.includes("licence") || k.includes("driver")
 }
 
+/** Parse a money-ish value; strips $ and commas. */
+export function parseMoneyAmount(raw: unknown): number | null {
+    if (raw == null || raw === "") return null
+    if (typeof raw === "number") return Number.isFinite(raw) ? raw : null
+    const cleaned = String(raw).trim().replace(/[$,\s]/g, "")
+    if (!cleaned) return null
+    // Support "4k" / "4K" shorthand used in dealer notes
+    const kMatch = cleaned.match(/^(\d+(?:\.\d+)?)\s*k$/i)
+    if (kMatch) {
+        const n = Number(kMatch[1]) * 1000
+        return Number.isFinite(n) ? n : null
+    }
+    const n = Number(cleaned)
+    return Number.isFinite(n) ? n : null
+}
+
 function formatMoney(value: number | string | null | undefined): string | null {
-    if (value == null || String(value).trim() === "") return null
-    const n = Number(value)
-    if (Number.isNaN(n)) return null
+    const n = parseMoneyAmount(value)
+    if (n == null || n <= 0) return null
     return new Intl.NumberFormat("en-US", {
         style: "currency",
         currency: "USD",
         maximumFractionDigits: n % 1 === 0 ? 0 : 2,
     }).format(n)
+}
+
+type DownPaymentAssessmentItem = {
+    label: string
+    auto_field?: string | null
+    input_type?: string
+    value?: Record<string, unknown> | null
+    auto_value?: unknown
+    weight?: number | string
+    points?: number | string
+    config?: {
+        options?: Array<{ label?: string; value?: string; fraction?: number }>
+    } | null
+}
+
+/**
+ * Pick a real down-payment dollar amount from guest / lead / trust score.
+ * Ignores tiny numbers that are just criterion weight/points or bad sheet codes (e.g. 4).
+ */
+export function resolveDownPaymentAmount(options: {
+    guestDownPayment?: unknown
+    leadDownPayment?: unknown
+    assessment?: { items?: DownPaymentAssessmentItem[] } | null
+}): number | null {
+    const candidates: number[] = []
+
+    for (const raw of [options.guestDownPayment, options.leadDownPayment]) {
+        const n = parseMoneyAmount(raw)
+        if (n != null && n > 0) candidates.push(n)
+    }
+
+    for (const item of options.assessment?.items || []) {
+        if (!(item.auto_field === "down_payment" || isDownPaymentLike(item.label))) continue
+        // Skip select auto_value — often a bad sheet code (e.g. 4), not dollars
+        if (item.input_type === "select") continue
+        const n = parseMoneyAmount(item.value?.number ?? item.auto_value)
+        if (n == null || n <= 0) continue
+        const weight = parseMoneyAmount(item.weight)
+        const points = parseMoneyAmount(item.points)
+        // Trust-score weight/points are often 1–20 — never treat those as dollars
+        if (weight != null && n === weight && n < 100) continue
+        if (points != null && n === points && n < 100) continue
+        candidates.push(n)
+    }
+
+    if (!candidates.length) return null
+
+    // Prefer realistic dollar amounts
+    const dollars = candidates.filter((n) => n >= 100)
+    if (dollars.length) return Math.max(...dollars)
+
+    // 50–99 could be a real small deposit; still prefer max
+    const modest = candidates.filter((n) => n >= 50)
+    if (modest.length) return Math.max(...modest)
+
+    // Only tiny values left (e.g. 4) — almost certainly not a dollar amount
+    return null
+}
+
+/**
+ * Display text for WhatsApp: prefer trust-score dropdown range (e.g. "2000-3000"),
+ * then a real dollar amount. Never surface junk auto codes like "4".
+ */
+export function resolveDownPaymentDisplay(options: {
+    guestDownPayment?: unknown
+    leadDownPayment?: unknown
+    assessment?: { items?: DownPaymentAssessmentItem[] } | null
+}): string | null {
+    for (const item of options.assessment?.items || []) {
+        if (!(item.auto_field === "down_payment" || isDownPaymentLike(item.label))) continue
+        if (item.input_type !== "select") continue
+        const optionValue =
+            typeof item.value?.option === "string" ? item.value.option : null
+        const optionLabel = resolveSelectOptionLabel(optionValue, item.config?.options)
+        if (optionLabel) return optionLabel
+        if (optionValue) return optionValue
+    }
+
+    const amount = resolveDownPaymentAmount(options)
+    return formatMoney(amount)
 }
 
 function formatNumeric(value: number | string | null | undefined): string | null {
@@ -225,9 +320,13 @@ export function buildGuestWhatsAppDetailLines(options: GuestWhatsAppMessageOptio
         lines.push(`${emoji}: ${trimmed}`)
     }
 
-    const downMoney = formatMoney(options.downPayment)
-    if (downMoney) {
-        pushLine("💰", `Down payment: ${downMoney}`, "down payment")
+    // downPayment may already be a range label ("2000-3000") or a dollar amount
+    const downDisplay =
+        typeof options.downPayment === "string" && options.downPayment.trim() !== ""
+            ? formatMoney(options.downPayment) || options.downPayment.trim()
+            : formatMoney(options.downPayment)
+    if (downDisplay) {
+        pushLine("💰", `Down payment: ${downDisplay}`, "down payment")
     }
 
     if (options.vehicleOfInterest?.trim()) {
@@ -326,11 +425,7 @@ export function eligibilityToWhatsAppInfoItems(
         const optionLabel = resolveSelectOptionLabel(optionValue, item.config?.options)
 
         if (autoField === "down_payment" || isDownPaymentLike(label)) {
-            const money = formatMoney(numFromValue)
-            if (money) {
-                items.push({ emoji: "💰", text: `Down payment: ${money}`, key: "down payment" })
-            }
-            // No amount → skip bare "Down Payment" label (useless in chat)
+            // Skip here — caller resolves via resolveDownPaymentDisplay()
             continue
         }
 

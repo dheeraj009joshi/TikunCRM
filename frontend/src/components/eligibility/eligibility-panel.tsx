@@ -231,7 +231,13 @@ export function EligibilityPanel({
                                                         <span className="text-sm font-medium">{item.label}</span>
                                                         <Badge variant="outline" className="text-[10px]">wt {Number(item.weight)}</Badge>
                                                         {item.value_source === "auto" && item.auto_value != null && (
-                                                            <span className="text-[10px] text-muted-foreground">from data: {String(item.auto_value)}</span>
+                                                            <span className="text-[10px] text-muted-foreground">
+                                                                from data:{" "}
+                                                                {item.auto_field === "down_payment" &&
+                                                                typeof item.auto_value === "number"
+                                                                    ? `$${Number(item.auto_value).toLocaleString()}`
+                                                                    : String(item.auto_value)}
+                                                            </span>
                                                         )}
                                                     </div>
                                                     {item.description && (

@@ -47,6 +47,7 @@ import {
     copyGuestWhatsAppMessageToClipboard,
     eligibilityToWhatsAppInfoItems,
     exportGuestQrPng,
+    resolveDownPaymentDisplay,
 } from "@/lib/qr-export"
 import {
     GuestService,
@@ -475,21 +476,7 @@ export function GuestFormModal({
         setCopyingMessage(true)
         setError(null)
         try {
-            // Prefer freshly saved guest; fall back to lead/eligibility for missing fields
             const current = guestRef.current || guest
-            let downPayment: number | string | null | undefined = current.down_payment
-            if (downPayment == null || String(downPayment).trim() === "") {
-                downPayment = leadDownPayment
-            }
-            if (downPayment == null || String(downPayment).trim() === "") {
-                const dpItem = eligibility?.items?.find(
-                    (i) => i.auto_field === "down_payment" || /down\s*payment/i.test(i.label)
-                )
-                const fromElig =
-                    (typeof dpItem?.value?.number === "number" ? dpItem.value.number : null) ??
-                    (typeof dpItem?.auto_value === "number" ? dpItem.auto_value : null)
-                if (fromElig != null) downPayment = fromElig
-            }
 
             // Refresh docs right before copy in case stips were just uploaded
             let docs = documents
@@ -520,6 +507,13 @@ export function GuestFormModal({
             } catch {
                 /* keep cached assessment */
             }
+
+            // Prefer trust-score range (e.g. "2000-3000"); ignore junk auto codes like 4
+            const downPayment = resolveDownPaymentDisplay({
+                guestDownPayment: current.down_payment,
+                leadDownPayment,
+                assessment,
+            })
 
             await copyGuestWhatsAppMessageToClipboard({
                 guestName: current.full_name || "Guest",
