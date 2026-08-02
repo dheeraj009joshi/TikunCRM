@@ -45,6 +45,7 @@ import { DealershipService } from "@/services/dealership-service"
 import {
     copyGuestQrImageToClipboard,
     copyGuestWhatsAppMessageToClipboard,
+    eligibilityToWhatsAppInfoItems,
     exportGuestQrPng,
 } from "@/lib/qr-export"
 import {
@@ -53,6 +54,9 @@ import {
     type GuestDocument,
     type GuestUpdatePayload,
 } from "@/services/guest-service"
+import { EligibilityService, type EligibilityAssessment } from "@/services/eligibility-service"
+import { LeadService } from "@/services/lead-service"
+import { StipsService } from "@/services/stips-service"
 
 interface GuestFormModalProps {
     isOpen: boolean
@@ -154,6 +158,8 @@ export function GuestFormModal({
 }: GuestFormModalProps) {
     const [guest, setGuest] = React.useState<Guest | null>(null)
     const [documents, setDocuments] = React.useState<GuestDocument[]>([])
+    const [eligibility, setEligibility] = React.useState<EligibilityAssessment | null>(null)
+    const [leadDownPayment, setLeadDownPayment] = React.useState<number | null>(null)
     const [isLoading, setIsLoading] = React.useState(false)
     const [saveStatus, setSaveStatus] = React.useState<"idle" | "saving" | "saved" | "error">("idle")
     const [shareUrl, setShareUrl] = React.useState<string | null>(null)
@@ -207,6 +213,8 @@ export function GuestFormModal({
             if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
             setGuest(null)
             setDocuments([])
+            setEligibility(null)
+            setLeadDownPayment(null)
             setShareUrl(null)
             setAppointmentAt(null)
             setDealershipName(null)
@@ -231,10 +239,58 @@ export function GuestFormModal({
                 guestRef.current = g
                 setShareUrl(shareUrlForGuest(g))
 
+                // Documents: guest stips first, then lead stips as fallback
                 try {
-                    setDocuments(await GuestService.getDocuments(g.id))
+                    let docs = await GuestService.getDocuments(g.id)
+                    if (!docs.length && (g.lead_id || leadId)) {
+                        try {
+                            const stipDocs = await StipsService.listDocuments(g.lead_id || leadId)
+                            docs = stipDocs.map((d) => ({
+                                id: d.id,
+                                category_name: d.category_name,
+                                file_name: d.file_name,
+                                content_type: d.content_type,
+                                uploaded_at: d.uploaded_at,
+                            }))
+                        } catch {
+                            /* lead stips best-effort */
+                        }
+                    }
+                    if (!cancelled) setDocuments(docs)
                 } catch {
                     /* documents are best-effort */
+                }
+
+                // Trust score / eligibility (license, credit, down payment criteria, etc.)
+                try {
+                    const assessment = await EligibilityService.getAssessment("guest", g.id)
+                    if (!cancelled) setEligibility(assessment)
+                } catch {
+                    try {
+                        if (g.lead_id || leadId) {
+                            const assessment = await EligibilityService.getAssessment(
+                                "lead",
+                                g.lead_id || leadId
+                            )
+                            if (!cancelled) setEligibility(assessment)
+                        }
+                    } catch {
+                        /* eligibility best-effort */
+                    }
+                }
+
+                // Lead meta down payment fallback when guest field is empty
+                try {
+                    const lead = await LeadService.getLead(g.lead_id || leadId)
+                    const meta = lead.meta_data || {}
+                    const raw =
+                        (lead as { down_payment?: number | string | null }).down_payment ??
+                        meta.downpayment ??
+                        meta.down_payment
+                    const n = raw != null && String(raw).trim() !== "" ? Number(raw) : NaN
+                    if (!cancelled) setLeadDownPayment(Number.isNaN(n) ? null : n)
+                } catch {
+                    /* lead fetch best-effort */
                 }
 
                 // Fetch appointment to get scheduled_at and its dealership_id
@@ -415,13 +471,66 @@ export function GuestFormModal({
         setCopyingMessage(true)
         setError(null)
         try {
+            // Prefer freshly saved guest; fall back to lead/eligibility for missing fields
+            const current = guestRef.current || guest
+            let downPayment: number | string | null | undefined = current.down_payment
+            if (downPayment == null || String(downPayment).trim() === "") {
+                downPayment = leadDownPayment
+            }
+            if (downPayment == null || String(downPayment).trim() === "") {
+                const dpItem = eligibility?.items?.find(
+                    (i) => i.auto_field === "down_payment" || /down\s*payment/i.test(i.label)
+                )
+                const fromElig =
+                    (typeof dpItem?.value?.number === "number" ? dpItem.value.number : null) ??
+                    (typeof dpItem?.auto_value === "number" ? dpItem.auto_value : null)
+                if (fromElig != null) downPayment = fromElig
+            }
+
+            // Refresh docs right before copy in case stips were just uploaded
+            let docs = documents
+            try {
+                const latest = await GuestService.getDocuments(current.id)
+                if (latest.length) docs = latest
+                else if (current.lead_id || leadId) {
+                    const stipDocs = await StipsService.listDocuments(current.lead_id || leadId)
+                    if (stipDocs.length) {
+                        docs = stipDocs.map((d) => ({
+                            id: d.id,
+                            category_name: d.category_name,
+                            file_name: d.file_name,
+                            content_type: d.content_type,
+                            uploaded_at: d.uploaded_at,
+                        }))
+                    }
+                }
+                setDocuments(docs)
+            } catch {
+                /* keep cached docs */
+            }
+
+            let assessment = eligibility
+            try {
+                assessment = await EligibilityService.getAssessment("guest", current.id)
+                setEligibility(assessment)
+            } catch {
+                /* keep cached assessment */
+            }
+
             await copyGuestWhatsAppMessageToClipboard({
-                guestName: guest.full_name || "Guest",
-                phone: guest.phone,
+                guestName: current.full_name || "Guest",
+                phone: current.phone,
+                email: current.email,
                 appointmentAt,
                 dealershipTimezone: dealershipTimezone || hookTimezone,
-                downPayment: guest.down_payment,
-                documents,
+                downPayment,
+                vehicleOfInterest: current.vehicle_of_interest,
+                tradeIn: current.trade_in,
+                payoff: current.payoff,
+                payoffBank: current.payoff_bank,
+                miles: current.miles,
+                documents: docs,
+                infoItems: eligibilityToWhatsAppInfoItems(assessment),
                 shareUrl,
             })
             setCopiedMessage(true)

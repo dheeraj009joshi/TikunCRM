@@ -118,16 +118,54 @@ function documentEmoji(categoryName: string): string {
     return "📄"
 }
 
-/** WhatsApp-style Customer + Info lines drawn onto the QR card. */
-export function buildGuestWhatsAppDetailLines(options: {
+export type GuestWhatsAppInfoItem = {
+    /** Display label, e.g. "Georgia License" or "Credit score" */
+    label: string
+    /** Optional value shown after the label, e.g. "2000" or "720" */
+    value?: string | number | null
+    emoji?: string
+}
+
+export type GuestWhatsAppMessageOptions = {
     guestName: string
     phone?: string | null
     appointmentAt?: string | null
     dealershipTimezone?: string | null
-    downPayment?: number | null
+    downPayment?: number | string | null
+    vehicleOfInterest?: string | null
+    tradeIn?: string | null
+    payoff?: number | string | null
+    payoffBank?: string | null
+    miles?: number | string | null
+    email?: string | null
+    /** Stip / uploaded document category names */
     documents?: { category_name: string }[]
+    /**
+     * Extra Info lines from trust score / eligibility (met criteria, license, credit, etc.)
+     * Prefer structured items; strings are treated as labels.
+     */
+    infoItems?: Array<GuestWhatsAppInfoItem | string>
     shareUrl?: string | null
-}): string[] {
+}
+
+function normalizeInfoKey(label: string): string {
+    return label.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+}
+
+function isDownPaymentLike(label: string): boolean {
+    const k = normalizeInfoKey(label)
+    return k.includes("down payment") || k === "down" || k.includes("downpayment")
+}
+
+function formatNumeric(value: number | string | null | undefined): string | null {
+    if (value == null || String(value).trim() === "") return null
+    const n = Number(value)
+    if (Number.isNaN(n)) return String(value).trim()
+    return String(n)
+}
+
+/** WhatsApp-style Customer + Info lines (text message + optional PDF/PNG details). */
+export function buildGuestWhatsAppDetailLines(options: GuestWhatsAppMessageOptions): string[] {
     const name = options.guestName.trim() || "Guest"
     const phone = options.phone?.trim() || "—"
     const when = formatAppointmentForWhatsApp(options.appointmentAt, options.dealershipTimezone)
@@ -136,23 +174,93 @@ export function buildGuestWhatsAppDetailLines(options: {
         `👶: ${name}`,
         `📞: ${phone}`,
         `📍: ${when}`,
-        "",
-        "Info:",
     ]
-
-    if (options.downPayment != null && String(options.downPayment).trim() !== "") {
-        const amount = Number(options.downPayment)
-        if (!Number.isNaN(amount)) lines.push(`💰: ${amount}`)
+    if (options.email?.trim()) {
+        lines.push(`✉️: ${options.email.trim()}`)
     }
 
+    lines.push("", "Info:")
+
     const seen = new Set<string>()
+    const pushInfo = (emoji: string, label: string, value?: string | number | null) => {
+        const trimmed = label.trim()
+        if (!trimmed) return
+        const key = normalizeInfoKey(trimmed)
+        if (seen.has(key)) return
+        // Also block near-duplicates like "Driver License" vs "Driver's License"
+        for (const existing of seen) {
+            if (existing.includes(key) || key.includes(existing)) {
+                if (Math.min(existing.length, key.length) >= 4) return
+            }
+        }
+        seen.add(key)
+        const valueText =
+            value != null && String(value).trim() !== "" && normalizeInfoKey(String(value)) !== key
+                ? `: ${String(value).trim()}`
+                : ""
+        // If label already looks like "💰: 2000", don't double-wrap
+        if (/^[^\s]+:\s/.test(trimmed) && !valueText) {
+            lines.push(trimmed)
+            return
+        }
+        lines.push(`${emoji}: ${trimmed}${valueText}`)
+    }
+
+    const down = formatNumeric(options.downPayment)
+    if (down != null) {
+        pushInfo("💰", down)
+        seen.add("down payment")
+    }
+
+    if (options.vehicleOfInterest?.trim()) {
+        pushInfo("🚗", options.vehicleOfInterest.trim())
+    }
+
+    if (options.tradeIn?.trim()) {
+        const payoff = formatNumeric(options.payoff)
+        const bank = options.payoffBank?.trim()
+        let tradeLabel = options.tradeIn.trim()
+        if (payoff != null) tradeLabel += ` (payoff ${payoff}${bank ? ` · ${bank}` : ""})`
+        pushInfo("🔄", tradeLabel)
+    } else {
+        const payoff = formatNumeric(options.payoff)
+        if (payoff != null) {
+            const bank = options.payoffBank?.trim()
+            pushInfo("🏦", bank ? `${bank} payoff` : "Payoff", payoff)
+        }
+    }
+
+    const miles = formatNumeric(options.miles)
+    if (miles != null) {
+        pushInfo("🛣️", "Miles", miles)
+    }
+
     for (const doc of options.documents || []) {
         const label = (doc.category_name || "").trim()
         if (!label) continue
-        const key = label.toLowerCase()
-        if (seen.has(key)) continue
-        seen.add(key)
-        lines.push(`${documentEmoji(label)}: ${label}`)
+        pushInfo(documentEmoji(label), label)
+    }
+
+    for (const raw of options.infoItems || []) {
+        if (typeof raw === "string") {
+            const label = raw.trim()
+            if (!label) continue
+            if (isDownPaymentLike(label) && down != null) continue
+            pushInfo(documentEmoji(label), label)
+            continue
+        }
+        const label = (raw.label || "").trim()
+        if (!label) continue
+        if (isDownPaymentLike(label)) {
+            if (down != null) continue
+            const amount = formatNumeric(raw.value)
+            if (amount != null) {
+                pushInfo(raw.emoji || "💰", amount)
+                seen.add("down payment")
+                continue
+            }
+        }
+        pushInfo(raw.emoji || documentEmoji(label), label, raw.value)
     }
 
     if (options.shareUrl?.trim()) {
@@ -162,32 +270,88 @@ export function buildGuestWhatsAppDetailLines(options: {
     return lines
 }
 
-export function buildGuestWhatsAppMessage(options: {
-    guestName: string
-    phone?: string | null
-    appointmentAt?: string | null
-    dealershipTimezone?: string | null
-    downPayment?: number | null
-    documents?: { category_name: string }[]
-    shareUrl: string
-}): string {
+export function buildGuestWhatsAppMessage(options: GuestWhatsAppMessageOptions): string {
     return buildGuestWhatsAppDetailLines(options).join("\n")
 }
 
-export async function copyGuestWhatsAppMessageToClipboard(options: {
-    guestName: string
-    phone?: string | null
-    appointmentAt?: string | null
-    dealershipTimezone?: string | null
-    downPayment?: number | null
-    documents?: { category_name: string }[]
-    shareUrl: string
-}): Promise<void> {
+export async function copyGuestWhatsAppMessageToClipboard(
+    options: GuestWhatsAppMessageOptions & { shareUrl: string }
+): Promise<void> {
     const text = buildGuestWhatsAppMessage(options)
     if (!navigator.clipboard?.writeText) {
         throw new Error("Copy text is not supported in this browser")
     }
     await navigator.clipboard.writeText(text)
+}
+
+/** Map trust-score / eligibility assessment into WhatsApp Info items. */
+export function eligibilityToWhatsAppInfoItems(
+    assessment: {
+        items?: Array<{
+            label: string
+            is_met: boolean
+            auto_field?: string | null
+            input_type?: string
+            value?: Record<string, unknown> | null
+            auto_value?: unknown
+        }>
+    } | null | undefined
+): GuestWhatsAppInfoItem[] {
+    if (!assessment?.items?.length) return []
+
+    const items: GuestWhatsAppInfoItem[] = []
+    for (const item of assessment.items) {
+        if (!item.is_met) continue
+        const label = (item.label || "").trim()
+        if (!label) continue
+
+        const autoField = item.auto_field || ""
+        const numFromValue =
+            typeof item.value?.number === "number"
+                ? item.value.number
+                : typeof item.auto_value === "number"
+                  ? item.auto_value
+                  : null
+        const optionFromValue =
+            typeof item.value?.option === "string" ? item.value.option : null
+
+        if (autoField === "down_payment" || isDownPaymentLike(label)) {
+            if (numFromValue != null) items.push({ label: "Down payment", value: numFromValue, emoji: "💰" })
+            else items.push({ label, emoji: "💰" })
+            continue
+        }
+        if (autoField === "has_license" || /license|licence|driver/.test(label.toLowerCase())) {
+            items.push({ label: label || "Driver's License", emoji: "🪪" })
+            continue
+        }
+        if (autoField === "credit_score" || /credit/.test(label.toLowerCase())) {
+            items.push({
+                label: label || "Credit score",
+                value: numFromValue,
+                emoji: "📊",
+            })
+            continue
+        }
+        if (autoField === "distance_miles" || /distance|miles/.test(label.toLowerCase())) {
+            items.push({
+                label: label || "Distance",
+                value: numFromValue != null ? `${numFromValue} mi` : null,
+                emoji: "📍",
+            })
+            continue
+        }
+
+        // Document / ID style criteria, or any other met item with a useful value
+        const emoji = documentEmoji(label)
+        if (item.input_type === "number" && numFromValue != null) {
+            items.push({ label, value: numFromValue, emoji })
+        } else if (item.input_type === "select" && optionFromValue) {
+            items.push({ label, value: optionFromValue, emoji })
+        } else {
+            items.push({ label, emoji })
+        }
+    }
+    return items
 }
 
 export function guestQrExportFilename(
