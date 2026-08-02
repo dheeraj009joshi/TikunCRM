@@ -156,3 +156,165 @@ export async function exportGuestQrPng(options: GuestQrImageOptions): Promise<vo
     link.click()
     URL.revokeObjectURL(link.href)
 }
+
+export type GuestWhatsAppShareOptions = GuestQrImageOptions & {
+    phone?: string | null
+    downPayment?: number | null
+    documents?: { category_name: string }[]
+    shareUrl: string
+}
+
+function calendarDayKey(date: Date, timezone?: string | null): string {
+    const opts: Intl.DateTimeFormatOptions = {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        ...(timezone ? { timeZone: timezone } : {}),
+    }
+    return date.toLocaleDateString("en-CA", opts)
+}
+
+/** e.g. Today 4:30 PM · Tomorrow 10:00 AM · Sat, Aug 1, 10:00 AM */
+export function formatAppointmentForWhatsApp(
+    isoDate: string | null | undefined,
+    timezone?: string | null
+): string {
+    if (!isoDate?.trim()) return "TBD"
+    try {
+        const dt = parseAsUTC(isoDate.trim())
+        if (Number.isNaN(dt.getTime())) return "TBD"
+        const opts: Intl.DateTimeFormatOptions = timezone ? { timeZone: timezone } : {}
+        const time = dt.toLocaleTimeString("en-US", {
+            ...opts,
+            hour: "numeric",
+            minute: "2-digit",
+        })
+        const apptDay = calendarDayKey(dt, timezone)
+        const today = calendarDayKey(new Date(), timezone)
+        if (apptDay === today) return `Today ${time}`
+
+        const tomorrowDate = new Date()
+        tomorrowDate.setDate(tomorrowDate.getDate() + 1)
+        if (apptDay === calendarDayKey(tomorrowDate, timezone)) return `Tomorrow ${time}`
+
+        const weekday = dt.toLocaleDateString("en-US", { ...opts, weekday: "short" })
+        const month = dt.toLocaleDateString("en-US", { ...opts, month: "short" })
+        const day = Number(dt.toLocaleDateString("en-US", { ...opts, day: "numeric" }))
+        return `${weekday}, ${month} ${day}, ${time}`
+    } catch {
+        return "TBD"
+    }
+}
+
+function documentEmoji(categoryName: string): string {
+    const c = categoryName.toLowerCase()
+    if (
+        c.includes("license") ||
+        c.includes("licence") ||
+        c.includes("driver") ||
+        /\bid\b/.test(c) ||
+        c.includes("identification")
+    ) {
+        return "🪪"
+    }
+    if (c.includes("social") || c.includes("ssn") || c.includes("security")) return "🏛️"
+    if (c.includes("insurance")) return "🛡️"
+    if (c.includes("pay stub") || c.includes("paystub") || c.includes("income") || c.includes("w2")) {
+        return "💵"
+    }
+    if (c.includes("bank") || c.includes("statement")) return "🏦"
+    return "📄"
+}
+
+/** WhatsApp-ready text block (Customer + Info), matching the showroom share format. */
+export function buildGuestWhatsAppShareText(options: {
+    guestName: string
+    phone?: string | null
+    appointmentAt?: string | null
+    dealershipTimezone?: string | null
+    downPayment?: number | null
+    documents?: { category_name: string }[]
+    shareUrl: string
+}): string {
+    const name = options.guestName.trim() || "Guest"
+    const phone = options.phone?.trim() || "—"
+    const when = formatAppointmentForWhatsApp(options.appointmentAt, options.dealershipTimezone)
+    const lines = [
+        "Customer:",
+        `👶: ${name}`,
+        `📞: ${phone}`,
+        `📍: ${when}`,
+        "",
+        "Info:",
+    ]
+
+    if (options.downPayment != null && String(options.downPayment).trim() !== "") {
+        const amount = Number(options.downPayment)
+        if (!Number.isNaN(amount)) lines.push(`💰: ${amount}`)
+    }
+
+    const seen = new Set<string>()
+    for (const doc of options.documents || []) {
+        const label = (doc.category_name || "").trim()
+        if (!label) continue
+        const key = label.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        lines.push(`${documentEmoji(label)}: ${label}`)
+    }
+
+    lines.push(`👉: ${options.shareUrl}`)
+    return lines.join("\n")
+}
+
+export type GuestWhatsAppShareResult = {
+    /** How the share was delivered */
+    method: "native_share" | "whatsapp_link" | "clipboard_text"
+}
+
+/**
+ * Share guest QR for WhatsApp:
+ * - Mobile: native share sheet with image + text when supported
+ * - Desktop: copy QR image to clipboard and open WhatsApp with the message text pre-filled
+ * - Fallback: copy the formatted text message to the clipboard
+ */
+export async function shareGuestQrOnWhatsApp(
+    options: GuestWhatsAppShareOptions
+): Promise<GuestWhatsAppShareResult> {
+    const text = buildGuestWhatsAppShareText({
+        guestName: options.guestName,
+        phone: options.phone,
+        appointmentAt: options.appointmentAt,
+        dealershipTimezone: options.dealershipTimezone,
+        downPayment: options.downPayment,
+        documents: options.documents,
+        shareUrl: options.shareUrl,
+    })
+    const blob = await buildGuestQrImageBlob(options)
+    const file = new File(
+        [blob],
+        guestQrExportFilename(options.guestName, options.appointmentAt, options.dealershipTimezone),
+        { type: "image/png" }
+    )
+
+    if (
+        typeof navigator !== "undefined" &&
+        typeof navigator.share === "function" &&
+        typeof navigator.canShare === "function" &&
+        navigator.canShare({ files: [file], text })
+    ) {
+        await navigator.share({ files: [file], text, title: options.guestName.trim() || "Guest QR" })
+        return { method: "native_share" }
+    }
+
+    if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })])
+    }
+
+    const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`
+    const opened = window.open(waUrl, "_blank", "noopener,noreferrer")
+    if (opened) return { method: "whatsapp_link" }
+
+    await navigator.clipboard.writeText(text)
+    return { method: "clipboard_text" }
+}

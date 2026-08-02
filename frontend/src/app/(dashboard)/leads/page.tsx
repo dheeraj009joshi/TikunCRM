@@ -1003,347 +1003,345 @@ export default function LeadsPage() {
             </div>
 
             {/* Toolbar */}
-            <Card>
+            <Card className="min-w-0">
                 <CardContent className="p-4">
-                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="flex items-center gap-3 flex-1">
-                            <Input
-                                placeholder="Search leads..."
-                                value={search}
-                                onChange={(e) => setSearch(e.target.value)}
-                                leftIcon={<Search className="h-4 w-4" />}
-                                className="max-w-xs"
-                            />
-                            {displayView === "list" ? (
-                                <Select
-                                    value={status}
-                                    onValueChange={(v) => {
-                                        setStatus(v)
-                                        setPage(1)
-                                        const params = new URLSearchParams(searchParams.toString())
-                                        if (v && v !== "all") params.set("status", v)
-                                        else params.delete("status")
-                                        params.delete("page")
-                                        router.replace(`/leads?${params.toString()}`)
-                                        filterStorage.setLeads({
-                                            filter: viewMode,
-                                            status: v,
-                                            source,
-                                            view: displayView,
-                                            assigned_to: assignedTo !== "all" ? assignedTo : undefined,
-                                            campaign: campaignFilter !== "all" ? campaignFilter : undefined,
-                                        })
-                                    }}
-                                >
-                                    <SelectTrigger className="w-36">
-                                        <SelectValue placeholder="Status" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {LEAD_STATUSES.map((s) => (
-                                            <SelectItem key={s.value} value={s.value}>
-                                                {s.label}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            ) : (
-                                <Popover>
-                                    <PopoverTrigger asChild>
-                                        <Button variant="outline" className="w-40 justify-between">
-                                            {selectedStageIds.length === 0
-                                                ? "All Stages"
-                                                : selectedStageIds.length === 1
-                                                    ? stages.find((s) => s.id === selectedStageIds[0])?.display_name ?? "1 stage"
-                                                    : `${selectedStageIds.length} stages`}
-                                            <Filter className="h-4 w-4 ml-1 opacity-50" />
-                                        </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent className="w-56 p-2" align="start">
-                                        <div className="flex items-center justify-between mb-2">
-                                            <span className="text-sm font-medium">Stages</span>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                className="h-7 text-xs"
-                                                onClick={() => setSelectedStageIds([])}
-                                            >
-                                                Deselect all
-                                            </Button>
-                                        </div>
-                                        <div className="max-h-64 overflow-y-auto space-y-1.5">
-                                            {stages.map((s) => (
-                                                <label
-                                                    key={s.id}
-                                                    className="flex items-center gap-2 cursor-pointer rounded px-2 py-1.5 hover:bg-muted/50"
-                                                >
-                                                    <Checkbox
-                                                        checked={selectedStageIds.includes(s.id)}
-                                                        onCheckedChange={(checked) => {
-                                                            setSelectedStageIds((prev) =>
-                                                                checked
-                                                                    ? [...prev, s.id]
-                                                                    : prev.filter((id) => id !== s.id)
-                                                            )
-                                                        }}
-                                                    />
-                                                    <span className="text-sm truncate">{s.display_name}</span>
-                                                </label>
-                                            ))}
-                                        </div>
-                                        <p className="text-xs text-muted-foreground mt-2">
-                                            {selectedStageIds.length === 0
-                                                ? "Showing all stages"
-                                                : `Showing ${selectedStageIds.length} stage(s)`}
-                                        </p>
-                                    </PopoverContent>
-                                </Popover>
-                            )}
+                    <div className="flex flex-wrap items-center gap-3">
+                        <Input
+                            placeholder="Search leads..."
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            leftIcon={<Search className="h-4 w-4" />}
+                            className="w-full max-w-xs shrink-0"
+                        />
+                        {displayView === "list" ? (
                             <Select
-                                    value={source}
-                                    onValueChange={(v) => {
-                                        setSource(v)
-                                        setPage(1)
-                                        const params = new URLSearchParams(searchParams.toString())
-                                        if (v && v !== "all") params.set("source", v)
-                                        else params.delete("source")
-                                        params.delete("page")
-                                        router.replace(`/leads?${params.toString()}`)
-                                        filterStorage.setLeads({
-                                            filter: viewMode,
-                                            status,
-                                            source: v,
-                                            view: displayView,
-                                            assigned_to: assignedTo !== "all" ? assignedTo : undefined,
-                                            campaign: campaignFilter !== "all" ? campaignFilter : undefined,
-                                        })
-                                    }}
-                                >
-                                <SelectTrigger className="w-36">
-                                    <SelectValue placeholder="Source" />
+                                value={status}
+                                onValueChange={(v) => {
+                                    setStatus(v)
+                                    setPage(1)
+                                    const params = new URLSearchParams(searchParams.toString())
+                                    if (v && v !== "all") params.set("status", v)
+                                    else params.delete("status")
+                                    params.delete("page")
+                                    router.replace(`/leads?${params.toString()}`)
+                                    filterStorage.setLeads({
+                                        filter: viewMode,
+                                        status: v,
+                                        source,
+                                        view: displayView,
+                                        assigned_to: assignedTo !== "all" ? assignedTo : undefined,
+                                        campaign: campaignFilter !== "all" ? campaignFilter : undefined,
+                                    })
+                                }}
+                            >
+                                <SelectTrigger className="w-36 shrink-0">
+                                    <SelectValue placeholder="Status" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    {LEAD_SOURCES.map((s) => (
+                                    {LEAD_STATUSES.map((s) => (
                                         <SelectItem key={s.value} value={s.value}>
                                             {s.label}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
                             </Select>
-                            {(isDealershipLevel || isSuperAdmin) && teamMembers.length > 0 && (
-                                <Select
-                                    value={assignedTo}
-                                    onValueChange={(v) => {
-                                        setAssignedTo(v)
-                                        setPage(1)
-                                        const params = new URLSearchParams(searchParams.toString())
-                                        if (v && v !== "all") params.set("assigned_to", v)
-                                        else params.delete("assigned_to")
-                                        params.delete("page")
-                                        router.replace(`/leads?${params.toString()}`)
-                                        filterStorage.setLeads({
-                                            filter: viewMode,
-                                            status,
-                                            source,
-                                            view: displayView,
-                                            assigned_to: v !== "all" ? v : undefined,
-                                            campaign: campaignFilter !== "all" ? campaignFilter : undefined,
-                                        })
-                                    }}
-                                >
-                                    <SelectTrigger className="w-44">
-                                        <SelectValue placeholder="Team member" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All team members</SelectItem>
-                                        {teamMembers.map((u) => (
-                                            <SelectItem key={u.id} value={u.id}>
-                                                {u.first_name} {u.last_name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            )}
-                            {(isDealershipLevel || isSuperAdmin) && bdcAgents.length > 0 && (
-                                <Select
-                                    value={bdcAgentFilter}
-                                    onValueChange={(v) => {
-                                        setBdcAgentFilter(v)
-                                        setPage(1)
-                                    }}
-                                >
-                                    <SelectTrigger className="w-44">
-                                        <SelectValue placeholder="BDC Agent" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All BDC agents</SelectItem>
-                                        {bdcAgents.map((a) => (
-                                            <SelectItem key={a.id} value={a.id}>
-                                                {a.first_name} {a.last_name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            )}
-                            {campaignOptions.length > 0 && (
-                                <Select
-                                    value={campaignFilter}
-                                    onValueChange={(v) => {
-                                        setCampaignFilter(v)
-                                        setPage(1)
-                                        const params = new URLSearchParams(searchParams.toString())
-                                        if (v !== "all") params.set("campaign", v)
-                                        else params.delete("campaign")
-                                        params.delete("page")
-                                        router.replace(`/leads?${params.toString()}`)
-                                        filterStorage.setLeads({
-                                            filter: viewMode,
-                                            status,
-                                            source,
-                                            view: displayView,
-                                            assigned_to: assignedTo !== "all" ? assignedTo : undefined,
-                                            campaign: v !== "all" ? v : undefined,
-                                        })
-                                    }}
-                                >
-                                    <SelectTrigger className="w-[200px] min-w-[10rem]">
-                                        <SelectValue placeholder="Campaign" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All campaigns</SelectItem>
-                                        {campaignOptions.map((c) => (
-                                            <SelectItem key={c.id} value={c.id} title={c.match_pattern}>
-                                                {c.display_name}
-                                                {c.sync_source_name ? ` · ${c.sync_source_name}` : ""}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            )}
-                            {/* Date Filter */}
+                        ) : (
                             <Popover>
                                 <PopoverTrigger asChild>
-                                    <Button variant="outline" className="w-auto min-w-[140px] justify-start">
-                                        <CalendarIcon className="h-4 w-4 mr-2" />
-                                        {dateMode === "all" ? (
-                                            "All Time"
-                                        ) : dateMode === "single" && specificDate ? (
-                                            format(specificDate, "MMM d, yyyy")
-                                        ) : dateMode === "range" ? (
-                                            dateFrom && dateTo ? (
-                                                `${format(dateFrom, "MMM d")} - ${format(dateTo, "MMM d")}`
-                                            ) : dateFrom ? (
-                                                `From ${format(dateFrom, "MMM d")}`
-                                            ) : dateTo ? (
-                                                `Until ${format(dateTo, "MMM d")}`
-                                            ) : (
-                                                "Date Range"
-                                            )
-                                        ) : (
-                                            "All Time"
-                                        )}
+                                    <Button variant="outline" className="w-40 shrink-0 justify-between">
+                                        {selectedStageIds.length === 0
+                                            ? "All Stages"
+                                            : selectedStageIds.length === 1
+                                                ? stages.find((s) => s.id === selectedStageIds[0])?.display_name ?? "1 stage"
+                                                : `${selectedStageIds.length} stages`}
+                                        <Filter className="h-4 w-4 ml-1 opacity-50" />
                                     </Button>
                                 </PopoverTrigger>
-                                <PopoverContent className="w-[min(95vw,720px)] max-h-[80vh] overflow-y-auto p-3" align="start">
-                                    <div className="space-y-3">
-                                        <div className="flex gap-1">
-                                            <Button
-                                                variant={dateMode === "all" ? "default" : "outline"}
-                                                size="sm"
-                                                onClick={() => {
-                                                    setDateMode("all")
-                                                    setSpecificDate(undefined)
-                                                    setDateFrom(undefined)
-                                                    setDateTo(undefined)
-                                                }}
-                                            >
-                                                All Time
-                                            </Button>
-                                            <Button
-                                                variant={dateMode === "single" ? "default" : "outline"}
-                                                size="sm"
-                                                onClick={() => setDateMode("single")}
-                                            >
-                                                Single Day
-                                            </Button>
-                                            <Button
-                                                variant={dateMode === "range" ? "default" : "outline"}
-                                                size="sm"
-                                                onClick={() => setDateMode("range")}
-                                            >
-                                                Range
-                                            </Button>
-                                        </div>
-                                        {dateMode === "single" && (
-                                            <CalendarPicker
-                                                mode="single"
-                                                selected={specificDate}
-                                                onSelect={setSpecificDate}
-                                                initialFocus
-                                            />
-                                        )}
-                                        {dateMode === "range" && (
-                                            <div className="space-y-2 rounded-lg border bg-muted/20 p-2">
-                                                <CalendarPicker
-                                                    mode="range"
-                                                    selected={{ from: dateFrom, to: dateTo }}
-                                                    onSelect={(range) => {
-                                                        setDateFrom(range?.from)
-                                                        setDateTo(range?.to)
-                                                    }}
-                                                    numberOfMonths={1}
-                                                    className="p-0"
-                                                />
-                                                <div className="grid grid-cols-2 gap-2 text-xs">
-                                                    <div className="rounded-md border bg-background px-2 py-1.5">
-                                                        <p className="text-muted-foreground">From</p>
-                                                        <p className="font-medium">
-                                                            {dateFrom ? format(dateFrom, "MMM d, yyyy") : "Not set"}
-                                                        </p>
-                                                    </div>
-                                                    <div className="rounded-md border bg-background px-2 py-1.5">
-                                                        <p className="text-muted-foreground">To</p>
-                                                        <p className="font-medium">
-                                                            {dateTo ? format(dateTo, "MMM d, yyyy") : "Not set"}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        )}
-                                        {(dateMode === "single" || dateMode === "range") && (
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                className="w-full"
-                                                onClick={() => {
-                                                    setDateMode("all")
-                                                    setSpecificDate(undefined)
-                                                    setDateFrom(undefined)
-                                                    setDateTo(undefined)
-                                                }}
-                                            >
-                                                Clear dates
-                                            </Button>
-                                        )}
+                                <PopoverContent className="w-56 p-2" align="start">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-sm font-medium">Stages</span>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-7 text-xs"
+                                            onClick={() => setSelectedStageIds([])}
+                                        >
+                                            Deselect all
+                                        </Button>
                                     </div>
+                                    <div className="max-h-64 overflow-y-auto space-y-1.5">
+                                        {stages.map((s) => (
+                                            <label
+                                                key={s.id}
+                                                className="flex items-center gap-2 cursor-pointer rounded px-2 py-1.5 hover:bg-muted/50"
+                                            >
+                                                <Checkbox
+                                                    checked={selectedStageIds.includes(s.id)}
+                                                    onCheckedChange={(checked) => {
+                                                        setSelectedStageIds((prev) =>
+                                                            checked
+                                                                ? [...prev, s.id]
+                                                                : prev.filter((id) => id !== s.id)
+                                                        )
+                                                    }}
+                                                />
+                                                <span className="text-sm truncate">{s.display_name}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mt-2">
+                                        {selectedStageIds.length === 0
+                                            ? "Showing all stages"
+                                            : `Showing ${selectedStageIds.length} stage(s)`}
+                                    </p>
                                 </PopoverContent>
                             </Popover>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <div className="h-4 w-px bg-border" />
+                        )}
+                        <Select
+                            value={source}
+                            onValueChange={(v) => {
+                                setSource(v)
+                                setPage(1)
+                                const params = new URLSearchParams(searchParams.toString())
+                                if (v && v !== "all") params.set("source", v)
+                                else params.delete("source")
+                                params.delete("page")
+                                router.replace(`/leads?${params.toString()}`)
+                                filterStorage.setLeads({
+                                    filter: viewMode,
+                                    status,
+                                    source: v,
+                                    view: displayView,
+                                    assigned_to: assignedTo !== "all" ? assignedTo : undefined,
+                                    campaign: campaignFilter !== "all" ? campaignFilter : undefined,
+                                })
+                            }}
+                        >
+                            <SelectTrigger className="w-36 shrink-0">
+                                <SelectValue placeholder="Source" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {LEAD_SOURCES.map((s) => (
+                                    <SelectItem key={s.value} value={s.value}>
+                                        {s.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        {(isDealershipLevel || isSuperAdmin) && teamMembers.length > 0 && (
+                            <Select
+                                value={assignedTo}
+                                onValueChange={(v) => {
+                                    setAssignedTo(v)
+                                    setPage(1)
+                                    const params = new URLSearchParams(searchParams.toString())
+                                    if (v && v !== "all") params.set("assigned_to", v)
+                                    else params.delete("assigned_to")
+                                    params.delete("page")
+                                    router.replace(`/leads?${params.toString()}`)
+                                    filterStorage.setLeads({
+                                        filter: viewMode,
+                                        status,
+                                        source,
+                                        view: displayView,
+                                        assigned_to: v !== "all" ? v : undefined,
+                                        campaign: campaignFilter !== "all" ? campaignFilter : undefined,
+                                    })
+                                }}
+                            >
+                                <SelectTrigger className="w-44 shrink-0">
+                                    <SelectValue placeholder="Team member" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All team members</SelectItem>
+                                    {teamMembers.map((u) => (
+                                        <SelectItem key={u.id} value={u.id}>
+                                            {u.first_name} {u.last_name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        )}
+                        {(isDealershipLevel || isSuperAdmin) && bdcAgents.length > 0 && (
+                            <Select
+                                value={bdcAgentFilter}
+                                onValueChange={(v) => {
+                                    setBdcAgentFilter(v)
+                                    setPage(1)
+                                }}
+                            >
+                                <SelectTrigger className="w-44 shrink-0">
+                                    <SelectValue placeholder="BDC Agent" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All BDC agents</SelectItem>
+                                    {bdcAgents.map((a) => (
+                                        <SelectItem key={a.id} value={a.id}>
+                                            {a.first_name} {a.last_name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        )}
+                        {campaignOptions.length > 0 && (
+                            <Select
+                                value={campaignFilter}
+                                onValueChange={(v) => {
+                                    setCampaignFilter(v)
+                                    setPage(1)
+                                    const params = new URLSearchParams(searchParams.toString())
+                                    if (v !== "all") params.set("campaign", v)
+                                    else params.delete("campaign")
+                                    params.delete("page")
+                                    router.replace(`/leads?${params.toString()}`)
+                                    filterStorage.setLeads({
+                                        filter: viewMode,
+                                        status,
+                                        source,
+                                        view: displayView,
+                                        assigned_to: assignedTo !== "all" ? assignedTo : undefined,
+                                        campaign: v !== "all" ? v : undefined,
+                                    })
+                                }}
+                            >
+                                <SelectTrigger className="w-[200px] min-w-[10rem] shrink-0">
+                                    <SelectValue placeholder="Campaign" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All campaigns</SelectItem>
+                                    {campaignOptions.map((c) => (
+                                        <SelectItem key={c.id} value={c.id} title={c.match_pattern}>
+                                            {c.display_name}
+                                            {c.sync_source_name ? ` · ${c.sync_source_name}` : ""}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        )}
+                        {/* Date Filter */}
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" className="w-auto min-w-[140px] shrink-0 justify-start">
+                                    <CalendarIcon className="h-4 w-4 mr-2" />
+                                    {dateMode === "all" ? (
+                                        "All Time"
+                                    ) : dateMode === "single" && specificDate ? (
+                                        format(specificDate, "MMM d, yyyy")
+                                    ) : dateMode === "range" ? (
+                                        dateFrom && dateTo ? (
+                                            `${format(dateFrom, "MMM d")} - ${format(dateTo, "MMM d")}`
+                                        ) : dateFrom ? (
+                                            `From ${format(dateFrom, "MMM d")}`
+                                        ) : dateTo ? (
+                                            `Until ${format(dateTo, "MMM d")}`
+                                        ) : (
+                                            "Date Range"
+                                        )
+                                    ) : (
+                                        "All Time"
+                                    )}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[min(95vw,720px)] max-h-[80vh] overflow-y-auto p-3" align="start">
+                                <div className="space-y-3">
+                                    <div className="flex gap-1">
+                                        <Button
+                                            variant={dateMode === "all" ? "default" : "outline"}
+                                            size="sm"
+                                            onClick={() => {
+                                                setDateMode("all")
+                                                setSpecificDate(undefined)
+                                                setDateFrom(undefined)
+                                                setDateTo(undefined)
+                                            }}
+                                        >
+                                            All Time
+                                        </Button>
+                                        <Button
+                                            variant={dateMode === "single" ? "default" : "outline"}
+                                            size="sm"
+                                            onClick={() => setDateMode("single")}
+                                        >
+                                            Single Day
+                                        </Button>
+                                        <Button
+                                            variant={dateMode === "range" ? "default" : "outline"}
+                                            size="sm"
+                                            onClick={() => setDateMode("range")}
+                                        >
+                                            Range
+                                        </Button>
+                                    </div>
+                                    {dateMode === "single" && (
+                                        <CalendarPicker
+                                            mode="single"
+                                            selected={specificDate}
+                                            onSelect={setSpecificDate}
+                                            initialFocus
+                                        />
+                                    )}
+                                    {dateMode === "range" && (
+                                        <div className="space-y-2 rounded-lg border bg-muted/20 p-2">
+                                            <CalendarPicker
+                                                mode="range"
+                                                selected={{ from: dateFrom, to: dateTo }}
+                                                onSelect={(range) => {
+                                                    setDateFrom(range?.from)
+                                                    setDateTo(range?.to)
+                                                }}
+                                                numberOfMonths={1}
+                                                className="p-0"
+                                            />
+                                            <div className="grid grid-cols-2 gap-2 text-xs">
+                                                <div className="rounded-md border bg-background px-2 py-1.5">
+                                                    <p className="text-muted-foreground">From</p>
+                                                    <p className="font-medium">
+                                                        {dateFrom ? format(dateFrom, "MMM d, yyyy") : "Not set"}
+                                                    </p>
+                                                </div>
+                                                <div className="rounded-md border bg-background px-2 py-1.5">
+                                                    <p className="text-muted-foreground">To</p>
+                                                    <p className="font-medium">
+                                                        {dateTo ? format(dateTo, "MMM d, yyyy") : "Not set"}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {(dateMode === "single" || dateMode === "range") && (
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="w-full"
+                                            onClick={() => {
+                                                setDateMode("all")
+                                                setSpecificDate(undefined)
+                                                setDateFrom(undefined)
+                                                setDateTo(undefined)
+                                            }}
+                                        >
+                                            Clear dates
+                                        </Button>
+                                    )}
+                                </div>
+                            </PopoverContent>
+                        </Popover>
+
+                        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
                             {displayView === "list" ? (
-                                <p className="text-sm text-muted-foreground px-2">
+                                <p className="text-sm text-muted-foreground whitespace-nowrap">
                                     Showing <span className="font-medium text-foreground">{leads.length}</span> of{" "}
                                     <span className="font-medium text-foreground">{total}</span> leads
                                 </p>
                             ) : (
-                                <p className="text-sm text-muted-foreground px-2">
+                                <p className="text-sm text-muted-foreground">
                                     Drag leads between stages to update their pipeline position.
                                 </p>
                             )}
                             {displayView === "list" && (
                                 <Popover>
                                     <PopoverTrigger asChild>
-                                        <Button variant="outline" size="sm">
+                                        <Button variant="outline" size="sm" className="shrink-0">
                                             <Columns3 className="h-4 w-4 mr-2" />
                                             Columns
                                         </Button>
@@ -1370,6 +1368,7 @@ export default function LeadsPage() {
                             <Button
                                 variant="outline"
                                 size="sm"
+                                className="shrink-0"
                                 onClick={() => setExportModalOpen(true)}
                             >
                                 <Download className="h-4 w-4 mr-2" />
