@@ -75,24 +75,8 @@ import { getConfigAccessStatus } from "@/services/config-access-service"
 import { getConfigUnlockToken } from "@/lib/config-unlock"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getApiErrorMessage } from "@/lib/api-errors"
-
-const COMMON_TIMEZONES = [
-    { value: "America/New_York", label: "Eastern Time (US)" },
-    { value: "America/Chicago", label: "Central Time (US)" },
-    { value: "America/Denver", label: "Mountain Time (US)" },
-    { value: "America/Los_Angeles", label: "Pacific Time (US)" },
-    { value: "America/Phoenix", label: "Arizona (No DST)" },
-    { value: "America/Anchorage", label: "Alaska Time" },
-    { value: "Pacific/Honolulu", label: "Hawaii Time" },
-    { value: "UTC", label: "UTC" },
-    { value: "Europe/London", label: "London (GMT/BST)" },
-    { value: "Europe/Paris", label: "Central European Time" },
-    { value: "Asia/Dubai", label: "Dubai (GST)" },
-    { value: "Asia/Kolkata", label: "India (IST)" },
-    { value: "Asia/Singapore", label: "Singapore (SGT)" },
-    { value: "Asia/Tokyo", label: "Japan (JST)" },
-    { value: "Australia/Sydney", label: "Sydney (AEST/AEDT)" },
-]
+import { TimezonePicker } from "@/components/ui/timezone-picker"
+import { clearDealershipTimezoneCache } from "@/hooks/use-dealership-timezone"
 
 export default function DealershipDetailPage() {
     const params = useParams()
@@ -372,15 +356,25 @@ export default function DealershipDetailPage() {
         }
     }
 
-    // Save timezone
+    // Save timezone (same behavior as dealership-owner Settings → Dealership)
     const handleSaveTimezone = async (timezone: string) => {
         if (!dealership) return
         setIsSaving(true)
         try {
             const updated = await DealershipService.updateDealership(dealership.id, { timezone })
             setDealership(updated)
+            clearDealershipTimezoneCache(dealership.id)
+            toast({
+                title: "Timezone updated",
+                description: `Appointments for this dealership now use ${timezone}.`,
+            })
         } catch (error) {
             console.error("Failed to update timezone:", error)
+            toast({
+                title: "Failed to update timezone",
+                description: getApiErrorMessage(error),
+                variant: "destructive",
+            })
         } finally {
             setIsSaving(false)
         }
@@ -715,34 +709,30 @@ export default function DealershipDetailPage() {
 
                 {/* Settings Tab */}
                 <TabsContent value="settings" className="space-y-6">
-                    {/* Timezone */}
+                    {/* Timezone — same control as Settings → Dealership for owners */}
                     <Card>
                         <CardHeader>
                             <div className="flex items-center gap-2">
                                 <Clock className="h-5 w-5 text-primary" />
-                                <CardTitle>Timezone</CardTitle>
+                                <CardTitle>Timezone Configuration</CardTitle>
                             </div>
                             <CardDescription>
-                                Set the timezone for this dealership for notifications, follow-ups, and appointments.
+                                Set the timezone for this dealership. Appointment and follow-up times use this
+                                setting for every authorized user (owners, sales, BDC, and super admins).
                             </CardDescription>
                         </CardHeader>
-                        <CardContent>
-                            <Select
-                                value={dealership.timezone}
-                                onValueChange={handleSaveTimezone}
+                        <CardContent className="space-y-2">
+                            <Label htmlFor="dealership-timezone">Dealership Timezone</Label>
+                            <TimezonePicker
+                                value={dealership.timezone || "America/New_York"}
+                                onChange={handleSaveTimezone}
                                 disabled={isSaving}
-                            >
-                                <SelectTrigger className="w-full md:w-[300px]">
-                                    <SelectValue placeholder="Select timezone" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {COMMON_TIMEZONES.map((tz) => (
-                                        <SelectItem key={tz.value} value={tz.value}>
-                                            {tz.label}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                                placeholder="Search and select timezone..."
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                This timezone is the single source of truth for this store&apos;s appointment
+                                times across the CRM, guest QR, and share previews.
+                            </p>
                         </CardContent>
                     </Card>
 

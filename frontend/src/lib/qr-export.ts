@@ -1,7 +1,7 @@
 /** Shared helpers for guest QR PNG/PDF export and clipboard copy (matches BDC report naming). */
 
 import { jsPDF } from "jspdf"
-import { parseAsUTC } from "@/utils/timezone"
+import { parseAsUTC, resolveDealershipTimezone } from "@/utils/timezone"
 
 export function sanitizeFilenamePart(text: string, maxLen = 60): string {
     if (!text) return ""
@@ -22,7 +22,9 @@ export function formatAppointmentForFilename(
     try {
         const dt = parseAsUTC(isoDate.trim())
         if (Number.isNaN(dt.getTime())) return "Appointment"
-        const opts: Intl.DateTimeFormatOptions = timezone ? { timeZone: timezone } : {}
+        const opts: Intl.DateTimeFormatOptions = {
+            timeZone: resolveDealershipTimezone(timezone),
+        }
         const weekday = dt.toLocaleDateString("en-US", { ...opts, weekday: "long" })
         const month = dt.toLocaleDateString("en-US", { ...opts, month: "short" })
         const day = Number(dt.toLocaleDateString("en-US", { ...opts, day: "numeric" }))
@@ -43,13 +45,13 @@ export function formatAppointmentLabel(
         const dt = parseAsUTC(isoDate.trim())
         if (Number.isNaN(dt.getTime())) return "Appointment"
         const opts: Intl.DateTimeFormatOptions = {
+            timeZone: resolveDealershipTimezone(timezone),
             weekday: "long",
             month: "short",
             day: "numeric",
             year: "numeric",
             hour: "numeric",
             minute: "2-digit",
-            ...(timezone ? { timeZone: timezone } : {}),
         }
         return dt.toLocaleString("en-US", opts)
     } catch {
@@ -62,7 +64,7 @@ function calendarDayKey(date: Date, timezone?: string | null): string {
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
-        ...(timezone ? { timeZone: timezone } : {}),
+        timeZone: resolveDealershipTimezone(timezone),
     }
     return date.toLocaleDateString("en-CA", opts)
 }
@@ -76,18 +78,19 @@ export function formatAppointmentForWhatsApp(
     try {
         const dt = parseAsUTC(isoDate.trim())
         if (Number.isNaN(dt.getTime())) return "TBD"
-        const opts: Intl.DateTimeFormatOptions = timezone ? { timeZone: timezone } : {}
+        const tz = resolveDealershipTimezone(timezone)
+        const opts: Intl.DateTimeFormatOptions = { timeZone: tz }
         const time = dt.toLocaleTimeString("en-US", {
             ...opts,
             hour: "numeric",
             minute: "2-digit",
         })
-        const apptDay = calendarDayKey(dt, timezone)
-        const today = calendarDayKey(new Date(), timezone)
+        const apptDay = calendarDayKey(dt, tz)
+        const today = calendarDayKey(new Date(), tz)
         if (apptDay === today) return `Today ${time}`
 
         const tomorrowDate = new Date(Date.now() + 86_400_000)
-        if (apptDay === calendarDayKey(tomorrowDate, timezone)) return `Tomorrow ${time}`
+        if (apptDay === calendarDayKey(tomorrowDate, tz)) return `Tomorrow ${time}`
 
         const weekday = dt.toLocaleDateString("en-US", { ...opts, weekday: "short" })
         const month = dt.toLocaleDateString("en-US", { ...opts, month: "short" })

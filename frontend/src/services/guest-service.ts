@@ -92,6 +92,8 @@ export interface GuestPublicProfile {
     dealership_name?: string | null
     dealership_timezone?: string | null
     appointment_at?: string | null
+    /** Pre-formatted in dealership timezone by the API */
+    appointment_label?: string | null
     eligibility?: EligibilityAssessment | null
     documents: GuestDocument[]
 }

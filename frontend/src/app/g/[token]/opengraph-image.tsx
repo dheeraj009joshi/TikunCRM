@@ -1,8 +1,8 @@
 import { ImageResponse } from "next/og"
 import {
     fetchPublicGuest,
-    formatGuestAppointmentLabel,
     guestSharePageUrl,
+    resolveGuestAppointmentLabel,
 } from "@/lib/guest-public"
 import { qrCodeDataUrl } from "@/lib/qr-data-url"
 
@@ -23,10 +23,7 @@ export default async function Image({ params }: ImageProps) {
     const name = profile?.full_name?.trim() || "Guest"
     const dealer = profile?.dealership_name?.trim() || ""
     const appointment =
-        formatGuestAppointmentLabel(
-            profile?.appointment_at,
-            profile?.dealership_timezone
-        ) || "No appointment scheduled"
+        resolveGuestAppointmentLabel(profile) || "No appointment scheduled"
 
     let qrSrc = ""
     try {

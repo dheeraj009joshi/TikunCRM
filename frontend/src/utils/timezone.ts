@@ -78,6 +78,17 @@ export function formatRelativeTime(date: Date | string | null | undefined): stri
 // Keep these for backward compatibility with existing code
 export const DEFAULT_TIMEZONE = "America/New_York";
 
+/**
+ * Resolve a dealership IANA timezone for appointment display.
+ * Uses the dealership setting as-is (including "UTC" if configured).
+ * Only falls back when the value is missing/blank.
+ */
+export function resolveDealershipTimezone(timezone?: string | null): string {
+    const tz = timezone?.trim();
+    if (!tz) return DEFAULT_TIMEZONE;
+    return tz;
+}
+
 export function formatDateInTimezone(
     date: Date | string | null | undefined,
     _timezone?: string,
@@ -123,7 +134,7 @@ export function formatDateInDealershipTimezone(
         
         // Build format options based on what's requested
         const formatOptions: Intl.DateTimeFormatOptions = {
-            timeZone: timezone,
+            timeZone: resolveDealershipTimezone(timezone),
         };
         
         if (options?.dateOnly) {

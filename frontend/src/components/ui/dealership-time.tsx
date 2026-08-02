@@ -6,6 +6,8 @@ import { formatDateInDealershipTimezone, getTimezoneAbbreviation, parseAsUTC } f
 
 interface DealershipTimeProps {
     date: Date | string | null | undefined;
+    /** Appointment/lead dealership — required for super admins without a home dealership */
+    dealershipId?: string | null;
     className?: string;
     showTimezoneAbbr?: boolean;
     dateOnly?: boolean;
@@ -15,17 +17,18 @@ interface DealershipTimeProps {
 /**
  * Displays a date/time in the dealership's configured timezone.
  * Used specifically for appointments which should display in dealership business hours.
- * 
+ *
  * For other timestamps (lead activity, notifications), use LocalTime instead.
  */
-export function DealershipTime({ 
-    date, 
-    className, 
+export function DealershipTime({
+    date,
+    dealershipId,
+    className,
     showTimezoneAbbr = false,
     dateOnly = false,
     timeOnly = false,
 }: DealershipTimeProps) {
-    const { dealershipTimezone, isLoading } = useDealershipTimezone();
+    const { dealershipTimezone, isLoading } = useDealershipTimezone(dealershipId);
     const [formatted, setFormatted] = useState<string>("—");
     const [tzAbbr, setTzAbbr] = useState<string>("");
 
@@ -71,13 +74,14 @@ export function DealershipTime({
 /**
  * Displays only the date portion in dealership timezone.
  */
-export function DealershipDate({ date, className, showTimezoneAbbr }: DealershipTimeProps) {
+export function DealershipDate({ date, dealershipId, className, showTimezoneAbbr }: DealershipTimeProps) {
     return (
-        <DealershipTime 
-            date={date} 
-            className={className} 
+        <DealershipTime
+            date={date}
+            dealershipId={dealershipId}
+            className={className}
             showTimezoneAbbr={showTimezoneAbbr}
-            dateOnly 
+            dateOnly
         />
     );
 }
@@ -85,13 +89,14 @@ export function DealershipDate({ date, className, showTimezoneAbbr }: Dealership
 /**
  * Displays only the time portion in dealership timezone.
  */
-export function DealershipTimeOnly({ date, className, showTimezoneAbbr }: DealershipTimeProps) {
+export function DealershipTimeOnly({ date, dealershipId, className, showTimezoneAbbr }: DealershipTimeProps) {
     return (
-        <DealershipTime 
-            date={date} 
-            className={className} 
+        <DealershipTime
+            date={date}
+            dealershipId={dealershipId}
+            className={className}
             showTimezoneAbbr={showTimezoneAbbr}
-            timeOnly 
+            timeOnly
         />
     );
 }

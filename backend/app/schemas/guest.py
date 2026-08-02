@@ -118,5 +118,7 @@ class GuestPublicResponse(BaseModel):
     dealership_name: Optional[str] = None
     dealership_timezone: Optional[str] = None
     appointment_at: Optional[datetime] = None
+    # Pre-formatted in dealership timezone for OG / WhatsApp (never UTC wall-clock)
+    appointment_label: Optional[str] = None
     eligibility: Optional[AssessmentResponse] = None
     documents: List[GuestDocument] = Field(default_factory=list)

@@ -76,7 +76,7 @@ import {
     FOLLOW_UP_STATUS_INFO,
     FollowUpStats,
 } from "@/services/follow-up-service"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useDealershipTimezone, useDealershipTimezoneMap } from "@/hooks/use-dealership-timezone"
 import { formatDateInDealershipTimezone, formatRelativeTime, getTimezoneAbbreviation } from "@/utils/timezone"
 import { UserAvatar } from "@/components/ui/avatar"
 import { getRoleDisplayName } from "@/hooks/use-role"
@@ -101,9 +101,16 @@ export default function FollowUpsPage() {
     const router = useRouter()
     const searchParams = useSearchParams()
     const { dealershipTimezone } = useDealershipTimezone()
-    const tzAbbr = getTimezoneAbbreviation(dealershipTimezone)
 
     const [followUps, setFollowUps] = React.useState<FollowUp[]>([])
+    const { getTimezone } = useDealershipTimezoneMap(
+        followUps.map((fu) => fu.assigned_to_user?.dealership_id)
+    )
+    const followUpTimezone = React.useCallback(
+        (dealershipId?: string | null) =>
+            dealershipId ? getTimezone(dealershipId) : dealershipTimezone,
+        [getTimezone, dealershipTimezone]
+    )
     const [isLoading, setIsLoading] = React.useState(true)
     const [stats, setStats] = React.useState<FollowUpStats>({ total: 0, pending: 0, overdue: 0, completed: 0 })
 
@@ -714,8 +721,18 @@ export default function FollowUpsPage() {
                                                             <div className="flex items-center gap-1">
                                                                 <Calendar className="h-4 w-4" />
                                                                 <span>
-                                                                    {formatDateInDealershipTimezone(followUp.scheduled_at, dealershipTimezone)}
-                                                                    {tzAbbr && <span className="text-xs ml-1">({tzAbbr})</span>}
+                                                                    {(() => {
+                                                                        const tz = followUpTimezone(
+                                                                            followUp.assigned_to_user?.dealership_id
+                                                                        )
+                                                                        const abbr = getTimezoneAbbreviation(tz)
+                                                                        return (
+                                                                            <>
+                                                                                {formatDateInDealershipTimezone(followUp.scheduled_at, tz)}
+                                                                                {abbr && <span className="text-xs ml-1">({abbr})</span>}
+                                                                            </>
+                                                                        )
+                                                                    })()}
                                                                 </span>
                                                             </div>
                                                             {followUp.assigned_to_user && (

@@ -10,6 +10,29 @@ from sqlalchemy import select
 from app.models.dealership import Dealership
 from app.models.user import User
 
+# Matches frontend DEFAULT_TIMEZONE — used only when dealership has no timezone string
+DEFAULT_DEALERSHIP_TIMEZONE = "America/New_York"
+
+
+def resolve_dealership_timezone(timezone_name: Optional[str]) -> str:
+    """Use dealership.timezone as-is (including UTC). Fallback only when blank."""
+    if not timezone_name or not str(timezone_name).strip():
+        return DEFAULT_DEALERSHIP_TIMEZONE
+    return str(timezone_name).strip()
+
+
+def format_appointment_label(dt: Optional[datetime], timezone_name: Optional[str]) -> Optional[str]:
+    """Human appointment label in dealership TZ, e.g. 'Saturday - Jul 18, 2026 - 3:00 PM'."""
+    if not dt:
+        return None
+    tz = resolve_dealership_timezone(timezone_name)
+    local = convert_to_timezone(dt, tz)
+    hour12 = local.hour % 12 or 12
+    return (
+        f"{local.strftime('%A')} - {local.strftime('%b')} {local.day}, {local.year} "
+        f"- {hour12}:{local.strftime('%M %p')}"
+    )
+
 
 async def get_dealership_timezone(db: AsyncSession, dealership_id: Optional[str]) -> str:
     """

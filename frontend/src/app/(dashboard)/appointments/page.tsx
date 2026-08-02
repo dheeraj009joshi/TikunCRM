@@ -48,7 +48,7 @@ import {
 } from "@/services/appointment-service"
 import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { TeamService, UserBrief } from "@/services/team-service"
-import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
+import { useDealershipTimezone, useDealershipTimezoneMap } from "@/hooks/use-dealership-timezone"
 import { formatDateInDealershipTimezone, getTimezoneAbbreviation } from "@/utils/timezone"
 import { useAuthStore } from "@/stores/auth-store"
 import { useRole } from "@/hooks/use-role"
@@ -849,11 +849,18 @@ const DATE_RANGE_PRESETS: { value: DateRangePreset; label: string }[] = [
 export default function AppointmentsPage() {
     const { user } = useAuthStore()
     const { dealershipTimezone } = useDealershipTimezone()
-    const tzAbbr = getTimezoneAbbreviation(dealershipTimezone)
     const searchParams = useSearchParams()
     const router = useRouter()
 
     const [appointments, setAppointments] = React.useState<Appointment[]>([])
+    const { getTimezone } = useDealershipTimezoneMap(
+        appointments.map((a) => a.dealership_id)
+    )
+    const appointmentTimezone = React.useCallback(
+        (dealershipId?: string | null) =>
+            dealershipId ? getTimezone(dealershipId) : dealershipTimezone,
+        [getTimezone, dealershipTimezone]
+    )
     const [stats, setStats] = React.useState<AppointmentStats | null>(null)
     const [loading, setLoading] = React.useState(true)
     const [page, setPage] = React.useState(1)
@@ -1135,17 +1142,21 @@ export default function AppointmentsPage() {
         }
         
         const headers = ["Title", "Date", "Time", "Status", "Type", "Lead", "Assigned To", "Location", "Notes"]
-        const rows = appointments.map(apt => [
-            apt.title,
-            formatDateInDealershipTimezone(apt.scheduled_at, dealershipTimezone, { dateOnly: true }),
-            formatDateInDealershipTimezone(apt.scheduled_at, dealershipTimezone, { timeOnly: true }) + (tzAbbr ? ` (${tzAbbr})` : ""),
-            getAppointmentStatusLabel(apt.status),
-            getAppointmentTypeLabel(apt.appointment_type),
-            apt.lead ? (apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown") : "-",
-            apt.assigned_to_user ? `${apt.assigned_to_user.first_name} ${apt.assigned_to_user.last_name}` : "-",
-            apt.location || "-",
-            apt.description || "-"
-        ])
+        const rows = appointments.map(apt => {
+            const tz = appointmentTimezone(apt.dealership_id)
+            const abbr = getTimezoneAbbreviation(tz)
+            return [
+                apt.title,
+                formatDateInDealershipTimezone(apt.scheduled_at, tz, { dateOnly: true }),
+                formatDateInDealershipTimezone(apt.scheduled_at, tz, { timeOnly: true }) + (abbr ? ` (${abbr})` : ""),
+                getAppointmentStatusLabel(apt.status),
+                getAppointmentTypeLabel(apt.appointment_type),
+                apt.lead ? (apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown") : "-",
+                apt.assigned_to_user ? `${apt.assigned_to_user.first_name} ${apt.assigned_to_user.last_name}` : "-",
+                apt.location || "-",
+                apt.description || "-"
+            ]
+        })
         
         const csvContent = [
             headers.join(","),
@@ -1230,7 +1241,11 @@ export default function AppointmentsPage() {
                     <tbody>
                         ${appointments.map(apt => `
                             <tr>
-                                <td>${formatDateInDealershipTimezone(apt.scheduled_at, dealershipTimezone)}${tzAbbr ? ` (${tzAbbr})` : ""}</td>
+                                <td>${(() => {
+                                    const tz = appointmentTimezone(apt.dealership_id)
+                                    const abbr = getTimezoneAbbreviation(tz)
+                                    return `${formatDateInDealershipTimezone(apt.scheduled_at, tz)}${abbr ? ` (${abbr})` : ""}`
+                                })()}</td>
                                 <td>${apt.title}</td>
                                 <td>${apt.lead ? (apt.lead.customer?.full_name || `${apt.lead.customer?.first_name || ""} ${apt.lead.customer?.last_name || ""}`.trim() || "Unknown") : "-"}</td>
                                 <td>${apt.assigned_to_user ? `${apt.assigned_to_user.first_name} ${apt.assigned_to_user.last_name}` : "-"}</td>
@@ -1746,8 +1761,16 @@ export default function AppointmentsPage() {
                                                 <div className="flex items-center gap-1">
                                                     <Calendar className="h-4 w-4" />
                                                     <span>
-                                                        {formatDateInDealershipTimezone(appointment.scheduled_at, dealershipTimezone)}
-                                                        {tzAbbr && <span className="text-xs ml-1">({tzAbbr})</span>}
+                                                        {(() => {
+                                                            const tz = appointmentTimezone(appointment.dealership_id)
+                                                            const abbr = getTimezoneAbbreviation(tz)
+                                                            return (
+                                                                <>
+                                                                    {formatDateInDealershipTimezone(appointment.scheduled_at, tz)}
+                                                                    {abbr && <span className="text-xs ml-1">({abbr})</span>}
+                                                                </>
+                                                            )
+                                                        })()}
                                                     </span>
                                                 </div>
                                                 {appointment.assigned_to_user && (

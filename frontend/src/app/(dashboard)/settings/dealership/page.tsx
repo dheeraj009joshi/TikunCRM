@@ -166,7 +166,8 @@ export default function DealershipSettingsPage() {
                         Timezone Configuration
                     </CardTitle>
                     <CardDescription>
-                        Set the timezone for your dealership. All timestamps and notifications will be displayed in this timezone for all users in your dealership.
+                        Set the timezone for your dealership. Appointment and follow-up times use this setting
+                        for every authorized user (owners, sales, BDC, and super admins viewing this store).
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -178,7 +179,8 @@ export default function DealershipSettingsPage() {
                             placeholder="Search and select timezone..."
                         />
                         <p className="text-xs text-muted-foreground">
-                            This timezone will be used for appointment and follow-up times across the CRM for users in this dealership.
+                            This timezone is the single source of truth for this store&apos;s appointment times
+                            across the CRM, guest QR, and share previews.
                         </p>
                     </div>
                     

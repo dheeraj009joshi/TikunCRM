@@ -20,7 +20,7 @@ import {
 } from "lucide-react"
 import { GuestService, type GuestPublicProfile } from "@/services/guest-service"
 import type { AssessmentItemState } from "@/services/eligibility-service"
-import { formatDateInDealershipTimezone } from "@/utils/timezone"
+import { formatDateInDealershipTimezone, resolveDealershipTimezone } from "@/utils/timezone"
 
 function scoreColor(score: number): string {
     if (score >= 70) return "text-emerald-600"
@@ -158,17 +158,14 @@ export function GuestPublicClient({ token }: { token: string }) {
     }
 
     const location = [profile.city, profile.state, profile.postal_code].filter(Boolean).join(", ")
-    const appointmentLabel = profile.appointment_at
-        ? profile.dealership_timezone
+    const appointmentLabel =
+        profile.appointment_label?.trim() ||
+        (profile.appointment_at
             ? formatDateInDealershipTimezone(
                   profile.appointment_at,
-                  profile.dealership_timezone
+                  resolveDealershipTimezone(profile.dealership_timezone)
               )
-            : new Date(profile.appointment_at).toLocaleString(undefined, {
-                  dateStyle: "medium",
-                  timeStyle: "short",
-              })
-        : null
+            : null)
 
     return (
         <div className="min-h-screen bg-gray-50 pb-10">

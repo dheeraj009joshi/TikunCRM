@@ -17,6 +17,7 @@ from app.models.appointment import Appointment
 from app.schemas.guest import GuestPublicResponse
 from app.services.eligibility_service import EligibilityService
 from app.services.guest_service import GuestService
+from app.utils.timezone import format_appointment_label, resolve_dealership_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +47,16 @@ async def get_public_guest(
     # Prefer appointment dealership for name/timezone so OG time matches store hours
     resolved_dealership_id = appt_dealership_id or guest.dealership_id
     dealership_name = None
-    dealership_timezone = None
+    raw_timezone = None
     if resolved_dealership_id:
         dres = await db.execute(select(Dealership).where(Dealership.id == resolved_dealership_id))
         dealership = dres.scalar_one_or_none()
         if dealership:
             dealership_name = dealership.name
-            dealership_timezone = dealership.timezone
+            raw_timezone = dealership.timezone
+
+    dealership_timezone = resolve_dealership_timezone(raw_timezone)
+    appointment_label = format_appointment_label(appointment_at, dealership_timezone)
 
     eligibility = await EligibilityService.build_assessment_payload(
         db, "guest", guest.id, guest.dealership_id
@@ -83,6 +87,7 @@ async def get_public_guest(
         dealership_name=dealership_name,
         dealership_timezone=dealership_timezone,
         appointment_at=appointment_at,
+        appointment_label=appointment_label,
         eligibility=eligibility,
         documents=documents,
     )
