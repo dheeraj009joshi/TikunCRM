@@ -116,6 +116,7 @@ class GuestPublicResponse(BaseModel):
     notes: Optional[str] = None
     status: str
     dealership_name: Optional[str] = None
+    dealership_timezone: Optional[str] = None
     appointment_at: Optional[datetime] = None
     eligibility: Optional[AssessmentResponse] = None
     documents: List[GuestDocument] = Field(default_factory=list)

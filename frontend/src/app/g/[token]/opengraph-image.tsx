@@ -23,7 +23,10 @@ export default async function Image({ params }: ImageProps) {
     const name = profile?.full_name?.trim() || "Guest"
     const dealer = profile?.dealership_name?.trim() || ""
     const appointment =
-        formatGuestAppointmentLabel(profile?.appointment_at) || "No appointment scheduled"
+        formatGuestAppointmentLabel(
+            profile?.appointment_at,
+            profile?.dealership_timezone
+        ) || "No appointment scheduled"
 
     let qrSrc = ""
     try {

@@ -90,6 +90,7 @@ export interface GuestPublicProfile {
     notes?: string | null
     status: GuestStatus
     dealership_name?: string | null
+    dealership_timezone?: string | null
     appointment_at?: string | null
     eligibility?: EligibilityAssessment | null
     documents: GuestDocument[]

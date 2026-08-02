@@ -27,17 +27,25 @@ export async function fetchPublicGuest(token: string): Promise<GuestPublicProfil
     }
 }
 
-/** e.g. Tuesday - Jul 7, 2026 - 5:00 PM */
-export function formatGuestAppointmentLabel(isoDate?: string | null): string | null {
+/** e.g. Tuesday - Jul 7, 2026 - 5:00 PM (dealership timezone when provided) */
+export function formatGuestAppointmentLabel(
+    isoDate?: string | null,
+    timezone?: string | null
+): string | null {
     if (!isoDate?.trim()) return null
     try {
         const dt = parseAsUTC(isoDate.trim())
         if (Number.isNaN(dt.getTime())) return null
-        const weekday = dt.toLocaleDateString("en-US", { weekday: "long" })
-        const month = dt.toLocaleDateString("en-US", { month: "short" })
-        const day = Number(dt.toLocaleDateString("en-US", { day: "numeric" }))
-        const year = Number(dt.toLocaleDateString("en-US", { year: "numeric" }))
-        const time = dt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+        const opts: Intl.DateTimeFormatOptions = timezone ? { timeZone: timezone } : {}
+        const weekday = dt.toLocaleDateString("en-US", { ...opts, weekday: "long" })
+        const month = dt.toLocaleDateString("en-US", { ...opts, month: "short" })
+        const day = Number(dt.toLocaleDateString("en-US", { ...opts, day: "numeric" }))
+        const year = Number(dt.toLocaleDateString("en-US", { ...opts, year: "numeric" }))
+        const time = dt.toLocaleTimeString("en-US", {
+            ...opts,
+            hour: "numeric",
+            minute: "2-digit",
+        })
         return `${weekday} - ${month} ${day}, ${year} - ${time}`
     } catch {
         return null
@@ -50,7 +58,10 @@ export function guestOgTitle(profile: GuestPublicProfile | null): string {
 
 export function guestOgDescription(profile: GuestPublicProfile | null): string {
     if (!profile) return "Guest profile shared via TikunCRM"
-    const appt = formatGuestAppointmentLabel(profile.appointment_at)
+    const appt = formatGuestAppointmentLabel(
+        profile.appointment_at,
+        profile.dealership_timezone
+    )
     const dealer = profile.dealership_name?.trim()
     const parts = [
         appt ? `Appointment: ${appt}` : null,

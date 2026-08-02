@@ -34,17 +34,25 @@ async def get_public_guest(
     if not guest or guest.share_revoked:
         raise HTTPException(status_code=404, detail="Guest profile not found")
 
-    dealership_name = None
-    if guest.dealership_id:
-        dres = await db.execute(select(Dealership).where(Dealership.id == guest.dealership_id))
-        dealership = dres.scalar_one_or_none()
-        dealership_name = dealership.name if dealership else None
-
     appointment_at = None
+    appt_dealership_id = None
     if guest.appointment_id:
         ares = await db.execute(select(Appointment).where(Appointment.id == guest.appointment_id))
         appt = ares.scalar_one_or_none()
-        appointment_at = appt.scheduled_at if appt else None
+        if appt:
+            appointment_at = appt.scheduled_at
+            appt_dealership_id = appt.dealership_id
+
+    # Prefer appointment dealership for name/timezone so OG time matches store hours
+    resolved_dealership_id = appt_dealership_id or guest.dealership_id
+    dealership_name = None
+    dealership_timezone = None
+    if resolved_dealership_id:
+        dres = await db.execute(select(Dealership).where(Dealership.id == resolved_dealership_id))
+        dealership = dres.scalar_one_or_none()
+        if dealership:
+            dealership_name = dealership.name
+            dealership_timezone = dealership.timezone
 
     eligibility = await EligibilityService.build_assessment_payload(
         db, "guest", guest.id, guest.dealership_id
@@ -73,6 +81,7 @@ async def get_public_guest(
         notes=guest.notes,
         status=guest.status,
         dealership_name=dealership_name,
+        dealership_timezone=dealership_timezone,
         appointment_at=appointment_at,
         eligibility=eligibility,
         documents=documents,
