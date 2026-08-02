@@ -924,9 +924,15 @@ class VoiceService:
     def generate_twiml_for_incoming(
         self,
         client_identity: str,
-        record: bool = True
+        record: bool = True,
+        timeout: int = 45,
+        wake_pause_seconds: int = 2,
     ) -> str:
-        """Generate TwiML for incoming call - routes to WebRTC client"""
+        """Generate TwiML for incoming call - routes to WebRTC client.
+
+        A short Pause gives FCM time to wake background tabs so Twilio Device
+        can re-register before Dial starts. Longer timeout covers wake races.
+        """
         from twilio.twiml.voice_response import VoiceResponse, Dial
 
         base = settings.backend_url.rstrip("/")
@@ -935,7 +941,10 @@ class VoiceService:
         recording_url = f"{base}/api/v1/voice/webhook/recording"
 
         response = VoiceResponse()
+        if wake_pause_seconds > 0:
+            response.pause(length=wake_pause_seconds)
         dial = Dial(
+            timeout=timeout,
             record="record-from-answer-dual" if record else "do-not-record",
             action=status_url,
             method="POST",
@@ -981,14 +990,18 @@ class VoiceService:
     def generate_twiml_ring_group(
         self,
         user_identities: List[str],
-        timeout: int = 30,
-        record: bool = True
+        timeout: int = 45,
+        record: bool = True,
+        wake_pause_seconds: int = 2,
     ) -> str:
         """
         Generate TwiML for ring group - rings multiple WebRTC clients simultaneously.
         First person to answer gets the call.
         Per-client statusCallback attributes the answerer (critical for BDC user_id).
         If nobody answers, Dial action (/webhook/status) returns voicemail TwiML.
+
+        Short Pause + longer timeout give background tabs time to wake via FCM
+        and re-register Twilio before Dial times out.
         """
         from twilio.twiml.voice_response import VoiceResponse, Dial
 
@@ -1001,6 +1014,9 @@ class VoiceService:
 
         if not user_identities:
             return self.generate_twiml_voicemail()
+
+        if wake_pause_seconds > 0:
+            response.pause(length=wake_pause_seconds)
 
         dial = Dial(
             timeout=timeout,

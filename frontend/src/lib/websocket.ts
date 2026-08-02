@@ -13,29 +13,52 @@ class WebSocketService {
     private ws: WebSocket | null = null;
     private listeners: Map<string, Set<(data: unknown) => void>> = new Map();
     private reconnectAttempts = 0;
-    private maxReconnectAttempts = 5;
+    /** Soft cap per backoff cycle; resets on successful open / tab visibility. */
+    private maxReconnectAttempts = 20;
     private reconnectDelay = 1000;
+    private maxReconnectDelay = 30_000;
     private userId: string | null = null;
     private token: string | null = null;
     private pingInterval: NodeJS.Timeout | null = null;
+    private pingWorker: Worker | null = null;
+    private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private isConnecting = false;
+    private lifecycleBound = false;
+    private intentionalClose = false;
 
     /**
      * Connect to the WebSocket server
      */
     connect(userId: string, token: string): void {
+        this.userId = userId;
+        this.token = token;
+        this.intentionalClose = false;
+        this.bindLifecycleListeners();
+
         if (this.ws?.readyState === WebSocket.OPEN) {
             console.log("[WS] Already connected");
             return;
         }
 
-        if (this.isConnecting) {
+        if (this.ws?.readyState === WebSocket.CONNECTING || this.isConnecting) {
             console.log("[WS] Connection already in progress");
             return;
         }
 
-        this.userId = userId;
-        this.token = token;
+        // Drop a half-closed socket before opening a new one
+        if (this.ws) {
+            try {
+                this.ws.onopen = null;
+                this.ws.onmessage = null;
+                this.ws.onclose = null;
+                this.ws.onerror = null;
+                this.ws.close();
+            } catch {
+                /* ignore */
+            }
+            this.ws = null;
+        }
+
         this.isConnecting = true;
 
         const wsUrl = this.getWebSocketUrl(token);
@@ -71,9 +94,9 @@ class WebSocketService {
                 this.isConnecting = false;
                 this.stopPingInterval();
                 this.emit("connection:close", { code: event.code, reason: event.reason });
-                
-                // Attempt reconnection if not a clean close
-                if (event.code !== 1000 && event.code !== 4001) {
+
+                // Attempt reconnection if not a clean/auth close
+                if (!this.intentionalClose && event.code !== 1000 && event.code !== 4001) {
                     this.attemptReconnect();
                 }
             };
@@ -104,14 +127,40 @@ class WebSocketService {
      * Disconnect from the WebSocket server
      */
     disconnect(): void {
+        this.intentionalClose = true;
+        this.clearReconnectTimer();
         this.stopPingInterval();
         if (this.ws) {
-            this.ws.close(1000, "Client disconnect");
+            try {
+                this.ws.onopen = null;
+                this.ws.onmessage = null;
+                this.ws.onclose = null;
+                this.ws.onerror = null;
+                this.ws.close(1000, "Client disconnect");
+            } catch {
+                /* ignore */
+            }
             this.ws = null;
         }
         this.userId = null;
         this.token = null;
         this.reconnectAttempts = 0;
+        this.isConnecting = false;
+    }
+
+    /**
+     * Reconnect if the socket is not OPEN (e.g. after tab wake / network restore).
+     * Resets the reconnect budget so background tabs can recover indefinitely.
+     */
+    ensureConnected(): void {
+        if (!this.userId || !this.token) return;
+        if (this.ws?.readyState === WebSocket.OPEN) return;
+        if (this.ws?.readyState === WebSocket.CONNECTING || this.isConnecting) return;
+
+        console.log("[WS] ensureConnected — reconnecting after wake/offline");
+        this.reconnectAttempts = 0;
+        this.clearReconnectTimer();
+        this.connect(this.userId, this.token);
     }
 
     /**
@@ -186,8 +235,10 @@ class WebSocketService {
      * Attempt to reconnect
      */
     private attemptReconnect(): void {
+        if (this.intentionalClose) return;
+
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            console.log("[WS] Max reconnect attempts reached");
+            console.log("[WS] Max reconnect attempts reached — will retry on tab focus/online");
             return;
         }
 
@@ -197,34 +248,90 @@ class WebSocketService {
         }
 
         this.reconnectAttempts++;
-        const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+        const delay = Math.min(
+            this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+            this.maxReconnectDelay
+        );
         console.log(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
-        setTimeout(() => {
-            if (this.userId && this.token) {
+        this.clearReconnectTimer();
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            if (this.userId && this.token && !this.intentionalClose) {
                 this.connect(this.userId, this.token);
             }
         }, delay);
     }
 
+    private clearReconnectTimer(): void {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+    }
+
     /**
-     * Start ping interval to keep connection alive
+     * Start ping interval to keep connection alive.
+     * Prefers a Web Worker so pings are not throttled in background tabs.
      */
     private startPingInterval(): void {
         this.stopPingInterval();
-        this.pingInterval = setInterval(() => {
+
+        const sendPing = () => {
             this.send("ping");
-        }, 30000); // Ping every 30 seconds
+        };
+
+        if (typeof Worker !== "undefined") {
+            try {
+                this.pingWorker = new Worker("/ws-keepalive-worker.js");
+                this.pingWorker.addEventListener("message", (e) => {
+                    if (e.data?.type === "ping") sendPing();
+                });
+                this.pingWorker.postMessage({ type: "start" });
+                return;
+            } catch (e) {
+                console.warn("[WS] Keep-alive Worker failed, falling back to setInterval:", e);
+            }
+        }
+
+        this.pingInterval = setInterval(sendPing, 30000);
     }
 
     /**
      * Stop ping interval
      */
     private stopPingInterval(): void {
+        if (this.pingWorker) {
+            try {
+                this.pingWorker.postMessage({ type: "stop" });
+                this.pingWorker.terminate();
+            } catch {
+                /* ignore */
+            }
+            this.pingWorker = null;
+        }
         if (this.pingInterval) {
             clearInterval(this.pingInterval);
             this.pingInterval = null;
         }
+    }
+
+    /**
+     * Reconnect when the tab wakes or network returns.
+     */
+    private bindLifecycleListeners(): void {
+        if (this.lifecycleBound || typeof window === "undefined") return;
+        this.lifecycleBound = true;
+
+        const onWake = () => {
+            if (document.visibilityState === "visible") {
+                this.ensureConnected();
+            }
+        };
+
+        document.addEventListener("visibilitychange", onWake);
+        window.addEventListener("focus", () => this.ensureConnected());
+        window.addEventListener("online", () => this.ensureConnected());
     }
 
     /**

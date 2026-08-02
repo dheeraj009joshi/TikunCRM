@@ -147,7 +147,7 @@ class PushService:
                     url=url,
                     tag=tag,
                     data=data,
-                    ttl_seconds=35,
+                    ttl_seconds=55,
                 )
             except Exception as e:
                 logger.warning("Incoming-call push failed for user %s: %s", uid, e)

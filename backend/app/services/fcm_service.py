@@ -82,7 +82,7 @@ class FCMService:
         self._load_credentials()
         return self._project_id
 
-        async def send(
+    async def send(
         self,
         token: str,
         title: str,
@@ -128,7 +128,7 @@ class FCMService:
         # FCM v1 message format for web push - DATA ONLY
         # We send data-only messages to force the Service Worker to handle display.
         # This is more reliable across browsers than automatic notification display.
-        
+
         # All data values must be strings (FCM requirement)
         data_payload = {
             "title": title,
@@ -159,7 +159,7 @@ class FCMService:
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
-        
+
         logger.info("FCM sending to token: %s...", token[:50])
         logger.info("FCM message: title=%s, body=%s", title, body[:50] if body else "")
 
@@ -184,7 +184,11 @@ class FCMService:
             # 404 = UNREGISTERED token (user unsubscribed, app uninstalled, token expired)
             # 400 = INVALID_ARGUMENT (malformed token)
             if response.status_code in (404, 400):
-                logger.info("FCM token %s... is invalid/unregistered (%d) - should be removed", token[:20], response.status_code)
+                logger.info(
+                    "FCM token %s... is invalid/unregistered (%d) - should be removed",
+                    token[:20],
+                    response.status_code,
+                )
                 # Raise a specific exception so caller can deactivate immediately
                 raise InvalidFCMTokenError(f"Token is invalid: {response.status_code}")
             return False

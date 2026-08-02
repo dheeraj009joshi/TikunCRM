@@ -64,6 +64,8 @@ class TwilioVoiceManager {
   private tokenRefreshTimer: NodeJS.Timeout | null = null;
   private keepAliveTimer: NodeJS.Timeout | null = null;
   private keepAliveWorker: Worker | null = null;
+  private keepAliveTicks = 0;
+  private reconnectInFlight: Promise<void> | null = null;
   private isInitialized = false;
   private dealershipId: string | null = null;
 
@@ -336,24 +338,89 @@ class TwilioVoiceManager {
   }
 
   /**
-   * Re-register if the browser suspended Twilio while the tab was backgrounded.
-   * Also handles the case where the device got stuck in "registering" state.
+   * Mark device destroyed so the React hook can full re-initialize.
    */
-  async ensureRegistered(): Promise<void> {
+  private markNeedsReinit(reason: string): void {
+    console.warn(`Twilio needs full re-init: ${reason}`);
+    this.stopKeepAlive();
+    if (this.tokenRefreshTimer) {
+      clearTimeout(this.tokenRefreshTimer);
+      this.tokenRefreshTimer = null;
+    }
+    this.device = null;
+    this.isInitialized = false;
+    this.notifyStateChange("offline");
+  }
+
+  /**
+   * Re-register if the browser suspended Twilio while the tab was backgrounded.
+   *
+   * @param force When true, unregister+register even if state is "registered".
+   *   Browsers can kill the Twilio signaling socket without flipping Device state,
+   *   so wake/visibility handlers must force a real reconnect.
+   */
+  async ensureRegistered(force = false): Promise<void> {
+    if (!this.isInitialized && !this.device) return;
+    if (this.reconnectInFlight) {
+      await this.reconnectInFlight;
+      return;
+    }
+
+    this.reconnectInFlight = this.doEnsureRegistered(force);
+    try {
+      await this.reconnectInFlight;
+    } finally {
+      this.reconnectInFlight = null;
+    }
+  }
+
+  private async doEnsureRegistered(force: boolean): Promise<void> {
     if (!this.device || !this.isInitialized) return;
+
+    // Never tear down signaling mid-call / mid-ring
+    if (this.currentCall) {
+      console.log("Twilio ensureRegistered skipped — call in progress");
+      return;
+    }
+
     try {
       const state = this.device.state;
-      if (state === "registered") return;
-      console.log(`Twilio device state="${state}" — attempting re-register`);
-      if (state === "destroyed") {
-        // Cannot re-register a destroyed device; need full re-init
-        this.isInitialized = false;
-        this.callbacks.onStateChange?.("offline");
+      if (state === "destroyed" || state === "destroying") {
+        this.markNeedsReinit(`state=${state}`);
         return;
       }
+
+      if (state === "registered" && !force) {
+        return;
+      }
+
+      console.log(
+        `Twilio device state="${state}" — ${force ? "forcing signaling reconnect" : "re-registering"}`
+      );
+
+      if (force && state === "registered") {
+        try {
+          await this.device.unregister();
+        } catch (e) {
+          console.warn("Twilio unregister during force reconnect failed:", e);
+        }
+      }
+
+      if (this.device.state === "destroyed") {
+        this.markNeedsReinit("destroyed after unregister");
+        return;
+      }
+
       await this.device.register();
+      this.keepAliveTicks = 0;
+      console.log("Twilio device re-registered successfully");
     } catch (e) {
       console.warn("Twilio ensureRegistered failed:", e);
+      // If register keeps failing, request a full re-init from the hook
+      const state = this.device?.state;
+      if (state === "destroyed" || state === "unregistered") {
+        this.markNeedsReinit(`register failed (state=${state})`);
+      }
     }
   }
 
@@ -363,15 +430,31 @@ class TwilioVoiceManager {
    */
   private startKeepAlive(): void {
     this.stopKeepAlive();
+    this.keepAliveTicks = 0;
 
     const doKeepAlive = () => {
       if (!this.device || !this.isInitialized) return;
+      if (this.currentCall) return;
+
       const state = this.device.state;
-      if (state === "unregistered") {
-        console.log("Twilio keep-alive: device unregistered, re-registering...");
-        this.device.register().catch((e) => {
-          console.warn("Twilio keep-alive re-register failed:", e);
-        });
+      if (state === "destroyed" || state === "destroying") {
+        this.markNeedsReinit(`keep-alive saw state=${state}`);
+        return;
+      }
+
+      this.keepAliveTicks += 1;
+      const tabHidden =
+        typeof document !== "undefined" && document.visibilityState === "hidden";
+
+      // While backgrounded, force a real reconnect every ~60s (5 × 12s ticks).
+      // Device often still reports "registered" after the signaling WS dies.
+      const shouldForce = tabHidden && this.keepAliveTicks % 5 === 0;
+
+      if (state === "unregistered" || state === "registering" || shouldForce) {
+        console.log(
+          `Twilio keep-alive: state=${state} hidden=${tabHidden} force=${shouldForce}`
+        );
+        void this.ensureRegistered(shouldForce || state !== "registered");
       }
     };
 

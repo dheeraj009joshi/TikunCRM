@@ -784,13 +784,19 @@ async def handle_incoming_call(
         except Exception as e:
             logger.warning("Incoming-call FCM push failed: %s", e)
     
-    # Generate TwiML — client identity must match voice token (user UUID)
+    # Generate TwiML — client identity must match voice token (user UUID).
+    # Pause + 45s Dial timeout give FCM time to wake background tabs and
+    # re-register Twilio before the client dial expires.
     if users_to_ring:
         user_identities = [service.client_identity_for_user(u) for u in users_to_ring]
         if len(user_identities) == 1:
-            twiml = service.generate_twiml_for_incoming(user_identities[0])
+            twiml = service.generate_twiml_for_incoming(
+                user_identities[0], timeout=45, wake_pause_seconds=2
+            )
         else:
-            twiml = service.generate_twiml_ring_group(user_identities, timeout=30)
+            twiml = service.generate_twiml_ring_group(
+                user_identities, timeout=45, wake_pause_seconds=2
+            )
             logger.info(
                 "Ring group for call %s: %d users (identities=%s)",
                 call_sid,

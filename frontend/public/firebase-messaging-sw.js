@@ -1,13 +1,13 @@
 /**
  * TikunCRM Firebase Messaging Service Worker
- * Version: 2.2 - Wake sleeping tabs for incoming call PiP popup
+ * Version: 2.3 - Force Twilio reconnect on wake; Accept action for pending invites
  * 
  * This service worker handles FCM push notifications.
  * Uses raw 'push' event listener for maximum browser compatibility.
  */
 
 // SW Version for cache busting
-const SW_VERSION = '2.2';
+const SW_VERSION = '2.3';
 
 // Import Firebase scripts (required for getToken() to work)
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js');
@@ -86,10 +86,11 @@ self.addEventListener('push', (event) => {
 
   if (isIncomingCall) {
     options.actions = [
+      { action: 'accept', title: 'Accept' },
       { action: 'open', title: 'Open CRM' },
     ];
 
-    // Wake all CRM tabs so Twilio re-registers before the signaling arrives.
+    // Wake all CRM tabs so Twilio force-reconnects before the signaling arrives.
     // This ensures the floating PiP popup works even if the tab was sleeping.
     event.waitUntil(
       clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
@@ -98,7 +99,7 @@ self.addEventListener('push', (event) => {
             type: 'WAKE_FOR_INCOMING_CALL',
             call_sid: data.call_sid || '',
             lead_id: data.lead_id || '',
-            from: data.from || '',
+            from: data.from_number || data.from || '',
             lead_name: data.lead_name || '',
           });
         }
@@ -113,6 +114,24 @@ self.addEventListener('push', (event) => {
   );
 });
 
+function focusOrOpenClient(url, message) {
+  return clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+    for (const client of clientList) {
+      if (client.url.includes(self.location.origin) && 'focus' in client) {
+        client.focus();
+        client.postMessage(message);
+        return;
+      }
+    }
+    return clients.openWindow(url).then((newClient) => {
+      if (newClient) {
+        // New window may not have listeners yet; SW wake on next push still helps
+        newClient.postMessage(message);
+      }
+    });
+  });
+}
+
 // Handle notification clicks - open the URL from notification data
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
@@ -122,24 +141,18 @@ self.addEventListener('notificationclick', (event) => {
               data.FCM_MSG?.data?.url ||
               '/notifications';
   const isIncomingCall = data.type === 'incoming_call';
+  const action = event.action || 'open';
+
+  const message = {
+    type: action === 'accept' && isIncomingCall
+      ? 'ACCEPT_INCOMING_CALL'
+      : (isIncomingCall ? 'INCOMING_CALL_CLICK' : 'NOTIFICATION_CLICK'),
+    url,
+    call_sid: data.call_sid || '',
+    lead_id: data.lead_id || '',
+  };
   
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      for (const client of clientList) {
-        if (client.url.includes(self.location.origin) && 'focus' in client) {
-          client.focus();
-          client.postMessage({
-            type: isIncomingCall ? 'INCOMING_CALL_CLICK' : 'NOTIFICATION_CLICK',
-            url,
-            call_sid: data.call_sid || '',
-            lead_id: data.lead_id || '',
-          });
-          return;
-        }
-      }
-      return clients.openWindow(url);
-    })
-  );
+  event.waitUntil(focusOrOpenClient(url, message));
 });
 
 // Service worker lifecycle

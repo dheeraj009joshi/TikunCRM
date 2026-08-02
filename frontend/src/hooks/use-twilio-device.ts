@@ -71,6 +71,8 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   const incomingCallRef = useRef<IncomingCallInfo | null>(null);
   const activeCallRef = useRef<CallInfo | null>(null);
   const acceptingRef = useRef(false);
+  const acceptCallRef = useRef<() => void>(() => {});
+  const ignoreCallRef = useRef<() => void>(() => {});
   incomingCallRef.current = incomingCall;
   activeCallRef.current = currentCallInfo;
 
@@ -353,45 +355,69 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   }, [isEnabled, isInitialized, initialize]);
 
   /**
-   * When the tab becomes visible again, re-register Twilio (browsers throttle
-   * background tabs and may drop the Voice signaling connection).
+   * When the tab becomes visible again, force a real Twilio signaling reconnect.
+   * Browsers can drop the Voice WS while Device still reports "registered".
    */
   useEffect(() => {
-    if (!isInitialized) return;
+    if (!isEnabled) return;
 
     const onVisible = () => {
-      if (document.visibilityState === "visible") {
-        void twilioVoiceManager.ensureRegistered();
+      if (document.visibilityState !== "visible") return;
+      if (!twilioVoiceManager.getIsInitialized()) {
+        // Destroyed / offline — hook auto-init effect will rebuild
+        void initialize();
+        return;
       }
+      void twilioVoiceManager.ensureRegistered(true);
     };
 
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
+    window.addEventListener("online", onVisible);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
+      window.removeEventListener("online", onVisible);
     };
-  }, [isInitialized]);
+  }, [isEnabled, initialize]);
 
   /**
    * Handle service worker messages:
-   * - INCOMING_CALL_CLICK / NOTIFICATION_CLICK: focus the tab
-   * - WAKE_FOR_INCOMING_CALL: immediately re-register Twilio so the
-   *   signaling WebSocket is live when the call arrives (handles case
-   *   where the tab was sleeping and the WS dropped silently).
+   * - WAKE_FOR_INCOMING_CALL: force Twilio reconnect before Dial invite arrives
+   * - INCOMING_CALL_CLICK / NOTIFICATION_CLICK: focus tab + reconnect
+   * - ACCEPT_INCOMING_CALL: accept if Twilio invite is already pending
    */
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const data = event.data || {};
 
       if (data.type === "WAKE_FOR_INCOMING_CALL") {
-        console.log("SW woke tab for incoming call — ensuring Twilio is registered");
-        void twilioVoiceManager.ensureRegistered();
+        console.log("SW woke tab for incoming call — forcing Twilio reconnect");
+        if (!twilioVoiceManager.getIsInitialized()) {
+          void initialize();
+        } else {
+          void twilioVoiceManager.ensureRegistered(true);
+        }
+        return;
+      }
+
+      if (data.type === "ACCEPT_INCOMING_CALL") {
+        window.focus();
+        if (incomingCallRef.current && !activeCallRef.current) {
+          // acceptCallRef is kept in sync below; call through it for shared accept logic
+          acceptCallRef.current();
+        } else {
+          void twilioVoiceManager.ensureRegistered(true);
+        }
         return;
       }
 
       if (data.type === "INCOMING_CALL_CLICK" || data.type === "NOTIFICATION_CLICK") {
-        void twilioVoiceManager.ensureRegistered();
+        if (!twilioVoiceManager.getIsInitialized()) {
+          void initialize();
+        } else {
+          void twilioVoiceManager.ensureRegistered(true);
+        }
         window.focus();
         if (typeof data.url === "string" && data.url.startsWith("/") && data.url !== window.location.pathname) {
           try {
@@ -405,23 +431,27 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     };
     navigator.serviceWorker?.addEventListener("message", onMessage);
     return () => navigator.serviceWorker?.removeEventListener("message", onMessage);
-  }, []);
+  }, [initialize]);
 
   /**
-   * Page Lifecycle API: re-register Twilio when the page resumes from
+   * Page Lifecycle API: force reconnect when the page resumes from
    * a frozen/discarded state (aggressive browser power saving).
    */
   useEffect(() => {
-    if (!isInitialized) return;
+    if (!isEnabled) return;
 
     const onResume = () => {
-      console.log("Page resumed from freeze — re-registering Twilio");
-      void twilioVoiceManager.ensureRegistered();
+      console.log("Page resumed from freeze — forcing Twilio reconnect");
+      if (!twilioVoiceManager.getIsInitialized()) {
+        void initialize();
+      } else {
+        void twilioVoiceManager.ensureRegistered(true);
+      }
     };
 
     document.addEventListener("resume", onResume);
     return () => document.removeEventListener("resume", onResume);
-  }, [isInitialized]);
+  }, [isEnabled, initialize]);
 
   /**
    * Cleanup on unmount
@@ -440,9 +470,6 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
    * The floating window stays on top of all other apps even when the CRM
    * tab is in the background — similar to WhatsApp/Telegram desktop.
    */
-  const acceptCallRef = useRef<() => void>(() => {});
-  const ignoreCallRef = useRef<() => void>(() => {});
-
   useEffect(() => {
     if (!incomingCall) {
       dismissIncomingCallPip();
