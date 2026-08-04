@@ -25,5 +25,10 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Run the application with gunicorn for production
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Single worker required: APScheduler (Google Sheets sync, email sync, reminders)
+# runs in-process and only one worker can hold /tmp/tikuncrm_scheduler.lock.
+# Multi-worker without failover leaves auto-sync dead if the leader exits.
+# Scale horizontally with multiple containers + external lock, or use start_prod.sh.
+ENV APP_ENV=production
+ENV BACKGROUND_SCHEDULER_ENABLED=true
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

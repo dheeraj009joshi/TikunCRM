@@ -58,6 +58,26 @@ export interface CallLogListResponse {
   page_size: number;
 }
 
+export interface MissedCallItem {
+  id: string;
+  lead_id: string | null;
+  dealership_id: string | null;
+  from_number: string;
+  to_number: string;
+  status: string;
+  started_at: string;
+  created_at: string;
+  lead_name: string | null;
+  is_seen: boolean;
+  called_back: boolean;
+}
+
+export interface MissedCallsResponse {
+  items: MissedCallItem[];
+  total: number;
+  pending_count: number;
+}
+
 export interface RecordingUrlResponse {
   recording_url: string;
   expires_in: number | null;
@@ -115,6 +135,26 @@ class VoiceService {
   }): Promise<CallLogListResponse> {
     const response = await apiClient.get<CallLogListResponse>("/voice/calls", { params });
     return response.data;
+  }
+
+  /**
+   * Missed inbound calls that still need attention (unseen or not called back)
+   */
+  async listMissedCalls(params?: {
+    page?: number;
+    page_size?: number;
+  }): Promise<MissedCallsResponse> {
+    const response = await apiClient.get<MissedCallsResponse>("/voice/calls/missed", {
+      params,
+    });
+    return response.data;
+  }
+
+  /**
+   * Mark a missed call as seen in the navbar calls tray
+   */
+  async markMissedCallSeen(callId: string): Promise<void> {
+    await apiClient.post(`/voice/calls/${callId}/mark-missed-seen`);
   }
 
   /**

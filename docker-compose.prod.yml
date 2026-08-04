@@ -40,6 +40,8 @@ services:
     container_name: tikuncrm_backend
     restart: always
     environment:
+      - APP_ENV=production
+      - BACKGROUND_SCHEDULER_ENABLED=true
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - SECRET_KEY=${SECRET_KEY}

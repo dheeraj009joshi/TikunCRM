@@ -1,6 +1,7 @@
 """
 TikunCRM - FastAPI Main Application
 """
+import asyncio
 import logging
 import os
 import fcntl
@@ -27,6 +28,8 @@ logger = logging.getLogger(__name__)
 SCHEDULER_LOCK_FILE = Path("/tmp/tikuncrm_scheduler.lock")
 _scheduler_lock_fd = None
 _is_scheduler_worker = False
+_scheduler_failover_task: asyncio.Task | None = None
+SCHEDULER_FAILOVER_INTERVAL_SECONDS = 30
 
 
 def try_acquire_scheduler_lock() -> bool:
@@ -66,13 +69,55 @@ def release_scheduler_lock():
     _is_scheduler_worker = False
 
 
+def _start_scheduler_as_leader() -> bool:
+    """Acquire lock (if needed) and start APScheduler. Returns True if this process is leader."""
+    global _is_scheduler_worker
+    if _is_scheduler_worker:
+        return True
+    if not try_acquire_scheduler_lock():
+        return False
+    try:
+        setup_scheduler()
+        start_scheduler()
+        logger.info("Background scheduler started (this worker is the scheduler leader)")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to start scheduler: {e}")
+        release_scheduler_lock()
+        return False
+
+
+async def _scheduler_failover_loop():
+    """
+    If the scheduler-leader worker dies under multi-worker uvicorn, fcntl releases
+    the lock but surviving workers never retry at startup. Poll and take over.
+    """
+    while True:
+        try:
+            await asyncio.sleep(SCHEDULER_FAILOVER_INTERVAL_SECONDS)
+            if _is_scheduler_worker or not settings.run_background_scheduler:
+                continue
+            if _start_scheduler_as_leader():
+                logger.warning(
+                    "Scheduler failover: this worker took over as leader after lock became free"
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Scheduler failover loop error: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
-    global _is_scheduler_worker
+    global _is_scheduler_worker, _scheduler_failover_task
     
     # Startup
     logger.info(f"Starting {settings.app_name} in {settings.app_env} mode")
+    logger.info(
+        "Background scheduler setting: enabled=%s (BACKGROUND_SCHEDULER_ENABLED)",
+        settings.run_background_scheduler,
+    )
     from app.services.email_notifier import email_notifier
     if email_notifier.is_configured:
         logger.info("System SMTP configured for notification emails")
@@ -86,15 +131,14 @@ async def lifespan(app: FastAPI):
         logger.info(
             "Background scheduler disabled (APP_ENV=development by default; set BACKGROUND_SCHEDULER_ENABLED=true to enable)"
         )
-    elif try_acquire_scheduler_lock():
-        try:
-            setup_scheduler()
-            start_scheduler()
-            logger.info("Background scheduler started (this worker is the scheduler leader)")
-        except Exception as e:
-            logger.error(f"Failed to start scheduler: {e}")
+    elif _start_scheduler_as_leader():
+        pass
     else:
         logger.info("Background scheduler skipped (another worker is the scheduler leader)")
+        _scheduler_failover_task = asyncio.create_task(
+            _scheduler_failover_loop(),
+            name="scheduler-failover",
+        )
 
     # Ensure default lead stages exist (e.g. manager_review for existing deployments)
     try:
@@ -108,6 +152,14 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info(f"Shutting down {settings.app_name}")
+
+    if _scheduler_failover_task and not _scheduler_failover_task.done():
+        _scheduler_failover_task.cancel()
+        try:
+            await _scheduler_failover_task
+        except asyncio.CancelledError:
+            pass
+        _scheduler_failover_task = None
     
     # Stop background scheduler only if this worker is running it
     if _is_scheduler_worker:
@@ -203,7 +255,17 @@ def create_application() -> FastAPI:
     # Health check endpoint
     @app.get("/health", tags=["Health"])
     async def health_check():
-        return {"status": "healthy", "app": settings.app_name}
+        from app.tasks.scheduler import scheduler as apscheduler
+        scheduler_running = bool(
+            _is_scheduler_worker and apscheduler is not None and apscheduler.running
+        )
+        return {
+            "status": "healthy",
+            "app": settings.app_name,
+            "scheduler_enabled": settings.run_background_scheduler,
+            "scheduler_leader": _is_scheduler_worker,
+            "scheduler_running": scheduler_running,
+        }
     
     return app
 

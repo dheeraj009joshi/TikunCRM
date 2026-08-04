@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { format, isToday, isYesterday } from "date-fns";
 import {
   Phone,
@@ -58,7 +59,15 @@ interface CommunicationItem {
 }
 
 export default function UnifiedInboxPage() {
-  const [activeTab, setActiveTab] = useState<"all" | "calls" | "sms" | "whatsapp" | "email">("all");
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const callIdParam = searchParams.get("callId");
+  const initialTab =
+    tabParam === "calls" || tabParam === "sms" || tabParam === "whatsapp" || tabParam === "email"
+      ? tabParam
+      : "all";
+
+  const [activeTab, setActiveTab] = useState<"all" | "calls" | "sms" | "whatsapp" | "email">(initialTab);
   const [loading, setLoading] = useState(true);
   const [voiceConfig, setVoiceConfig] = useState<VoiceConfig | null>(null);
   const [smsConfig, setSmsConfig] = useState<SMSConfig | null>(null);
@@ -135,6 +144,13 @@ export default function UnifiedInboxPage() {
       loadAll();
     }
   }, [voiceConfig, smsConfig, whatsappConfig, loadAll]);
+
+  // Deep-link tab from navbar: /inbox?tab=calls
+  useEffect(() => {
+    if (tabParam === "calls" || tabParam === "sms" || tabParam === "whatsapp" || tabParam === "email") {
+      setActiveTab(tabParam);
+    }
+  }, [tabParam]);
   
   // Build unified list
   const buildUnifiedList = (): CommunicationItem[] => {
@@ -287,6 +303,43 @@ export default function UnifiedInboxPage() {
       console.error("Failed to get recording URL:", err);
     }
   };
+
+  // Deep-link from navbar missed-calls tray: /inbox?tab=calls&callId=…
+  const deepLinkedCallRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!callIdParam || loading) return;
+    if (deepLinkedCallRef.current === callIdParam) return;
+
+    const selectCall = async (call: CallLog) => {
+      deepLinkedCallRef.current = callIdParam;
+      if (!calls.some((c) => c.id === call.id)) {
+        setCalls((prev) => [call, ...prev]);
+      }
+      await handleSelect({
+        id: `call-${call.id}`,
+        type: "call",
+        lead_id: call.lead_id,
+        lead_name: call.lead_name || undefined,
+        direction: call.direction as "inbound" | "outbound",
+        timestamp: call.created_at,
+        preview: `${call.direction === "inbound" ? "Incoming" : "Outgoing"} call`,
+        status: call.status,
+        raw: call,
+      });
+    };
+
+    const existing = calls.find((c) => c.id === callIdParam);
+    if (existing) {
+      void selectCall(existing);
+      return;
+    }
+
+    void voiceService
+      .getCall(callIdParam)
+      .then((call) => selectCall(call))
+      .catch((err) => console.error("Failed to load deep-linked call:", err));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callIdParam, loading, calls]);
   
   const items = buildUnifiedList();
   

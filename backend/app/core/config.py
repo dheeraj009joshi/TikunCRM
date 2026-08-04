@@ -42,8 +42,10 @@ class Settings(BaseSettings):
     app_name: str = "TikunCRM"
     app_env: str = "development"
     debug: bool = True
-    # APScheduler (email sync, sheets sync, reminders, etc.). None = auto: off in development, on otherwise.
-    background_scheduler_enabled: Optional[bool] = True 
+    # APScheduler (email sync, sheets sync, reminders, etc.).
+    # PRODUCTION MUST be true or Google Sheets auto-sync never runs (UI stuck at "1 day ago").
+    # Set BACKGROUND_SCHEDULER_ENABLED=false only to intentionally disable jobs.
+    background_scheduler_enabled: Optional[bool] = True
     
     # Server
     host: str = "0.0.0.0"

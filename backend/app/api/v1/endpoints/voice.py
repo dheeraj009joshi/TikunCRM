@@ -25,7 +25,8 @@ from app.services.dealership_twilio_config_service import (
     get_effective_twilio_config,
     find_dealership_id_by_voice_to,
 )
-from app.core.websocket_manager import ws_manager
+from sqlalchemy.orm.attributes import flag_modified
+from app.core.timezone import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,89 @@ class CallLogListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class MissedCallItem(BaseModel):
+    """Missed inbound call that still needs attention"""
+    id: UUID
+    lead_id: Optional[UUID] = None
+    dealership_id: Optional[UUID] = None
+    from_number: str
+    to_number: str
+    status: str
+    started_at: datetime
+    created_at: datetime
+    lead_name: Optional[str] = None
+    is_seen: bool = False
+    called_back: bool = False
+
+
+class MissedCallsResponse(BaseModel):
+    items: List[MissedCallItem]
+    total: int
+    pending_count: int
+
+
+MISSED_STATUSES = {
+    CallStatus.NO_ANSWER,
+    CallStatus.BUSY,
+    CallStatus.FAILED,
+    CallStatus.CANCELED,
+}
+
+
+def _digits_phone(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return "".join(ch for ch in value if ch.isdigit())
+
+
+def _phones_match(a: Optional[str], b: Optional[str]) -> bool:
+    da, db = _digits_phone(a), _digits_phone(b)
+    if not da or not db:
+        return False
+    return da == db or da[-10:] == db[-10:]
+
+
+def _call_log_to_response(call: CallLog) -> CallLogResponse:
+    return CallLogResponse(
+        id=call.id,
+        lead_id=call.lead_id,
+        user_id=call.user_id,
+        dealership_id=call.dealership_id,
+        twilio_call_sid=call.twilio_call_sid,
+        direction=call.direction.value,
+        from_number=call.from_number,
+        to_number=call.to_number,
+        status=call.status.value,
+        started_at=call.started_at,
+        answered_at=call.answered_at,
+        ended_at=call.ended_at,
+        duration_seconds=call.duration_seconds,
+        recording_url=call.recording_url,
+        notes=call.notes,
+        outcome=call.outcome,
+        created_at=call.created_at,
+        lead_name=call.lead.full_name if call.lead else None,
+        user_name=call.user.full_name if call.user else None,
+    )
+
+
+def _apply_call_access_filter(query, current_user: User):
+    """Restrict call queries by role (salespeople see assigned-lead + own calls)."""
+    if current_user.role == UserRole.SALESPERSON:
+        assigned = select(Lead.id).where(Lead.assigned_to == current_user.id)
+        return query.where(
+            (CallLog.user_id == current_user.id) | (CallLog.lead_id.in_(assigned))
+        )
+    if current_user.role in (
+        UserRole.DEALERSHIP_ADMIN,
+        UserRole.DEALERSHIP_OWNER,
+        UserRole.BDC,
+    ):
+        if current_user.dealership_id:
+            return query.where(CallLog.dealership_id == current_user.dealership_id)
+    return query
 
 
 class UpdateCallNotesRequest(BaseModel):
@@ -290,6 +374,116 @@ async def initiate_call(
         call_sid="connecting",
         status="initiated"
     )
+
+
+@router.get("/calls/missed", response_model=MissedCallsResponse)
+async def list_missed_calls(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=50),
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Missed inbound calls that still need attention:
+    not yet seen in the calls tray, or not yet called back.
+    Badge `pending_count` = unseen OR not called back.
+    """
+    query = (
+        select(CallLog)
+        .where(
+            CallLog.direction == CallDirection.INBOUND,
+            CallLog.status.in_(list(MISSED_STATUSES)),
+        )
+        .options(selectinload(CallLog.lead))
+        .order_by(CallLog.started_at.desc())
+        .limit(200)
+    )
+    query = _apply_call_access_filter(query, current_user)
+    result = await db.execute(query)
+    missed_calls = list(result.scalars().all())
+    if not missed_calls:
+        return MissedCallsResponse(items=[], total=0, pending_count=0)
+
+    # Load recent outbound calls in the same scope to detect callbacks
+    oldest = min(c.started_at for c in missed_calls)
+    outbound_q = (
+        select(CallLog)
+        .where(
+            CallLog.direction == CallDirection.OUTBOUND,
+            CallLog.started_at >= oldest,
+        )
+        .order_by(CallLog.started_at.asc())
+        .limit(500)
+    )
+    outbound_q = _apply_call_access_filter(outbound_q, current_user)
+    outbound_res = await db.execute(outbound_q)
+    outbound_calls = list(outbound_res.scalars().all())
+
+    items: List[MissedCallItem] = []
+    for call in missed_calls:
+        meta = call.meta_data or {}
+        is_seen = bool(meta.get("missed_seen_at"))
+        called_back = False
+        for out in outbound_calls:
+            if out.started_at <= call.started_at:
+                continue
+            if call.lead_id and out.lead_id and out.lead_id == call.lead_id:
+                called_back = True
+                break
+            if _phones_match(out.to_number, call.from_number):
+                called_back = True
+                break
+        # Hide fully handled (seen + called back)
+        if is_seen and called_back:
+            continue
+        items.append(
+            MissedCallItem(
+                id=call.id,
+                lead_id=call.lead_id,
+                dealership_id=call.dealership_id,
+                from_number=call.from_number,
+                to_number=call.to_number,
+                status=call.status.value,
+                started_at=call.started_at,
+                created_at=call.created_at,
+                lead_name=call.lead.full_name if call.lead else None,
+                is_seen=is_seen,
+                called_back=called_back,
+            )
+        )
+
+    pending_count = sum(1 for i in items if (not i.is_seen) or (not i.called_back))
+    total = len(items)
+    offset = (page - 1) * page_size
+    page_items = items[offset : offset + page_size]
+    return MissedCallsResponse(
+        items=page_items,
+        total=total,
+        pending_count=pending_count,
+    )
+
+
+@router.post("/calls/{call_id}/mark-missed-seen")
+async def mark_missed_call_seen(
+    call_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark a missed inbound call as seen in the calls tray."""
+    query = select(CallLog).where(CallLog.id == call_id)
+    query = _apply_call_access_filter(query, current_user)
+    result = await db.execute(query)
+    call = result.scalar_one_or_none()
+    if not call:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+
+    meta = dict(call.meta_data or {})
+    meta["missed_seen_at"] = utc_now().isoformat()
+    meta["missed_seen_by"] = str(current_user.id)
+    call.meta_data = meta
+    flag_modified(call, "meta_data")
+    await db.commit()
+    return {"ok": True, "id": str(call.id)}
 
 
 @router.get("/calls", response_model=CallLogListResponse)

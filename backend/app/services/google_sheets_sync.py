@@ -444,6 +444,13 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
         
         if not rows:
             logger.info(f"No data fetched from source {source.name}")
+            # Still stamp last_synced_at so the UI shows the job ran (vs scheduler dead)
+            async with sync_session_maker() as session:
+                source = await session.merge(source)
+                source.last_synced_at = utc_now()
+                source.last_sync_lead_count = 0
+                source.last_sync_error = "No data from sheet"
+                await session.commit()
             return _empty_sync_result("No data from sheet")
         
         sheet_total_rows = len(rows)
@@ -476,6 +483,10 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                 sheet_valid_leads = len(parsed_leads)
                 if not parsed_leads:
                     logger.info(f"No valid leads to process from source {source.name}")
+                    source.last_synced_at = utc_now()
+                    source.last_sync_lead_count = 0
+                    source.last_sync_error = None
+                    await session.commit()
                     return {
                         "sheet_total_rows": sheet_total_rows,
                         "sheet_valid_leads": 0,

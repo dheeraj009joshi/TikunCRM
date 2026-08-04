@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation"
 import { Command, Menu } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { NotificationBell } from "@/components/layout/notification-bell"
+import { MissedCallsBell } from "@/components/layout/missed-calls-bell"
 import { useSidebarOptional } from "@/contexts/sidebar-context"
 
 const SEGMENT_LABELS: Record<string, string> = {
@@ -118,6 +119,7 @@ export function Header() {
                     <span>K</span>
                 </div>
 
+                <MissedCallsBell />
                 <NotificationBell />
 
                 <div className="mx-1 h-6 w-px bg-border sm:mx-2" />
