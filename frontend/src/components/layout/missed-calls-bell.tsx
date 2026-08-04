@@ -36,7 +36,6 @@ export function MissedCallsBell() {
     const [pendingCount, setPendingCount] = React.useState(0)
     const [isLoading, setIsLoading] = React.useState(false)
     const [isMarkingAll, setIsMarkingAll] = React.useState(false)
-    const unreadCount = items.filter((c) => !c.is_seen).length
 
     const fetchMissed = React.useCallback(async () => {
         setIsLoading(true)
@@ -95,10 +94,9 @@ export function MissedCallsBell() {
         setIsMarkingAll(true)
         try {
             await voiceService.markAllMissedCallsSeen()
-            setItems((prev) => prev.map((c) => ({ ...c, is_seen: true })))
-            const res = await voiceService.listMissedCalls({ page_size: 15 })
-            setItems(res.items)
-            setPendingCount(res.pending_count)
+            // Cleared = seen + no longer needs callback → empty tray / zero badge
+            setItems([])
+            setPendingCount(0)
         } catch (error) {
             console.error("Failed to mark all missed calls seen:", error)
         } finally {
@@ -150,7 +148,7 @@ export function MissedCallsBell() {
             <PopoverContent className="w-80 p-0" align="end" sideOffset={8}>
                 <div className="flex items-center justify-between border-b px-4 py-3">
                     <h3 className="font-semibold">Missed calls</h3>
-                    {unreadCount > 0 ? (
+                    {pendingCount > 0 && (
                         <Button
                             variant="ghost"
                             size="sm"
@@ -165,11 +163,7 @@ export function MissedCallsBell() {
                             )}
                             Mark all read
                         </Button>
-                    ) : pendingCount > 0 ? (
-                        <span className="text-xs text-muted-foreground">
-                            {pendingCount} pending
-                        </span>
-                    ) : null}
+                    )}
                 </div>
 
                 <div className="max-h-[400px] overflow-y-auto">

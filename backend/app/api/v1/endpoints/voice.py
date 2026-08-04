@@ -423,17 +423,19 @@ async def list_missed_calls(
     for call in missed_calls:
         meta = call.meta_data or {}
         is_seen = bool(meta.get("missed_seen_at"))
-        called_back = False
-        for out in outbound_calls:
-            if out.started_at <= call.started_at:
-                continue
-            if call.lead_id and out.lead_id and out.lead_id == call.lead_id:
-                called_back = True
-                break
-            if _phones_match(out.to_number, call.from_number):
-                called_back = True
-                break
-        # Hide fully handled (seen + called back)
+        # User dismissed via "Mark all read" — treat as no longer needing callback
+        called_back = bool(meta.get("missed_callback_cleared_at"))
+        if not called_back:
+            for out in outbound_calls:
+                if out.started_at <= call.started_at:
+                    continue
+                if call.lead_id and out.lead_id and out.lead_id == call.lead_id:
+                    called_back = True
+                    break
+                if _phones_match(out.to_number, call.from_number):
+                    called_back = True
+                    break
+        # Hide fully handled (seen + called back / cleared)
         if is_seen and called_back:
             continue
         items.append(
@@ -468,7 +470,10 @@ async def mark_all_missed_calls_seen(
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Mark all accessible missed inbound calls as seen in the calls tray."""
+    """
+    Clear all accessible missed calls from the tray:
+    mark as seen and treat as no longer needing callback.
+    """
     query = select(CallLog).where(
         CallLog.direction == CallDirection.INBOUND,
         CallLog.status.in_(list(MISSED_STATUSES)),
@@ -481,10 +486,15 @@ async def mark_all_missed_calls_seen(
     marked = 0
     for call in calls:
         meta = dict(call.meta_data or {})
-        if meta.get("missed_seen_at"):
+        already_cleared = bool(meta.get("missed_seen_at")) and bool(
+            meta.get("missed_callback_cleared_at")
+        )
+        if already_cleared:
             continue
-        meta["missed_seen_at"] = now
+        meta["missed_seen_at"] = meta.get("missed_seen_at") or now
         meta["missed_seen_by"] = str(current_user.id)
+        meta["missed_callback_cleared_at"] = now
+        meta["missed_callback_cleared_by"] = str(current_user.id)
         call.meta_data = meta
         flag_modified(call, "meta_data")
         marked += 1

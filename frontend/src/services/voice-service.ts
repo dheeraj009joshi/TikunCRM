@@ -158,7 +158,7 @@ class VoiceService {
   }
 
   /**
-   * Mark all accessible missed calls as seen in the navbar calls tray
+   * Clear all missed calls from the tray (seen + no longer needs callback)
    */
   async markAllMissedCallsSeen(): Promise<{ marked: number }> {
     const response = await apiClient.post<{ ok: boolean; marked: number }>(
