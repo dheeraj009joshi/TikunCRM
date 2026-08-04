@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Phone, PhoneMissed, Loader2, ExternalLink } from "lucide-react"
+import { Phone, PhoneMissed, Loader2, ExternalLink, CheckCheck } from "lucide-react"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useWebSocketEvent, useNotificationEvents } from "@/hooks/use-websocket"
 import { formatRelativeTimeInTimezone } from "@/utils/timezone"
@@ -35,6 +35,8 @@ export function MissedCallsBell() {
     const [items, setItems] = React.useState<MissedCallItem[]>([])
     const [pendingCount, setPendingCount] = React.useState(0)
     const [isLoading, setIsLoading] = React.useState(false)
+    const [isMarkingAll, setIsMarkingAll] = React.useState(false)
+    const unreadCount = items.filter((c) => !c.is_seen).length
 
     const fetchMissed = React.useCallback(async () => {
         setIsLoading(true)
@@ -89,6 +91,21 @@ export function MissedCallsBell() {
         if (open) void fetchMissed()
     }, [open, fetchMissed])
 
+    const handleMarkAllAsRead = async () => {
+        setIsMarkingAll(true)
+        try {
+            await voiceService.markAllMissedCallsSeen()
+            setItems((prev) => prev.map((c) => ({ ...c, is_seen: true })))
+            const res = await voiceService.listMissedCalls({ page_size: 15 })
+            setItems(res.items)
+            setPendingCount(res.pending_count)
+        } catch (error) {
+            console.error("Failed to mark all missed calls seen:", error)
+        } finally {
+            setIsMarkingAll(false)
+        }
+    }
+
     const handleOpenCall = async (call: MissedCallItem) => {
         setOpen(false)
         if (!call.is_seen) {
@@ -133,11 +150,26 @@ export function MissedCallsBell() {
             <PopoverContent className="w-80 p-0" align="end" sideOffset={8}>
                 <div className="flex items-center justify-between border-b px-4 py-3">
                     <h3 className="font-semibold">Missed calls</h3>
-                    {pendingCount > 0 && (
+                    {unreadCount > 0 ? (
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-auto px-2 py-1 text-xs"
+                            onClick={() => void handleMarkAllAsRead()}
+                            disabled={isMarkingAll}
+                        >
+                            {isMarkingAll ? (
+                                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                            ) : (
+                                <CheckCheck className="mr-1 h-3 w-3" />
+                            )}
+                            Mark all read
+                        </Button>
+                    ) : pendingCount > 0 ? (
                         <span className="text-xs text-muted-foreground">
                             {pendingCount} pending
                         </span>
-                    )}
+                    ) : null}
                 </div>
 
                 <div className="max-h-[400px] overflow-y-auto">

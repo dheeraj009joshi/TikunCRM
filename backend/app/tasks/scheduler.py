@@ -1,13 +1,15 @@
 """
 Background task scheduler using APScheduler
 
-Handles periodic background tasks including:
-- IMAP email sync for all users (every 2 minutes)
-- Google Sheets lead sync (every 2 minutes, staggered)
-- Lead auto-assignment on first note (every 2 minutes, staggered)
-- Stale lead unassignment after 72 hours (every hour)
+Active jobs only:
+- Google Sheets lead sync (every 2 minutes)
+- Lead auto-assignment on first note (every 2 minutes)
+- Stale lead unassignment (every hour)
+- Appointment reminders (every 5 minutes)
+- Follow-up reminders (every 15 minutes)
+- Missed appointment detection (every 30 minutes)
 
-Tasks are staggered to prevent overwhelming the database connection pool.
+IMAP email sync and WhatsApp bulk/auto workers are intentionally not scheduled.
 """
 import logging
 from datetime import datetime, timedelta
@@ -15,9 +17,6 @@ from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.triggers.cron import CronTrigger
-
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +28,11 @@ def get_scheduler() -> AsyncIOScheduler:
     """Get the scheduler instance."""
     global scheduler
     if scheduler is None:
-        # Use a thread pool executor with limited workers to prevent blocking
         scheduler = AsyncIOScheduler(
             job_defaults={
-                'coalesce': True,  # Combine multiple missed runs into one
-                'max_instances': 1,  # Only one instance of each job at a time
-                'misfire_grace_time': 30,  # Allow 30s grace period for missed jobs
+                'coalesce': True,
+                'max_instances': 1,
+                'misfire_grace_time': 30,
             }
         )
     return scheduler
@@ -42,30 +40,23 @@ def get_scheduler() -> AsyncIOScheduler:
 
 def setup_scheduler():
     """
-    Set up background task scheduler with all jobs.
+    Set up background task scheduler with lead sync + appointment jobs only.
     Called during application startup.
-    
-    Tasks are staggered to prevent all tasks from running simultaneously
-    and overwhelming the database connection pool.
     """
     scheduler = get_scheduler()
-    
-    # IMAP email sync - runs at :00 and :30 of each minute (every 2 minutes)
-    from app.tasks.email_sync import run_email_sync
-    scheduler.add_job(
-        run_email_sync,
-        trigger=IntervalTrigger(minutes=2),
-        id="email_sync",
-        name="Sync incoming emails from IMAP for all users",
-        replace_existing=True,
-    )
-    
-    # Google Sheets lead sync - async job on the event loop (every 2 minutes).
+
+    # Remove jobs we no longer want (survives replace_existing if ids change across deploys)
+    for obsolete_id in ("email_sync", "whatsapp_bulk_sends", "auto_whatsapp_worker"):
+        if scheduler.get_job(obsolete_id):
+            scheduler.remove_job(obsolete_id)
+            logger.info("Removed obsolete scheduler job: %s", obsolete_id)
+
+    # Google Sheets lead sync - every 2 minutes.
     # Per-source sync_interval_minutes still gates which sheets are actually pulled.
     from app.tasks.google_sheets_sync import run_google_sheets_sync
     scheduler.add_job(
         run_google_sheets_sync,
-        trigger=IntervalTrigger(minutes=2, start_date=datetime.now() + timedelta(seconds=40)),
+        trigger=IntervalTrigger(minutes=2, start_date=datetime.now() + timedelta(seconds=20)),
         id="google_sheets_sync",
         name="Sync leads from Google Sheets",
         replace_existing=True,
@@ -73,18 +64,18 @@ def setup_scheduler():
         coalesce=True,
         misfire_grace_time=120,
     )
-    
-    # Lead auto-assignment - runs every 2 minutes, starting 80 seconds after email sync
+
+    # Lead auto-assignment - every 2 minutes
     from app.tasks.lead_assignment import run_auto_assign_task
     scheduler.add_job(
         run_auto_assign_task,
-        trigger=IntervalTrigger(minutes=2, start_date=datetime.now() + timedelta(seconds=80)),
+        trigger=IntervalTrigger(minutes=2, start_date=datetime.now() + timedelta(seconds=50)),
         id="lead_auto_assign",
         name="Auto-assign leads based on first note",
         replace_existing=True,
     )
-    
-    # Stale lead unassignment - runs every hour to unassign inactive leads
+
+    # Stale lead unassignment - every hour
     from app.tasks.lead_assignment import run_stale_unassign_task
     scheduler.add_job(
         run_stale_unassign_task,
@@ -94,8 +85,8 @@ def setup_scheduler():
         replace_existing=True,
         max_instances=1,
     )
-    
-    # Appointment reminders - runs every 5 minutes to send 1-hour advance reminders
+
+    # Appointment reminders - every 5 minutes
     from app.tasks.reminder_tasks import send_appointment_reminders
     scheduler.add_job(
         send_appointment_reminders,
@@ -105,8 +96,8 @@ def setup_scheduler():
         replace_existing=True,
         max_instances=1,
     )
-    
-    # Follow-up reminders - runs every 15 minutes to send 1-hour advance reminders
+
+    # Follow-up reminders - every 15 minutes
     from app.tasks.reminder_tasks import send_followup_reminders
     scheduler.add_job(
         send_followup_reminders,
@@ -116,8 +107,8 @@ def setup_scheduler():
         replace_existing=True,
         max_instances=1,
     )
-    
-    # Missed appointment detection - runs every 30 minutes
+
+    # Missed appointment detection - every 30 minutes
     from app.tasks.reminder_tasks import detect_missed_appointments
     scheduler.add_job(
         detect_missed_appointments,
@@ -127,39 +118,15 @@ def setup_scheduler():
         replace_existing=True,
         max_instances=1,
     )
-    
-    # WhatsApp bulk send processing - runs every 2 minutes
-    from app.tasks.whatsapp_tasks import run_process_pending_bulk_sends
-    scheduler.add_job(
-        run_process_pending_bulk_sends,
-        trigger=IntervalTrigger(minutes=2, start_date=datetime.now() + timedelta(seconds=100)),
-        id="whatsapp_bulk_sends",
-        name="Process pending WhatsApp bulk sends",
-        replace_existing=True,
-        max_instances=1,
-    )
-    
-    # Auto WhatsApp (Selenium-based) job processing - runs every 30 seconds
-    from app.tasks.auto_whatsapp_worker import run_auto_whatsapp_worker
-    scheduler.add_job(
-        run_auto_whatsapp_worker,
-        trigger=IntervalTrigger(seconds=30, start_date=datetime.now() + timedelta(seconds=15)),
-        id="auto_whatsapp_worker",
-        name="Process Auto WhatsApp bulk send jobs",
-        replace_existing=True,
-        max_instances=1,
-    )
-    
-    logger.info("Background scheduler configured (tasks staggered to prevent blocking):")
-    logger.info("  - IMAP email sync (every 2 minutes, offset: 0s)")
-    logger.info("  - Google Sheets lead sync (every 2 minutes, offset: 40s)")
-    logger.info("  - Lead auto-assignment (every 2 minutes, offset: 80s)")
+
+    logger.info("Background scheduler configured (lead sync + appointments only):")
+    logger.info("  - Google Sheets lead sync (every 2 minutes)")
+    logger.info("  - Lead auto-assignment (every 2 minutes)")
     logger.info("  - Stale lead unassignment (every hour)")
     logger.info("  - Appointment reminders (every 5 minutes)")
     logger.info("  - Follow-up reminders (every 15 minutes)")
     logger.info("  - Missed appointment detection (every 30 minutes)")
-    logger.info("  - WhatsApp bulk sends (every 2 minutes, offset: 100s)")
-    logger.info("  - Auto WhatsApp worker (every 30 seconds, offset: 15s)")
+    logger.info("  - DISABLED: IMAP email sync, WhatsApp bulk, Auto WhatsApp worker")
 
 
 def start_scheduler():

@@ -463,6 +463,37 @@ async def list_missed_calls(
     )
 
 
+@router.post("/calls/missed/mark-all-seen")
+async def mark_all_missed_calls_seen(
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark all accessible missed inbound calls as seen in the calls tray."""
+    query = select(CallLog).where(
+        CallLog.direction == CallDirection.INBOUND,
+        CallLog.status.in_(list(MISSED_STATUSES)),
+    )
+    query = _apply_call_access_filter(query, current_user)
+    result = await db.execute(query)
+    calls = list(result.scalars().all())
+
+    now = utc_now().isoformat()
+    marked = 0
+    for call in calls:
+        meta = dict(call.meta_data or {})
+        if meta.get("missed_seen_at"):
+            continue
+        meta["missed_seen_at"] = now
+        meta["missed_seen_by"] = str(current_user.id)
+        call.meta_data = meta
+        flag_modified(call, "meta_data")
+        marked += 1
+
+    if marked:
+        await db.commit()
+    return {"ok": True, "marked": marked}
+
+
 @router.post("/calls/{call_id}/mark-missed-seen")
 async def mark_missed_call_seen(
     call_id: UUID,

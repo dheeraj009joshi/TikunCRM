@@ -158,6 +158,16 @@ class VoiceService {
   }
 
   /**
+   * Mark all accessible missed calls as seen in the navbar calls tray
+   */
+  async markAllMissedCallsSeen(): Promise<{ marked: number }> {
+    const response = await apiClient.post<{ ok: boolean; marked: number }>(
+      "/voice/calls/missed/mark-all-seen"
+    );
+    return { marked: response.data.marked };
+  }
+
+  /**
    * Get a specific call log
    */
   async getCall(callId: string): Promise<CallLog> {
