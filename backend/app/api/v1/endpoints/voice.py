@@ -1066,6 +1066,13 @@ async def handle_outgoing_call(
     call_sid = form_data.get("CallSid", "")
     to_number = (form_data.get("To") or "").strip()
     from_identity = form_data.get("From", "")
+    lead_id_raw = (form_data.get("lead_id") or "").strip()
+    lead_id = None
+    if lead_id_raw:
+        try:
+            lead_id = UUID(lead_id_raw)
+        except ValueError:
+            logger.warning("Outgoing webhook invalid lead_id=%r", lead_id_raw)
 
     logger.info(f"Outgoing call webhook: {call_sid} to {to_number!r} from {from_identity!r}")
 
@@ -1082,6 +1089,7 @@ async def handle_outgoing_call(
             call_sid=call_sid,
             from_identity=from_identity,
             to_number=to_number,
+            lead_id=lead_id,
         )
         if not call_log:
             logger.warning("Outgoing webhook: could not create call log (unknown user)")
@@ -1129,16 +1137,19 @@ async def handle_call_status(
         logger.exception("Status webhook failed to parse form: %s", e)
         return Response(content=empty_twiml, media_type="application/xml")
 
-    # CallSid is the parent call (the leg we have in call_log). Dial action sends DialCallStatus/DialCallDuration.
+    # CallSid is usually the parent call (the leg we have in call_log).
+    # Dial action sends DialCallStatus/DialCallDuration; ParentCallSid may appear on child legs.
     call_sid = form_data.get("CallSid", "")
+    parent_call_sid = form_data.get("ParentCallSid", "")
     call_status = form_data.get("DialCallStatus") or form_data.get("CallStatus", "")
     call_duration = form_data.get("DialCallDuration") or form_data.get("CallDuration", "")
     # Called contains the client identity that answered (e.g., "client:user@email.com")
     called_identity = form_data.get("Called", "")
 
     logger.info(
-        "Call status webhook: CallSid=%s DialCallStatus=%s CallStatus=%s duration=%s Called=%s",
+        "Call status webhook: CallSid=%s ParentCallSid=%s DialCallStatus=%s CallStatus=%s duration=%s Called=%s",
         call_sid,
+        parent_call_sid,
         form_data.get("DialCallStatus"),
         form_data.get("CallStatus"),
         call_duration,
@@ -1147,6 +1158,7 @@ async def handle_call_status(
 
     status_map = {
         "queued": CallStatus.INITIATED,
+        "initiated": CallStatus.INITIATED,
         "ringing": CallStatus.RINGING,
         "in-progress": CallStatus.IN_PROGRESS,
         "completed": CallStatus.COMPLETED,
@@ -1170,7 +1182,8 @@ async def handle_call_status(
         call_log = await service.update_call_status(
             call_sid=call_sid,
             status=status,
-            duration=duration
+            duration=duration,
+            parent_call_sid=parent_call_sid or None,
         )
 
         if call_log:
@@ -1205,8 +1218,14 @@ async def handle_call_status(
                         call_log, answered_by_user, auto_assign=True
                     )
             
-            # Log activity for completed calls
-            if status in [CallStatus.COMPLETED, CallStatus.BUSY, CallStatus.NO_ANSWER, CallStatus.FAILED]:
+            # Log activity for completed / missed / canceled calls
+            if status in [
+                CallStatus.COMPLETED,
+                CallStatus.BUSY,
+                CallStatus.NO_ANSWER,
+                CallStatus.FAILED,
+                CallStatus.CANCELED,
+            ]:
                 await service.log_call_activity(call_log)
                 
                 # Send WebSocket event for unknown caller needing lead details
@@ -1482,6 +1501,8 @@ async def handle_recording_complete(
         call_log.recording_url = f"{recording_url}.wav" if recording_url else None
         call_log.recording_sid = recording_sid
         call_log.recording_duration_seconds = duration
+        # If status webhook never finalized (stuck at initiated), complete + timeline from recording
+        await service.finalize_call_from_recording(call_log, duration)
         await db.commit()
         
         # Broadcast recording availability for real-time timeline updates
@@ -1501,6 +1522,23 @@ async def handle_recording_complete(
                 )
             except Exception as e:
                 logger.warning("call:recording_ready broadcast failed: %s", e)
+
+            # Notify lead timeline clients that a call activity exists/updated
+            try:
+                await ws_manager.broadcast_to_dealership(
+                    str(call_log.dealership_id),
+                    {
+                        "type": "call:completed",
+                        "payload": {
+                            "call_log_id": str(call_log.id),
+                            "lead_id": str(call_log.lead_id),
+                            "status": call_log.status.value,
+                            "duration_seconds": call_log.duration_seconds,
+                        },
+                    },
+                )
+            except Exception as e:
+                logger.warning("call:completed broadcast failed: %s", e)
     
     # Queue background task for downloading from Twilio and uploading to Azure
     # This runs outside the request context with its own DB session

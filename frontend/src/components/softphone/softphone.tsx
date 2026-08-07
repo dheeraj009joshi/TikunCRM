@@ -218,6 +218,7 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
           call={incomingCall}
           onAccept={acceptCall}
           onIgnore={ignoreCall}
+          isCallWaiting={isOnCall}
         />
 
         <LeadDetailsModal
@@ -354,6 +355,7 @@ export function Softphone({ className, leadPhone, leadId, leadName, asButton }: 
         call={incomingCall}
         onAccept={acceptCall}
         onIgnore={ignoreCall}
+        isCallWaiting={isOnCall}
       />
 
       {/* Lead details modal for unknown callers */}

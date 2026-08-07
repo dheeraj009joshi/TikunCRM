@@ -113,7 +113,7 @@ import { GuestFormModal } from "@/components/guests/guest-form-modal"
 import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal, getLinkableAppointmentsForCheckIn } from "@/services/appointment-service"
 import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
 import { StipsService, StipsCategory, StipDocument } from "@/services/stips-service"
-import { useLeadUpdateEvents, useActivityEvents } from "@/hooks/use-websocket"
+import { useLeadUpdateEvents, useActivityEvents, useWebSocketEvent } from "@/hooks/use-websocket"
 import { LocalTime } from "@/components/ui/local-time"
 import { DealershipTime } from "@/components/ui/dealership-time"
 import { format } from "date-fns"
@@ -1819,6 +1819,28 @@ export default function LeadDetailsPage() {
     }, [leadId, fetchActivities, fetchLead])
     
     useActivityEvents(leadId, handleNewActivity)
+
+    // Refresh timeline when a call completes / recording lands (CallLog may finalize after status)
+    useWebSocketEvent(
+        "call:completed",
+        React.useCallback(
+            (data: { lead_id?: string }) => {
+                if (data?.lead_id === leadId) fetchActivities()
+            },
+            [leadId, fetchActivities]
+        ),
+        [leadId, fetchActivities]
+    )
+    useWebSocketEvent(
+        "call:recording_ready",
+        React.useCallback(
+            (data: { lead_id?: string }) => {
+                if (data?.lead_id === leadId) fetchActivities()
+            },
+            [leadId, fetchActivities]
+        ),
+        [leadId, fetchActivities]
+    )
 
     const onStatusSelect = (newStatus: string) => {
         if (!lead) return

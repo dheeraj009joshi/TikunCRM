@@ -559,17 +559,42 @@ class VoiceService:
         status: CallStatus,
         duration: Optional[int] = None,
         answered_at: Optional[datetime] = None,
-        ended_at: Optional[datetime] = None
+        ended_at: Optional[datetime] = None,
+        parent_call_sid: Optional[str] = None,
     ) -> Optional[CallLog]:
-        """Update call status from Twilio webhook"""
-        result = await self.db.execute(
-            select(CallLog).where(CallLog.twilio_call_sid == call_sid)
+        """Update call status from Twilio webhook (CallSid or ParentCallSid)."""
+        call_log = await self.get_call_log_by_sid(
+            call_sid=call_sid or None,
+            parent_call_sid=parent_call_sid or None,
         )
-        call_log = result.scalar_one_or_none()
 
         if not call_log:
-            logger.warning(f"Call log not found for SID: {call_sid}")
+            logger.warning(
+                "Call log not found for SID: call_sid=%s parent=%s",
+                call_sid,
+                parent_call_sid,
+            )
             return None
+
+        # Don't regress a terminal status back to initiated/ringing from late/parent callbacks
+        terminal = {
+            CallStatus.COMPLETED,
+            CallStatus.BUSY,
+            CallStatus.NO_ANSWER,
+            CallStatus.FAILED,
+            CallStatus.CANCELED,
+        }
+        if call_log.status in terminal and status not in terminal:
+            logger.info(
+                "Ignoring non-terminal status %s for call %s (already %s)",
+                status.value,
+                call_log.twilio_call_sid,
+                call_log.status.value,
+            )
+            if duration is not None and (call_log.duration_seconds or 0) == 0:
+                call_log.duration_seconds = duration
+                await self.db.flush()
+            return call_log
 
         call_log.status = status
         
@@ -583,11 +608,16 @@ class VoiceService:
         
         if ended_at:
             call_log.ended_at = ended_at
-        elif status in [CallStatus.COMPLETED, CallStatus.BUSY, CallStatus.NO_ANSWER, CallStatus.FAILED, CallStatus.CANCELED]:
+        elif status in terminal:
             call_log.ended_at = utc_now()
         
         await self.db.flush()
-        logger.info(f"Updated call {call_sid} status to {status.value}")
+        logger.info(
+            "Updated call %s status to %s (duration=%s)",
+            call_log.twilio_call_sid,
+            status.value,
+            call_log.duration_seconds,
+        )
         
         return call_log
     
@@ -624,6 +654,43 @@ class VoiceService:
         except Exception as e:
             logger.error(f"Failed to process recording for call {call_sid}: {e}")
             return None
+
+    async def finalize_call_from_recording(
+        self,
+        call_log: CallLog,
+        recording_duration: int,
+    ) -> CallLog:
+        """
+        When a recording arrives but status never reached a terminal state
+        (common softphone/Dial race), mark completed and ensure timeline activity.
+        """
+        terminal = {
+            CallStatus.COMPLETED,
+            CallStatus.BUSY,
+            CallStatus.NO_ANSWER,
+            CallStatus.FAILED,
+            CallStatus.CANCELED,
+        }
+        if call_log.status not in terminal:
+            call_log.status = CallStatus.COMPLETED
+            if not call_log.ended_at:
+                call_log.ended_at = utc_now()
+            if not call_log.answered_at and recording_duration > 0:
+                call_log.answered_at = call_log.started_at or utc_now()
+            logger.info(
+                "Finalized call %s to completed from recording (was non-terminal)",
+                call_log.id,
+            )
+
+        if (call_log.duration_seconds or 0) == 0 and recording_duration > 0:
+            call_log.duration_seconds = recording_duration
+
+        await self.db.flush()
+
+        if not call_log.activity_logged:
+            await self.log_call_activity(call_log)
+
+        return call_log
     
     async def log_call_activity(self, call_log: CallLog) -> None:
         """Create an Activity record for a completed call"""
@@ -753,6 +820,13 @@ class VoiceService:
             activity.meta_data = meta
             await self.db.flush()
             logger.info(f"Updated activity with recording for call_log {call_log_id}")
+        elif call_log and not call_log.activity_logged:
+            # Status webhook missed — still put the call on the lead timeline
+            if recording_duration_seconds is not None:
+                await self.finalize_call_from_recording(call_log, recording_duration_seconds)
+            else:
+                await self.log_call_activity(call_log)
+            logger.info(f"Created CALL_LOGGED activity from recording for call_log {call_log_id}")
         else:
             logger.debug(f"No CALL_LOGGED activity found for call_log_id {call_log_id}")
             await self.db.flush()
@@ -865,6 +939,7 @@ class VoiceService:
         call_sid: str,
         from_identity: str,
         to_number: str,
+        lead_id: Optional[UUID] = None,
     ) -> Tuple[Optional[CallLog], Optional[EffectiveTwilioConfig]]:
         """
         Create call_log with real Twilio CallSid when outgoing webhook runs.
@@ -873,7 +948,12 @@ class VoiceService:
         user = await self.get_user_by_identity(from_identity)
         if not user:
             return None, None
-        lead = await self.find_lead_by_phone(to_number)
+        lead = None
+        if lead_id:
+            lead_result = await self.db.execute(select(Lead).where(Lead.id == lead_id))
+            lead = lead_result.scalar_one_or_none()
+        if not lead:
+            lead = await self.find_lead_by_phone(to_number)
         dealership_id = await self.resolve_voice_dealership_id(user, lead=lead)
         effective = await get_effective_twilio_config(self.db, dealership_id)
         caller_num = effective.voice_caller_id_number or effective.sms_from_number
@@ -888,7 +968,12 @@ class VoiceService:
             dealership_id=dealership_id,
             status=CallStatus.INITIATED,
         )
-        logger.info(f"Created call_log {call_log.id} for outgoing call {call_sid} (no pending found)")
+        logger.info(
+            "Created call_log %s for outgoing call %s (lead_id=%s)",
+            call_log.id,
+            call_sid,
+            call_log.lead_id,
+        )
         return call_log, effective
 
     def generate_twiml_for_outbound(

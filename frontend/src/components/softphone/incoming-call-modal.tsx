@@ -10,9 +10,16 @@ interface IncomingCallModalProps {
   onAccept: () => void;
   /** Stop ringing on this device only — does not hang up for other agents. */
   onIgnore: () => void;
+  /** True when agent is already on another call (call waiting). */
+  isCallWaiting?: boolean;
 }
 
-export function IncomingCallModal({ call, onAccept, onIgnore }: IncomingCallModalProps) {
+export function IncomingCallModal({
+  call,
+  onAccept,
+  onIgnore,
+  isCallWaiting = false,
+}: IncomingCallModalProps) {
   const open = !!call;
 
   return (
@@ -40,7 +47,9 @@ export function IncomingCallModal({ call, onAccept, onIgnore }: IncomingCallModa
           onIgnore();
         }}
       >
-        <DialogTitle className="sr-only">Incoming Call</DialogTitle>
+        <DialogTitle className="sr-only">
+          {isCallWaiting ? "Call Waiting" : "Incoming Call"}
+        </DialogTitle>
 
         {/* Explicit close — more reliable than relying only on the default Dialog X */}
         <Button
@@ -69,10 +78,12 @@ export function IncomingCallModal({ call, onAccept, onIgnore }: IncomingCallModa
           <p className="text-muted-foreground mb-6">{call?.from}</p>
 
           <p className="text-sm text-muted-foreground mb-2 animate-pulse">
-            Incoming call...
+            {isCallWaiting ? "Call waiting..." : "Incoming call..."}
           </p>
           <p className="text-xs text-muted-foreground mb-8 text-center max-w-xs">
-            Ignore or X only stops ringing for you. Others keep ringing until someone answers.
+            {isCallWaiting
+              ? "Accept ends your current call and answers this one. Ignore keeps you on your current call."
+              : "Ignore or X only stops ringing for you. Others keep ringing until someone answers."}
           </p>
 
           <div className="flex gap-8">
@@ -98,7 +109,9 @@ export function IncomingCallModal({ call, onAccept, onIgnore }: IncomingCallModa
               >
                 <Phone className="h-7 w-7" />
               </Button>
-              <span className="mt-2 text-sm text-muted-foreground">Accept</span>
+              <span className="mt-2 text-sm text-muted-foreground">
+                {isCallWaiting ? "Switch" : "Accept"}
+              </span>
             </div>
           </div>
         </div>

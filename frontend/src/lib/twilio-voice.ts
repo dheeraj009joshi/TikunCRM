@@ -59,7 +59,10 @@ export type TwilioEventCallback = {
 
 class TwilioVoiceManager {
   private device: TwilioDevice | null = null;
+  /** Active connected (or ringing-only when not busy) call */
   private currentCall: TwilioCall | null = null;
+  /** Second inbound while already on a call (call waiting) */
+  private pendingIncomingCall: TwilioCall | null = null;
   private callbacks: TwilioEventCallback = {};
   private tokenRefreshTimer: NodeJS.Timeout | null = null;
   private keepAliveTimer: NodeJS.Timeout | null = null;
@@ -157,6 +160,18 @@ class TwilioVoiceManager {
         leadName: twilioCall.customParameters.get("lead_name"),
       };
 
+      const activeConnected =
+        this.currentCall &&
+        ["open", "connecting", "ringing"].includes(this.currentCall.status());
+
+      if (activeConnected && this.currentCall?.status() === "open") {
+        // Already talking — keep active call; queue this as call-waiting
+        this.pendingIncomingCall = twilioCall;
+        this.setupCallListeners(twilioCall);
+        this.callbacks.onIncomingCall?.(twilioCall, info);
+        return;
+      }
+
       this.currentCall = twilioCall;
       this.setupCallListeners(twilioCall);
       this.notifyStateChange("busy");
@@ -188,23 +203,44 @@ class TwilioVoiceManager {
 
     call.on("disconnect", () => {
       console.log("Call disconnected");
-      this.currentCall = null;
-      this.notifyStateChange("ready");
-      this.callbacks.onCallDisconnected?.(call);
+      if (this.pendingIncomingCall === call) {
+        this.pendingIncomingCall = null;
+        this.callbacks.onCallDisconnected?.(call);
+        return;
+      }
+      if (this.currentCall === call) {
+        this.currentCall = null;
+        this.notifyStateChange(this.pendingIncomingCall ? "busy" : "ready");
+        this.callbacks.onCallDisconnected?.(call);
+      }
     });
 
     call.on("cancel", () => {
       console.log("Call cancelled");
-      this.currentCall = null;
-      this.notifyStateChange("ready");
-      this.callbacks.onCallDisconnected?.(call);
+      if (this.pendingIncomingCall === call) {
+        this.pendingIncomingCall = null;
+        this.callbacks.onCallDisconnected?.(call);
+        return;
+      }
+      if (this.currentCall === call) {
+        this.currentCall = null;
+        this.notifyStateChange(this.pendingIncomingCall ? "busy" : "ready");
+        this.callbacks.onCallDisconnected?.(call);
+      }
     });
 
     call.on("reject", () => {
       console.log("Call rejected");
-      this.currentCall = null;
-      this.notifyStateChange("ready");
-      this.callbacks.onCallDisconnected?.(call);
+      if (this.pendingIncomingCall === call) {
+        this.pendingIncomingCall = null;
+        this.callbacks.onCallDisconnected?.(call);
+        return;
+      }
+      if (this.currentCall === call) {
+        this.currentCall = null;
+        this.notifyStateChange(this.pendingIncomingCall ? "busy" : "ready");
+        this.callbacks.onCallDisconnected?.(call);
+      }
     });
 
     call.on("error", (err: unknown) => {
@@ -248,9 +284,27 @@ class TwilioVoiceManager {
   }
 
   /**
-   * Accept an incoming call
+   * Accept an incoming call.
+   * If already on an active call, puts the first on mute/hold and accepts the waiting leg.
    */
   acceptCall(): void {
+    if (this.pendingIncomingCall) {
+      const waiting = this.pendingIncomingCall;
+      this.pendingIncomingCall = null;
+      // Hold current conversation so the waiting call can be answered
+      if (this.currentCall && this.currentCall.status() === "open") {
+        try {
+          this.currentCall.mute(true);
+          this.currentCall.disconnect();
+        } catch (e) {
+          console.warn("Failed to end previous call before accepting waiting:", e);
+        }
+      }
+      this.currentCall = waiting;
+      waiting.accept();
+      this.notifyStateChange("busy");
+      return;
+    }
     if (this.currentCall) {
       this.currentCall.accept();
     }
@@ -259,9 +313,19 @@ class TwilioVoiceManager {
   /**
    * Ignore an incoming call on this device only.
    * Does not hang up for the caller or other ring-group agents.
+   * Prefer pending (call-waiting) over the active connected call.
    */
   ignoreCall(): void {
-    if (this.currentCall) {
+    if (this.pendingIncomingCall) {
+      try {
+        this.pendingIncomingCall.ignore();
+      } catch (e) {
+        console.warn("Failed to ignore waiting call:", e);
+      }
+      this.pendingIncomingCall = null;
+      return;
+    }
+    if (this.currentCall && this.currentCall.status() !== "open") {
       try {
         this.currentCall.ignore();
       } catch (e) {
@@ -277,6 +341,11 @@ class TwilioVoiceManager {
    * Prefer ignoreCall() for ring groups so other agents can still answer.
    */
   rejectCall(): void {
+    if (this.pendingIncomingCall) {
+      this.pendingIncomingCall.reject();
+      this.pendingIncomingCall = null;
+      return;
+    }
     if (this.currentCall) {
       this.currentCall.reject();
       this.currentCall = null;
@@ -291,8 +360,22 @@ class TwilioVoiceManager {
     if (this.currentCall) {
       this.currentCall.disconnect();
       this.currentCall = null;
-      this.notifyStateChange("ready");
+      this.notifyStateChange(this.pendingIncomingCall ? "busy" : "ready");
     }
+  }
+
+  /**
+   * Whether a second inbound is waiting while on an active call
+   */
+  hasPendingIncoming(): boolean {
+    return this.pendingIncomingCall !== null;
+  }
+
+  /**
+   * True if any call is active or ringing on this device
+   */
+  isOnAnyCall(): boolean {
+    return this.currentCall !== null || this.pendingIncomingCall !== null;
   }
 
   /**
@@ -327,7 +410,7 @@ class TwilioVoiceManager {
    * Check if currently on a call
    */
   isOnCall(): boolean {
-    return this.currentCall !== null;
+    return this.currentCall !== null || this.pendingIncomingCall !== null;
   }
 
   /**
@@ -378,7 +461,7 @@ class TwilioVoiceManager {
     if (!this.device || !this.isInitialized) return;
 
     // Never tear down signaling mid-call / mid-ring
-    if (this.currentCall) {
+    if (this.currentCall || this.pendingIncomingCall) {
       console.log("Twilio ensureRegistered skipped — call in progress");
       return;
     }
@@ -434,7 +517,7 @@ class TwilioVoiceManager {
 
     const doKeepAlive = () => {
       if (!this.device || !this.isInitialized) return;
-      if (this.currentCall) return;
+      if (this.currentCall || this.pendingIncomingCall) return;
 
       const state = this.device.state;
       if (state === "destroyed" || state === "destroying") {
@@ -540,6 +623,15 @@ class TwilioVoiceManager {
     }
 
     this.stopKeepAlive();
+
+    if (this.pendingIncomingCall) {
+      try {
+        this.pendingIncomingCall.ignore();
+      } catch {
+        /* noop */
+      }
+      this.pendingIncomingCall = null;
+    }
 
     if (this.currentCall) {
       this.currentCall.disconnect();

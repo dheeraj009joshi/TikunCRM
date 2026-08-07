@@ -261,23 +261,23 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
           }
         },
         onIncomingCall: (call, info) => {
-          // If already on an active call, auto-ignore this new incoming call
-          if (activeCallRef.current) {
-            try { twilioVoiceManager.ignoreCall(); } catch { /* noop */ }
-            return;
-          }
+          // Allow call-waiting: second inbound while on a call still shows the modal
           setIncomingCall(info);
-          // Ringing is not an active connected call — keep Accept/Ignore modal only
-          setIsOnCall(false);
+          if (!activeCallRef.current) {
+            setIsOnCall(false);
+          }
           startIncomingRingtone();
           if (typeof document !== "undefined" && document.hidden && Notification.permission === "granted") {
             try {
-              const n = new Notification("Incoming Call", {
-                body: `Call from ${info.leadName || info.from}`,
-                icon: "/icon.svg",
-                tag: `incoming-call-${info.callSid || "ring"}`,
-                requireInteraction: true,
-              });
+              const n = new Notification(
+                activeCallRef.current ? "Call Waiting" : "Incoming Call",
+                {
+                  body: `Call from ${info.leadName || info.from}`,
+                  icon: "/icon.svg",
+                  tag: `incoming-call-${info.callSid || "ring"}`,
+                  requireInteraction: true,
+                }
+              );
               n.onclick = () => {
                 window.focus();
                 n.close();
@@ -300,17 +300,29 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
         },
         onCallDisconnected: (call) => {
           acceptingRef.current = false;
+          // Waiting leg cancelled — clear modal but keep active call UI
+          if (twilioVoiceManager.hasPendingIncoming()) {
+            // Another call still pending; disconnect was for a different leg
+          }
+          const stillOnCall = !!twilioVoiceManager.getCurrentCall() &&
+            twilioVoiceManager.getCurrentCall()?.status() === "open";
+          if (stillOnCall) {
+            // Active call remains; only clear waiting UI if that leg ended
+            if (incomingCallRef.current) {
+              setIncomingCall(null);
+              stopIncomingRingtone();
+              dismissIncomingCallPip();
+            }
+            return;
+          }
           stopIncomingRingtone();
           dismissIncomingCallPip();
           if (activeCallRef.current) {
-            // Was on an active connected call that ended
             setCurrentCallInfo(null);
             setIsMuted(false);
             stopDurationTimer();
             setIsOnCall(false);
           } else if (incomingCallRef.current) {
-            // Was still ringing (never accepted) — Twilio cancelled the leg
-            // because someone else answered or the caller hung up
             setIncomingCall(null);
             setIsOnCall(false);
           }
@@ -554,9 +566,11 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       });
       setIncomingCall(null);
       setIsOnCall(true);
+      stopDurationTimer();
+      startDurationTimer();
       twilioVoiceManager.acceptCall();
     }
-  }, [incomingCall]);
+  }, [incomingCall, stopDurationTimer, startDurationTimer]);
 
   /**
    * Ignore incoming call on this device only (other agents keep ringing).
