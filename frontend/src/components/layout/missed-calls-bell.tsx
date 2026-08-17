@@ -76,7 +76,7 @@ export function MissedCallsBell() {
 
     useNotificationEvents(
         React.useCallback((notification: { notification_type?: string; type?: string }) => {
-            const t = notification.notification_type || notification.type
+            const t = String(notification.notification_type || notification.type || "").toLowerCase()
             if (t === "missed_call" || t === "voicemail") {
                 void voiceService
                     .listMissedCalls({ page_size: 1 })

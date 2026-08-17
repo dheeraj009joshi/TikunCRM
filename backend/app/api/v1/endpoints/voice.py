@@ -27,8 +27,19 @@ from app.services.dealership_twilio_config_service import (
 )
 from sqlalchemy.orm.attributes import flag_modified
 from app.core.timezone import utc_now
+from app.core.websocket_manager import ws_manager
 
 logger = logging.getLogger(__name__)
+
+# Always-valid TwiML so Twilio never plays "An application error has occurred"
+_FALLBACK_VOICEMAIL_TWIML = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    "<Response>"
+    "<Say>Sorry, no one is available to take your call. Please leave a message after the beep.</Say>"
+    "<Record maxLength=\"120\" playBeep=\"true\" timeout=\"5\"/>"
+    "<Hangup/>"
+    "</Response>"
+)
 
 router = APIRouter()
 
@@ -934,115 +945,136 @@ async def handle_incoming_call(
     to_number = form_data.get("To", "")
     
     logger.info(f"Incoming call webhook: {call_sid} from {from_number} to {to_number}")
-    
-    service = get_voice_service(db)
-    
-    # Try to find the lead by phone number
-    lead = await service.find_lead_by_phone(from_number)
-    is_unknown_caller = lead is None
-    requires_lead_details = False
-    
-    dealership_id = lead.dealership_id if lead else None
-    dealership_from_to = await find_dealership_id_by_voice_to(db, to_number)
-    if dealership_from_to:
-        dealership_id = dealership_id or dealership_from_to
 
-    if is_unknown_caller and not dealership_id:
-        from app.models.dealership import Dealership
-        result = await db.execute(select(Dealership).limit(1))
-        dealership = result.scalar_one_or_none()
-        if dealership:
-            dealership_id = dealership.id
-    
-    # For unknown callers, create minimal lead
-    if is_unknown_caller and dealership_id:
-        lead, customer = await service.create_minimal_lead_for_unknown_caller(
-            phone=from_number,
-            dealership_id=dealership_id
-        )
-        requires_lead_details = True
-        logger.info(f"Created minimal lead {lead.id} for unknown caller {from_number}")
-    
-    # Find users to ring (ring group)
-    users_to_ring, _ = await service.find_users_for_incoming_call(lead, dealership_id)
-    
-    # Create call log
-    call_log = await service.create_call_log(
-        twilio_call_sid=call_sid,
-        direction=CallDirection.INBOUND,
-        from_number=from_number,
-        to_number=to_number,
-        user_id=users_to_ring[0].id if len(users_to_ring) == 1 else None,  # Only set if single user
-        lead_id=lead.id if lead else None,
-        customer_id=lead.customer_id if lead else None,
-        dealership_id=dealership_id or (users_to_ring[0].dealership_id if users_to_ring else None),
-        status=CallStatus.RINGING
-    )
-    
-    # Set requires_lead_details flag for unknown callers
-    if requires_lead_details:
-        call_log.requires_lead_details = True
-    
-    await db.commit()
-    
-    # Real-time WS + FCM push so agents still get alerted when the CRM tab is backgrounded
-    lead_name = lead.full_name if lead else None
-    for user in users_to_ring:
-        await ws_manager.send_to_user(
-            str(user.id),
-            {
-                "type": "call:incoming",
-                "payload": {
-                    "call_log_id": str(call_log.id),
-                    "call_sid": call_sid,
-                    "from_number": from_number,
-                    "lead_id": str(lead.id) if lead else None,
-                    "lead_name": lead_name,
-                    "is_ring_group": len(users_to_ring) > 1,
-                }
-            }
+    try:
+        service = get_voice_service(db)
+
+        # Try to find the lead by phone number
+        lead = await service.find_lead_by_phone(from_number)
+        is_unknown_caller = lead is None
+        requires_lead_details = False
+
+        dealership_id = lead.dealership_id if lead else None
+        dealership_from_to = await find_dealership_id_by_voice_to(db, to_number)
+        if dealership_from_to:
+            dealership_id = dealership_id or dealership_from_to
+
+        if is_unknown_caller and not dealership_id:
+            from app.models.dealership import Dealership
+            result = await db.execute(select(Dealership).limit(1))
+            dealership = result.scalar_one_or_none()
+            if dealership:
+                dealership_id = dealership.id
+
+        # For unknown callers, create minimal lead
+        if is_unknown_caller and dealership_id:
+            lead, customer = await service.create_minimal_lead_for_unknown_caller(
+                phone=from_number,
+                dealership_id=dealership_id
+            )
+            requires_lead_details = True
+            logger.info(f"Created minimal lead {lead.id} for unknown caller {from_number}")
+
+        # Find users to ring (ring group)
+        users_to_ring, _ = await service.find_users_for_incoming_call(lead, dealership_id)
+
+        # Create call log
+        call_log = await service.create_call_log(
+            twilio_call_sid=call_sid,
+            direction=CallDirection.INBOUND,
+            from_number=from_number,
+            to_number=to_number,
+            user_id=users_to_ring[0].id if len(users_to_ring) == 1 else None,  # Only set if single user
+            lead_id=lead.id if lead else None,
+            customer_id=lead.customer_id if lead else None,
+            dealership_id=dealership_id or (users_to_ring[0].dealership_id if users_to_ring else None),
+            status=CallStatus.RINGING
         )
 
-    if users_to_ring:
+        # Set requires_lead_details flag for unknown callers
+        if requires_lead_details:
+            call_log.requires_lead_details = True
+
+        await db.commit()
+
+        # Safe name lookup — do not touch lead.full_name (async lazy-load of customer crashes)
+        lead_name = None
+        if lead:
+            try:
+                lead_name = await service._call_lead_display_name(lead.id)
+            except Exception:
+                lead_name = None
+
+        # Real-time WS + FCM must never fail the TwiML response
         try:
-            from app.services.push_service import push_service
-
-            await push_service.notify_incoming_call(
-                db,
-                [u.id for u in users_to_ring],
-                from_number=from_number,
-                lead_name=lead_name,
-                lead_id=lead.id if lead else None,
-                call_sid=call_sid,
-                call_log_id=call_log.id,
-            )
+            for user in users_to_ring:
+                await ws_manager.send_to_user(
+                    str(user.id),
+                    {
+                        "type": "call:incoming",
+                        "payload": {
+                            "call_log_id": str(call_log.id),
+                            "call_sid": call_sid,
+                            "from_number": from_number,
+                            "lead_id": str(lead.id) if lead else None,
+                            "lead_name": lead_name,
+                            "is_ring_group": len(users_to_ring) > 1,
+                        }
+                    }
+                )
         except Exception as e:
-            logger.warning("Incoming-call FCM push failed: %s", e)
-    
-    # Generate TwiML — client identity must match voice token (user UUID).
-    # Pause + 45s Dial timeout give FCM time to wake background tabs and
-    # re-register Twilio before the client dial expires.
-    if users_to_ring:
-        user_identities = [service.client_identity_for_user(u) for u in users_to_ring]
-        if len(user_identities) == 1:
-            twiml = service.generate_twiml_for_incoming(
-                user_identities[0], timeout=45, wake_pause_seconds=2
-            )
+            logger.warning("Incoming-call WebSocket notify failed: %s", e)
+
+        if users_to_ring:
+            try:
+                from app.services.push_service import push_service
+
+                await push_service.notify_incoming_call(
+                    db,
+                    [u.id for u in users_to_ring],
+                    from_number=from_number,
+                    lead_name=lead_name,
+                    lead_id=lead.id if lead else None,
+                    call_sid=call_sid,
+                    call_log_id=call_log.id,
+                )
+            except Exception as e:
+                logger.warning("Incoming-call FCM push failed: %s", e)
+
+        # Generate TwiML — client identity must match voice token (user UUID).
+        # Pause + 45s Dial timeout give FCM time to wake background tabs and
+        # re-register Twilio before the client dial expires.
+        if users_to_ring:
+            user_identities = [service.client_identity_for_user(u) for u in users_to_ring]
+            if len(user_identities) == 1:
+                twiml = service.generate_twiml_for_incoming(
+                    user_identities[0], timeout=45, wake_pause_seconds=2
+                )
+            else:
+                twiml = service.generate_twiml_ring_group(
+                    user_identities, timeout=45, wake_pause_seconds=2
+                )
+                logger.info(
+                    "Ring group for call %s: %d users (identities=%s)",
+                    call_sid,
+                    len(users_to_ring),
+                    [u.email for u in users_to_ring],
+                )
         else:
-            twiml = service.generate_twiml_ring_group(
-                user_identities, timeout=45, wake_pause_seconds=2
-            )
-            logger.info(
-                "Ring group for call %s: %d users (identities=%s)",
-                call_sid,
-                len(users_to_ring),
-                [u.email for u in users_to_ring],
-            )
-    else:
-        # No users available - go to voicemail
-        twiml = service.generate_twiml_voicemail()
-    
-    return Response(content=twiml, media_type="application/xml")
+            twiml = service.generate_twiml_voicemail()
+
+        return Response(content=twiml, media_type="application/xml")
+    except Exception as e:
+        logger.exception("Incoming call webhook failed for CallSid=%s: %s", call_sid, e)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        try:
+            twiml = get_voice_service(db).generate_twiml_voicemail()
+        except Exception:
+            twiml = _FALLBACK_VOICEMAIL_TWIML
+        return Response(content=twiml, media_type="application/xml")
 
 
 @router.post("/webhook/outgoing")

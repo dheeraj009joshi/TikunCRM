@@ -20,7 +20,7 @@ from app.services.dealership_twilio_config_service import (
 )
 from app.core.permissions import UserRole
 from app.models.call_log import CallLog, CallDirection, CallStatus
-from app.models.lead import Lead
+from app.models.lead import Lead, LeadSource
 from app.services.lead_stage_service import LeadStageService
 from app.models.customer import Customer
 from app.models.user import User
@@ -293,7 +293,7 @@ class VoiceService:
         lead = Lead(
             customer_id=customer.id,
             dealership_id=dealership_id,
-            source="inbound_call",
+            source=LeadSource.MANUAL,
             stage_id=default_stage.id,
         )
         self.db.add(lead)
@@ -773,16 +773,21 @@ class VoiceService:
         )
         call_log = call_result.scalar_one_or_none()
 
-        # Voicemail = recording left after inbound no-answer / busy / failed
+        # Voicemail = inbound recording after a miss. Parent CallStatus often
+        # becomes "completed" after Record, so also honor outcome="missed".
         is_voicemail = bool(
             call_log
             and call_log.direction == CallDirection.INBOUND
-            and call_log.status in {
-                CallStatus.NO_ANSWER,
-                CallStatus.BUSY,
-                CallStatus.FAILED,
-                CallStatus.CANCELED,
-            }
+            and not call_log.answered_by
+            and (
+                call_log.status in {
+                    CallStatus.NO_ANSWER,
+                    CallStatus.BUSY,
+                    CallStatus.FAILED,
+                    CallStatus.CANCELED,
+                }
+                or (call_log.outcome or "") in {"missed", "voicemail"}
+            )
         )
         if call_log and is_voicemail:
             call_log.outcome = "voicemail"
@@ -853,6 +858,8 @@ class VoiceService:
         """Notify dealership + BDC that an inbound ring group timed out."""
         if not call_log.dealership_id:
             return
+        if not call_log.answered_by and (call_log.outcome or "") not in {"voicemail"}:
+            call_log.outcome = "missed"
         try:
             from app.services.notification_service import NotificationService
 
