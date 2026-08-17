@@ -41,6 +41,69 @@ _FALLBACK_VOICEMAIL_TWIML = (
     "</Response>"
 )
 
+async def _notify_incoming_ring_background(
+    user_ids: List[str],
+    from_number: str,
+    lead_name: Optional[str],
+    lead_id: Optional[str],
+    call_sid: str,
+    call_log_id: str,
+) -> None:
+    """FCM + WS after TwiML is already returned — must not block Twilio (15s)."""
+    from app.db.database import async_session_maker
+    from app.services.push_service import push_service
+
+    try:
+        for uid in user_ids:
+            await ws_manager.send_to_user(
+                uid,
+                {
+                    "type": "call:incoming",
+                    "payload": {
+                        "call_log_id": call_log_id,
+                        "call_sid": call_sid,
+                        "from_number": from_number,
+                        "lead_id": lead_id,
+                        "lead_name": lead_name,
+                        "is_ring_group": len(user_ids) > 1,
+                    },
+                },
+            )
+    except Exception as e:
+        logger.warning("Incoming-call WebSocket notify failed: %s", e)
+
+    try:
+        async with async_session_maker() as db:
+            await push_service.notify_incoming_call(
+                db,
+                [UUID(uid) for uid in user_ids],
+                from_number=from_number,
+                lead_name=lead_name,
+                lead_id=UUID(lead_id) if lead_id else None,
+                call_sid=call_sid,
+                call_log_id=UUID(call_log_id),
+            )
+    except Exception as e:
+        logger.warning("Incoming-call FCM push failed: %s", e)
+
+
+async def _notify_missed_inbound_background(call_log_id: str) -> None:
+    """Missed-call email/push after Dial-action TwiML is already returned."""
+    from app.db.database import async_session_maker
+
+    try:
+        async with async_session_maker() as db:
+            service = get_voice_service(db)
+            result = await db.execute(select(CallLog).where(CallLog.id == UUID(call_log_id)))
+            call_log = result.scalar_one_or_none()
+            if not call_log:
+                return
+            await service.notify_missed_inbound_call(call_log)
+            await db.commit()
+    except Exception as e:
+        logger.warning("Background missed-call notify failed for %s: %s", call_log_id, e)
+
+
 router = APIRouter()
 
 
@@ -927,6 +990,7 @@ async def stream_recording(
 @router.post("/webhook/incoming", response_class=PlainTextResponse)
 async def handle_incoming_call(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -978,26 +1042,26 @@ async def handle_incoming_call(
         # Find users to ring (ring group)
         users_to_ring, _ = await service.find_users_for_incoming_call(lead, dealership_id)
 
-        # Create call log
-        call_log = await service.create_call_log(
-            twilio_call_sid=call_sid,
-            direction=CallDirection.INBOUND,
-            from_number=from_number,
-            to_number=to_number,
-            user_id=users_to_ring[0].id if len(users_to_ring) == 1 else None,  # Only set if single user
-            lead_id=lead.id if lead else None,
-            customer_id=lead.customer_id if lead else None,
-            dealership_id=dealership_id or (users_to_ring[0].dealership_id if users_to_ring else None),
-            status=CallStatus.RINGING
-        )
+        # Create call log (Twilio retries reuse the same CallSid)
+        call_log = await service.get_call_by_sid(call_sid) if call_sid else None
+        if not call_log:
+            call_log = await service.create_call_log(
+                twilio_call_sid=call_sid,
+                direction=CallDirection.INBOUND,
+                from_number=from_number,
+                to_number=to_number,
+                user_id=users_to_ring[0].id if len(users_to_ring) == 1 else None,
+                lead_id=lead.id if lead else None,
+                customer_id=lead.customer_id if lead else None,
+                dealership_id=dealership_id or (users_to_ring[0].dealership_id if users_to_ring else None),
+                status=CallStatus.RINGING
+            )
 
-        # Set requires_lead_details flag for unknown callers
         if requires_lead_details:
             call_log.requires_lead_details = True
 
         await db.commit()
 
-        # Safe name lookup — do not touch lead.full_name (async lazy-load of customer crashes)
         lead_name = None
         if lead:
             try:
@@ -1005,54 +1069,27 @@ async def handle_incoming_call(
             except Exception:
                 lead_name = None
 
-        # Real-time WS + FCM must never fail the TwiML response
-        try:
-            for user in users_to_ring:
-                await ws_manager.send_to_user(
-                    str(user.id),
-                    {
-                        "type": "call:incoming",
-                        "payload": {
-                            "call_log_id": str(call_log.id),
-                            "call_sid": call_sid,
-                            "from_number": from_number,
-                            "lead_id": str(lead.id) if lead else None,
-                            "lead_name": lead_name,
-                            "is_ring_group": len(users_to_ring) > 1,
-                        }
-                    }
-                )
-        except Exception as e:
-            logger.warning("Incoming-call WebSocket notify failed: %s", e)
-
+        # Notify AFTER TwiML is returned — FCM/email here used to exceed Twilio's 15s limit
         if users_to_ring:
-            try:
-                from app.services.push_service import push_service
+            background_tasks.add_task(
+                _notify_incoming_ring_background,
+                [str(u.id) for u in users_to_ring],
+                from_number,
+                lead_name,
+                str(lead.id) if lead else None,
+                call_sid,
+                str(call_log.id),
+            )
 
-                await push_service.notify_incoming_call(
-                    db,
-                    [u.id for u in users_to_ring],
-                    from_number=from_number,
-                    lead_name=lead_name,
-                    lead_id=lead.id if lead else None,
-                    call_sid=call_sid,
-                    call_log_id=call_log.id,
-                )
-            except Exception as e:
-                logger.warning("Incoming-call FCM push failed: %s", e)
-
-        # Generate TwiML — client identity must match voice token (user UUID).
-        # Pause + 45s Dial timeout give FCM time to wake background tabs and
-        # re-register Twilio before the client dial expires.
         if users_to_ring:
             user_identities = [service.client_identity_for_user(u) for u in users_to_ring]
             if len(user_identities) == 1:
                 twiml = service.generate_twiml_for_incoming(
-                    user_identities[0], timeout=45, wake_pause_seconds=2
+                    user_identities[0], timeout=45, wake_pause_seconds=1
                 )
             else:
                 twiml = service.generate_twiml_ring_group(
-                    user_identities, timeout=45, wake_pause_seconds=2
+                    user_identities, timeout=45, wake_pause_seconds=1
                 )
                 logger.info(
                     "Ring group for call %s: %d users (identities=%s)",
@@ -1148,6 +1185,7 @@ async def handle_outgoing_call(
 @router.post("/webhook/status")
 async def handle_call_status(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -1303,14 +1341,15 @@ async def handle_call_status(
                     except Exception as e:
                         logger.warning("call:completed broadcast failed: %s", e)
 
-            # Missed inbound ring-group → in-app + push (before commit; voicemail notify comes later)
+            # Missed inbound — stamp outcome now; email/push AFTER TwiML (Twilio 15s limit)
             dial_status_for_notify = (form_data.get("DialCallStatus") or "").lower()
             if (
                 is_inbound_call
                 and dial_status_for_notify in {"no-answer", "busy", "failed", "canceled"}
             ):
-                await service.notify_missed_inbound_call(call_log)
-                # Dial finished without an answer — dismiss remaining incoming modals
+                if not call_log.answered_by and (call_log.outcome or "") not in {"voicemail"}:
+                    call_log.outcome = "missed"
+                background_tasks.add_task(_notify_missed_inbound_background, str(call_log.id))
                 if call_log.dealership_id:
                     try:
                         await ws_manager.broadcast_to_dealership(

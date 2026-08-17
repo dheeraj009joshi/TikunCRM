@@ -160,12 +160,26 @@ class TwilioVoiceManager {
         leadName: twilioCall.customParameters.get("lead_name"),
       };
 
-      const activeConnected =
-        this.currentCall &&
-        ["open", "connecting", "ringing"].includes(this.currentCall.status());
+      const currentStatus = this.currentCall?.status();
+      const currentSid = this.currentCall?.parameters?.CallSid;
+      const incomingSid = twilioCall.parameters.CallSid;
 
-      if (activeConnected && this.currentCall?.status() === "open") {
-        // Already talking — keep active call; queue this as call-waiting
+      // Duplicate invite for the same Twilio call — ignore
+      if (this.currentCall && currentSid && incomingSid && currentSid === incomingSid) {
+        console.log("Ignoring duplicate incoming invite", incomingSid);
+        return;
+      }
+
+      // Already talking — keep active call; queue this as call-waiting
+      if (this.currentCall && currentStatus === "open") {
+        this.pendingIncomingCall = twilioCall;
+        this.setupCallListeners(twilioCall);
+        this.callbacks.onIncomingCall?.(twilioCall, info);
+        return;
+      }
+
+      // Already ringing another call — do not replace (that dropped the first invite)
+      if (this.currentCall && currentStatus && ["connecting", "ringing", "pending"].includes(currentStatus)) {
         this.pendingIncomingCall = twilioCall;
         this.setupCallListeners(twilioCall);
         this.callbacks.onIncomingCall?.(twilioCall, info);

@@ -404,11 +404,16 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       const data = event.data || {};
 
       if (data.type === "WAKE_FOR_INCOMING_CALL") {
-        console.log("SW woke tab for incoming call — forcing Twilio reconnect");
+        // Do not force unregister+register — that drops a live Dial invite
+        // (one ring, then Twilio plays "application error").
+        if (twilioVoiceManager.isOnAnyCall()) {
+          console.log("SW wake skipped — already ringing/on a call");
+          return;
+        }
         if (!twilioVoiceManager.getIsInitialized()) {
           void initialize();
         } else {
-          void twilioVoiceManager.ensureRegistered(true);
+          void twilioVoiceManager.ensureRegistered(false);
         }
         return;
       }
