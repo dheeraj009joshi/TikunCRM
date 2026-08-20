@@ -36,7 +36,6 @@ import {
     Target,
     Send,
     QrCode,
-    Bot,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -77,15 +76,10 @@ const allSidebarItems: SidebarItem[] = [
         icon: LayoutDashboard, 
         href: "/dashboard" 
     },
-    { 
+    {
         name: "Leads", 
         icon: Inbox, 
         href: "/leads" 
-    },
-    {
-        name: "Tikun AI",
-        icon: Bot,
-        href: "/assistant",
     },
     {
         name: "Customers",

@@ -12,6 +12,8 @@ import { WebSocketProvider } from "@/components/providers/websocket-provider"
 import { SidebarProvider, useSidebarOptional } from "@/contexts/sidebar-context"
 import { BdcDealershipProvider } from "@/contexts/bdc-dealership-context"
 import { CallLeadProvider, useCallLeadOptional } from "@/contexts/call-lead-context"
+import { AiCopilotProvider } from "@/contexts/ai-copilot-context"
+import { AiCopilotPanel } from "@/components/ai/ai-copilot-panel"
 import { Softphone } from "@/components/softphone"
 import { FcmRegistrar } from "@/components/providers/fcm-registrar"
 import { useAuthStore } from "@/stores/auth-store"
@@ -63,14 +65,16 @@ export default function DashboardLayout({
         <WebSocketProvider>
             <CallLeadProvider>
                 <SidebarProvider>
-                    <BdcDealershipProvider>
-                        <DashboardContent
-                            showReminder={showReminder}
-                            onReminderClose={handleReminderClose}
-                        >
-                            {children}
-                        </DashboardContent>
-                    </BdcDealershipProvider>
+                    <AiCopilotProvider>
+                        <BdcDealershipProvider>
+                            <DashboardContent
+                                showReminder={showReminder}
+                                onReminderClose={handleReminderClose}
+                            >
+                                {children}
+                            </DashboardContent>
+                        </BdcDealershipProvider>
+                    </AiCopilotProvider>
                 </SidebarProvider>
             </CallLeadProvider>
         </WebSocketProvider>
@@ -108,6 +112,7 @@ function DashboardContent({
                 leadId={callLead?.leadId}
                 leadName={callLead?.leadName}
             />
+            <AiCopilotPanel />
             <FcmRegistrar />
         </div>
     )

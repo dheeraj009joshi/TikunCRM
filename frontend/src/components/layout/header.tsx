@@ -3,11 +3,13 @@
 import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Command, Menu } from "lucide-react"
+import { Command, Menu, Sparkles } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { NotificationBell } from "@/components/layout/notification-bell"
 import { MissedCallsBell } from "@/components/layout/missed-calls-bell"
 import { useSidebarOptional } from "@/contexts/sidebar-context"
+import { useAiCopilotOptional } from "@/contexts/ai-copilot-context"
+import { Button } from "@/components/ui/button"
 
 const SEGMENT_LABELS: Record<string, string> = {
     dashboard: "Dashboard",
@@ -67,6 +69,7 @@ function labelFor(segment: string): string {
 export function Header() {
     const pathname = usePathname()
     const sidebar = useSidebarOptional()
+    const copilot = useAiCopilotOptional()
     const segments = (pathname || "/dashboard").split("/").filter(Boolean)
 
     const crumbs = segments.map((segment, i) => ({
@@ -113,6 +116,19 @@ export function Header() {
             </div>
 
             <div className="flex items-center gap-2 sm:gap-4">
+                {copilot && (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => copilot.toggle()}
+                        title="Tikun Copilot (⌘⇧J)"
+                    >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        <span className="hidden sm:inline">Copilot</span>
+                    </Button>
+                )}
+
                 {/* Shortcut hint */}
                 <div className="hidden items-center gap-1 rounded border bg-muted px-1.5 py-0.5 text-[10px] font-medium sm:flex">
                     <Command className="h-3 w-3" />
