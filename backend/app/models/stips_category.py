@@ -29,6 +29,8 @@ class StipsCategory(Base):
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # "customer" = docs follow customer; "lead" = docs belong to lead only
     scope: Mapped[str] = mapped_column(String(20), nullable=False, default="lead")
+    # Maps uploads to lead list filters: "ssn" | "dl" | null
+    filter_key: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     dealership_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("dealerships.id", ondelete="SET NULL"),

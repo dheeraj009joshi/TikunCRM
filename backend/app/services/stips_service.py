@@ -54,12 +54,14 @@ class StipsCategoryService:
         display_order: int = 0,
         scope: str = "lead",
         dealership_id: Optional[uuid.UUID] = None,
+        filter_key: Optional[str] = None,
     ) -> StipsCategory:
         cat = StipsCategory(
             name=name,
             display_order=display_order,
             scope=scope,
             dealership_id=dealership_id,
+            filter_key=filter_key,
         )
         db.add(cat)
         await db.flush()

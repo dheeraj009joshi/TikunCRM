@@ -188,6 +188,18 @@ export default function LeadsPage() {
     const [status, setStatus] = React.useState(statusParam || "all")
     const [selectedStageIds, setSelectedStageIds] = React.useState<string[]>([])
     const [source, setSource] = React.useState(sourceParam || "all")
+    const [hasSsnStip, setHasSsnStip] = React.useState(
+        () => searchParams.get("has_ssn_stip") === "true"
+    )
+    const [hasDlStip, setHasDlStip] = React.useState(
+        () => searchParams.get("has_dl_stip") === "true"
+    )
+    const [downMin, setDownMin] = React.useState(
+        () => searchParams.get("down_min") || ""
+    )
+    const [downMax, setDownMax] = React.useState(
+        () => searchParams.get("down_max") || ""
+    )
     const { user: authUser } = useAuthStore()
     const isAdminLevel =
         authUser?.role === "dealership_admin" ||
@@ -567,6 +579,24 @@ export default function LeadsPage() {
             if (dateTo) params.date_to = endOfDay(dateTo).toISOString()
         }
 
+        // Tikun AI / stip & down filters
+        if (hasSsnStip) params.has_ssn_stip = true
+        if (hasDlStip) params.has_dl_stip = true
+        if (downMin !== "" && !Number.isNaN(Number(downMin))) {
+            params.down_min = Number(downMin)
+        }
+        if (downMax !== "" && !Number.isNaN(Number(downMax))) {
+            params.down_max = Number(downMax)
+        }
+        if (searchParams.get("has_license") === "true") params.has_license = true
+        if (searchParams.get("pool") === "mine" || searchParams.get("pool") === "unassigned") {
+            if (!params.pool) {
+                params.pool = searchParams.get("pool") as "mine" | "unassigned"
+            }
+        }
+        const stageFromAi = searchParams.get("stage_id")
+        if (stageFromAi && !params.stage_id) params.stage_id = stageFromAi
+
         return params
     }, [
         search,
@@ -582,6 +612,11 @@ export default function LeadsPage() {
         specificDate,
         dateFrom,
         dateTo,
+        searchParams,
+        hasSsnStip,
+        hasDlStip,
+        downMin,
+        downMax,
     ])
 
     const fetchLeads = React.useCallback(async () => {
@@ -1218,6 +1253,47 @@ export default function LeadsPage() {
                                 </SelectContent>
                             </Select>
                         )}
+                        <div className="flex shrink-0 items-center gap-2 rounded-md border px-2 py-1.5">
+                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <Checkbox
+                                    checked={hasSsnStip}
+                                    onCheckedChange={(v) => {
+                                        setHasSsnStip(v === true)
+                                        setPage(1)
+                                    }}
+                                />
+                                SSN
+                            </label>
+                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <Checkbox
+                                    checked={hasDlStip}
+                                    onCheckedChange={(v) => {
+                                        setHasDlStip(v === true)
+                                        setPage(1)
+                                    }}
+                                />
+                                DL
+                            </label>
+                            <Input
+                                className="h-7 w-16 text-xs"
+                                placeholder="Min $"
+                                value={downMin}
+                                onChange={(e) => {
+                                    setDownMin(e.target.value.replace(/[^\d.]/g, ""))
+                                    setPage(1)
+                                }}
+                            />
+                            <span className="text-xs text-muted-foreground">–</span>
+                            <Input
+                                className="h-7 w-16 text-xs"
+                                placeholder="Max $"
+                                value={downMax}
+                                onChange={(e) => {
+                                    setDownMax(e.target.value.replace(/[^\d.]/g, ""))
+                                    setPage(1)
+                                }}
+                            />
+                        </div>
                         {/* Date Filter */}
                         <Popover>
                             <PopoverTrigger asChild>

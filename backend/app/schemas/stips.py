@@ -13,6 +13,7 @@ class StipsCategoryCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     display_order: int = 0
     scope: Literal["customer", "lead"] = "lead"
+    filter_key: Optional[Literal["ssn", "dl"]] = None
     dealership_id: Optional[UUID] = None
 
 
@@ -21,6 +22,7 @@ class StipsCategoryUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     display_order: Optional[int] = None
     scope: Optional[Literal["customer", "lead"]] = None
+    filter_key: Optional[Literal["ssn", "dl"]] = None
 
 
 class StipsCategoryReorder(BaseModel):
@@ -34,6 +36,7 @@ class StipsCategoryResponse(BaseModel):
     name: str
     display_order: int
     scope: str
+    filter_key: Optional[str] = None
     dealership_id: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime

@@ -76,6 +76,9 @@ export interface Lead {
     external_id?: string;
     interested_in?: string;
     budget_range?: string;
+    down_payment?: number | null;
+    has_ssn_stip?: boolean;
+    has_dl_stip?: boolean;
     /** Indicates this lead appeared in multiple campaigns */
     is_starred?: boolean;
     /** Campaign associations (for multi-campaign leads) */
@@ -171,6 +174,11 @@ export interface LeadListParams {
     multi_campaign_only?: boolean;
     /** Filter by campaign mapping (primary or lead_campaigns) */
     campaign_mapping_id?: string;
+    down_min?: number;
+    down_max?: number;
+    has_license?: boolean;
+    has_ssn_stip?: boolean;
+    has_dl_stip?: boolean;
 }
 
 /** Same query params as GET /leads/ but without pagination — used for CSV export */

@@ -10,6 +10,7 @@ export interface StipsCategory {
     name: string;
     display_order: number;
     scope: "customer" | "lead";
+    filter_key?: "ssn" | "dl" | null;
     dealership_id?: string | null;
     created_at: string;
     updated_at: string;
@@ -44,6 +45,7 @@ export const StipsService = {
         name: string;
         display_order?: number;
         scope?: "customer" | "lead";
+        filter_key?: "ssn" | "dl" | null;
         dealership_id?: string | null;
     }): Promise<StipsCategory> {
         const response = await apiClient.post(CATEGORIES_PREFIX, data);
@@ -52,7 +54,12 @@ export const StipsService = {
 
     async updateCategory(
         id: string,
-        data: Partial<{ name: string; display_order: number; scope: "customer" | "lead" }>
+        data: Partial<{
+            name: string;
+            display_order: number;
+            scope: "customer" | "lead";
+            filter_key: "ssn" | "dl" | null;
+        }>
     ): Promise<StipsCategory> {
         const response = await apiClient.patch(`${CATEGORIES_PREFIX}/${id}`, data);
         return response.data;

@@ -37,6 +37,7 @@ export default function StipsCategoriesSettingsPage() {
     const [showCreate, setShowCreate] = React.useState(false)
     const [formName, setFormName] = React.useState("")
     const [formScope, setFormScope] = React.useState<"customer" | "lead">("lead")
+    const [formFilterKey, setFormFilterKey] = React.useState<"none" | "ssn" | "dl">("none")
     const [formOrder, setFormOrder] = React.useState(0)
     const [isSaving, setIsSaving] = React.useState(false)
     const [deleteError, setDeleteError] = React.useState<string | null>(null)
@@ -68,12 +69,14 @@ export default function StipsCategoriesSettingsPage() {
                     name: formName.trim(),
                     display_order: formOrder,
                     scope: formScope,
+                    filter_key: formFilterKey === "none" ? null : formFilterKey,
                 })
             } else {
                 await StipsService.createCategory({
                     name: formName.trim(),
                     display_order: formOrder,
                     scope: formScope,
+                    filter_key: formFilterKey === "none" ? null : formFilterKey,
                 })
             }
             setEditCategory(null)
@@ -81,6 +84,7 @@ export default function StipsCategoriesSettingsPage() {
             setFormName("")
             setFormOrder(categories.length)
             setFormScope("lead")
+            setFormFilterKey("none")
             await loadCategories()
         } catch (error) {
             console.error("Failed to save category:", error)
@@ -108,6 +112,7 @@ export default function StipsCategoriesSettingsPage() {
         setFormName(category.name)
         setFormOrder(category.display_order)
         setFormScope(category.scope as "customer" | "lead")
+        setFormFilterKey(category.filter_key === "ssn" || category.filter_key === "dl" ? category.filter_key : "none")
         setShowCreate(true)
     }
 
@@ -116,6 +121,7 @@ export default function StipsCategoriesSettingsPage() {
         setFormName("")
         setFormOrder(categories.length)
         setFormScope("lead")
+        setFormFilterKey("none")
         setShowCreate(true)
     }
 
@@ -167,6 +173,9 @@ export default function StipsCategoriesSettingsPage() {
                                         <p className="font-medium text-sm">{category.name}</p>
                                         <p className="text-xs text-muted-foreground">
                                             Scope: {category.scope} · Order: {category.display_order}
+                                            {category.filter_key
+                                                ? ` · Filter: ${category.filter_key.toUpperCase()}`
+                                                : ""}
                                         </p>
                                     </div>
                                     {canManage && (
@@ -214,6 +223,25 @@ export default function StipsCategoriesSettingsPage() {
                                     <SelectItem value="customer">Customer — documents follow the customer across leads</SelectItem>
                                 </SelectContent>
                             </Select>
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Maps to lead filter</Label>
+                            <Select
+                                value={formFilterKey}
+                                onValueChange={(v) => setFormFilterKey(v as "none" | "ssn" | "dl")}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="none">None</SelectItem>
+                                    <SelectItem value="ssn">SSN stip (has_ssn_stip)</SelectItem>
+                                    <SelectItem value="dl">Driver license (has_dl_stip)</SelectItem>
+                                </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                                When set, uploads update lead flags so Tikun AI and filters can find them.
+                            </p>
                         </div>
                         <div className="space-y-2">
                             <Label>Display order</Label>

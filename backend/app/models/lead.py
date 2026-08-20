@@ -167,6 +167,16 @@ class Lead(Base):
     # Typed down payment for the eligibility engine (legacy meta_data["downpayment"] is fallback)
     down_payment: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
 
+    # Denormalized stip presence flags (synced from stips uploads / category filter_key)
+    has_ssn_stip: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, index=True,
+        comment="True when lead/customer has a stip mapped to filter_key=ssn",
+    )
+    has_dl_stip: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, index=True,
+        comment="True when lead/customer has a stip mapped to filter_key=dl",
+    )
+
     # --- Timestamps ---
     first_contacted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

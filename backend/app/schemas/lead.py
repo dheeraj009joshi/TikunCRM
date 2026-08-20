@@ -216,6 +216,9 @@ class LeadResponse(BaseModel):
     external_id: Optional[str] = None
     interested_in: Optional[str] = None
     budget_range: Optional[str] = None
+    down_payment: Optional[float] = None
+    has_ssn_stip: bool = False
+    has_dl_stip: bool = False
     # Multi-campaign tracking
     is_starred: bool = False
     campaigns: List[LeadCampaignResponse] = Field(default_factory=list)

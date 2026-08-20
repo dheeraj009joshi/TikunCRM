@@ -235,6 +235,122 @@ class EligibilityService:
         return values, dealership_id
 
     @staticmethod
+    async def _write_back_entity_fields(
+        db: AsyncSession,
+        entity_type: str,
+        entity_id: UUID,
+        criterion_id: UUID,
+        value: Optional[dict],
+        is_met: Optional[bool],
+    ) -> None:
+        """Persist auto/manual criterion values onto lead/customer/guest columns."""
+        criterion = await EligibilityService.get_criterion(db, criterion_id)
+        if not criterion:
+            return
+
+        auto_field = criterion.auto_field
+        # Also match by known keys when criterion is manual but labeled like down payment
+        key = (auto_field or criterion.key or "").lower()
+
+        def _number_from_value() -> Optional[float]:
+            if not value:
+                return None
+            if "number" in value and value["number"] is not None:
+                return _to_float(value["number"])
+            if "option" in value and isinstance(value["option"], str):
+                # Ranges like "2000-3000" → midpoint
+                m = re.match(r"^\s*(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*$", value["option"])
+                if m:
+                    lo, hi = float(m.group(1)), float(m.group(2))
+                    return (lo + hi) / 2.0
+                return _to_float(value["option"])
+            return None
+
+        if key in ("down_payment", "downpayment") or "down" in (criterion.label or "").lower():
+            amount = _number_from_value()
+            if amount is None:
+                return
+            if entity_type == EligibilityEntityType.LEAD.value:
+                from app.models.lead import Lead
+                res = await db.execute(select(Lead).where(Lead.id == entity_id))
+                lead = res.scalar_one_or_none()
+                if lead:
+                    lead.down_payment = amount
+            elif entity_type == EligibilityEntityType.GUEST.value:
+                from app.models.guest import Guest
+                res = await db.execute(select(Guest).where(Guest.id == entity_id))
+                guest = res.scalar_one_or_none()
+                if guest:
+                    guest.down_payment = amount
+                    if guest.lead_id:
+                        from app.models.lead import Lead
+                        lres = await db.execute(select(Lead).where(Lead.id == guest.lead_id))
+                        lead = lres.scalar_one_or_none()
+                        if lead and lead.down_payment is None:
+                            lead.down_payment = amount
+            await db.flush()
+            return
+
+        if key in ("credit_score",) or "credit" in (criterion.label or "").lower():
+            score = _number_from_value()
+            if score is None:
+                return
+            cust_id = None
+            if entity_type == EligibilityEntityType.CUSTOMER.value:
+                cust_id = entity_id
+            elif entity_type == EligibilityEntityType.LEAD.value:
+                from app.models.lead import Lead
+                res = await db.execute(select(Lead).where(Lead.id == entity_id))
+                lead = res.scalar_one_or_none()
+                if lead:
+                    cust_id = lead.customer_id
+            elif entity_type == EligibilityEntityType.GUEST.value:
+                from app.models.guest import Guest
+                res = await db.execute(select(Guest).where(Guest.id == entity_id))
+                guest = res.scalar_one_or_none()
+                if guest:
+                    cust_id = guest.customer_id
+            if cust_id:
+                from app.models.customer import Customer
+                cres = await db.execute(select(Customer).where(Customer.id == cust_id))
+                cust = cres.scalar_one_or_none()
+                if cust:
+                    cust.credit_score = int(score)
+                    await db.flush()
+            return
+
+        if key in ("has_license",) or "license" in (criterion.label or "").lower():
+            licensed = is_met if is_met is not None else None
+            if licensed is None and value:
+                licensed = bool(value.get("boolean") if "boolean" in value else value.get("checked"))
+            if licensed is None:
+                return
+            cust_id = None
+            if entity_type == EligibilityEntityType.CUSTOMER.value:
+                cust_id = entity_id
+            elif entity_type == EligibilityEntityType.LEAD.value:
+                from app.models.lead import Lead
+                res = await db.execute(select(Lead).where(Lead.id == entity_id))
+                lead = res.scalar_one_or_none()
+                if lead:
+                    cust_id = lead.customer_id
+                    if licensed:
+                        lead.has_dl_stip = True
+            elif entity_type == EligibilityEntityType.GUEST.value:
+                from app.models.guest import Guest
+                res = await db.execute(select(Guest).where(Guest.id == entity_id))
+                guest = res.scalar_one_or_none()
+                if guest:
+                    cust_id = guest.customer_id
+            if cust_id:
+                from app.models.customer import Customer
+                cres = await db.execute(select(Customer).where(Customer.id == cust_id))
+                cust = cres.scalar_one_or_none()
+                if cust:
+                    cust.has_license = bool(licensed)
+                    await db.flush()
+
+    @staticmethod
     async def _get_linked_lead_guest(
         db: AsyncSession, entity_type: str, entity_id: UUID
     ) -> Optional[Tuple[str, UUID]]:
@@ -548,6 +664,11 @@ class EligibilityService:
         item.checked_at = utc_now()
         assessment.last_updated_by = user_id
         await db.flush()
+
+        # Write trust-score values back onto lead/customer/guest for list filters
+        await EligibilityService._write_back_entity_fields(
+            db, entity_type, entity_id, criterion_id, value, is_met
+        )
 
         payload = await EligibilityService.build_assessment_payload(
             db, entity_type, entity_id, assessment.dealership_id

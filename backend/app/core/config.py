@@ -176,9 +176,13 @@ class Settings(BaseSettings):
     
     # STT/LLM/TTS API Keys for AI Voice
     deepgram_api_key: str = ""  # Speech-to-Text
-    openai_api_key: str = ""  # LLM for conversation
+    openai_api_key: str = ""  # LLM for conversation + Tikun AI assistant
     cartesia_api_key: str = ""  # Text-to-Speech (or use elevenlabs_api_key)
     elevenlabs_api_key: str = ""  # Alternative TTS provider
+
+    # Tikun AI (ChatGPT-style CRM assistant)
+    ai_assistant_enabled: bool = True
+    ai_assistant_model: str = "gpt-4o"
     
     # Azure Blob Storage (for call recordings)
     azure_storage_connection_string: str = ""

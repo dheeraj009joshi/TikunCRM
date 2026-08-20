@@ -518,6 +518,9 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "external_id": lead.external_id,
             "interested_in": lead.interested_in,
             "budget_range": lead.budget_range,
+            "down_payment": float(lead.down_payment) if getattr(lead, "down_payment", None) is not None else None,
+            "has_ssn_stip": bool(getattr(lead, "has_ssn_stip", False)),
+            "has_dl_stip": bool(getattr(lead, "has_dl_stip", False)),
             "is_starred": getattr(lead, 'is_starred', False),
             "campaigns": [],  # Not fetched in list view for performance
             "first_contacted_at": lead.first_contacted_at.isoformat() if lead.first_contacted_at else None,
@@ -583,6 +586,11 @@ def _build_leads_list_select(
     multi_campaign_only: Optional[bool] = None,
     campaign_mapping_id: Optional[UUID] = None,
     dealership_id: Optional[UUID] = None,
+    down_min: Optional[float] = None,
+    down_max: Optional[float] = None,
+    has_license: Optional[bool] = None,
+    has_ssn_stip: Optional[bool] = None,
+    has_dl_stip: Optional[bool] = None,
 ):
     """
     Shared SELECT for list_leads and export_leads_csv — same visibility and filters
@@ -714,6 +722,20 @@ def _build_leads_list_select(
             )
         )
 
+    if down_min is not None:
+        query = query.where(Lead.down_payment >= down_min)
+    if down_max is not None:
+        query = query.where(Lead.down_payment <= down_max)
+
+    if has_ssn_stip is not None:
+        query = query.where(Lead.has_ssn_stip == has_ssn_stip)
+    if has_dl_stip is not None:
+        query = query.where(Lead.has_dl_stip == has_dl_stip)
+
+    if has_license is not None:
+        license_subq = select(Customer.id).where(Customer.has_license == has_license)
+        query = query.where(Lead.customer_id.in_(license_subq))
+
     return query
 
 
@@ -745,6 +767,11 @@ async def list_leads(
         None,
         description="Filter by dealership (BDC / super admin with access)",
     ),
+    down_min: Optional[float] = Query(None, description="Minimum down payment"),
+    down_max: Optional[float] = Query(None, description="Maximum down payment"),
+    has_license: Optional[bool] = Query(None, description="Customer has_license flag"),
+    has_ssn_stip: Optional[bool] = Query(None, description="Lead has SSN stip uploaded"),
+    has_dl_stip: Optional[bool] = Query(None, description="Lead has driver license stip uploaded"),
 ) -> Any:
     """
     List leads with filtering and pagination.
@@ -776,6 +803,11 @@ async def list_leads(
         multi_campaign_only=multi_campaign_only,
         campaign_mapping_id=campaign_mapping_id,
         dealership_id=dealership_id,
+        down_min=down_min,
+        down_max=down_max,
+        has_license=has_license,
+        has_ssn_stip=has_ssn_stip,
+        has_dl_stip=has_dl_stip,
     )
 
     # Pagination
@@ -2826,6 +2858,8 @@ async def upload_lead_stip_document(
         uploaded_by=current_user.id,
         target_customer=target_customer,
     )
+    from app.services.stip_flags_service import refresh_lead_stip_flags
+    await refresh_lead_stip_flags(db, lead_id)
     performer_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or current_user.email or "Someone"
     await ActivityService.log_activity(
         db,
@@ -2856,6 +2890,8 @@ async def delete_lead_stip_document(
     deleted = await delete_document_for_lead(db, document_id, lead)
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found or not accessible")
+    from app.services.stip_flags_service import refresh_lead_stip_flags
+    await refresh_lead_stip_flags(db, lead_id)
     performer_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or current_user.email or "Someone"
     await ActivityService.log_activity(
         db,
@@ -3329,6 +3365,11 @@ async def export_leads_csv(
     ),
     date_from: Optional[datetime] = Query(None, description="Filter by created date from"),
     date_to: Optional[datetime] = Query(None, description="Filter by created date to"),
+    down_min: Optional[float] = Query(None),
+    down_max: Optional[float] = Query(None),
+    has_license: Optional[bool] = Query(None),
+    has_ssn_stip: Optional[bool] = Query(None),
+    has_dl_stip: Optional[bool] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
@@ -3364,6 +3405,11 @@ async def export_leads_csv(
         fresh_only=fresh_only,
         multi_campaign_only=multi_campaign_only,
         campaign_mapping_id=campaign_mapping_id,
+        down_min=down_min,
+        down_max=down_max,
+        has_license=has_license,
+        has_ssn_stip=has_ssn_stip,
+        has_dl_stip=has_dl_stip,
     )
 
     query = query.order_by(Lead.created_at.desc())

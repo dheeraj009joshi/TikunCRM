@@ -63,6 +63,7 @@ async def create_category(
         display_order=body.display_order,
         scope=body.scope,
         dealership_id=body.dealership_id or current_user.dealership_id,
+        filter_key=body.filter_key,
     )
     await db.commit()
     await db.refresh(category)

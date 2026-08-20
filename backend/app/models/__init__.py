@@ -51,6 +51,7 @@ from app.models.eligibility import (
 from app.models.guest import Guest, GuestStatus
 from app.models.saved_view import SavedView
 from app.models.task import Task, TaskType, TaskPriority, TaskStatus
+from app.models.ai_assistant import AiConversation, AiMessage
 
 __all__ = [
     "Customer",
@@ -124,4 +125,6 @@ __all__ = [
     "TaskType",
     "TaskPriority",
     "TaskStatus",
+    "AiConversation",
+    "AiMessage",
 ]
