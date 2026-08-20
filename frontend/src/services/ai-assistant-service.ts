@@ -221,7 +221,7 @@ export const AiAssistantService = {
             handlers.onMessageDelta?.(String(payload.text || ""));
             break;
           case "ui_block":
-            handlers.onUiBlock?.(payload as AiUiBlock);
+            handlers.onUiBlock?.(payload as unknown as AiUiBlock);
             break;
           case "done":
             handlers.onDone?.(payload);
