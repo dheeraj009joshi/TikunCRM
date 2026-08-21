@@ -31,6 +31,7 @@ export interface AiUiBlock {
     down_payment?: number | null;
     has_ssn_stip?: boolean;
     has_dl_stip?: boolean;
+    is_business?: boolean | null;
     stage?: string | null;
     phone?: string | null;
     priority_score?: number;
@@ -238,12 +239,33 @@ export const AiAssistantService = {
 export function buildLeadsUrlFromFilters(
   filterParams?: Record<string, string | number | boolean>
 ): string {
-  if (!filterParams) return "/leads";
   const qs = new URLSearchParams();
+
+  // Always pin a view so leads page does not restore stale localStorage filters
+  // (that restore only runs when `filter` is missing from the URL).
+  const pool = filterParams?.pool;
+  if (pool === "mine") qs.set("filter", "mine");
+  else if (pool === "unassigned") qs.set("filter", "unassigned");
+  else qs.set("filter", "all");
+
+  if (!filterParams) {
+    return `/leads?${qs.toString()}`;
+  }
+
   for (const [k, v] of Object.entries(filterParams)) {
     if (v === undefined || v === null) continue;
+    if (k === "pool") continue; // already mapped to filter=
+    if (k === "fresh_only" && (v === true || v === "true")) {
+      qs.set("filter", "fresh");
+      continue;
+    }
+    // stage_id → status (leads page stage dropdown / API)
+    if (k === "stage_id") {
+      qs.set("status", String(v));
+      continue;
+    }
     qs.set(k, String(v));
   }
-  const s = qs.toString();
-  return s ? `/leads?${s}` : "/leads";
+
+  return `/leads?${qs.toString()}`;
 }

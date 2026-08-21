@@ -196,28 +196,17 @@ class VoiceService:
         Returns:
             Tuple of (list_of_users_to_ring, is_unknown_caller)
 
-        Ring policy:
-            - Assigned lead: assigned salesperson + all BDC agents for the dealership
-            - Unassigned / unknown: dealership sales team + all BDC agents for the dealership
+        Ring policy (always, regardless of assignment):
+            - All active salespersons / dealership admins / owners at the dealership
+            - All active BDC agents with access to the dealership
+            First person to answer gets the call.
         """
         is_unknown_caller = lead is None
         target_dealership = dealership_id or (lead.dealership_id if lead else None)
 
         users_by_id: Dict[UUID, User] = {}
 
-        # Assigned salesperson (if any)
-        if lead and lead.assigned_to:
-            result = await self.db.execute(
-                select(User).where(
-                    User.id == lead.assigned_to,
-                    User.is_active == True,
-                )
-            )
-            assigned = result.scalar_one_or_none()
-            if assigned:
-                users_by_id[assigned.id] = assigned
-        elif target_dealership:
-            # Unassigned: ring the dealership sales team
+        if target_dealership:
             result = await self.db.execute(
                 select(User).where(
                     User.dealership_id == target_dealership,
@@ -232,8 +221,6 @@ class VoiceService:
             for user in result.scalars().all():
                 users_by_id[user.id] = user
 
-        # Always include BDC agents with access to this dealership
-        if target_dealership:
             for bdc in await self._get_bdc_agents_for_dealership(target_dealership):
                 users_by_id[bdc.id] = bdc
 

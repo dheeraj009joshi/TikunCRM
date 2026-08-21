@@ -79,6 +79,7 @@ export interface Lead {
     down_payment?: number | null;
     has_ssn_stip?: boolean;
     has_dl_stip?: boolean;
+    is_business?: boolean | null;
     /** Indicates this lead appeared in multiple campaigns */
     is_starred?: boolean;
     /** Campaign associations (for multi-campaign leads) */
@@ -179,6 +180,7 @@ export interface LeadListParams {
     has_license?: boolean;
     has_ssn_stip?: boolean;
     has_dl_stip?: boolean;
+    is_business?: boolean;
 }
 
 /** Same query params as GET /leads/ but without pagination — used for CSV export */

@@ -349,6 +349,78 @@ class EligibilityService:
                 if cust:
                     cust.has_license = bool(licensed)
                     await db.flush()
+            return
+
+        # Finance Document: Passport / Tax ID / SSN → has_ssn_stip (any one)
+        if (
+            key in ("finance_document", "finance_doc", "has_ssn")
+            or "finance" in (criterion.label or "").lower()
+        ):
+            opt = None
+            if value and isinstance(value, dict):
+                opt = str(value.get("option") or "").strip().lower()
+            if opt not in (
+                "s",
+                "ssn",
+                "t",
+                "tax id",
+                "tax_id",
+                "taxid",
+                "p",
+                "passport",
+            ):
+                return
+            lead = None
+            if entity_type == EligibilityEntityType.LEAD.value:
+                from app.models.lead import Lead
+                res = await db.execute(select(Lead).where(Lead.id == entity_id))
+                lead = res.scalar_one_or_none()
+            elif entity_type == EligibilityEntityType.GUEST.value:
+                from app.models.guest import Guest
+                from app.models.lead import Lead
+                res = await db.execute(select(Guest).where(Guest.id == entity_id))
+                guest = res.scalar_one_or_none()
+                if guest and guest.lead_id:
+                    lres = await db.execute(select(Lead).where(Lead.id == guest.lead_id))
+                    lead = lres.scalar_one_or_none()
+            if lead and not lead.has_ssn_stip:
+                lead.has_ssn_stip = True
+                await db.flush()
+            return
+
+        # Business: Yes/No → lead.is_business
+        if key in ("business", "is_business") or (criterion.label or "").strip().lower() == "business":
+            flag: Optional[bool] = None
+            if value and isinstance(value, dict):
+                if "boolean" in value:
+                    flag = bool(value["boolean"])
+                else:
+                    opt = str(value.get("option") or "").strip().lower()
+                    if opt in ("y", "yes", "true", "1"):
+                        flag = True
+                    elif opt in ("n", "no", "false", "0"):
+                        flag = False
+            if flag is None and is_met is not None:
+                flag = bool(is_met)
+            if flag is None:
+                return
+            lead = None
+            if entity_type == EligibilityEntityType.LEAD.value:
+                from app.models.lead import Lead
+                res = await db.execute(select(Lead).where(Lead.id == entity_id))
+                lead = res.scalar_one_or_none()
+            elif entity_type == EligibilityEntityType.GUEST.value:
+                from app.models.guest import Guest
+                from app.models.lead import Lead
+                res = await db.execute(select(Guest).where(Guest.id == entity_id))
+                guest = res.scalar_one_or_none()
+                if guest and guest.lead_id:
+                    lres = await db.execute(select(Lead).where(Lead.id == guest.lead_id))
+                    lead = lres.scalar_one_or_none()
+            if lead is not None:
+                lead.is_business = flag
+                await db.flush()
+            return
 
     @staticmethod
     async def _get_linked_lead_guest(

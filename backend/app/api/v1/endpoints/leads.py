@@ -521,6 +521,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "down_payment": float(lead.down_payment) if getattr(lead, "down_payment", None) is not None else None,
             "has_ssn_stip": bool(getattr(lead, "has_ssn_stip", False)),
             "has_dl_stip": bool(getattr(lead, "has_dl_stip", False)),
+            "is_business": getattr(lead, "is_business", None),
             "is_starred": getattr(lead, 'is_starred', False),
             "campaigns": [],  # Not fetched in list view for performance
             "first_contacted_at": lead.first_contacted_at.isoformat() if lead.first_contacted_at else None,
@@ -591,6 +592,7 @@ def _build_leads_list_select(
     has_license: Optional[bool] = None,
     has_ssn_stip: Optional[bool] = None,
     has_dl_stip: Optional[bool] = None,
+    is_business: Optional[bool] = None,
 ):
     """
     Shared SELECT for list_leads and export_leads_csv — same visibility and filters
@@ -731,6 +733,8 @@ def _build_leads_list_select(
         query = query.where(Lead.has_ssn_stip == has_ssn_stip)
     if has_dl_stip is not None:
         query = query.where(Lead.has_dl_stip == has_dl_stip)
+    if is_business is not None:
+        query = query.where(Lead.is_business == is_business)
 
     if has_license is not None:
         license_subq = select(Customer.id).where(Customer.has_license == has_license)
@@ -772,6 +776,7 @@ async def list_leads(
     has_license: Optional[bool] = Query(None, description="Customer has_license flag"),
     has_ssn_stip: Optional[bool] = Query(None, description="Lead has SSN stip uploaded"),
     has_dl_stip: Optional[bool] = Query(None, description="Lead has driver license stip uploaded"),
+    is_business: Optional[bool] = Query(None, description="Trust-score Business Yes/No"),
 ) -> Any:
     """
     List leads with filtering and pagination.
@@ -808,6 +813,7 @@ async def list_leads(
         has_license=has_license,
         has_ssn_stip=has_ssn_stip,
         has_dl_stip=has_dl_stip,
+        is_business=is_business,
     )
 
     # Pagination
@@ -3370,6 +3376,7 @@ async def export_leads_csv(
     has_license: Optional[bool] = Query(None),
     has_ssn_stip: Optional[bool] = Query(None),
     has_dl_stip: Optional[bool] = Query(None),
+    is_business: Optional[bool] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
@@ -3410,6 +3417,7 @@ async def export_leads_csv(
         has_license=has_license,
         has_ssn_stip=has_ssn_stip,
         has_dl_stip=has_dl_stip,
+        is_business=is_business,
     )
 
     query = query.order_by(Lead.created_at.desc())

@@ -512,6 +512,7 @@ async def rank_leads_to_call(
         "has_ssn_stip": args.get("has_ssn_stip"),
         "has_dl_stip": args.get("has_dl_stip"),
         "has_license": args.get("has_license"),
+        "is_business": args.get("is_business"),
         "down_min": args.get("down_min"),
         "down_max": args.get("down_max"),
         "dealership_id": args.get("dealership_id"),
@@ -530,6 +531,9 @@ async def rank_leads_to_call(
         elif lead.get("has_dl_stip") or lead.get("has_ssn_stip"):
             score += 10
             reasons.append("partial stips")
+        if lead.get("is_business") is True:
+            score += 5
+            reasons.append("business")
         dp = lead.get("down_payment")
         if dp is not None and 2000 <= float(dp) <= 5000:
             score += 15

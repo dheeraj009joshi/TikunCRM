@@ -194,6 +194,9 @@ export default function LeadsPage() {
     const [hasDlStip, setHasDlStip] = React.useState(
         () => searchParams.get("has_dl_stip") === "true"
     )
+    const [isBusiness, setIsBusiness] = React.useState(
+        () => searchParams.get("is_business") === "true"
+    )
     const [downMin, setDownMin] = React.useState(
         () => searchParams.get("down_min") || ""
     )
@@ -222,7 +225,7 @@ export default function LeadsPage() {
                       ? "multi_campaign"
                       : filterParam === "mine"
                         ? "mine"
-                        : isAdminLevel
+                        : isAdminLevel || isBdc
                           ? "all"
                           : "mine"
     )
@@ -270,21 +273,54 @@ export default function LeadsPage() {
         return items
     }, [stages])
 
-    // Restore filters from localStorage when URL has no params (e.g. sidebar link to /leads)
+    // Restore filters from localStorage when URL has no view + no explicit search filters
+    // (e.g. bare sidebar link to /leads). Never overwrite Copilot "Open in Leads" params.
     React.useEffect(() => {
         const filter = searchParams.get("filter")
-        if (filter != null) return // URL has filter, nothing to restore
+        if (filter != null) return
+        const hasExplicitSearch = [
+            "down_min",
+            "down_max",
+            "has_ssn_stip",
+            "has_dl_stip",
+            "is_business",
+            "has_license",
+            "stage_id",
+            "status",
+            "pool",
+            "search",
+            "dealership_id",
+            "source",
+            "campaign",
+            "assigned_to",
+            "fresh_only",
+        ].some((k) => searchParams.get(k) != null)
+        if (hasExplicitSearch) {
+            // Pin filter=all while preserving Copilot/API query params
+            const params = new URLSearchParams(searchParams.toString())
+            params.set("filter", "all")
+            params.delete("page")
+            router.replace(`/leads?${params.toString()}`, { scroll: false })
+            return
+        }
         const saved = filterStorage.getLeads()
         if (!saved?.filter) return
+        // Only restore the tab (and list/pipeline). Do not restore campaign/status —
+        // those made "All Leads" look selected while silently showing a tiny subset.
         const params = new URLSearchParams()
         params.set("filter", saved.filter)
-        if (saved.status && saved.status !== "all") params.set("status", saved.status)
-        if (saved.source && saved.source !== "all") params.set("source", saved.source)
         if (saved.view === "pipeline") params.set("view", "pipeline")
-        if (saved.assigned_to && saved.assigned_to !== "all") params.set("assigned_to", saved.assigned_to)
-        if (saved.campaign && saved.campaign !== "all") params.set("campaign", saved.campaign)
         router.replace(`/leads?${params.toString()}`)
     }, [router, searchParams])
+
+    // Keep stip / down / business filters in sync when navigating via Copilot links
+    React.useEffect(() => {
+        setHasSsnStip(searchParams.get("has_ssn_stip") === "true")
+        setHasDlStip(searchParams.get("has_dl_stip") === "true")
+        setIsBusiness(searchParams.get("is_business") === "true")
+        setDownMin(searchParams.get("down_min") || "")
+        setDownMax(searchParams.get("down_max") || "")
+    }, [searchParams])
 
     // When in manager_review view, sync status to manager_review stage id once stages are loaded
     React.useEffect(() => {
@@ -316,7 +352,10 @@ export default function LeadsPage() {
         }
 
         if (urlStatus) setStatus(urlStatus)
+        else if (filter !== "converted" && filter !== "manager_review") setStatus("all")
+
         if (urlSource) setSource(urlSource)
+        else setSource("all")
         if (urlView === "pipeline") setDisplayView("pipeline")
         else if (urlView === "list") setDisplayView("list")
         if (urlAssignedTo) setAssignedTo(urlAssignedTo)
@@ -582,6 +621,7 @@ export default function LeadsPage() {
         // Tikun AI / stip & down filters
         if (hasSsnStip) params.has_ssn_stip = true
         if (hasDlStip) params.has_dl_stip = true
+        if (isBusiness) params.is_business = true
         if (downMin !== "" && !Number.isNaN(Number(downMin))) {
             params.down_min = Number(downMin)
         }
@@ -615,6 +655,7 @@ export default function LeadsPage() {
         searchParams,
         hasSsnStip,
         hasDlStip,
+        isBusiness,
         downMin,
         downMax,
     ])
@@ -955,30 +996,48 @@ export default function LeadsPage() {
                         const mode = v as ViewMode
                         setViewMode(mode)
                         setPage(1)
+                        // Reset sticky list filters so "All Leads" actually means all
+                        setStatus("all")
+                        setSource("all")
+                        setAssignedTo("all")
+                        setCampaignFilter("all")
+                        setDealershipFilter("all")
+                        setHasSsnStip(false)
+                        setHasDlStip(false)
+                        setIsBusiness(false)
+                        setDownMin("")
+                        setDownMax("")
+                        setBdcAgentFilter("all")
+                        setDateMode("all")
+                        setSpecificDate(undefined)
+                        setDateFrom(undefined)
+                        setDateTo(undefined)
+                        setSelectedStageIds([])
+
+                        const params = new URLSearchParams()
                         if (mode === "converted") {
                             setStatus("converted")
-                            router.push("/leads?filter=converted")
+                            params.set("filter", "converted")
                         } else if (mode === "unassigned") {
-                            router.push("/leads?filter=unassigned")
+                            params.set("filter", "unassigned")
                         } else if (mode === "fresh") {
-                            router.push("/leads?filter=fresh")
+                            params.set("filter", "fresh")
                         } else if (mode === "all") {
-                            router.push("/leads?filter=all")
+                            params.set("filter", "all")
                         } else if (mode === "manager_review") {
-                            router.push("/leads?filter=manager_review")
+                            params.set("filter", "manager_review")
                         } else if (mode === "multi_campaign") {
-                            router.push("/leads?filter=multi_campaign")
+                            params.set("filter", "multi_campaign")
                         } else {
-                            router.push("/leads?filter=mine")
+                            params.set("filter", "mine")
                         }
-                        const nextStatus = mode === "converted" ? "converted" : status
+                        if (displayView === "pipeline") params.set("view", "pipeline")
+                        router.push(`/leads?${params.toString()}`)
                         filterStorage.setLeads({
                             filter: mode,
-                            status: nextStatus,
-                            source,
+                            status: mode === "converted" ? "converted" : "all",
+                            source: "all",
                             view: displayView,
-                            assigned_to: assignedTo !== "all" ? assignedTo : undefined,
-                            campaign: campaignFilter !== "all" ? campaignFilter : undefined,
                         })
                     }}
                 >
@@ -1273,6 +1332,16 @@ export default function LeadsPage() {
                                     }}
                                 />
                                 DL
+                            </label>
+                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <Checkbox
+                                    checked={isBusiness}
+                                    onCheckedChange={(v) => {
+                                        setIsBusiness(v === true)
+                                        setPage(1)
+                                    }}
+                                />
+                                Business
                             </label>
                             <Input
                                 className="h-7 w-16 text-xs"

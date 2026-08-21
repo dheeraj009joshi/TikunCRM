@@ -995,12 +995,13 @@ async def handle_incoming_call(
 ):
     """
     Twilio webhook for incoming calls.
-    Routes call to appropriate user(s) WebRTC client(s).
-    
+    Routes call to dealership ring group (sales + admins + BDC).
+
     Ring rules:
-    - If caller is known and lead is assigned: ring only assigned user
-    - If caller is known but lead unassigned: ring all salespersons (first to answer gets assigned)
-    - If caller is unknown: create minimal lead, ring all salespersons
+    - Always ring all active salespersons, dealership admins/owners, and BDC
+      for the dealership (assignment does not narrow the ring group).
+    - First person to answer gets the call (and may be auto-assigned).
+    - Unknown callers: create a minimal lead, then ring the same group.
     """
     form_data = await request.form()
     

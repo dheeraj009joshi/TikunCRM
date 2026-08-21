@@ -177,6 +177,12 @@ class Lead(Base):
         comment="True when lead/customer has a stip mapped to filter_key=dl",
     )
 
+    # Trust-score Business criterion (Yes/No) denormalized for filters / AI
+    is_business: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True, index=True,
+        comment="From eligibility Business select (y/n); null if unknown",
+    )
+
     # --- Timestamps ---
     first_contacted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

@@ -55,6 +55,10 @@ SEARCH_LEADS_TOOL = {
                 "has_ssn_stip": {"type": "boolean"},
                 "has_dl_stip": {"type": "boolean"},
                 "has_license": {"type": "boolean"},
+                "is_business": {
+                    "type": "boolean",
+                    "description": "Trust-score Business Yes (true) / No (false)",
+                },
                 "stage_id": {"type": "string", "description": "Pipeline stage UUID if known"},
                 "source": {"type": "string"},
                 "is_active": {"type": "boolean"},
@@ -182,6 +186,7 @@ RANK_LEADS_TOOL = {
                 "limit": {"type": "integer"},
                 "has_ssn_stip": {"type": "boolean"},
                 "has_dl_stip": {"type": "boolean"},
+                "is_business": {"type": "boolean"},
                 "down_min": {"type": "number"},
                 "down_max": {"type": "number"},
             },
@@ -210,6 +215,7 @@ Role / access (always honor — tools already enforce this):
 Rules:
 - Use tools to fetch real data. Never invent leads, names, or counts.
 - "SSN" / "DL" / "driver license" means stip documents on file (has_ssn_stip / has_dl_stip), not storing ID numbers.
+- "Business" / "business customer" maps to is_business (trust-score Business Yes/No).
 - After search_leads or rank_leads_to_call, summarize and highlight a few leads.
 - For assign / stage change / follow-ups: call write tools with lead_ids from a prior search. Those only PROPOSE — user must Confirm in the UI.
 - Resolve people with list_salespersons before assign when the name is ambiguous (BDC: use dealership_id when multi-store).
@@ -255,6 +261,8 @@ def build_thinking_plan(user_text: str, role: str) -> str:
         bits.append("Map “SSN” → has_ssn_stip (document uploaded, not the number).")
     if any(x in t for x in ("dl", "license", "licence", "driver")):
         bits.append("Map “DL / license” → has_dl_stip / has_license.")
+    if "business" in t:
+        bits.append("Map “business” → is_business true/false.")
     m = re.search(r"(\d[\d,]*)\s*[-–to]+\s*(\d[\d,]*)", t)
     if m or "down" in t:
         bits.append("Parse down-payment range into down_min / down_max.")
@@ -378,6 +386,7 @@ class AiAssistantService:
             has_license=args.get("has_license"),
             has_ssn_stip=args.get("has_ssn_stip"),
             has_dl_stip=args.get("has_dl_stip"),
+            is_business=args.get("is_business"),
             dealership_id=dealership_id,
         )
 
@@ -398,6 +407,7 @@ class AiAssistantService:
                 "has_ssn_stip": args.get("has_ssn_stip"),
                 "has_dl_stip": args.get("has_dl_stip"),
                 "has_license": args.get("has_license"),
+                "is_business": args.get("is_business"),
                 "stage_id": str(stage_id) if stage_id else None,
                 "dealership_id": str(dealership_id) if dealership_id else None,
                 "search": args.get("search"),
@@ -424,6 +434,7 @@ class AiAssistantService:
                         "down_payment": item.get("down_payment"),
                         "has_ssn_stip": item.get("has_ssn_stip"),
                         "has_dl_stip": item.get("has_dl_stip"),
+                        "is_business": item.get("is_business"),
                         "stage": stage,
                         "phone": cust.get("phone"),
                     }
@@ -444,6 +455,7 @@ class AiAssistantService:
                         else None,
                         "has_ssn_stip": bool(item.has_ssn_stip),
                         "has_dl_stip": bool(item.has_dl_stip),
+                        "is_business": getattr(item, "is_business", None),
                         "stage": stage,
                         "phone": getattr(cust, "phone", None),
                     }

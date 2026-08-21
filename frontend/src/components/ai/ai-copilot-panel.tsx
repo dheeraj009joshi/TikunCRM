@@ -192,6 +192,11 @@ function LeadTableBlock({
                   {[
                     l.has_ssn_stip ? "SSN" : null,
                     l.has_dl_stip ? "DL" : null,
+                    l.is_business === true
+                      ? "Biz"
+                      : l.is_business === false
+                        ? "Personal"
+                        : null,
                   ]
                     .filter(Boolean)
                     .join(" · ") || "—"}

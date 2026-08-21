@@ -219,6 +219,7 @@ class LeadResponse(BaseModel):
     down_payment: Optional[float] = None
     has_ssn_stip: bool = False
     has_dl_stip: bool = False
+    is_business: Optional[bool] = None
     # Multi-campaign tracking
     is_starred: bool = False
     campaigns: List[LeadCampaignResponse] = Field(default_factory=list)
