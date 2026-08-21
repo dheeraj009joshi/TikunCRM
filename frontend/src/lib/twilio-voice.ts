@@ -89,6 +89,34 @@ class TwilioVoiceManager {
   private dealershipId: string | null = null;
   /** Dealerships currently registered (for change detection) */
   private registeredDealershipKey = "";
+  private presenceTimer: ReturnType<typeof setInterval> | null = null;
+
+  private reportPresence(
+    status: "registered" | "heartbeat" | "busy" | "idle" | "unregistered"
+  ): void {
+    void voiceService.reportPresence(status);
+  }
+
+  private startPresenceHeartbeat(): void {
+    this.stopPresenceHeartbeat();
+    this.reportPresence("registered");
+    // TTL on server is 45s — refresh well before expiry
+    this.presenceTimer = setInterval(() => {
+      if (!this.isInitialized) return;
+      if (this.currentCall || this.pendingIncomingCall) {
+        this.reportPresence("busy");
+      } else {
+        this.reportPresence("heartbeat");
+      }
+    }, 20_000);
+  }
+
+  private stopPresenceHeartbeat(): void {
+    if (this.presenceTimer) {
+      clearInterval(this.presenceTimer);
+      this.presenceTimer = null;
+    }
+  }
 
   /**
    * Initialize the Twilio Device with an access token.
@@ -156,6 +184,7 @@ class TwilioVoiceManager {
       this.notifyStateChange("ready");
       this.scheduleTokenRefresh(tokenData.expires_in);
       this.startKeepAlive();
+      this.startPresenceHeartbeat();
 
       console.log(
         "Twilio Voice initialized (primary dealership=%s account=%s)",
@@ -210,7 +239,10 @@ class TwilioVoiceManager {
   private setupDeviceListeners(device: TwilioDevice, isPrimary: boolean): void {
     device.on("registered", () => {
       console.log("Twilio device registered", isPrimary ? "(primary)" : "(extra)");
-      if (isPrimary) this.notifyStateChange("ready");
+      if (isPrimary) {
+        this.notifyStateChange("ready");
+        this.reportPresence("registered");
+      }
     });
 
     device.on("error", (err: unknown) => {
@@ -233,6 +265,7 @@ class TwilioVoiceManager {
 
       device.on("unregistered", () => {
         console.log("Twilio device unregistered");
+        this.reportPresence("unregistered");
         this.notifyStateChange("offline");
       });
     }
@@ -287,6 +320,7 @@ class TwilioVoiceManager {
   private setupCallListeners(call: TwilioCall): void {
     call.on("accept", () => {
       console.log("Call accepted");
+      this.reportPresence("busy");
       this.callbacks.onCallConnected?.(call);
     });
 
@@ -300,6 +334,7 @@ class TwilioVoiceManager {
       if (this.currentCall === call) {
         this.currentCall = null;
         this.notifyStateChange(this.pendingIncomingCall ? "busy" : "ready");
+        this.reportPresence(this.pendingIncomingCall ? "busy" : "idle");
         this.callbacks.onCallDisconnected?.(call);
       }
     });
@@ -515,6 +550,8 @@ class TwilioVoiceManager {
   private markNeedsReinit(reason: string): void {
     console.warn(`Twilio needs full re-init: ${reason}`);
     this.stopKeepAlive();
+    this.stopPresenceHeartbeat();
+    this.reportPresence("unregistered");
     if (this.tokenRefreshTimer) {
       clearTimeout(this.tokenRefreshTimer);
       this.tokenRefreshTimer = null;
@@ -597,6 +634,8 @@ class TwilioVoiceManager {
 
       await this.device.register();
       this.keepAliveTicks = 0;
+      this.reportPresence("registered");
+      if (!this.presenceTimer) this.startPresenceHeartbeat();
       console.log("Twilio device re-registered successfully");
       await this.ensureExtraDevicesRegistered(force);
     } catch (e) {
@@ -757,6 +796,8 @@ class TwilioVoiceManager {
       this.tokenRefreshTimer = null;
     }
 
+    this.stopPresenceHeartbeat();
+    this.reportPresence("unregistered");
     this.stopKeepAlive();
 
     if (this.pendingIncomingCall) {

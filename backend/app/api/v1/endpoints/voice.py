@@ -387,7 +387,12 @@ async def debug_ring_group(
         dealership_id = dealership_id or dealership_from_to
 
     users_to_ring, is_unknown = await service.find_users_for_incoming_call(lead, dealership_id)
-    identities = [service.client_identity_for_user(u) for u in users_to_ring]
+    users_to_dial = await service.select_users_for_softphone_dial(users_to_ring, lead=lead)
+    identities = [service.client_identity_for_user(u) for u in users_to_dial]
+
+    from app.services.softphone_presence_service import presence_snapshot
+
+    snap = await presence_snapshot(db, [u.id for u in users_to_ring])
 
     # Softphone identity for current user + which dealership token they would get
     my_resolved = await service.resolve_voice_dealership_id(current_user)
@@ -401,7 +406,8 @@ async def debug_ring_group(
         "lead_id": str(lead.id) if lead else None,
         "is_unknown_caller": is_unknown and lead is None,
         "users_to_ring_count": len(users_to_ring),
-        "would_go_to_voicemail_immediately": len(users_to_ring) == 0,
+        "users_to_dial_count": len(users_to_dial),
+        "would_go_to_voicemail_immediately": len(users_to_dial) == 0,
         "users_to_ring": [
             {
                 "id": str(u.id),
@@ -409,8 +415,17 @@ async def debug_ring_group(
                 "role": u.role.value if hasattr(u.role, "value") else str(u.role),
                 "client_identity": service.client_identity_for_user(u),
                 "dealership_id": str(u.dealership_id) if u.dealership_id else None,
+                "softphone": snap.get(str(u.id), {"live": False}),
             }
             for u in users_to_ring
+        ],
+        "users_to_dial": [
+            {
+                "id": str(u.id),
+                "email": u.email,
+                "role": u.role.value if hasattr(u.role, "value") else str(u.role),
+            }
+            for u in users_to_dial
         ],
         "dial_client_identities": identities,
         "current_user": {
@@ -418,11 +433,49 @@ async def debug_ring_group(
             "role": current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role),
             "client_identity": str(current_user.id),
             "included_in_ring_group": any(u.id == current_user.id for u in users_to_ring),
+            "included_in_dial": any(u.id == current_user.id for u in users_to_dial),
+            "softphone": snap.get(str(current_user.id), {"live": False}),
             "token_dealership_id": str(my_resolved) if my_resolved else None,
             "voice_ready": my_effective.is_voice_ready(),
             "account_sid_prefix": (my_effective.account_sid or "")[:10] or None,
         },
     }
+
+
+class SoftphonePresenceRequest(BaseModel):
+    """Browser reports Twilio Device registration state."""
+    status: str = Field(
+        ...,
+        description="registered | heartbeat | busy | idle | unregistered",
+    )
+
+
+@router.post("/presence")
+async def report_softphone_presence(
+    body: SoftphonePresenceRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Softphone presence heartbeat. Required so inbound Dial can target live Devices
+    (Twilio has no API to list registered Client identities).
+    """
+    from app.services import softphone_presence_service as presence
+
+    presence_status = (body.status or "").strip().lower()
+    if presence_status in {"registered", "heartbeat", "idle"}:
+        await presence.upsert_presence(db, current_user.id, busy=False)
+    elif presence_status == "busy":
+        await presence.upsert_presence(db, current_user.id, busy=True)
+    elif presence_status == "unregistered":
+        await presence.clear_presence(db, current_user.id)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="status must be registered|heartbeat|busy|idle|unregistered",
+        )
+    await db.commit()
+    return {"ok": True, "status": presence_status}
 
 
 @router.post("/token", response_model=VoiceTokenResponse)
@@ -1111,18 +1164,30 @@ async def handle_incoming_call(
             if dealership:
                 dealership_id = dealership.id
 
-        # For unknown callers, create minimal lead on the resolved dealership
+        # For unknown callers, create minimal lead (must not block ringing on failure)
         if is_unknown_caller and dealership_id:
-            lead, customer = await service.create_minimal_lead_for_unknown_caller(
-                phone=from_number,
-                dealership_id=dealership_id
-            )
-            requires_lead_details = True
-            logger.info(f"Created minimal lead {lead.id} for unknown caller {from_number}")
+            try:
+                lead, customer = await service.create_minimal_lead_for_unknown_caller(
+                    phone=from_number,
+                    dealership_id=dealership_id
+                )
+                requires_lead_details = True
+                logger.info(f"Created minimal lead {lead.id} for unknown caller {from_number}")
+            except Exception as create_err:
+                logger.exception(
+                    "Failed to create minimal lead for unknown caller %s: %s",
+                    from_number,
+                    create_err,
+                )
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+                # Continue — still ring the dealership softphones
 
         # Sales/admins from lead's dealership + BDC with access to that dealership
         users_to_ring, _ = await service.find_users_for_incoming_call(lead, dealership_id)
-        users_to_dial = service.prioritize_users_for_softphone_dial(users_to_ring)
+        users_to_dial = await service.select_users_for_softphone_dial(users_to_ring, lead=lead)
 
         # Create call log (Twilio retries reuse the same CallSid)
         call_log = await service.get_call_by_sid(call_sid) if call_sid else None

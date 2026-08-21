@@ -120,6 +120,19 @@ class VoiceService {
   }
 
   /**
+   * Report Twilio Device registration so inbound Dial targets live softphones only.
+   */
+  async reportPresence(
+    status: "registered" | "heartbeat" | "busy" | "idle" | "unregistered"
+  ): Promise<void> {
+    try {
+      await apiClient.post("/voice/presence", { status })
+    } catch {
+      /* presence is best-effort; never block calling */
+    }
+  }
+
+  /**
    * Initiate an outbound call
    */
   async initiateCall(request: InitiateCallRequest): Promise<InitiateCallResponse> {

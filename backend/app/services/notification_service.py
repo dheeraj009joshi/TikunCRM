@@ -422,6 +422,54 @@ class NotificationService:
 
         return list(recipients.values())
 
+    async def _get_store_call_notification_recipients(
+        self, dealership_id: UUID
+    ) -> list["User"]:
+        """
+        Missed-call / voicemail recipients for one store:
+        - Active salespersons, dealership admins, and owners at that dealership
+        - Active BDC agents with access to that dealership
+        """
+        from app.core.permissions import UserRole
+        from app.models.user import User
+        from app.models.user_dealership_access import UserDealershipAccess
+
+        users_by_id: dict = {}
+
+        result = await self.db.execute(
+            select(User).where(
+                User.dealership_id == dealership_id,
+                User.is_active == True,
+                User.role.in_(
+                    [
+                        UserRole.SALESPERSON,
+                        UserRole.DEALERSHIP_ADMIN,
+                        UserRole.DEALERSHIP_OWNER,
+                    ]
+                ),
+            )
+        )
+        for user in result.scalars().all():
+            users_by_id[user.id] = user
+
+        bdc_result = await self.db.execute(
+            select(User)
+            .join(
+                UserDealershipAccess,
+                UserDealershipAccess.user_id == User.id,
+            )
+            .where(
+                UserDealershipAccess.dealership_id == dealership_id,
+                User.role == UserRole.BDC,
+                User.is_active == True,
+            )
+            .distinct()
+        )
+        for bdc_user in bdc_result.scalars().all():
+            users_by_id[bdc_user.id] = bdc_user
+
+        return list(users_by_id.values())
+
     async def notify_new_lead_to_dealership(
         self,
         dealership_id: UUID,
@@ -492,13 +540,12 @@ class NotificationService:
         lead_name: Optional[str] = None,
     ) -> List[Notification]:
         """
-        Notify dealership users + BDC that an inbound call was not answered.
-        Push + email; no SMS.
+        Notify that store's salespersons + admins/owners + BDC (email + push).
         """
         if await self._already_notified_call(call_log_id, NotificationType.MISSED_CALL):
             return []
 
-        recipients = await self._get_dealership_notification_recipients(dealership_id)
+        recipients = await self._get_store_call_notification_recipients(dealership_id)
         who = lead_name or from_number or "Unknown caller"
         title = f"Missed call: {who}"
         message = (
@@ -509,7 +556,7 @@ class NotificationService:
         link = f"/leads/{lead_id}" if lead_id else None
 
         notifications: List[Notification] = []
-        for user, _send_sms in recipients:
+        for user in recipients:
             try:
                 notification = await self.create_notification(
                     user_id=user.id,
@@ -533,10 +580,13 @@ class NotificationService:
                 )
 
         logger.info(
-            "Sent missed-call notifications to %s/%s users for call %s",
+            "Sent missed-call notifications to %s/%s store users for call %s "
+            "(dealership=%s emails=%s)",
             len(notifications),
             len(recipients),
             call_log_id,
+            dealership_id,
+            [u.email for u in recipients],
         )
         return notifications
 
@@ -550,13 +600,12 @@ class NotificationService:
         duration_seconds: Optional[int] = None,
     ) -> List[Notification]:
         """
-        Notify dealership users + BDC that a caller left a voicemail.
-        Push + email; no SMS.
+        Notify that store's salespersons + admins/owners + BDC (email + push).
         """
         if await self._already_notified_call(call_log_id, NotificationType.VOICEMAIL):
             return []
 
-        recipients = await self._get_dealership_notification_recipients(dealership_id)
+        recipients = await self._get_store_call_notification_recipients(dealership_id)
         who = lead_name or from_number or "Unknown caller"
         title = f"Voicemail: {who}"
         duration_bit = (
@@ -566,7 +615,7 @@ class NotificationService:
         link = f"/leads/{lead_id}" if lead_id else None
 
         notifications: List[Notification] = []
-        for user, _send_sms in recipients:
+        for user in recipients:
             try:
                 notification = await self.create_notification(
                     user_id=user.id,
@@ -590,13 +639,15 @@ class NotificationService:
                 )
 
         logger.info(
-            "Sent voicemail notifications to %s/%s users for call %s",
+            "Sent voicemail notifications to %s/%s store users for call %s "
+            "(dealership=%s)",
             len(notifications),
             len(recipients),
             call_log_id,
+            dealership_id,
         )
         return notifications
-    
+
     async def notify_lead_assigned_to_dealership(
         self,
         lead_id: UUID,

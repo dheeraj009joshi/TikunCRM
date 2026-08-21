@@ -108,7 +108,11 @@ class VoiceService:
             raise
     
     async def find_lead_by_phone(self, phone: str) -> Optional[Lead]:
-        """Find a lead by phone number via Customer table (most recent lead for that customer)."""
+        """Find a lead by phone number via Customer table.
+
+        Prefers the most recently updated lead that has an assignment
+        (salesperson or BDC); otherwise the most recently updated lead.
+        """
         normalized = "".join(c for c in phone if c.isdigit())
         if len(normalized) < 10:
             return None
@@ -124,6 +128,21 @@ class VoiceService:
         customer = cust_result.scalar_one_or_none()
         if not customer:
             return None
+
+        # Prefer an assigned lead for this customer (Brown Fitterman had 2 rows)
+        assigned = await self.db.execute(
+            select(Lead)
+            .where(
+                Lead.customer_id == customer.id,
+                or_(Lead.assigned_to.isnot(None), Lead.bdc_assigned_to_id.isnot(None)),
+            )
+            .order_by(Lead.updated_at.desc())
+            .limit(1)
+        )
+        lead = assigned.scalar_one_or_none()
+        if lead:
+            return lead
+
         result = await self.db.execute(
             select(Lead)
             .where(Lead.customer_id == customer.id)
@@ -235,6 +254,18 @@ class VoiceService:
             for bdc in await self._get_bdc_agents_for_dealership(target_dealership):
                 users_by_id[bdc.id] = bdc
 
+            # Always include lead assignees even if role/dealership edge cases
+            if lead:
+                for uid in (lead.bdc_assigned_to_id, lead.assigned_to):
+                    if not uid or uid in users_by_id:
+                        continue
+                    res = await self.db.execute(
+                        select(User).where(User.id == uid, User.is_active == True)
+                    )
+                    assignee = res.scalar_one_or_none()
+                    if assignee:
+                        users_by_id[assignee.id] = assignee
+
         users = list(users_by_id.values())
         if users:
             logger.info(
@@ -254,33 +285,62 @@ class VoiceService:
 
         return ([], is_unknown_caller)
 
-    def prioritize_users_for_softphone_dial(self, users: List[User]) -> List[User]:
+    def prioritize_users_for_softphone_dial(
+        self,
+        users: List[User],
+        lead: Optional[Lead] = None,
+    ) -> List[User]:
         """
         Order users for <Dial><Client> and truncate to Twilio's 10-client max.
 
-        Priority: BDC → salesperson → admin → owner. BDC agents are the primary
-        softphone operators; they must not be crowded out by a large sales team.
+        Priority:
+          0. Lead's assigned BDC (bdc_assigned_to_id)
+          1. Lead's assigned user (assigned_to) — salesperson OR admin
+          2. Other BDC agents
+          3. Salespersons
+          4. Admins / owners
         """
         role_rank = {
-            UserRole.BDC: 0,
-            UserRole.SALESPERSON: 1,
-            UserRole.DEALERSHIP_ADMIN: 2,
-            UserRole.DEALERSHIP_OWNER: 3,
+            UserRole.BDC: 2,
+            UserRole.SALESPERSON: 3,
+            UserRole.DEALERSHIP_ADMIN: 4,
+            UserRole.DEALERSHIP_OWNER: 5,
         }
 
-        def _rank(u: User) -> int:
+        preferred: List[UUID] = []
+        if lead:
+            if lead.bdc_assigned_to_id:
+                preferred.append(lead.bdc_assigned_to_id)
+            if lead.assigned_to:
+                preferred.append(lead.assigned_to)
+
+        def _rank(u: User) -> tuple:
+            # Preferred assignees always first (stable order of preferred list)
+            if u.id in preferred:
+                return (0, preferred.index(u.id))
             role = u.role
             if hasattr(role, "value"):
-                # Enum member
-                return role_rank.get(role, 9)
-            # Plain string from DB
+                return (role_rank.get(role, 9), 0)
             try:
-                return role_rank.get(UserRole(str(role)), 9)
+                return (role_rank.get(UserRole(str(role)), 9), 0)
             except ValueError:
-                return 9
+                return (9, 0)
 
         ordered = sorted(users, key=_rank)
-        capped = ordered[: self.MAX_SIMULTANEOUS_DIAL_CLIENTS]
+        # Ensure preferred users are present even if somehow missing from `users`
+        by_id = {u.id: u for u in ordered}
+        capped: List[User] = []
+        for pid in preferred:
+            if pid in by_id and by_id[pid] not in capped:
+                capped.append(by_id[pid])
+        for u in ordered:
+            if u in capped:
+                continue
+            capped.append(u)
+            if len(capped) >= self.MAX_SIMULTANEOUS_DIAL_CLIENTS:
+                break
+        capped = capped[: self.MAX_SIMULTANEOUS_DIAL_CLIENTS]
+
         if len(users) > self.MAX_SIMULTANEOUS_DIAL_CLIENTS:
             logger.warning(
                 "Ring group has %d users; dialing softphone for first %d only "
@@ -291,13 +351,50 @@ class VoiceService:
             )
         return capped
 
+    async def select_users_for_softphone_dial(
+        self,
+        users: List[User],
+        lead: Optional[Lead] = None,
+    ) -> List[User]:
+        """
+        Dial only users with a *live* softphone Device (presence heartbeat).
+
+        Twilio has no API for registered clients — the browser reports presence.
+        Among live users, apply assignee / role priority and cap at 10.
+        If nobody is live, return [] so inbound goes to voicemail (FCM still notifies).
+        """
+        from app.services.softphone_presence_service import live_user_ids
+
+        live_ids = await live_user_ids(
+            self.db,
+            [u.id for u in users],
+            exclude_busy=True,
+        )
+        live_users = [u for u in users if u.id in live_ids]
+        if not live_users:
+            logger.warning(
+                "No live softphone Devices among %d ring-group candidates — "
+                "Dial will go to voicemail (push still sent)",
+                len(users),
+            )
+            return []
+
+        logger.info(
+            "Softphone dial candidates: %d live / %d total (live=%s)",
+            len(live_users),
+            len(users),
+            [u.email for u in live_users],
+        )
+        return self.prioritize_users_for_softphone_dial(live_users, lead=lead)
+
     async def find_customer_by_phone(self, phone: str, dealership_id: Optional[UUID] = None) -> Optional[Customer]:
         """Find a customer by phone number."""
         normalized = "".join(c for c in phone if c.isdigit())
         if len(normalized) < 10:
             return None
         suffix = normalized[-10:]
-        
+
+        # Customer has no dealership_id — scope via lead when needed
         query = select(Customer).where(
             or_(
                 Customer.phone.ilike(f"%{suffix}"),
@@ -305,9 +402,12 @@ class VoiceService:
             )
         )
         if dealership_id:
-            query = query.where(Customer.dealership_id == dealership_id)
+            query = (
+                query.join(Lead, Lead.customer_id == Customer.id)
+                .where(Lead.dealership_id == dealership_id)
+            )
         query = query.limit(1)
-        
+
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
@@ -320,16 +420,19 @@ class VoiceService:
         Create a minimal lead + customer for an unknown caller.
         The lead.requires_lead_details flag is set via call_log.
         """
-        # Create customer with phone only
-        customer = Customer(
-            phone=phone,
-            dealership_id=dealership_id,
-            first_name="Unknown",
-            last_name="Caller",
-        )
-        self.db.add(customer)
-        await self.db.flush()
-        
+        # Reuse existing customer by phone if present (phone is unique)
+        existing = await self.find_customer_by_phone(phone)
+        if existing:
+            customer = existing
+        else:
+            customer = Customer(
+                phone=phone,
+                first_name="Unknown",
+                last_name="Caller",
+            )
+            self.db.add(customer)
+            await self.db.flush()
+
         # Get default stage and create lead with minimal info
         default_stage = await LeadStageService.get_default_stage(self.db, dealership_id)
         lead = Lead(
@@ -340,7 +443,7 @@ class VoiceService:
         )
         self.db.add(lead)
         await self.db.flush()
-        
+
         logger.info(f"Created minimal lead {lead.id} for unknown caller {phone}")
         return lead, customer
 
