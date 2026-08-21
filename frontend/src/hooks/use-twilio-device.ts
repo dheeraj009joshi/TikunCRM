@@ -53,7 +53,7 @@ interface CallInfo {
 
 export function useTwilioDevice(): UseTwilioDeviceReturn {
   const { toast } = useToast();
-  const { selectedDealershipId } = useBdcDealership();
+  const { selectedDealershipId, dealerships, isLoading: bdcDealershipsLoading } = useBdcDealership();
   
   // State
   const [isEnabled, setIsEnabled] = useState(false);
@@ -225,20 +225,50 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   }, []);
 
   /**
-   * Check if voice is enabled
+   * Resolve which Twilio dealership account(s) this softphone must register on.
+   * BDC with a selected store → that store only.
+   * BDC with "All dealerships" → every accessible store (inbound numbers differ per store).
+   * Sales/admin → empty list (backend uses user.dealership_id).
+   */
+  const voiceDealershipIds =
+    dealerships.length > 0
+      ? selectedDealershipId
+        ? [selectedDealershipId]
+        : dealerships.map((d) => d.id)
+      : ([] as string[]);
+
+  /**
+   * Check if voice is enabled (wait for BDC dealership list first)
    */
   useEffect(() => {
+    if (bdcDealershipsLoading) return;
+
     const checkConfig = async () => {
       try {
-        const config = await voiceService.getConfig();
-        setIsEnabled(config.voice_enabled);
+        if (voiceDealershipIds.length === 0) {
+          const config = await voiceService.getConfig();
+          setIsEnabled(config.voice_enabled);
+          return;
+        }
+        for (const id of voiceDealershipIds) {
+          try {
+            const config = await voiceService.getConfig(id);
+            if (config.voice_enabled) {
+              setIsEnabled(true);
+              return;
+            }
+          } catch {
+            /* try next store */
+          }
+        }
+        setIsEnabled(false);
       } catch {
         console.log("Voice not configured");
         setIsEnabled(false);
       }
     };
-    checkConfig();
-  }, []);
+    void checkConfig();
+  }, [bdcDealershipsLoading, selectedDealershipId, dealerships]);
 
   /**
    * Initialize Twilio device
@@ -248,6 +278,13 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       console.log("Voice calling not enabled");
       return;
     }
+    if (bdcDealershipsLoading) {
+      console.log("Voice waiting for BDC dealership list");
+      return;
+    }
+
+    const primary = voiceDealershipIds[0] ?? null;
+    const extras = voiceDealershipIds.slice(1);
 
     try {
       await twilioVoiceManager.initialize(
@@ -300,14 +337,9 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
         },
         onCallDisconnected: (call) => {
           acceptingRef.current = false;
-          // Waiting leg cancelled — clear modal but keep active call UI
-          if (twilioVoiceManager.hasPendingIncoming()) {
-            // Another call still pending; disconnect was for a different leg
-          }
           const stillOnCall = !!twilioVoiceManager.getCurrentCall() &&
             twilioVoiceManager.getCurrentCall()?.status() === "open";
           if (stillOnCall) {
-            // Active call remains; only clear waiting UI if that leg ended
             if (incomingCallRef.current) {
               setIncomingCall(null);
               stopIncomingRingtone();
@@ -345,26 +377,36 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
           console.log("Token expiring, will refresh automatically");
         },
       },
-        selectedDealershipId
+        primary,
+        extras
       );
+      setIsInitialized(true);
     } catch (error) {
       console.error("Failed to initialize Twilio:", error);
+      setIsInitialized(false);
       toast({
         title: "Voice Initialization Failed",
         description: "Could not connect to voice service",
         variant: "destructive",
       });
     }
-  }, [isEnabled, toast, startDurationTimer, stopDurationTimer, selectedDealershipId]);
+  }, [
+    isEnabled,
+    toast,
+    startDurationTimer,
+    stopDurationTimer,
+    bdcDealershipsLoading,
+    selectedDealershipId,
+    dealerships,
+  ]);
 
   /**
-   * Auto-initialize when enabled
+   * Auto-initialize / re-init when dealership selection changes
    */
   useEffect(() => {
-    if (isEnabled && !isInitialized) {
-      initialize();
-    }
-  }, [isEnabled, isInitialized, initialize]);
+    if (!isEnabled || bdcDealershipsLoading) return;
+    void initialize();
+  }, [isEnabled, bdcDealershipsLoading, initialize]);
 
   /**
    * When the tab becomes visible again, force a real Twilio signaling reconnect.

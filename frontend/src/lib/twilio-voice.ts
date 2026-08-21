@@ -59,6 +59,8 @@ export type TwilioEventCallback = {
 
 class TwilioVoiceManager {
   private device: TwilioDevice | null = null;
+  /** Extra Devices so BDC can receive inbound on every accessible store's Twilio account */
+  private extraDevices: Map<string, TwilioDevice> = new Map();
   /** Active connected (or ringing-only when not busy) call */
   private currentCall: TwilioCall | null = null;
   /** Second inbound while already on a call (call waiting) */
@@ -71,87 +73,130 @@ class TwilioVoiceManager {
   private reconnectInFlight: Promise<void> | null = null;
   private isInitialized = false;
   private dealershipId: string | null = null;
+  /** Dealerships currently registered (for change detection) */
+  private registeredDealershipKey = "";
 
   /**
-   * Initialize the Twilio Device with an access token
+   * Initialize the Twilio Device with an access token.
+   * Pass extraDealershipIds for BDC "All stores" so inbound Dial on any
+   * store Twilio account can reach this softphone.
    */
   async initialize(
     callbacks: TwilioEventCallback = {},
-    dealershipId?: string | null
+    dealershipId?: string | null,
+    extraDealershipIds: string[] = []
   ): Promise<void> {
-    if (this.isInitialized) {
-      console.log("Twilio already initialized");
+    const primary = dealershipId ?? null;
+    const extras = [
+      ...new Set(extraDealershipIds.filter((id): id is string => !!id && id !== primary)),
+    ];
+    const key = [primary ?? "", ...extras].sort().join(",");
+
+    if (this.isInitialized && this.registeredDealershipKey === key) {
+      console.log("Twilio already initialized for dealerships:", key || "(user default)");
+      this.callbacks = callbacks;
       return;
     }
 
+    if (this.isInitialized) {
+      console.log("Twilio dealership set changed — reinitializing", key);
+      this.destroy();
+    }
+
     this.callbacks = callbacks;
-    this.dealershipId = dealershipId ?? null;
+    this.dealershipId = primary;
+    this.registeredDealershipKey = key;
     this.notifyStateChange("connecting");
 
     try {
-      // Dynamically load Twilio SDK
       const { Device } = await import("@twilio/voice-sdk");
 
-      // Get access token from backend (BDC may pass selected dealership)
       const tokenData = await voiceService.getToken(this.dealershipId);
-
-      // Create device
       const options = {
         logLevel: 1 as const,
         codecPreferences: ["opus", "pcmu"],
         allowIncomingWhileBusy: true,
         closeProtection: true,
       };
-      this.device = new Device(tokenData.token, options as ConstructorParameters<typeof Device>[1]) as unknown as TwilioDevice;
+      this.device = new Device(
+        tokenData.token,
+        options as ConstructorParameters<typeof Device>[1]
+      ) as unknown as TwilioDevice;
 
-      // Set up event listeners
-      this.setupDeviceListeners();
-
-      // Register the device
+      this.setupDeviceListeners(this.device, true);
       await this.device.register();
 
       this.isInitialized = true;
       this.notifyStateChange("ready");
-
-      // Set up token refresh before expiry
       this.scheduleTokenRefresh(tokenData.expires_in);
-
-      // Periodically verify device registration (catches silent WebSocket drops)
       this.startKeepAlive();
 
-      console.log("Twilio Voice initialized successfully");
+      console.log(
+        "Twilio Voice initialized (primary dealership=%s)",
+        this.dealershipId || "user-default"
+      );
+
+      for (const extraId of extras) {
+        try {
+          const extraToken = await voiceService.getToken(extraId);
+          const extraDevice = new Device(
+            extraToken.token,
+            options as ConstructorParameters<typeof Device>[1]
+          ) as unknown as TwilioDevice;
+          this.setupDeviceListeners(extraDevice, false);
+          await extraDevice.register();
+          this.extraDevices.set(extraId, extraDevice);
+          console.log("Twilio Voice extra device registered for dealership", extraId);
+        } catch (e) {
+          console.warn("Twilio extra device failed for dealership", extraId, e);
+        }
+      }
     } catch (error) {
       console.error("Failed to initialize Twilio Voice:", error);
       this.notifyStateChange("error");
+      this.isInitialized = false;
+      this.registeredDealershipKey = "";
       throw error;
     }
   }
 
   /**
-   * Set up event listeners on the Twilio Device
+   * Set up event listeners on a Twilio Device
    */
-  private setupDeviceListeners(): void {
-    if (!this.device) return;
-
-    // Device ready
-    this.device.on("registered", () => {
-      console.log("Twilio device registered");
-      this.notifyStateChange("ready");
+  private setupDeviceListeners(device: TwilioDevice, isPrimary: boolean): void {
+    device.on("registered", () => {
+      console.log("Twilio device registered", isPrimary ? "(primary)" : "(extra)");
+      if (isPrimary) this.notifyStateChange("ready");
     });
 
-    // Device error
-    this.device.on("error", (err: unknown) => {
+    device.on("error", (err: unknown) => {
       const error = err instanceof Error ? err : new Error(String(err));
       console.error("Twilio device error:", error);
       this.callbacks.onCallError?.(error);
-      this.notifyStateChange("error");
+      if (isPrimary) this.notifyStateChange("error");
     });
 
-    // Incoming call
-    this.device.on("incoming", (call: unknown) => {
-      const twilioCall = call as TwilioCall;
+    device.on("incoming", (call: unknown) => {
+      this.handleIncomingInvite(call as TwilioCall);
+    });
+
+    if (isPrimary) {
+      device.on("tokenWillExpire", () => {
+        console.log("Twilio token will expire soon");
+        this.callbacks.onTokenExpiring?.();
+        this.refreshToken();
+      });
+
+      device.on("unregistered", () => {
+        console.log("Twilio device unregistered");
+        this.notifyStateChange("offline");
+      });
+    }
+  }
+
+  private handleIncomingInvite(twilioCall: TwilioCall): void {
       console.log("Incoming call:", twilioCall.parameters);
-      
+
       const info: IncomingCallInfo = {
         callSid: twilioCall.parameters.CallSid || "",
         parentCallSid: twilioCall.parameters.ParentCallSid || undefined,
@@ -190,20 +235,6 @@ class TwilioVoiceManager {
       this.setupCallListeners(twilioCall);
       this.notifyStateChange("busy");
       this.callbacks.onIncomingCall?.(twilioCall, info);
-    });
-
-    // Token about to expire
-    this.device.on("tokenWillExpire", () => {
-      console.log("Twilio token will expire soon");
-      this.callbacks.onTokenExpiring?.();
-      this.refreshToken();
-    });
-
-    // Device unregistered
-    this.device.on("unregistered", () => {
-      console.log("Twilio device unregistered");
-      this.notifyStateChange("offline");
-    });
   }
 
   /**
@@ -652,12 +683,23 @@ class TwilioVoiceManager {
       this.currentCall = null;
     }
 
+    for (const [, extra] of this.extraDevices) {
+      try {
+        extra.destroy();
+      } catch {
+        /* noop */
+      }
+    }
+    this.extraDevices.clear();
+
     if (this.device) {
       this.device.destroy();
       this.device = null;
     }
 
     this.isInitialized = false;
+    this.registeredDealershipKey = "";
+    this.dealershipId = null;
     this.callbacks = {};
   }
 

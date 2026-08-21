@@ -99,8 +99,11 @@ class VoiceService {
   /**
    * Get voice configuration status
    */
-  async getConfig(): Promise<VoiceConfig> {
-    const response = await apiClient.get<VoiceConfig>("/voice/config");
+  async getConfig(dealershipId?: string | null): Promise<VoiceConfig> {
+    const response = await apiClient.get<VoiceConfig>(
+      "/voice/config",
+      dealershipId ? { params: { dealership_id: dealershipId } } : undefined
+    );
     return response.data;
   }
 
