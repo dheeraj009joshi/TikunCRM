@@ -73,8 +73,21 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   const acceptingRef = useRef(false);
   const acceptCallRef = useRef<() => void>(() => {});
   const ignoreCallRef = useRef<() => void>(() => {});
+  /** Block force Twilio reconnect while an inbound Dial may be in flight */
+  const protectIncomingUntilRef = useRef(0);
   incomingCallRef.current = incomingCall;
   activeCallRef.current = currentCallInfo;
+
+  const markIncomingCallWindow = useCallback((ms = 90_000) => {
+    protectIncomingUntilRef.current = Date.now() + ms;
+  }, []);
+
+  const canForceTwilioReconnect = useCallback(() => {
+    if (twilioVoiceManager.isOnAnyCall()) return false;
+    if (incomingCallRef.current) return false;
+    if (Date.now() < protectIncomingUntilRef.current) return false;
+    return true;
+  }, []);
 
   const matchesIncomingCall = useCallback(
     (payload: {
@@ -417,8 +430,9 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   }, [isEnabled, bdcDealershipsLoading, initialize]);
 
   /**
-   * When the tab becomes visible again, force a real Twilio signaling reconnect.
-   * Browsers can drop the Voice WS while Device still reports "registered".
+   * When the tab becomes visible again, re-register only if safe.
+   * Never force unregister+register during an inbound Dial window — that drops
+   * the invite (notifications still fire via FCM, softphone never rings).
    */
   useEffect(() => {
     if (!isEnabled) return;
@@ -426,8 +440,11 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
       if (!twilioVoiceManager.getIsInitialized()) {
-        // Destroyed / offline — hook auto-init effect will rebuild
         void initialize();
+        return;
+      }
+      if (!canForceTwilioReconnect()) {
+        console.log("Twilio force reconnect skipped — inbound call window active");
         return;
       }
       void twilioVoiceManager.ensureRegistered(true);
@@ -441,12 +458,12 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       window.removeEventListener("focus", onVisible);
       window.removeEventListener("online", onVisible);
     };
-  }, [isEnabled, initialize]);
+  }, [isEnabled, initialize, canForceTwilioReconnect]);
 
   /**
    * Handle service worker messages:
-   * - WAKE_FOR_INCOMING_CALL: force Twilio reconnect before Dial invite arrives
-   * - INCOMING_CALL_CLICK / NOTIFICATION_CLICK: focus tab + reconnect
+   * - WAKE_FOR_INCOMING_CALL: gentle re-register only (never force)
+   * - INCOMING_CALL_CLICK / NOTIFICATION_CLICK: focus tab; do not tear down Device
    * - ACCEPT_INCOMING_CALL: accept if Twilio invite is already pending
    */
   useEffect(() => {
@@ -454,8 +471,8 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       const data = event.data || {};
 
       if (data.type === "WAKE_FOR_INCOMING_CALL") {
-        // Do not force unregister+register — that drops a live Dial invite
-        // (one ring, then Twilio plays "application error").
+        markIncomingCallWindow();
+        // Do not force unregister+register — that drops a live Dial invite.
         if (twilioVoiceManager.isOnAnyCall()) {
           console.log("SW wake skipped — already ringing/on a call");
           return;
@@ -469,21 +486,25 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       }
 
       if (data.type === "ACCEPT_INCOMING_CALL") {
+        markIncomingCallWindow();
         window.focus();
         if (incomingCallRef.current && !activeCallRef.current) {
-          // acceptCallRef is kept in sync below; call through it for shared accept logic
           acceptCallRef.current();
-        } else {
-          void twilioVoiceManager.ensureRegistered(true);
         }
+        // Never force reconnect here — invite may already be pending
         return;
       }
 
       if (data.type === "INCOMING_CALL_CLICK" || data.type === "NOTIFICATION_CLICK") {
+        if (data.type === "INCOMING_CALL_CLICK") {
+          markIncomingCallWindow();
+        }
         if (!twilioVoiceManager.getIsInitialized()) {
           void initialize();
-        } else {
+        } else if (canForceTwilioReconnect()) {
           void twilioVoiceManager.ensureRegistered(true);
+        } else {
+          void twilioVoiceManager.ensureRegistered(false);
         }
         window.focus();
         if (typeof data.url === "string" && data.url.startsWith("/") && data.url !== window.location.pathname) {
@@ -498,7 +519,7 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     };
     navigator.serviceWorker?.addEventListener("message", onMessage);
     return () => navigator.serviceWorker?.removeEventListener("message", onMessage);
-  }, [initialize]);
+  }, [initialize, markIncomingCallWindow, canForceTwilioReconnect]);
 
   /**
    * Page Lifecycle API: force reconnect when the page resumes from
@@ -508,17 +529,19 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     if (!isEnabled) return;
 
     const onResume = () => {
-      console.log("Page resumed from freeze — forcing Twilio reconnect");
+      console.log("Page resumed from freeze — Twilio reconnect");
       if (!twilioVoiceManager.getIsInitialized()) {
         void initialize();
-      } else {
+      } else if (canForceTwilioReconnect()) {
         void twilioVoiceManager.ensureRegistered(true);
+      } else {
+        void twilioVoiceManager.ensureRegistered(false);
       }
     };
 
     document.addEventListener("resume", onResume);
     return () => document.removeEventListener("resume", onResume);
-  }, [isEnabled, initialize]);
+  }, [isEnabled, initialize, canForceTwilioReconnect]);
 
   /**
    * Cleanup on unmount

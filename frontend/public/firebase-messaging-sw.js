@@ -90,8 +90,8 @@ self.addEventListener('push', (event) => {
       { action: 'open', title: 'Open CRM' },
     ];
 
-    // Wake all CRM tabs so Twilio force-reconnects before the signaling arrives.
-    // This ensures the floating PiP popup works even if the tab was sleeping.
+    // Wake CRM tabs gently so Twilio Device is ready — do NOT ask for force
+    // unregister/register (that drops the live Dial invite).
     event.waitUntil(
       clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
         for (const client of clientList) {

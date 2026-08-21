@@ -1095,10 +1095,12 @@ async def handle_incoming_call(
         is_unknown_caller = lead is None
         requires_lead_details = False
 
-        dealership_id = lead.dealership_id if lead else None
+        # Prefer the dealership that owns the dialed number (To). Lead dealership
+        # is only a fallback — otherwise a lead at store A calling store B's DID
+        # rings the wrong softphone account group.
         dealership_from_to = await find_dealership_id_by_voice_to(db, to_number)
-        if dealership_from_to:
-            dealership_id = dealership_id or dealership_from_to
+        lead_dealership = lead.dealership_id if lead else None
+        dealership_id = dealership_from_to or lead_dealership
 
         if is_unknown_caller and not dealership_id:
             from app.models.dealership import Dealership
@@ -1116,8 +1118,9 @@ async def handle_incoming_call(
             requires_lead_details = True
             logger.info(f"Created minimal lead {lead.id} for unknown caller {from_number}")
 
-        # Find users to ring (ring group)
+        # Find users to notify + dial (full list for FCM; Dial capped later)
         users_to_ring, _ = await service.find_users_for_incoming_call(lead, dealership_id)
+        users_to_dial = service.prioritize_users_for_softphone_dial(users_to_ring)
 
         # Create call log (Twilio retries reuse the same CallSid)
         call_log = await service.get_call_by_sid(call_sid) if call_sid else None
@@ -1127,10 +1130,10 @@ async def handle_incoming_call(
                 direction=CallDirection.INBOUND,
                 from_number=from_number,
                 to_number=to_number,
-                user_id=users_to_ring[0].id if len(users_to_ring) == 1 else None,
+                user_id=users_to_dial[0].id if len(users_to_dial) == 1 else None,
                 lead_id=lead.id if lead else None,
                 customer_id=lead.customer_id if lead else None,
-                dealership_id=dealership_id or (users_to_ring[0].dealership_id if users_to_ring else None),
+                dealership_id=dealership_id or (users_to_dial[0].dealership_id if users_to_dial else None),
                 status=CallStatus.RINGING
             )
 
@@ -1147,6 +1150,7 @@ async def handle_incoming_call(
                 lead_name = None
 
         # Notify AFTER TwiML is returned — FCM/email here used to exceed Twilio's 15s limit
+        # Notify the FULL ring group (not just the Dial cap of 10).
         if users_to_ring:
             background_tasks.add_task(
                 _notify_incoming_ring_background,
@@ -1158,21 +1162,22 @@ async def handle_incoming_call(
                 str(call_log.id),
             )
 
-        if users_to_ring:
-            user_identities = [service.client_identity_for_user(u) for u in users_to_ring]
+        if users_to_dial:
+            user_identities = [service.client_identity_for_user(u) for u in users_to_dial]
             if len(user_identities) == 1:
                 twiml = service.generate_twiml_for_incoming(
-                    user_identities[0], timeout=45, wake_pause_seconds=1
+                    user_identities[0], timeout=45, wake_pause_seconds=2
                 )
             else:
                 twiml = service.generate_twiml_ring_group(
-                    user_identities, timeout=45, wake_pause_seconds=1
+                    user_identities, timeout=45, wake_pause_seconds=2
                 )
                 logger.info(
-                    "Ring group for call %s: %d users (identities=%s)",
+                    "Ring group for call %s: notify=%d dial=%d (dialing=%s)",
                     call_sid,
                     len(users_to_ring),
-                    [u.email for u in users_to_ring],
+                    len(users_to_dial),
+                    [u.email for u in users_to_dial],
                 )
         else:
             twiml = service.generate_twiml_voicemail()

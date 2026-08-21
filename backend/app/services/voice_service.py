@@ -185,6 +185,11 @@ class VoiceService:
         """Twilio Client identity — must match voice token identity (user UUID)."""
         return str(user.id)
 
+    # Twilio <Dial> allows at most 10 nested <Client>/<Number> nouns.
+    # Exceeding this makes Dial fail (error 13250) → immediate voicemail,
+    # while FCM can still notify everyone — exactly the "notify but no ring" bug.
+    MAX_SIMULTANEOUS_DIAL_CLIENTS = 10
+
     async def find_users_for_incoming_call(
         self,
         lead: Optional[Lead],
@@ -197,8 +202,10 @@ class VoiceService:
             Tuple of (list_of_users_to_ring, is_unknown_caller)
 
         Ring policy (always, regardless of assignment):
-            - All active salespersons / dealership admins / owners at the dealership
-            - All active BDC agents with access to the dealership
+            - All active BDC agents with access to the dealership (priority)
+            - Then salespersons, then dealership admins/owners
+            - Softphone Dial is capped at MAX_SIMULTANEOUS_DIAL_CLIENTS (Twilio limit);
+              callers should still FCM-notify the full list separately.
             First person to answer gets the call.
         """
         is_unknown_caller = lead is None
@@ -235,6 +242,43 @@ class VoiceService:
             return (users, is_unknown_caller)
 
         return ([], is_unknown_caller)
+
+    def prioritize_users_for_softphone_dial(self, users: List[User]) -> List[User]:
+        """
+        Order users for <Dial><Client> and truncate to Twilio's 10-client max.
+
+        Priority: BDC → salesperson → admin → owner. BDC agents are the primary
+        softphone operators; they must not be crowded out by a large sales team.
+        """
+        role_rank = {
+            UserRole.BDC: 0,
+            UserRole.SALESPERSON: 1,
+            UserRole.DEALERSHIP_ADMIN: 2,
+            UserRole.DEALERSHIP_OWNER: 3,
+        }
+
+        def _rank(u: User) -> int:
+            role = u.role
+            if hasattr(role, "value"):
+                # Enum member
+                return role_rank.get(role, 9)
+            # Plain string from DB
+            try:
+                return role_rank.get(UserRole(str(role)), 9)
+            except ValueError:
+                return 9
+
+        ordered = sorted(users, key=_rank)
+        capped = ordered[: self.MAX_SIMULTANEOUS_DIAL_CLIENTS]
+        if len(users) > self.MAX_SIMULTANEOUS_DIAL_CLIENTS:
+            logger.warning(
+                "Ring group has %d users; dialing softphone for first %d only "
+                "(Twilio Dial max). FCM should still notify all. Dialing: %s",
+                len(users),
+                len(capped),
+                [u.email for u in capped],
+            )
+        return capped
 
     async def find_customer_by_phone(self, phone: str, dealership_id: Optional[UUID] = None) -> Optional[Customer]:
         """Find a customer by phone number."""
@@ -1093,6 +1137,15 @@ class VoiceService:
 
         if not user_identities:
             return self.generate_twiml_voicemail()
+
+        # Hard safety: Twilio rejects Dial with >10 Client/Number nouns (13250).
+        if len(user_identities) > self.MAX_SIMULTANEOUS_DIAL_CLIENTS:
+            logger.warning(
+                "generate_twiml_ring_group truncating %d identities to %d",
+                len(user_identities),
+                self.MAX_SIMULTANEOUS_DIAL_CLIENTS,
+            )
+            user_identities = user_identities[: self.MAX_SIMULTANEOUS_DIAL_CLIENTS]
 
         if wake_pause_seconds > 0:
             response.pause(length=wake_pause_seconds)
