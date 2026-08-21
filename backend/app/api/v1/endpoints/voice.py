@@ -349,6 +349,82 @@ async def get_voice_config_status(
     }
 
 
+@router.get("/debug/ring-group")
+async def debug_ring_group(
+    to_number: Optional[str] = Query(
+        None,
+        description="Simulate inbound To number (E.164). Defaults to env TWILIO_PHONE_NUMBER.",
+    ),
+    from_number: Optional[str] = Query(
+        None,
+        description="Optional caller From number to also resolve a lead.",
+    ),
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Admin/BDC debug: show which dealership + users would be dialed for an inbound call.
+    Does not place a call. Helps diagnose multi-dealership BDC softphone issues.
+    """
+    if current_user.role not in {
+        UserRole.SUPER_ADMIN,
+        UserRole.DEALERSHIP_OWNER,
+        UserRole.DEALERSHIP_ADMIN,
+        UserRole.BDC,
+    }:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed")
+
+    service = get_voice_service(db)
+    to_num = (to_number or settings.twilio_phone_number or "").strip()
+    dealership_from_to = await find_dealership_id_by_voice_to(db, to_num) if to_num else None
+
+    lead = None
+    if from_number:
+        lead = await service.find_lead_by_phone(from_number)
+
+    dealership_id = lead.dealership_id if lead else None
+    if dealership_from_to:
+        dealership_id = dealership_id or dealership_from_to
+
+    users_to_ring, is_unknown = await service.find_users_for_incoming_call(lead, dealership_id)
+    identities = [service.client_identity_for_user(u) for u in users_to_ring]
+
+    # Softphone identity for current user + which dealership token they would get
+    my_resolved = await service.resolve_voice_dealership_id(current_user)
+    my_effective = await get_effective_twilio_config(db, my_resolved)
+
+    return {
+        "to_number": to_num or None,
+        "from_number": from_number,
+        "dealership_matched_by_to": str(dealership_from_to) if dealership_from_to else None,
+        "dealership_used_for_ring": str(dealership_id) if dealership_id else None,
+        "lead_id": str(lead.id) if lead else None,
+        "is_unknown_caller": is_unknown and lead is None,
+        "users_to_ring_count": len(users_to_ring),
+        "would_go_to_voicemail_immediately": len(users_to_ring) == 0,
+        "users_to_ring": [
+            {
+                "id": str(u.id),
+                "email": u.email,
+                "role": u.role.value if hasattr(u.role, "value") else str(u.role),
+                "client_identity": service.client_identity_for_user(u),
+                "dealership_id": str(u.dealership_id) if u.dealership_id else None,
+            }
+            for u in users_to_ring
+        ],
+        "dial_client_identities": identities,
+        "current_user": {
+            "id": str(current_user.id),
+            "role": current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role),
+            "client_identity": str(current_user.id),
+            "included_in_ring_group": any(u.id == current_user.id for u in users_to_ring),
+            "token_dealership_id": str(my_resolved) if my_resolved else None,
+            "voice_ready": my_effective.is_voice_ready(),
+            "account_sid_prefix": (my_effective.account_sid or "")[:10] or None,
+        },
+    }
+
+
 @router.post("/token", response_model=VoiceTokenResponse)
 async def get_voice_token(
     dealership_id: Optional[UUID] = Query(

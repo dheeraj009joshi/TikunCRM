@@ -57,10 +57,24 @@ export type TwilioEventCallback = {
   onTokenExpiring?: () => void;
 };
 
+/** Decode Twilio Access Token payload (no verify) — `sub` is Account SID. */
+function twilioAccountSidFromToken(jwt: string): string | null {
+  try {
+    const payload = jwt.split(".")[1];
+    if (!payload) return null;
+    const json = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
+    return typeof json.sub === "string" ? json.sub : null;
+  } catch {
+    return null;
+  }
+}
+
 class TwilioVoiceManager {
   private device: TwilioDevice | null = null;
   /** Extra Devices so BDC can receive inbound on every accessible store's Twilio account */
   private extraDevices: Map<string, TwilioDevice> = new Map();
+  /** dealershipId → account SID we registered (for token refresh) */
+  private registeredAccountByDealership: Map<string, string> = new Map();
   /** Active connected (or ringing-only when not busy) call */
   private currentCall: TwilioCall | null = null;
   /** Second inbound while already on a call (call waiting) */
@@ -78,8 +92,11 @@ class TwilioVoiceManager {
 
   /**
    * Initialize the Twilio Device with an access token.
-   * Pass extraDealershipIds for BDC "All stores" so inbound Dial on any
+   * Pass extraDealershipIds for multi-store BDC so inbound Dial on any
    * store Twilio account can reach this softphone.
+   *
+   * Devices that share the same Twilio Account SID are skipped — only one
+   * Client registration per identity is allowed per account.
    */
   async initialize(
     callbacks: TwilioEventCallback = {},
@@ -90,7 +107,9 @@ class TwilioVoiceManager {
     const extras = [
       ...new Set(extraDealershipIds.filter((id): id is string => !!id && id !== primary)),
     ];
-    const key = [primary ?? "", ...extras].sort().join(",");
+    // Include primary separately so switching the UI store re-binds outbound Device
+    // while still registering every accessible store for inbound.
+    const key = `${primary ?? ""}::${[...extras].sort().join(",")}`;
 
     if (this.isInitialized && this.registeredDealershipKey === key) {
       console.log("Twilio already initialized for dealerships:", key || "(user default)");
@@ -126,19 +145,36 @@ class TwilioVoiceManager {
       this.setupDeviceListeners(this.device, true);
       await this.device.register();
 
+      const primaryAccount = twilioAccountSidFromToken(tokenData.token);
+      const seenAccounts = new Set<string>();
+      if (primaryAccount) seenAccounts.add(primaryAccount);
+      if (this.dealershipId && primaryAccount) {
+        this.registeredAccountByDealership.set(this.dealershipId, primaryAccount);
+      }
+
       this.isInitialized = true;
       this.notifyStateChange("ready");
       this.scheduleTokenRefresh(tokenData.expires_in);
       this.startKeepAlive();
 
       console.log(
-        "Twilio Voice initialized (primary dealership=%s)",
-        this.dealershipId || "user-default"
+        "Twilio Voice initialized (primary dealership=%s account=%s)",
+        this.dealershipId || "user-default",
+        primaryAccount || "unknown"
       );
 
       for (const extraId of extras) {
         try {
           const extraToken = await voiceService.getToken(extraId);
+          const extraAccount = twilioAccountSidFromToken(extraToken.token);
+          if (extraAccount && seenAccounts.has(extraAccount)) {
+            console.log(
+              "Twilio skip extra dealership %s — same account %s as already registered",
+              extraId,
+              extraAccount
+            );
+            continue;
+          }
           const extraDevice = new Device(
             extraToken.token,
             options as ConstructorParameters<typeof Device>[1]
@@ -146,7 +182,15 @@ class TwilioVoiceManager {
           this.setupDeviceListeners(extraDevice, false);
           await extraDevice.register();
           this.extraDevices.set(extraId, extraDevice);
-          console.log("Twilio Voice extra device registered for dealership", extraId);
+          if (extraAccount) {
+            seenAccounts.add(extraAccount);
+            this.registeredAccountByDealership.set(extraId, extraAccount);
+          }
+          console.log(
+            "Twilio Voice extra device registered for dealership %s account=%s",
+            extraId,
+            extraAccount || "unknown"
+          );
         } catch (e) {
           console.warn("Twilio extra device failed for dealership", extraId, e);
         }
@@ -475,8 +519,18 @@ class TwilioVoiceManager {
       clearTimeout(this.tokenRefreshTimer);
       this.tokenRefreshTimer = null;
     }
+    for (const [, extra] of this.extraDevices) {
+      try {
+        extra.destroy();
+      } catch {
+        /* noop */
+      }
+    }
+    this.extraDevices.clear();
+    this.registeredAccountByDealership.clear();
     this.device = null;
     this.isInitialized = false;
+    this.registeredDealershipKey = "";
     this.notifyStateChange("offline");
   }
 
@@ -519,6 +573,8 @@ class TwilioVoiceManager {
       }
 
       if (state === "registered" && !force) {
+        // Still re-check extras that may have dropped
+        await this.ensureExtraDevicesRegistered(false);
         return;
       }
 
@@ -542,12 +598,36 @@ class TwilioVoiceManager {
       await this.device.register();
       this.keepAliveTicks = 0;
       console.log("Twilio device re-registered successfully");
+      await this.ensureExtraDevicesRegistered(force);
     } catch (e) {
       console.warn("Twilio ensureRegistered failed:", e);
       // If register keeps failing, request a full re-init from the hook
       const state = this.device?.state;
       if (state === "destroyed" || state === "unregistered") {
         this.markNeedsReinit(`register failed (state=${state})`);
+      }
+    }
+  }
+
+  private async ensureExtraDevicesRegistered(force: boolean): Promise<void> {
+    for (const [dealershipId, extra] of this.extraDevices) {
+      try {
+        const state = extra.state;
+        if (state === "destroyed" || state === "destroying") continue;
+        if (state === "registered" && !force) continue;
+        if (force && state === "registered") {
+          try {
+            await extra.unregister();
+          } catch {
+            /* noop */
+          }
+        }
+        if (extra.state !== "destroyed") {
+          await extra.register();
+          console.log("Twilio extra device re-registered for", dealershipId);
+        }
+      } catch (e) {
+        console.warn("Twilio extra ensureRegistered failed for", dealershipId, e);
       }
     }
   }
@@ -621,15 +701,25 @@ class TwilioVoiceManager {
   private async refreshToken(): Promise<void> {
     try {
       const tokenData = await voiceService.getToken(this.dealershipId);
-      
+
       if (this.device) {
-        // Update token on existing device
-        const { Device } = await import("@twilio/voice-sdk");
-        (this.device as unknown as { updateToken: (token: string) => void }).updateToken(tokenData.token);
-        console.log("Twilio token refreshed");
-        
-        // Schedule next refresh
+        (this.device as unknown as { updateToken: (token: string) => void }).updateToken(
+          tokenData.token
+        );
+        console.log("Twilio primary token refreshed");
         this.scheduleTokenRefresh(tokenData.expires_in);
+      }
+
+      for (const [dealershipId, extra] of this.extraDevices) {
+        try {
+          const extraToken = await voiceService.getToken(dealershipId);
+          (extra as unknown as { updateToken: (token: string) => void }).updateToken(
+            extraToken.token
+          );
+          console.log("Twilio extra token refreshed for", dealershipId);
+        } catch (e) {
+          console.warn("Twilio extra token refresh failed for", dealershipId, e);
+        }
       }
     } catch (error) {
       console.error("Failed to refresh Twilio token:", error);
@@ -691,6 +781,7 @@ class TwilioVoiceManager {
       }
     }
     this.extraDevices.clear();
+    this.registeredAccountByDealership.clear();
 
     if (this.device) {
       this.device.destroy();

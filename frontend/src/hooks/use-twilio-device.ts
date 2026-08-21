@@ -225,17 +225,23 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   }, []);
 
   /**
-   * Resolve which Twilio dealership account(s) this softphone must register on.
-   * BDC with a selected store → that store only.
-   * BDC with "All dealerships" → every accessible store (inbound numbers differ per store).
+   * Softphone registration dealerships (inbound).
+   *
+   * CRITICAL for multi-store BDC: always register on EVERY accessible store,
+   * not just the UI-selected one. The dealership filter only scopes leads/UI —
+   * inbound numbers live on per-store Twilio accounts, so a Device registered
+   * only for store A will never receive Dial invites for store B's number.
+   *
    * Sales/admin → empty list (backend uses user.dealership_id).
    */
-  const voiceDealershipIds =
-    dealerships.length > 0
-      ? selectedDealershipId
-        ? [selectedDealershipId]
-        : dealerships.map((d) => d.id)
-      : ([] as string[]);
+  const inboundVoiceDealershipIds =
+    dealerships.length > 0 ? dealerships.map((d) => d.id) : ([] as string[]);
+
+  /**
+   * Outbound primary dealership (selected filter, else first accessible).
+   */
+  const outboundVoiceDealershipId =
+    selectedDealershipId ?? inboundVoiceDealershipIds[0] ?? null;
 
   /**
    * Check if voice is enabled (wait for BDC dealership list first)
@@ -245,12 +251,12 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
 
     const checkConfig = async () => {
       try {
-        if (voiceDealershipIds.length === 0) {
+        if (inboundVoiceDealershipIds.length === 0) {
           const config = await voiceService.getConfig();
           setIsEnabled(config.voice_enabled);
           return;
         }
-        for (const id of voiceDealershipIds) {
+        for (const id of inboundVoiceDealershipIds) {
           try {
             const config = await voiceService.getConfig(id);
             if (config.voice_enabled) {
@@ -283,8 +289,10 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       return;
     }
 
-    const primary = voiceDealershipIds[0] ?? null;
-    const extras = voiceDealershipIds.slice(1);
+    // Primary = preferred outbound store; extras = every other accessible store
+    // so inbound rings on all dealership Twilio accounts.
+    const primary = outboundVoiceDealershipId;
+    const extras = inboundVoiceDealershipIds.filter((id) => id !== primary);
 
     try {
       await twilioVoiceManager.initialize(

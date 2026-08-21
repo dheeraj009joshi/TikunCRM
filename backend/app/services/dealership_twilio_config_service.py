@@ -234,13 +234,47 @@ async def find_dealership_id_by_inbound_to(
 async def find_dealership_id_by_voice_to(
     db: AsyncSession, to_raw: str
 ) -> Optional[UUID]:
-    """Match inbound voice To (called number) to voice_caller_id_number."""
+    """
+    Match inbound voice To (called number) to a dealership Twilio number.
+
+    Checks voice_caller_id_number, then sms_from_number (often the same DID),
+    then falls back to the global TWILIO_PHONE_NUMBER → first dealership with
+    a voice-capable config (or any dealership).
+    """
     to_key = digits_last10(to_raw or "")
     if len(to_key) < 10:
         return None
 
     result = await db.execute(select(DealershipTwilioConfig))
-    for cfg in result.scalars().all():
-        if cfg.voice_caller_id_number and digits_last10(cfg.voice_caller_id_number) == to_key:
-            return cfg.dealership_id
+    configs = list(result.scalars().all())
+
+    for cfg in configs:
+        for num in (cfg.voice_caller_id_number, cfg.sms_from_number):
+            if num and digits_last10(num) == to_key:
+                return cfg.dealership_id
+
+    global_voice = digits_last10(settings.twilio_phone_number or "")
+    if to_key and to_key == global_voice:
+        for cfg in configs:
+            if cfg.voice_enabled or cfg.voice_caller_id_number or cfg.twilio_twiml_app_sid:
+                logger.info(
+                    "Inbound voice To %s matched global number; using dealership %s",
+                    to_raw,
+                    cfg.dealership_id,
+                )
+                return cfg.dealership_id
+        from app.models.dealership import Dealership
+
+        dealership_result = await db.execute(
+            select(Dealership).order_by(Dealership.created_at.asc()).limit(1)
+        )
+        dealership = dealership_result.scalar_one_or_none()
+        if dealership:
+            logger.info(
+                "Inbound voice To %s matched global number; using first dealership %s",
+                to_raw,
+                dealership.id,
+            )
+            return dealership.id
+
     return None
