@@ -202,18 +202,21 @@ class VoiceService:
             Tuple of (list_of_users_to_ring, is_unknown_caller)
 
         Ring policy (always, regardless of assignment):
-            - All active BDC agents with access to the dealership (priority)
-            - Then salespersons, then dealership admins/owners
+            - Salespersons / dealership admins / owners whose User.dealership_id
+              equals the lead's dealership (same store as the lead)
+            - Active BDC agents with UserDealershipAccess to that same dealership
             - Softphone Dial is capped at MAX_SIMULTANEOUS_DIAL_CLIENTS (Twilio limit);
-              callers should still FCM-notify the full list separately.
+              FCM still notifies the full list.
             First person to answer gets the call.
         """
         is_unknown_caller = lead is None
+        # Always prefer explicit dealership_id (caller should pass lead.dealership_id)
         target_dealership = dealership_id or (lead.dealership_id if lead else None)
 
         users_by_id: Dict[UUID, User] = {}
 
         if target_dealership:
+            # Sales + admins + owners ONLY from this dealership (lead's store)
             result = await self.db.execute(
                 select(User).where(
                     User.dealership_id == target_dealership,
@@ -228,16 +231,24 @@ class VoiceService:
             for user in result.scalars().all():
                 users_by_id[user.id] = user
 
+            # BDC: only agents granted access to this same dealership
             for bdc in await self._get_bdc_agents_for_dealership(target_dealership):
                 users_by_id[bdc.id] = bdc
 
         users = list(users_by_id.values())
         if users:
             logger.info(
-                "Incoming ring group for dealership %s: %d users (%d BDC)",
+                "Incoming ring group for lead dealership %s: %d users "
+                "(%d salesperson, %d BDC, %d admin/owner)",
                 target_dealership,
                 len(users),
+                sum(1 for u in users if u.role == UserRole.SALESPERSON),
                 sum(1 for u in users if u.role == UserRole.BDC),
+                sum(
+                    1
+                    for u in users
+                    if u.role in (UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER)
+                ),
             )
             return (users, is_unknown_caller)
 

@@ -1074,10 +1074,12 @@ async def handle_incoming_call(
     Routes call to dealership ring group (sales + admins + BDC).
 
     Ring rules:
-    - Always ring all active salespersons, dealership admins/owners, and BDC
-      for the dealership (assignment does not narrow the ring group).
+    - Use the lead's dealership when a lead is found.
+    - Ring only salespersons / admins / owners belonging to that dealership.
+    - Also ring BDC agents who have access to that same dealership.
     - First person to answer gets the call (and may be auto-assigned).
-    - Unknown callers: create a minimal lead, then ring the same group.
+    - Unknown callers: resolve store from dialed number, create a minimal lead,
+      then ring that store's group.
     """
     form_data = await request.form()
     
@@ -1095,12 +1097,12 @@ async def handle_incoming_call(
         is_unknown_caller = lead is None
         requires_lead_details = False
 
-        # Prefer the dealership that owns the dialed number (To). Lead dealership
-        # is only a fallback — otherwise a lead at store A calling store B's DID
-        # rings the wrong softphone account group.
+        # Ring group dealership = where the LEAD lives.
+        # Salespersons / admins / owners must belong to that dealership.
+        # Only when there is no lead yet, fall back to the dialed number's store.
         dealership_from_to = await find_dealership_id_by_voice_to(db, to_number)
         lead_dealership = lead.dealership_id if lead else None
-        dealership_id = dealership_from_to or lead_dealership
+        dealership_id = lead_dealership or dealership_from_to
 
         if is_unknown_caller and not dealership_id:
             from app.models.dealership import Dealership
@@ -1109,7 +1111,7 @@ async def handle_incoming_call(
             if dealership:
                 dealership_id = dealership.id
 
-        # For unknown callers, create minimal lead
+        # For unknown callers, create minimal lead on the resolved dealership
         if is_unknown_caller and dealership_id:
             lead, customer = await service.create_minimal_lead_for_unknown_caller(
                 phone=from_number,
@@ -1118,7 +1120,7 @@ async def handle_incoming_call(
             requires_lead_details = True
             logger.info(f"Created minimal lead {lead.id} for unknown caller {from_number}")
 
-        # Find users to notify + dial (full list for FCM; Dial capped later)
+        # Sales/admins from lead's dealership + BDC with access to that dealership
         users_to_ring, _ = await service.find_users_for_incoming_call(lead, dealership_id)
         users_to_dial = service.prioritize_users_for_softphone_dial(users_to_ring)
 
