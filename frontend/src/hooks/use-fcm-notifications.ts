@@ -157,7 +157,7 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
       const title = notificationData.title || data.title || "TikunCRM"
       const body = notificationData.body || data.body || "You have a new notification"
       const url = data.url || "/notifications"
-      const icon = notificationData.icon || data.icon || "/icon.svg"
+      const icon = notificationData.icon || data.icon || "/icon-192.png"
       const tag = data.tag || "tikuncrm-fcm"
 
       // Show notification

@@ -123,7 +123,7 @@ class FCMService:
 
         # Full URL for icons
         base = (settings.frontend_url or "").rstrip("/")
-        full_icon = f"{base}/icon.svg" if base else "/icon.svg"
+        full_icon = f"{base}/icon-192.png" if base else "/icon-192.png"
 
         # FCM v1 message format for web push - DATA ONLY
         # We send data-only messages to force the Service Worker to handle display.
