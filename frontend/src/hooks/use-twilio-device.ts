@@ -6,6 +6,11 @@ import { twilioVoiceManager, DeviceState, TwilioCall, IncomingCallInfo } from "@
 import { voiceService, VoiceConfig } from "@/services/voice-service";
 import { startIncomingRingtone, stopIncomingRingtone } from "@/lib/incoming-ringtone";
 import { showIncomingCallPip, dismissIncomingCallPip } from "@/lib/incoming-call-pip";
+import {
+  clearIncomingCallIntent,
+  readIncomingCallIntent,
+  saveIncomingCallIntent,
+} from "@/lib/incoming-call-intent";
 import { useToast } from "./use-toast";
 import { useWebSocketEvent } from "./use-websocket";
 import { useBdcDealership } from "@/contexts/bdc-dealership-context";
@@ -75,6 +80,8 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   const ignoreCallRef = useRef<() => void>(() => {});
   /** Block force Twilio reconnect while an inbound Dial may be in flight */
   const protectIncomingUntilRef = useRef(0);
+  /** User tapped Accept on the push notification before the Twilio invite arrived */
+  const pendingAutoAcceptRef = useRef(false);
   incomingCallRef.current = incomingCall;
   activeCallRef.current = currentCallInfo;
 
@@ -325,13 +332,41 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
             setIsOnCall(false);
           }
           startIncomingRingtone();
+
+          // She tapped Accept on the phone notification before the invite arrived —
+          // answer as soon as Twilio delivers the invite to this Device.
+          if (pendingAutoAcceptRef.current && !activeCallRef.current) {
+            pendingAutoAcceptRef.current = false;
+            clearIncomingCallIntent();
+            acceptingRef.current = true;
+            stopIncomingRingtone();
+            dismissIncomingCallPip();
+            setCurrentCallInfo({
+              direction: "inbound",
+              phoneNumber: info.from,
+              leadId: info.leadId,
+              leadName: info.leadName,
+              startTime: new Date(),
+            });
+            setIncomingCall(null);
+            setIsOnCall(true);
+            startDurationTimer();
+            try {
+              twilioVoiceManager.acceptCall();
+            } catch (err) {
+              console.warn("Auto-accept after notification failed:", err);
+              acceptingRef.current = false;
+            }
+            return;
+          }
+
           if (typeof document !== "undefined" && document.hidden && Notification.permission === "granted") {
             try {
               const n = new Notification(
                 activeCallRef.current ? "Call Waiting" : "Incoming Call",
                 {
                   body: `Call from ${info.leadName || info.from}`,
-                  icon: "/icon.svg",
+                  icon: "/icon-192.png",
                   tag: `incoming-call-${info.callSid || "ring"}`,
                   requireInteraction: true,
                 }
@@ -464,7 +499,7 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
    * Handle service worker messages:
    * - WAKE_FOR_INCOMING_CALL: gentle re-register only (never force)
    * - INCOMING_CALL_CLICK / NOTIFICATION_CLICK: focus tab; do not tear down Device
-   * - ACCEPT_INCOMING_CALL: accept if Twilio invite is already pending
+   * - ACCEPT_INCOMING_CALL: accept now, or auto-accept when invite arrives
    */
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -488,16 +523,32 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       if (data.type === "ACCEPT_INCOMING_CALL") {
         markIncomingCallWindow();
         window.focus();
+        saveIncomingCallIntent({
+          autoAccept: true,
+          callSid: data.call_sid || undefined,
+          leadId: data.lead_id || undefined,
+        });
+        pendingAutoAcceptRef.current = true;
         if (incomingCallRef.current && !activeCallRef.current) {
+          pendingAutoAcceptRef.current = false;
+          clearIncomingCallIntent();
           acceptCallRef.current();
+        } else if (!twilioVoiceManager.getIsInitialized()) {
+          void initialize();
+        } else {
+          void twilioVoiceManager.ensureRegistered(false);
         }
-        // Never force reconnect here — invite may already be pending
         return;
       }
 
       if (data.type === "INCOMING_CALL_CLICK" || data.type === "NOTIFICATION_CLICK") {
         if (data.type === "INCOMING_CALL_CLICK") {
           markIncomingCallWindow();
+          saveIncomingCallIntent({
+            autoAccept: false,
+            callSid: data.call_sid || undefined,
+            leadId: data.lead_id || undefined,
+          });
         }
         if (!twilioVoiceManager.getIsInitialized()) {
           void initialize();
@@ -520,6 +571,26 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     navigator.serviceWorker?.addEventListener("message", onMessage);
     return () => navigator.serviceWorker?.removeEventListener("message", onMessage);
   }, [initialize, markIncomingCallWindow, canForceTwilioReconnect]);
+
+  /**
+   * Cold start from call notification (?incoming_call=1 or sessionStorage).
+   * Opens CRM and optionally auto-accepts once the Twilio invite arrives.
+   */
+  useEffect(() => {
+    if (!isEnabled) return;
+    const intent = readIncomingCallIntent();
+    if (!intent) return;
+
+    markIncomingCallWindow();
+    if (intent.autoAccept) {
+      pendingAutoAcceptRef.current = true;
+    }
+    if (!twilioVoiceManager.getIsInitialized()) {
+      void initialize();
+    } else {
+      void twilioVoiceManager.ensureRegistered(false);
+    }
+  }, [isEnabled, initialize, markIncomingCallWindow]);
 
   /**
    * Page Lifecycle API: force reconnect when the page resumes from

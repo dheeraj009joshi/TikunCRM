@@ -127,7 +127,7 @@ class PushService:
         body = f"Incoming call from {who}"
         if lead_name and from_number:
             body = f"{lead_name} • {from_number}"
-        url = f"/leads/{lead_id}" if lead_id else "/"
+        url = f"/dashboard?incoming_call=1&lead_id={lead_id}" if lead_id else "/dashboard?incoming_call=1"
         tag = f"incoming-call-{call_sid}" if call_sid else "incoming-call"
         data = {
             "type": "incoming_call",

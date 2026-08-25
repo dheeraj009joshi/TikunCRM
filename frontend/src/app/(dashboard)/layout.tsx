@@ -16,6 +16,8 @@ import { AiCopilotProvider } from "@/contexts/ai-copilot-context"
 import { AiCopilotPanel } from "@/components/ai/ai-copilot-panel"
 import { Softphone } from "@/components/softphone"
 import { FcmRegistrar } from "@/components/providers/fcm-registrar"
+import { InstallPrompt } from "@/components/pwa/install-prompt"
+import { NotificationPermissionPrompt } from "@/components/pwa/notification-permission-prompt"
 import { useAuthStore } from "@/stores/auth-store"
 
 export default function DashboardLayout({
@@ -114,6 +116,8 @@ function DashboardContent({
             />
             <AiCopilotPanel />
             <FcmRegistrar />
+            <InstallPrompt />
+            <NotificationPermissionPrompt />
         </div>
     )
 }

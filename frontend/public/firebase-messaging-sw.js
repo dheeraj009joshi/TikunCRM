@@ -1,13 +1,13 @@
 /**
  * TikunCRM Firebase Messaging Service Worker
- * Version: 2.3 - Force Twilio reconnect on wake; Accept action for pending invites
+ * Version: 2.4 - Cold-start open from call notification; retry Accept message
  * 
  * This service worker handles FCM push notifications.
  * Uses raw 'push' event listener for maximum browser compatibility.
  */
 
 // SW Version for cache busting
-const SW_VERSION = '2.3';
+const SW_VERSION = '2.4';
 
 // Import Firebase scripts (required for getToken() to work)
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js');
@@ -51,7 +51,7 @@ self.addEventListener('push', (event) => {
   
   const title = notification.title || data.title || 'TikunCRM';
   const body = notification.body || data.body || 'You have a new notification';
-  const icon = notification.icon || data.icon || '/icon.svg';
+  const icon = notification.icon || data.icon || '/icon-192.png';
   const tag = notification.tag || data.tag || 'tikuncrm-' + Date.now();
   const url = data.url || fcmOptions.link || '/notifications';
   const type = data.type || '';
@@ -70,7 +70,7 @@ self.addEventListener('push', (event) => {
   const options = {
     body: body,
     icon: icon,
-    badge: '/icon.svg',
+    badge: '/icon-192.png',
     tag: tag,
     data: {
       url: url,
@@ -114,20 +114,46 @@ self.addEventListener('push', (event) => {
   );
 });
 
-function focusOrOpenClient(url, message) {
+function postMessageWithRetry(client, message) {
+  if (!client) return;
+  const send = () => {
+    try { client.postMessage(message); } catch (e) { console.warn('[SW] postMessage failed:', e); }
+  };
+  send();
+  // Cold start: React/Twilio listeners often mount after openWindow
+  setTimeout(send, 400);
+  setTimeout(send, 1200);
+  setTimeout(send, 2500);
+}
+
+function buildIncomingCallOpenUrl(path, autoAccept, callSid, leadId) {
+  // Prefer /dashboard so Softphone always mounts on cold start
+  const openPath =
+    !path || path === '/' || path === '/notifications' || String(path).startsWith('/leads/')
+      ? '/dashboard'
+      : path;
+  const params = new URLSearchParams();
+  params.set('incoming_call', '1');
+  if (autoAccept) params.set('auto_accept', '1');
+  if (callSid) params.set('call_sid', String(callSid));
+  if (leadId) params.set('lead_id', String(leadId));
+  return self.location.origin + openPath + '?' + params.toString();
+}
+
+function focusOrOpenClient(url, message, isIncomingCall, autoAccept) {
   return clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
     for (const client of clientList) {
       if (client.url.includes(self.location.origin) && 'focus' in client) {
-        client.focus();
-        client.postMessage(message);
-        return;
+        return client.focus().then((focused) => {
+          postMessageWithRetry(focused || client, message);
+        });
       }
     }
-    return clients.openWindow(url).then((newClient) => {
-      if (newClient) {
-        // New window may not have listeners yet; SW wake on next push still helps
-        newClient.postMessage(message);
-      }
+    const openUrl = isIncomingCall
+      ? buildIncomingCallOpenUrl(url, autoAccept, message.call_sid, message.lead_id)
+      : (String(url).startsWith('http') ? url : self.location.origin + url);
+    return clients.openWindow(openUrl).then((newClient) => {
+      postMessageWithRetry(newClient, message);
     });
   });
 }
@@ -143,16 +169,19 @@ self.addEventListener('notificationclick', (event) => {
   const isIncomingCall = data.type === 'incoming_call';
   const action = event.action || 'open';
 
+  const autoAccept = action === 'accept' && isIncomingCall;
+
   const message = {
-    type: action === 'accept' && isIncomingCall
+    type: autoAccept
       ? 'ACCEPT_INCOMING_CALL'
       : (isIncomingCall ? 'INCOMING_CALL_CLICK' : 'NOTIFICATION_CLICK'),
     url,
     call_sid: data.call_sid || '',
     lead_id: data.lead_id || '',
+    auto_accept: autoAccept,
   };
   
-  event.waitUntil(focusOrOpenClient(url, message));
+  event.waitUntil(focusOrOpenClient(url, message, isIncomingCall, autoAccept));
 });
 
 // Service worker lifecycle
