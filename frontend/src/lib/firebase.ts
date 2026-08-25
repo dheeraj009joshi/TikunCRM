@@ -5,6 +5,7 @@
 
 import { initializeApp, getApps, FirebaseApp } from "firebase/app"
 import { getMessaging, getToken, onMessage, Messaging, MessagePayload } from "firebase/messaging"
+import { withTimeout } from "@/lib/with-timeout"
 
 // Firebase configuration from environment variables
 const firebaseConfig = {
@@ -16,6 +17,10 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
   measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 }
+
+const FCM_SW_PATH = "/firebase-messaging-sw.js"
+const SW_READY_TIMEOUT_MS = 12_000
+const GET_TOKEN_TIMEOUT_MS = 15_000
 
 // Singleton instances
 let firebaseApp: FirebaseApp | null = null
@@ -87,6 +92,32 @@ export function getFirebaseMessaging(): Messaging | null {
   return messaging
 }
 
+async function getServiceWorkerRegistration(): Promise<ServiceWorkerRegistration | null> {
+  try {
+    let registration = await navigator.serviceWorker.getRegistration("/")
+
+    if (!registration) {
+      registration = await withTimeout(
+        navigator.serviceWorker.register(FCM_SW_PATH, { scope: "/" }),
+        SW_READY_TIMEOUT_MS,
+        "Service worker registration timed out"
+      )
+    }
+
+    await withTimeout(
+      navigator.serviceWorker.ready,
+      SW_READY_TIMEOUT_MS,
+      "Service worker ready timed out"
+    )
+
+    console.log("[Firebase] FCM service worker ready")
+    return registration
+  } catch (error) {
+    console.error("[Firebase] Service worker setup failed:", error)
+    return null
+  }
+}
+
 /**
  * Request permission and get FCM token
  */
@@ -97,41 +128,47 @@ export async function getFCMToken(): Promise<string | null> {
       return null
     }
 
-    // Check/request notification permission
-    const permission = await Notification.requestPermission()
-    if (permission !== "granted") {
+    const permission = Notification.permission
+    if (permission === "denied") {
       console.log("[Firebase] Notification permission denied")
       return null
     }
 
-    // Register service worker for FCM (must be the one used to get the token)
-    const swRegistration = await navigator.serviceWorker.register("/firebase-messaging-sw.js", {
-      scope: "/"
-    })
-    
-    // Wait for the service worker to be ready
-    await navigator.serviceWorker.ready
-    console.log("[Firebase] FCM service worker ready")
+    if (permission === "default") {
+      const result = await Notification.requestPermission()
+      if (result !== "granted") {
+        console.log("[Firebase] Notification permission denied")
+        return null
+      }
+    }
 
-    // Get FCM token with the registered service worker and Firebase VAPID key
+    const swRegistration = await getServiceWorkerRegistration()
+    if (!swRegistration) {
+      return null
+    }
+
     const fcmVapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY
     if (!fcmVapidKey) {
       console.error("[Firebase] VAPID key not configured")
       return null
     }
     
-    const token = await getToken(messagingInstance, {
-      serviceWorkerRegistration: swRegistration,
-      vapidKey: fcmVapidKey
-    })
+    const token = await withTimeout(
+      getToken(messagingInstance, {
+        serviceWorkerRegistration: swRegistration,
+        vapidKey: fcmVapidKey,
+      }),
+      GET_TOKEN_TIMEOUT_MS,
+      "FCM getToken timed out"
+    )
 
     if (token) {
       console.log("[Firebase] FCM token obtained")
       return token
-    } else {
-      console.warn("[Firebase] No token returned from Firebase")
-      return null
     }
+
+    console.warn("[Firebase] No token returned from Firebase")
+    return null
   } catch (error) {
     console.error("[Firebase] Failed to get FCM token:", error)
     return null

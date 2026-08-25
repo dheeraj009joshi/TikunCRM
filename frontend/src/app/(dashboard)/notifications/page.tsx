@@ -61,6 +61,9 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { filterStorage } from "@/lib/filter-storage"
+import { withTimeout } from "@/lib/with-timeout"
+
+const NOTIFICATIONS_FETCH_TIMEOUT_MS = 20_000
 
 // Icon mapping for notification types
 const typeIcons: Record<NotificationType, React.ComponentType<{ className?: string }>> = {
@@ -133,6 +136,7 @@ export default function NotificationsPage() {
     const [notifications, setNotifications] = React.useState<Notification[]>([])
     const [stats, setStats] = React.useState<NotificationStats | null>(null)
     const [isLoading, setIsLoading] = React.useState(true)
+    const [fetchError, setFetchError] = React.useState<string | null>(null)
     const [isMarkingAll, setIsMarkingAll] = React.useState(false)
     const [isDeleting, setIsDeleting] = React.useState(false)
 
@@ -199,6 +203,7 @@ export default function NotificationsPage() {
     // Fetch notifications
     const fetchNotifications = React.useCallback(async () => {
         setIsLoading(true)
+        setFetchError(null)
         try {
             const params: any = {
                 page,
@@ -209,11 +214,20 @@ export default function NotificationsPage() {
                 params.notification_type = typeFilter
             }
             
-            const response = await NotificationService.listNotifications(params)
+            const response = await withTimeout(
+                NotificationService.listNotifications(params),
+                NOTIFICATIONS_FETCH_TIMEOUT_MS,
+                "Loading notifications timed out"
+            )
             setNotifications(response.items)
             setTotal(response.total)
         } catch (error) {
             console.error("Failed to fetch notifications:", error)
+            setFetchError(
+                error instanceof Error
+                    ? error.message
+                    : "Could not load notifications. Check your connection and try again."
+            )
         } finally {
             setIsLoading(false)
         }
@@ -456,6 +470,15 @@ export default function NotificationsPage() {
                     {isLoading ? (
                         <div className="flex items-center justify-center py-12">
                             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                        </div>
+                    ) : fetchError ? (
+                        <div className="flex flex-col items-center justify-center py-12 text-center px-4">
+                            <AlertCircle className="h-12 w-12 text-destructive/70 mb-4" />
+                            <p className="text-lg font-medium">Could not load notifications</p>
+                            <p className="text-sm text-muted-foreground mt-1 max-w-md">{fetchError}</p>
+                            <Button variant="outline" className="mt-4" onClick={() => fetchNotifications()}>
+                                Try again
+                            </Button>
                         </div>
                     ) : notifications.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-12 text-center">

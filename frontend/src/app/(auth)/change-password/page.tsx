@@ -107,7 +107,7 @@ export default function ChangePasswordPage() {
                     <div className="relative z-20 flex items-center text-lg font-medium">
                         <div className="mr-2 flex h-8 w-8 items-center justify-center rounded bg-white text-primary">
                             <Image
-                                src="/Gemini_Generated_Image_iauae6iauae6iaua.png"
+                                src="/brand/app-icon.png"
                                 alt="TikunCRM"
                                 width={32}
                                 height={32}

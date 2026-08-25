@@ -366,7 +366,7 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
                 activeCallRef.current ? "Call Waiting" : "Incoming Call",
                 {
                   body: `Call from ${info.leadName || info.from}`,
-                  icon: "/icon-192.png",
+                  icon: "/brand/app-icon-192.png",
                   tag: `incoming-call-${info.callSid || "ring"}`,
                   requireInteraction: true,
                 }

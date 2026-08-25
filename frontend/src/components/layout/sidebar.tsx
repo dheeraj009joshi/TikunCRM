@@ -541,7 +541,7 @@ export function Sidebar() {
                     )}
                 >
                     <Image
-                        src="/Gemini_Generated_Image_iauae6iauae6iaua.png"
+                        src="/brand/app-icon-192.png"
                         alt="TikunCRM"
                         width={40}
                         height={40}

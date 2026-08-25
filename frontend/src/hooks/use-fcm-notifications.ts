@@ -8,6 +8,8 @@ import {
   getFCMToken,
   onForegroundMessage,
 } from "@/lib/firebase"
+import { canUseWebPush, getIOSPushRequirementMessage } from "@/lib/pwa-utils"
+import { withTimeout } from "@/lib/with-timeout"
 
 interface FCMState {
   isSupported: boolean
@@ -22,6 +24,13 @@ interface UseFCMNotificationsReturn extends FCMState {
   unsubscribe: () => Promise<boolean>
   requestPermission: () => Promise<NotificationPermission>
 }
+
+const TOKEN_REGISTER_TIMEOUT_MS = 20_000
+const API_REGISTER_TIMEOUT_MS = 15_000
+
+// Shared across hook instances (FcmRegistrar + PushNotificationToggle on same page)
+let autoRegisterPromise: Promise<boolean> | null = null
+let sharedForegroundHandler: (() => void) | null = null
 
 /**
  * Hook for managing Firebase Cloud Messaging (FCM) push notifications
@@ -40,7 +49,6 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
     permission: null,
   })
 
-  const foregroundHandlerRef = useRef<(() => void) | null>(null)
   const initRef = useRef(false)
 
   // Initialize on mount - auto-register token if permission is granted
@@ -52,151 +60,78 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
   }, [])
 
   async function initializeFCM() {
-    // Check basic requirements
-    if (typeof window === "undefined") {
-      setState({
-        isSupported: false,
-        isSubscribed: false,
-        isLoading: false,
-        error: "Not running in browser",
-        permission: null,
-      })
-      return
-    }
-
-    // Check if Firebase is configured
-    if (!isFirebaseConfigured()) {
-      setState({
-        isSupported: false,
-        isSubscribed: false,
-        isLoading: false,
-        error: "Firebase is not configured",
-        permission: null,
-      })
-      return
-    }
-
-    // Check browser support
-    const hasSupport = 
-      "serviceWorker" in navigator &&
-      "PushManager" in window &&
-      "Notification" in window
-
-    if (!hasSupport) {
-      setState({
-        isSupported: false,
-        isSubscribed: false,
-        isLoading: false,
-        error: "Push notifications are not supported in this browser",
-        permission: null,
-      })
-      return
-    }
-
-    // Check current permission
-    const permission = Notification.permission
-    
-    // If permission is granted, auto-register token
-    // This ensures we always have a fresh token on app load
-    if (permission === "granted") {
-      try {
-        const token = await getFCMToken()
-        if (token) {
-          // Register token with backend (backend handles deduplication)
-          await apiClient.post("/push/fcm/register", {
-            token,
-            device_name: getDeviceName(),
-          })
-          console.log("[FCM] Token auto-registered on app load")
-          
-          // Set up foreground handler
-          setupForegroundHandler()
-          
-          setState({
-            isSupported: true,
-            isSubscribed: true,
-            isLoading: false,
-            permission,
-            error: null,
-          })
-          return
-        }
-      } catch (error) {
-        console.warn("[FCM] Auto-registration failed:", error)
-        // Continue with isSubscribed = false
-      }
-    }
-
-    // Permission not granted or token failed - just set state
-    setState({
-      isSupported: true,
-      isSubscribed: false,
-      isLoading: false,
-      permission,
-      error: null,
-    })
-  }
-
-  // Set up foreground message handler
-  function setupForegroundHandler() {
-    if (foregroundHandlerRef.current) return
-
-    const unsub = onForegroundMessage((payload: MessagePayload) => {
-      console.log("[FCM] Foreground message received:", payload)
-      
-      // Handle both notification+data and data-only payloads
-      const notificationData = payload.notification || {}
-      const data = payload.data || {}
-      const type = data.type || ""
-
-      // Softphone already rings / shows modal when tab is focused
-      if (type === "incoming_call" && typeof document !== "undefined" && !document.hidden) {
+    try {
+      if (typeof window === "undefined") {
+        setState({
+          isSupported: false,
+          isSubscribed: false,
+          isLoading: false,
+          error: "Not running in browser",
+          permission: null,
+        })
         return
       }
-      
-      const title = notificationData.title || data.title || "TikunCRM"
-      const body = notificationData.body || data.body || "You have a new notification"
-      const url = data.url || "/notifications"
-      const icon = notificationData.icon || data.icon || "/icon-192.png"
-      const tag = data.tag || "tikuncrm-fcm"
 
-      // Show notification
-      if (Notification.permission === "granted") {
-        try {
-          const notification = new Notification(title, {
-            body,
-            icon,
-            badge: icon,
-            tag,
-            data: { url, type },
-            requireInteraction: true,
-          })
-          
-          notification.onclick = () => {
-            window.focus()
-            window.location.href = url
-            notification.close()
-          }
-        } catch (err) {
-          console.error("[FCM] Failed to show notification:", err)
+      if (!isFirebaseConfigured()) {
+        setState({
+          isSupported: false,
+          isSubscribed: false,
+          isLoading: false,
+          error: "Firebase is not configured",
+          permission: null,
+        })
+        return
+      }
+
+      const iosRequirement = getIOSPushRequirementMessage()
+      if (iosRequirement) {
+        setState({
+          isSupported: false,
+          isSubscribed: false,
+          isLoading: false,
+          error: iosRequirement,
+          permission: Notification.permission,
+        })
+        return
+      }
+
+      if (!canUseWebPush()) {
+        setState({
+          isSupported: false,
+          isSubscribed: false,
+          isLoading: false,
+          error: "Push notifications are not supported in this browser",
+          permission: null,
+        })
+        return
+      }
+
+      const permission = Notification.permission
+
+      // Show UI immediately — token registration can hang on some iOS builds
+      setState({
+        isSupported: true,
+        isSubscribed: false,
+        isLoading: false,
+        permission,
+        error: null,
+      })
+
+      if (permission === "granted") {
+        const subscribed = await autoRegisterTokenOnce()
+        if (subscribed) {
+          setState((prev) => ({ ...prev, isSubscribed: true }))
         }
       }
-    })
-
-    if (unsub) {
-      foregroundHandlerRef.current = unsub
+    } catch (error) {
+      console.warn("[FCM] Initialization failed:", error)
+      setState((prev) => ({
+        ...prev,
+        isLoading: false,
+        error: prev.error || "Failed to initialize push notifications",
+      }))
     }
   }
-
-  // Cleanup foreground handler on unmount
-  useEffect(() => {
-    return () => {
-      if (foregroundHandlerRef.current) {
-        foregroundHandlerRef.current()
-        foregroundHandlerRef.current = null
-      }
-    }
-  }, [])
 
   // Request notification permission
   const requestPermission = useCallback(async (): Promise<NotificationPermission> => {
@@ -224,7 +159,6 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
     setState((prev) => ({ ...prev, isLoading: true, error: null }))
 
     try {
-      // Request permission if needed
       let permission = Notification.permission
       if (permission === "default") {
         permission = await requestPermission()
@@ -239,26 +173,15 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
         return false
       }
 
-      // Get FCM token
-      const token = await getFCMToken()
-      if (!token) {
+      const subscribed = await autoRegisterTokenOnce()
+      if (!subscribed) {
         setState((prev) => ({
           ...prev,
           isLoading: false,
-          error: "Failed to get FCM token",
+          error: "Failed to get FCM token. Try closing and reopening the app.",
         }))
         return false
       }
-
-      // Set up foreground handler
-      setupForegroundHandler()
-
-      // Register token with backend
-      await apiClient.post("/push/fcm/register", {
-        token,
-        device_name: getDeviceName(),
-      })
-      console.log("[FCM] Token registered via subscribe()")
 
       setState((prev) => ({
         ...prev,
@@ -285,16 +208,22 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
     setState((prev) => ({ ...prev, isLoading: true, error: null }))
 
     try {
-      // Get current token and unregister from backend
-      const token = await getFCMToken()
+      const token = await withTimeout(
+        getFCMToken(),
+        TOKEN_REGISTER_TIMEOUT_MS,
+        "FCM token request timed out"
+      )
       if (token) {
-        await apiClient.post("/push/fcm/unregister", { token })
+        await withTimeout(
+          apiClient.post("/push/fcm/unregister", { token }),
+          API_REGISTER_TIMEOUT_MS,
+          "FCM unregister API timed out"
+        )
       }
 
-      // Clean up foreground handler
-      if (foregroundHandlerRef.current) {
-        foregroundHandlerRef.current()
-        foregroundHandlerRef.current = null
+      if (sharedForegroundHandler) {
+        sharedForegroundHandler()
+        sharedForegroundHandler = null
       }
 
       setState((prev) => ({
@@ -324,6 +253,90 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
   }
 }
 
+async function autoRegisterTokenOnce(): Promise<boolean> {
+  if (autoRegisterPromise) {
+    return autoRegisterPromise
+  }
+
+  autoRegisterPromise = (async () => {
+    try {
+      const token = await withTimeout(
+        getFCMToken(),
+        TOKEN_REGISTER_TIMEOUT_MS,
+        "FCM token request timed out"
+      )
+      if (!token) {
+        return false
+      }
+
+      await withTimeout(
+        apiClient.post("/push/fcm/register", {
+          token,
+          device_name: getDeviceName(),
+        }),
+        API_REGISTER_TIMEOUT_MS,
+        "FCM register API timed out"
+      )
+      console.log("[FCM] Token auto-registered on app load")
+      setupSharedForegroundHandler()
+      return true
+    } catch (error) {
+      console.warn("[FCM] Auto-registration failed:", error)
+      autoRegisterPromise = null
+      return false
+    }
+  })()
+
+  return autoRegisterPromise
+}
+
+function setupSharedForegroundHandler() {
+  if (sharedForegroundHandler) return
+
+  const unsub = onForegroundMessage((payload: MessagePayload) => {
+    console.log("[FCM] Foreground message received:", payload)
+
+    const notificationData = payload.notification || {}
+    const data = payload.data || {}
+    const type = data.type || ""
+
+    if (type === "incoming_call" && typeof document !== "undefined" && !document.hidden) {
+      return
+    }
+
+    const title = notificationData.title || data.title || "TikunCRM"
+    const body = notificationData.body || data.body || "You have a new notification"
+    const url = data.url || "/notifications"
+    const icon = notificationData.icon || data.icon || "/brand/app-icon-192.png"
+    const tag = data.tag || "tikuncrm-fcm"
+
+    if (Notification.permission === "granted") {
+      try {
+        const notification = new Notification(title, {
+          body,
+          icon,
+          badge: icon,
+          tag,
+          data: { url, type },
+          requireInteraction: true,
+        })
+
+        notification.onclick = () => {
+          window.focus()
+          window.location.href = url
+          notification.close()
+        }
+      } catch (err) {
+        console.error("[FCM] Failed to show notification:", err)
+      }
+    }
+  })
+
+  if (unsub) {
+    sharedForegroundHandler = unsub
+  }
+}
+
 /**
  * Get a friendly device name for display
  */
@@ -334,7 +347,6 @@ function getDeviceName(): string {
   let device = "Desktop"
   let browser = "Browser"
 
-  // Detect device type
   if (/iPad/.test(ua)) device = "iPad"
   else if (/iPhone/.test(ua)) device = "iPhone"
   else if (/Android/.test(ua) && /Mobile/.test(ua)) device = "Android Phone"
@@ -343,7 +355,6 @@ function getDeviceName(): string {
   else if (/Windows/.test(ua)) device = "Windows PC"
   else if (/Linux/.test(ua)) device = "Linux PC"
 
-  // Detect browser
   if (/Chrome/.test(ua) && !/Edg/.test(ua)) browser = "Chrome"
   else if (/Safari/.test(ua) && !/Chrome/.test(ua)) browser = "Safari"
   else if (/Firefox/.test(ua)) browser = "Firefox"
@@ -359,28 +370,14 @@ function getDeviceName(): string {
 export async function registerFCMToken(): Promise<boolean> {
   if (typeof window === "undefined") return false
   if (!isFirebaseConfigured()) return false
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return false
+  if (!canUseWebPush()) return false
   
-  // Only proceed if permission is already granted
   if (Notification.permission !== "granted") {
     console.log("[FCM] Permission not granted, skipping token registration")
     return false
   }
 
-  try {
-    const token = await getFCMToken()
-    if (token) {
-      await apiClient.post("/push/fcm/register", {
-        token,
-        device_name: getDeviceName(),
-      })
-      console.log("[FCM] Token registered successfully")
-      return true
-    }
-  } catch (error) {
-    console.error("[FCM] Token registration failed:", error)
-  }
-  return false
+  return autoRegisterTokenOnce()
 }
 
 export default useFCMNotifications

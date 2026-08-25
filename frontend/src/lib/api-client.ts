@@ -11,6 +11,8 @@ const apiClient = axios.create({
     headers: {
         "Content-Type": "application/json",
     },
+    // Prevent UI spinners from hanging forever on slow or stuck mobile networks
+    timeout: 30_000,
 });
 
 // Track if we're currently refreshing to avoid multiple refresh attempts

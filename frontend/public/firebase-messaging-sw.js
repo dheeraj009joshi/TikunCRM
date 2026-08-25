@@ -1,13 +1,13 @@
 /**
  * TikunCRM Firebase Messaging Service Worker
- * Version: 2.4 - Cold-start open from call notification; retry Accept message
+ * Version: 2.5 - TikunCRM brand icons (/brand/*) cache-bust old L placeholder
  * 
  * This service worker handles FCM push notifications.
  * Uses raw 'push' event listener for maximum browser compatibility.
  */
 
 // SW Version for cache busting
-const SW_VERSION = '2.4';
+const SW_VERSION = '2.5';
 
 // Import Firebase scripts (required for getToken() to work)
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js');
@@ -51,7 +51,7 @@ self.addEventListener('push', (event) => {
   
   const title = notification.title || data.title || 'TikunCRM';
   const body = notification.body || data.body || 'You have a new notification';
-  const icon = notification.icon || data.icon || '/icon-192.png';
+  const icon = notification.icon || data.icon || '/brand/app-icon-192.png';
   const tag = notification.tag || data.tag || 'tikuncrm-' + Date.now();
   const url = data.url || fcmOptions.link || '/notifications';
   const type = data.type || '';
@@ -70,7 +70,7 @@ self.addEventListener('push', (event) => {
   const options = {
     body: body,
     icon: icon,
-    badge: '/icon-192.png',
+    badge: '/brand/app-icon-192.png',
     tag: tag,
     data: {
       url: url,

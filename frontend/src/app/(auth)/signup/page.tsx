@@ -67,7 +67,7 @@ export default function SignupPage() {
                 <div className="absolute inset-0 bg-primary" />
                 <div className="relative z-20 flex items-center text-lg font-medium">
                     <Image
-                        src="/Gemini_Generated_Image_iauae6iauae6iaua.png"
+                        src="/brand/app-icon.png"
                         alt="TikunCRM"
                         width={32}
                         height={32}

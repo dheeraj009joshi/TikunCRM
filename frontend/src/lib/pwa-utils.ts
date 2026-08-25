@@ -31,11 +31,25 @@ export function isMobileDevice(): boolean {
 
 export function canUseWebPush(): boolean {
   if (typeof window === "undefined") return false
-  return (
-    "serviceWorker" in navigator &&
-    "PushManager" in window &&
-    "Notification" in window
-  )
+  if (
+    !("serviceWorker" in navigator) ||
+    !("PushManager" in window) ||
+    !("Notification" in window)
+  ) {
+    return false
+  }
+  // iOS web push only works in an installed PWA (Add to Home Screen), not in Safari tabs
+  if (isIOS() && !isStandalonePWA()) {
+    return false
+  }
+  return true
+}
+
+export function getIOSPushRequirementMessage(): string | null {
+  if (isIOS() && !isStandalonePWA()) {
+    return "On iPhone, tap Share → Add to Home Screen, then open TikunCRM from your home screen to enable push notifications."
+  }
+  return null
 }
 
 export function wasInstallPromptDismissed(): boolean {
