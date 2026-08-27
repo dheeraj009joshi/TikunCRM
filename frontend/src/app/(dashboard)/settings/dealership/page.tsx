@@ -8,13 +8,11 @@ import {
     Loader2,
     CheckCircle2,
     Globe,
-    FileText,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
-import { Input } from "@/components/ui/input"
 import { TimezonePicker } from "@/components/ui/timezone-picker"
 import { DealershipService, Dealership } from "@/services/dealership-service"
 import { useRole } from "@/hooks/use-role"
@@ -30,7 +28,6 @@ export default function DealershipSettingsPage() {
     const [isSaving, setIsSaving] = React.useState(false)
     const [dealership, setDealership] = React.useState<Dealership | null>(null)
     const [timezone, setTimezone] = React.useState<string>("UTC")
-    const [creditAppUrl, setCreditAppUrl] = React.useState<string>("")
     const [error, setError] = React.useState<string | null>(null)
     const [successMessage, setSuccessMessage] = React.useState<string | null>(null)
     
@@ -47,7 +44,6 @@ export default function DealershipSettingsPage() {
                 const data = await DealershipService.getDealership(user.dealership_id)
                 setDealership(data)
                 setTimezone(data.timezone || "UTC")
-                setCreditAppUrl((data.config?.credit_app_url as string) || "")
             } catch (err: any) {
                 console.error("Failed to load dealership:", err)
                 setError(err?.response?.data?.detail || "Failed to load dealership settings")
@@ -67,19 +63,8 @@ export default function DealershipSettingsPage() {
         setSuccessMessage(null)
         
         try {
-            // Merge credit_app_url into existing config
-            const updatedConfig = {
-                ...dealership.config,
-                credit_app_url: creditAppUrl.trim() || undefined,
-            }
-            // Remove key if empty
-            if (!creditAppUrl.trim()) {
-                delete updatedConfig.credit_app_url
-            }
-            
             const updated = await DealershipService.updateDealership(dealership.id, {
                 timezone,
-                config: updatedConfig,
             })
             setDealership(updated)
             // Clear timezone cache so hook will refetch the new timezone
@@ -189,47 +174,6 @@ export default function DealershipSettingsPage() {
                             <p className="font-medium">Current Dealership:</p>
                             <p className="mt-1">{dealership.name}</p>
                         </div>
-                        <Button onClick={handleSave} disabled={isSaving}>
-                            {isSaving ? (
-                                <>
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    Saving...
-                                </>
-                            ) : (
-                                "Save Settings"
-                            )}
-                        </Button>
-                    </div>
-                </CardContent>
-            </Card>
-            
-            {/* Credit Application URL */}
-            <Card>
-                <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                        <FileText className="h-5 w-5" />
-                        Credit Application URL
-                    </CardTitle>
-                    <CardDescription>
-                        Configure the URL for your dealership's credit application form. This URL will be opened when users click "Initiate Credit App" on a lead.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="space-y-2">
-                        <Label htmlFor="creditAppUrl">Credit Application URL</Label>
-                        <Input
-                            id="creditAppUrl"
-                            type="url"
-                            placeholder="https://example.com/credit-application"
-                            value={creditAppUrl}
-                            onChange={(e) => setCreditAppUrl(e.target.value)}
-                        />
-                        <p className="text-xs text-muted-foreground">
-                            Enter the full URL to your external credit application form. Leave empty to use the default.
-                        </p>
-                    </div>
-                    
-                    <div className="flex items-center justify-end pt-4 border-t">
                         <Button onClick={handleSave} disabled={isSaving}>
                             {isSaving ? (
                                 <>

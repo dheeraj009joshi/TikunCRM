@@ -110,6 +110,7 @@ import { BookAppointmentModal } from "@/components/appointments/book-appointment
 import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
 import { TrustScoreBadge } from "@/components/eligibility/trust-score-badge"
 import { GuestFormModal } from "@/components/guests/guest-form-modal"
+import { LeadCreditAppForm } from "@/components/credit-app/lead-credit-app-form"
 import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal, getLinkableAppointmentsForCheckIn } from "@/services/appointment-service"
 import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
 import { StipsService, StipsCategory, StipDocument } from "@/services/stips-service"
@@ -559,11 +560,6 @@ export default function LeadDetailsPage() {
     const [appointmentCompleteModal, setAppointmentCompleteModal] = React.useState<Appointment | null>(null)
     const [appointmentRescheduleModal, setAppointmentRescheduleModal] = React.useState<Appointment | null>(null)
     const [appointmentBannerOpen, setAppointmentBannerOpen] = React.useState(false)
-    // Credit app outcome (capture when user returns after initiating)
-    const [showCreditAppOutcomeModal, setShowCreditAppOutcomeModal] = React.useState(false)
-    const [creditAppOutcomeSubmitting, setCreditAppOutcomeSubmitting] = React.useState<"complete" | "abandon" | null>(null)
-    const [isInitiatingCreditApp, setIsInitiatingCreditApp] = React.useState(false)
-    
     // Reply to note
     const [replyingTo, setReplyingTo] = React.useState<string | null>(null)
     const [replyContent, setReplyContent] = React.useState("")
@@ -579,7 +575,8 @@ export default function LeadDetailsPage() {
     const [recordingPlaybackLoading, setRecordingPlaybackLoading] = React.useState<string | null>(null)
     const recordingPlaybackObjectUrlRef = React.useRef<string | null>(null)
     // Active tab: default to Notes when opening from mention link (?note=activity_id)
-    const [activeActivityTab, setActiveActivityTab] = React.useState<"timeline" | "notes" | "appointments" | "followups" | "stips">(
+    type LeadActivityTab = "timeline" | "notes" | "appointments" | "followups" | "stips" | "eligibility" | "credit-app"
+    const [activeActivityTab, setActiveActivityTab] = React.useState<LeadActivityTab>(
         noteIdFromUrl ? "notes" : "timeline"
     )
     // Timeline lens: filter the unified timeline by channel
@@ -1012,16 +1009,6 @@ export default function LeadDetailsPage() {
             TeamService.listBdcAgents().then(setBdcAgents).catch(() => setBdcAgents([]))
         }
     }, [fetchLead, fetchActivities, fetchShowroomStatus, fetchLeadAppointmentsAndFollowUps, isSuperAdmin, isDealershipLevel])
-
-    // Pending credit app: most recent credit-app activity is "initiated" (not completed/abandoned)
-    const hasPendingCreditApp = React.useMemo(() => {
-        const creditTypes = ["credit_app_initiated", "credit_app_completed", "credit_app_abandoned"] as const
-        const creditActivities = activities
-            .filter((a) => creditTypes.includes(a.type as typeof creditTypes[number]))
-            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        const latest = creditActivities[0]
-        return latest?.type === "credit_app_initiated"
-    }, [activities])
 
     React.useEffect(() => {
         LeadStageService.list().then(setStages).catch(console.error)
@@ -2382,37 +2369,15 @@ export default function LeadDetailsPage() {
                                             <span className="whitespace-nowrap">Email</span>
                                         </Button>
                                     )}
-                                    {!hasPendingCreditApp && (
-                                        <Button 
-                                            variant="outline" 
-                                            className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
-                                            title="Initiate credit application (opens Toyota South Atlanta)"
-                                            disabled={isInitiatingCreditApp}
-                                            onClick={() => {
-                                                setIsInitiatingCreditApp(true)
-                                                LeadService.creditAppInitiate(lead.id)
-                                                    .then((r) => {
-                                                        if (r?.redirect_url) window.open(r.redirect_url, "_blank")
-                                                        return Promise.all([fetchLead(), fetchActivities()])
-                                                    })
-                                                    .catch((e) => console.error(e))
-                                                    .finally(() => setIsInitiatingCreditApp(false))
-                                            }}
-                                        >
-                                            {isInitiatingCreditApp ? <Loader2 className="h-4 w-4 mr-2 shrink-0 animate-spin text-teal-500" /> : <FileText className="h-4 w-4 mr-2 shrink-0 text-teal-500" />}
-                                            Initiate Credit App
-                                        </Button>
-                                    )}
-                                    {hasPendingCreditApp && (
-                                        <Button 
-                                            variant="outline"
-                                            className="w-full h-10 rounded-lg border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-all duration-200 hover:shadow-sm active:scale-[0.99]"
-                                            onClick={() => setShowCreditAppOutcomeModal(true)}
-                                        >
-                                            <CheckCircle className="h-4 w-4 mr-2 shrink-0" />
-                                            Capture Credit App Outcome
-                                        </Button>
-                                    )}
+                                    <Button 
+                                        variant="outline" 
+                                        className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
+                                        title="Open in-CRM credit application"
+                                        onClick={() => setActiveActivityTab("credit-app")}
+                                    >
+                                        <FileText className="h-4 w-4 mr-2 shrink-0 text-teal-500" />
+                                        Credit Application
+                                    </Button>
                                     <Button 
                                         variant="outline" 
                                         className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
@@ -3254,36 +3219,14 @@ export default function LeadDetailsPage() {
                                     </Button>
                                 </div>
                             )}
-                            {!hasPendingCreditApp && (
-                                <Button 
-                                    className="w-full justify-start" 
-                                    variant="outline"
-                                    disabled={isInitiatingCreditApp}
-                                    onClick={() => {
-                                        setIsInitiatingCreditApp(true)
-                                        LeadService.creditAppInitiate(lead.id)
-                                            .then((r) => {
-                                                if (r?.redirect_url) window.open(r.redirect_url, "_blank")
-                                                return Promise.all([fetchLead(), fetchActivities()])
-                                            })
-                                            .catch((e) => console.error(e))
-                                            .finally(() => setIsInitiatingCreditApp(false))
-                                    }}
-                                >
-                                    {isInitiatingCreditApp ? <Loader2 className="h-4 w-4 mr-2 animate-spin text-teal-500" /> : <FileText className="h-4 w-4 mr-2 text-teal-500" />}
-                                    Initiate Credit App
-                                </Button>
-                            )}
-                            {hasPendingCreditApp && (
-                                <Button 
-                                    className="w-full justify-start border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100" 
-                                    variant="outline"
-                                    onClick={() => setShowCreditAppOutcomeModal(true)}
-                                >
-                                    <CheckCircle className="h-4 w-4 mr-2" />
-                                    Capture Credit App Outcome
-                                </Button>
-                            )}
+                            <Button 
+                                className="w-full justify-start" 
+                                variant="outline"
+                                onClick={() => setActiveActivityTab("credit-app")}
+                            >
+                                <FileText className="h-4 w-4 mr-2 text-teal-500" />
+                                Credit Application
+                            </Button>
                             <Button 
                                 className="w-full justify-start" 
                                 variant="outline"
@@ -3369,7 +3312,7 @@ export default function LeadDetailsPage() {
                 {/* Right Column: Activity & Interaction */}
                 <div className="lg:col-span-2 flex flex-col min-h-0 overflow-hidden">
                     <Card className="flex-1 flex flex-col min-h-0 overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
-                        <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as "timeline" | "notes" | "appointments" | "followups" | "stips")} className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                        <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as LeadActivityTab)} className="flex-1 flex flex-col min-h-0 overflow-hidden">
                             <div className="border-b border-border/60">
                                 {nextScheduledAppointment && (
                                     <div className="px-6 pt-3 pb-1">
@@ -3495,6 +3438,13 @@ export default function LeadDetailsPage() {
                                     >
                                         <FileStack className="h-4 w-4" />
                                         Stips
+                                    </TabsTrigger>
+                                    <TabsTrigger 
+                                        value="credit-app"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
+                                    >
+                                        <FileText className="h-4 w-4" />
+                                        Credit App
                                     </TabsTrigger>
                                     <TabsTrigger 
                                         value="eligibility"
@@ -4912,6 +4862,24 @@ export default function LeadDetailsPage() {
                                 )}
                             </TabsContent>
 
+                            <TabsContent value="credit-app" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                                {leadId && (
+                                    <LeadCreditAppForm
+                                        leadId={leadId}
+                                        dealershipId={lead?.dealership_id}
+                                        primaryCustomerName={
+                                            lead?.customer ? getCustomerFullName(lead.customer) : "Primary customer"
+                                        }
+                                        secondaryCustomerName={
+                                            lead?.secondary_customer
+                                                ? getCustomerFullName(lead.secondary_customer)
+                                                : null
+                                        }
+                                        hasSecondaryCustomer={!!lead?.secondary_customer_id}
+                                    />
+                                )}
+                            </TabsContent>
+
                             <TabsContent value="eligibility" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
                                 <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border bg-muted/30 p-4">
                                     <div className="min-w-0">
@@ -5350,69 +5318,6 @@ export default function LeadDetailsPage() {
                             ) : (
                                 "Check Out"
                             )}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
-
-            {/* Credit app outcome: Completed or Abandoned — no required identifiers */}
-            <Dialog open={showCreditAppOutcomeModal} onOpenChange={setShowCreditAppOutcomeModal}>
-                <DialogContent className="max-w-md">
-                    <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2">
-                            <FileText className="h-5 w-5" />
-                            Credit Application Outcome
-                        </DialogTitle>
-                        <DialogDescription>
-                            Was the credit application completed or abandoned?
-                        </DialogDescription>
-                    </DialogHeader>
-                    <div className="flex flex-col gap-3 pt-2">
-                        <Button
-                            disabled={creditAppOutcomeSubmitting !== null}
-                            onClick={async () => {
-                                if (!leadId) return
-                                setCreditAppOutcomeSubmitting("complete")
-                                try {
-                                    await LeadService.creditAppComplete(leadId, {})
-                                    setShowCreditAppOutcomeModal(false)
-                                    fetchLead()
-                                    fetchActivities()
-                                } catch (e: unknown) {
-                                    alert((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Failed to save")
-                                } finally {
-                                    setCreditAppOutcomeSubmitting(null)
-                                }
-                            }}
-                        >
-                            {creditAppOutcomeSubmitting === "complete" ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle className="h-4 w-4 mr-2" />}
-                            Completed
-                        </Button>
-                        <Button
-                            variant="outline"
-                            disabled={creditAppOutcomeSubmitting !== null}
-                            onClick={async () => {
-                                if (!leadId) return
-                                setCreditAppOutcomeSubmitting("abandon")
-                                try {
-                                    await LeadService.creditAppAbandon(leadId, {})
-                                    setShowCreditAppOutcomeModal(false)
-                                    fetchLead()
-                                    fetchActivities()
-                                } catch (e: unknown) {
-                                    alert((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Failed to save")
-                                } finally {
-                                    setCreditAppOutcomeSubmitting(null)
-                                }
-                            }}
-                        >
-                            {creditAppOutcomeSubmitting === "abandon" ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <XCircle className="h-4 w-4 mr-2" />}
-                            Abandoned
-                        </Button>
-                    </div>
-                    <DialogFooter>
-                        <Button variant="ghost" onClick={() => setShowCreditAppOutcomeModal(false)}>
-                            Cancel
                         </Button>
                     </DialogFooter>
                 </DialogContent>
