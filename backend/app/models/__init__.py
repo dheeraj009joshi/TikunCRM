@@ -52,6 +52,12 @@ from app.models.guest import Guest, GuestStatus
 from app.models.saved_view import SavedView
 from app.models.task import Task, TaskType, TaskPriority, TaskStatus
 from app.models.ai_assistant import AiConversation, AiMessage
+from app.models.lead_credit_application import (
+    LeadCreditApplication,
+    CreditApplicationStatus,
+    CreditApplicationTransactionType,
+    CreditApplicationType,
+)
 
 __all__ = [
     "Customer",
@@ -127,4 +133,8 @@ __all__ = [
     "TaskStatus",
     "AiConversation",
     "AiMessage",
+    "LeadCreditApplication",
+    "CreditApplicationStatus",
+    "CreditApplicationTransactionType",
+    "CreditApplicationType",
 ]

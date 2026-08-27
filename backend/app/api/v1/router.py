@@ -3,7 +3,7 @@ API v1 Router - combines all route modules
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, bdc_reports, voice, sms, whatsapp, showroom, customers, lead_stages, stips, admin_sync_sources, campaign_mappings, auto_whatsapp, eligibility, guests, public, saved_views, tasks, ai_assistant
+from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, bdc_reports, voice, sms, whatsapp, showroom, customers, lead_stages, stips, admin_sync_sources, campaign_mappings, auto_whatsapp, eligibility, guests, public, saved_views, tasks, ai_assistant, credit_application
 from app.api.v1.endpoints.webhooks import sendgrid as sendgrid_webhook
 from app.api.v1.endpoints.webhooks import twilio as twilio_webhook
 from app.api.v1.endpoints.webhooks import twilio_ai_voice as twilio_ai_voice_webhook
@@ -16,6 +16,7 @@ api_router.include_router(auth_oauth.router, prefix="/auth/oauth", tags=["OAuth"
 api_router.include_router(users.router, prefix="/users", tags=["Users"])
 api_router.include_router(dealerships.router, prefix="/dealerships", tags=["Dealerships"])
 api_router.include_router(leads.router, prefix="/leads", tags=["Leads"])
+api_router.include_router(credit_application.router, prefix="/leads", tags=["Leads"])
 api_router.include_router(customers.router, prefix="/customers", tags=["Customers"])
 api_router.include_router(lead_stages.router, prefix="/lead-stages", tags=["Lead Stages"])
 api_router.include_router(stips.router, prefix="/stips", tags=["Stips"])
