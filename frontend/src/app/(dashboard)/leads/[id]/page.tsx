@@ -577,7 +577,7 @@ export default function LeadDetailsPage() {
     // Active tab: default to Notes when opening from mention link (?note=activity_id)
     type LeadActivityTab = "timeline" | "notes" | "appointments" | "followups" | "stips" | "eligibility" | "credit-app"
     const [activeActivityTab, setActiveActivityTab] = React.useState<LeadActivityTab>(
-        noteIdFromUrl ? "notes" : "eligibility"
+        noteIdFromUrl ? "notes" : "timeline"
     )
     const [showMoreTabsModal, setShowMoreTabsModal] = React.useState(false)
     // Timeline lens: filter the unified timeline by channel
@@ -3387,6 +3387,12 @@ export default function LeadDetailsPage() {
                                 <div className="flex items-center gap-0 flex-1 min-w-0">
                                 <TabsList className="bg-transparent h-auto p-0 gap-1 flex-1 min-w-0 justify-start flex-nowrap overflow-x-auto no-scrollbar">
                                     <TabsTrigger 
+                                        value="timeline"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
+                                    >
+                                        Activity Timeline
+                                    </TabsTrigger>
+                                    <TabsTrigger 
                                         value="eligibility"
                                         className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
                                     >
@@ -3448,12 +3454,6 @@ export default function LeadDetailsPage() {
                                                 {followUpBadgeCount}
                                             </span>
                                         )}
-                                    </TabsTrigger>
-                                    <TabsTrigger 
-                                        value="timeline"
-                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
-                                    >
-                                        Activity Timeline
                                     </TabsTrigger>
                                 </TabsList>
                                 <Button
@@ -5135,13 +5135,13 @@ export default function LeadDetailsPage() {
                     <div className="grid gap-1.5 py-1">
                         {(
                             [
+                                { value: "timeline" as const, label: "Activity Timeline", icon: History },
                                 { value: "eligibility" as const, label: "Trust Score", icon: Gauge },
                                 { value: "notes" as const, label: "Notes", icon: MessageSquare },
                                 { value: "credit-app" as const, label: "Credit App", icon: FileText },
                                 { value: "stips" as const, label: "Stips", icon: FileStack },
                                 { value: "appointments" as const, label: "Appointments", icon: CalendarClock, badge: appointmentBadgeCount },
                                 { value: "followups" as const, label: "Follow-ups", icon: Calendar, badge: followUpBadgeCount, badgeColor: followUpBadgeColor },
-                                { value: "timeline" as const, label: "Activity Timeline", icon: History },
                             ] as const
                         ).map((item) => {
                             const Icon = item.icon
