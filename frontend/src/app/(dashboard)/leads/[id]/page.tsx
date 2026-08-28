@@ -577,8 +577,9 @@ export default function LeadDetailsPage() {
     // Active tab: default to Notes when opening from mention link (?note=activity_id)
     type LeadActivityTab = "timeline" | "notes" | "appointments" | "followups" | "stips" | "eligibility" | "credit-app"
     const [activeActivityTab, setActiveActivityTab] = React.useState<LeadActivityTab>(
-        noteIdFromUrl ? "notes" : "timeline"
+        noteIdFromUrl ? "notes" : "eligibility"
     )
+    const [showMoreTabsModal, setShowMoreTabsModal] = React.useState(false)
     // Timeline lens: filter the unified timeline by channel
     const [timelineLens, setTimelineLens] = React.useState<"all" | "calls" | "emails" | "messages" | "notes" | "stages">("all")
     const lensedActivities = React.useMemo(() => {
@@ -3383,18 +3384,34 @@ export default function LeadDetailsPage() {
                                     </div>
                                 )}
                             <div className="px-6 flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-0 flex-1 min-w-0">
                                 <TabsList className="bg-transparent h-auto p-0 gap-1 flex-1 min-w-0 justify-start flex-nowrap overflow-x-auto no-scrollbar">
                                     <TabsTrigger 
-                                        value="timeline"
-                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
-                            >
-                                Activity Timeline
+                                        value="eligibility"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
+                                    >
+                                        <Gauge className="h-4 w-4" />
+                                        Trust Score
                                     </TabsTrigger>
                                     <TabsTrigger 
                                         value="notes"
                                         className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
                                     >
                                         Notes
+                                    </TabsTrigger>
+                                    <TabsTrigger 
+                                        value="credit-app"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
+                                    >
+                                        <FileText className="h-4 w-4" />
+                                        Credit App
+                                    </TabsTrigger>
+                                    <TabsTrigger 
+                                        value="stips"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
+                                    >
+                                        <FileStack className="h-4 w-4" />
+                                        Stips
                                     </TabsTrigger>
                                     <TabsTrigger 
                                         value="appointments"
@@ -3421,7 +3438,7 @@ export default function LeadDetailsPage() {
                                         Follow-ups
                                         {followUpBadgeCount > 0 && (
                                             <span
-                                className={cn(
+                                                className={cn(
                                                     "h-5 min-w-[20px] rounded-full text-white text-xs font-medium flex items-center justify-center px-1.5",
                                                     followUpBadgeColor === "red" && "bg-red-500",
                                                     followUpBadgeColor === "green" && "bg-green-500",
@@ -3433,27 +3450,24 @@ export default function LeadDetailsPage() {
                                         )}
                                     </TabsTrigger>
                                     <TabsTrigger 
-                                        value="stips"
-                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
+                                        value="timeline"
+                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 transition-colors duration-200"
                                     >
-                                        <FileStack className="h-4 w-4" />
-                                        Stips
-                                    </TabsTrigger>
-                                    <TabsTrigger 
-                                        value="credit-app"
-                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
-                                    >
-                                        <FileText className="h-4 w-4" />
-                                        Credit App
-                                    </TabsTrigger>
-                                    <TabsTrigger 
-                                        value="eligibility"
-                                        className="shrink-0 whitespace-nowrap rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-4 px-3 flex items-center gap-1.5"
-                                    >
-                                        <Gauge className="h-4 w-4" />
-                                        Trust Score
+                                        Activity Timeline
                                     </TabsTrigger>
                                 </TabsList>
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="shrink-0 h-9 w-9 rounded-full"
+                                    title="More sections"
+                                    onClick={() => setShowMoreTabsModal(true)}
+                                >
+                                    <MoreHorizontal className="h-5 w-5" />
+                                    <span className="sr-only">More sections</span>
+                                </Button>
+                                </div>
                                 <div className="shrink-0 flex flex-col items-end gap-1.5 min-w-[140px]">
                                     <DropdownMenu>
                                         <DropdownMenuTrigger asChild>
@@ -5109,6 +5123,66 @@ export default function LeadDetailsPage() {
                 />
             )}
 
+            {/* More sections overlay */}
+            <Dialog open={showMoreTabsModal} onOpenChange={setShowMoreTabsModal}>
+                <DialogContent className="max-w-sm">
+                    <DialogHeader>
+                        <DialogTitle>Sections</DialogTitle>
+                        <DialogDescription>
+                            Jump to any section on this lead.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-1.5 py-1">
+                        {(
+                            [
+                                { value: "eligibility" as const, label: "Trust Score", icon: Gauge },
+                                { value: "notes" as const, label: "Notes", icon: MessageSquare },
+                                { value: "credit-app" as const, label: "Credit App", icon: FileText },
+                                { value: "stips" as const, label: "Stips", icon: FileStack },
+                                { value: "appointments" as const, label: "Appointments", icon: CalendarClock, badge: appointmentBadgeCount },
+                                { value: "followups" as const, label: "Follow-ups", icon: Calendar, badge: followUpBadgeCount, badgeColor: followUpBadgeColor },
+                                { value: "timeline" as const, label: "Activity Timeline", icon: History },
+                            ] as const
+                        ).map((item) => {
+                            const Icon = item.icon
+                            const active = activeActivityTab === item.value
+                            const badge = "badge" in item ? item.badge : 0
+                            return (
+                                <button
+                                    key={item.value}
+                                    type="button"
+                                    onClick={() => {
+                                        setActiveActivityTab(item.value)
+                                        setShowMoreTabsModal(false)
+                                    }}
+                                    className={cn(
+                                        "flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors",
+                                        active
+                                            ? "border-primary bg-primary/5 text-primary"
+                                            : "border-transparent hover:bg-muted"
+                                    )}
+                                >
+                                    <Icon className="h-4 w-4 shrink-0" />
+                                    <span className="flex-1 font-medium">{item.label}</span>
+                                    {badge != null && badge > 0 && (
+                                        <span
+                                            className={cn(
+                                                "h-5 min-w-[20px] rounded-full text-white text-xs font-medium flex items-center justify-center px-1.5",
+                                                "badgeColor" in item && item.badgeColor === "green" && "bg-green-500",
+                                                "badgeColor" in item && item.badgeColor === "grey" && "bg-gray-500",
+                                                (!("badgeColor" in item) || item.badgeColor === "red") && "bg-red-500"
+                                            )}
+                                        >
+                                            {badge}
+                                        </span>
+                                    )}
+                                    {active && <Check className="h-4 w-4 shrink-0" />}
+                                </button>
+                            )
+                        })}
+                    </div>
+                </DialogContent>
+            </Dialog>
             {/* Check-in: link to which appointment? (when lead has multiple) */}
             <Dialog open={showCheckInAppointmentModal} onOpenChange={(open) => { if (!open) { setShowCheckInAppointmentModal(false); setLeadAppointmentsForCheckIn([]) } }}>
                 <DialogContent className="max-w-md">
