@@ -3575,6 +3575,15 @@ export default function LeadDetailsPage() {
                                                       : null
                                             const hideOutreachDescription =
                                                 (isSmsSent || isWhatsappSent) && outreachBody != null
+                                            const callStatus = String(meta?.status ?? "").toLowerCase()
+                                            const callOutcome = String(meta?.outcome ?? "").toLowerCase()
+                                            const isUnansweredCall =
+                                                activity.type === "call_logged" &&
+                                                (
+                                                    ["no-answer", "busy", "failed", "canceled"].includes(callStatus) ||
+                                                    ["no_answer", "no-answer", "no answer"].includes(callOutcome) ||
+                                                    /no answer/i.test(activity.description || "")
+                                                )
                                             return (
                                             <div key={activity.id} className="flex gap-3 relative">
                                                 {/* Timeline line */}
@@ -3601,7 +3610,7 @@ export default function LeadDetailsPage() {
                                                                     {activity.description}
                                                                 </p>
                                                             )}
-                                                            {activity.user && (
+                                                            {activity.user && !isUnansweredCall && (
                                                                 <p className="text-xs text-muted-foreground mt-1">
                                                                     by {activity.user.first_name} {activity.user.last_name}
                                                                 </p>

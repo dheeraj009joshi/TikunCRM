@@ -787,8 +787,8 @@ class NotificationService:
         Notify users when an existing lead appears in a new campaign.
         
         Notification targeting:
-        - If lead is assigned: notify assigned salesperson + dealership admins
-        - If lead is unassigned: notify all salespeople + admins in the dealership
+        - If lead is assigned: notify assigned salesperson + dealership admins/owners + BDC with access
+        - If lead is unassigned: notify all dealership users + BDC with access to that dealership
         
         Args:
             lead_id: ID of the lead
@@ -801,12 +801,13 @@ class NotificationService:
             List of created notifications
         """
         from app.core.permissions import UserRole
+        from app.models.user_dealership_access import UserDealershipAccess
         
         notifications = []
         # Explicit "duplicate lead" wording: a new import arrived, but the contact already exists.
         title = f"Duplicate lead: {lead_name}"
         message = (
-            f'A new lead came in from "{new_campaign_name}"'
+            f'A new lead came in from "{new_campaign_name}" '
             f"(duplicate). Open the lead to see campaign history before contacting them again."
         )
         link = f"/leads/{lead_id}"
@@ -815,20 +816,34 @@ class NotificationService:
             logger.warning(f"Cannot send multi-campaign notification for lead {lead_id} - no dealership_id")
             return notifications
         
-        # Get users to notify based on assignment status
+        users_by_id: dict = {}
+
+        # BDC agents access dealerships via UserDealershipAccess (often not User.dealership_id)
+        bdc_result = await self.db.execute(
+            select(User)
+            .join(
+                UserDealershipAccess,
+                UserDealershipAccess.user_id == User.id,
+            )
+            .where(
+                UserDealershipAccess.dealership_id == dealership_id,
+                User.role == UserRole.BDC,
+                User.is_active == True,
+            )
+            .distinct()
+        )
+        for bdc_user in bdc_result.scalars().all():
+            users_by_id[bdc_user.id] = bdc_user
+
         if assigned_to:
-            # Lead is assigned - notify assigned salesperson + dealership admins/owners
-            users_to_notify = []
-            
-            # Get the assigned salesperson
+            # Lead is assigned - notify assigned salesperson + dealership admins/owners (+ BDC above)
             assigned_user_result = await self.db.execute(
                 select(User).where(User.id == assigned_to, User.is_active == True)
             )
             assigned_user = assigned_user_result.scalar_one_or_none()
             if assigned_user:
-                users_to_notify.append(assigned_user)
+                users_by_id[assigned_user.id] = assigned_user
             
-            # Get dealership admins and owners
             admins_result = await self.db.execute(
                 select(User).where(
                     User.dealership_id == dealership_id,
@@ -836,19 +851,20 @@ class NotificationService:
                     User.role.in_([UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER])
                 )
             )
-            admins = admins_result.scalars().all()
-            for admin in admins:
-                if admin.id != assigned_to:  # Don't duplicate if assigned user is also admin
-                    users_to_notify.append(admin)
+            for admin in admins_result.scalars().all():
+                users_by_id[admin.id] = admin
         else:
-            # Lead is unassigned - notify all users in dealership
+            # Lead is unassigned - notify all users in dealership (+ BDC above)
             users_result = await self.db.execute(
                 select(User).where(
                     User.dealership_id == dealership_id,
                     User.is_active == True
                 )
             )
-            users_to_notify = list(users_result.scalars().all())
+            for user in users_result.scalars().all():
+                users_by_id[user.id] = user
+        
+        users_to_notify = list(users_by_id.values())
         
         # Send notifications
         for user in users_to_notify:
@@ -875,7 +891,8 @@ class NotificationService:
                 logger.error(f"Failed to notify user {user.id} about multi-campaign lead: {e}")
         
         logger.info(
-            f"Sent multi-campaign notifications to {len(notifications)} users for lead {lead_id}"
+            f"Sent multi-campaign notifications to {len(notifications)} users for lead {lead_id} "
+            f"(includes BDC with dealership access)"
         )
         return notifications
 
@@ -1081,8 +1098,8 @@ async def notify_lead_multi_campaign_background(
     Runs in a background task with its own DB session.
     
     Notification targeting:
-    - If lead is assigned: notify assigned salesperson + dealership admins
-    - If lead is unassigned: notify all salespeople + admins in the dealership
+    - If lead is assigned: notify assigned salesperson + dealership admins/owners + BDC with access
+    - If lead is unassigned: notify all dealership users + BDC with access to that dealership
     """
     import traceback
     from app.db.database import async_session_maker
