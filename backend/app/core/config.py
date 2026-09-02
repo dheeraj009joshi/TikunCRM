@@ -56,6 +56,11 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("DATABASE_URL", "DATABASE_URL_33"),
     )
+    # Connection pool (single-worker prod uses pooling; set DB_USE_NULL_POOL=true for multi-worker)
+    db_pool_size: int = 10
+    db_max_overflow: int = 10
+    db_use_null_pool: bool = False
+    dashboard_cache_ttl_seconds: int = 45
     
     # JWT Settings (.env may use SECRET_KEY or JWT_SECRET)
     secret_key: str = Field(

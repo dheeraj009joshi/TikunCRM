@@ -67,16 +67,10 @@ AUTO_ASSIGN_BLOCKED_ROLES = frozenset({
 
 
 def get_assignment_session_maker():
-    """Create a dedicated engine and session maker for assignment operations."""
-    from sqlalchemy.pool import NullPool
-    url, connect_args = get_engine_url_and_connect_args()
-    engine = create_async_engine(
-        url,
-        echo=False,
-        poolclass=NullPool,  # Use NullPool for background tasks
-        connect_args=connect_args,
-    )
-    return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    """Return the shared session maker (reuses the app connection pool)."""
+    from app.db.database import async_session_maker
+
+    return async_session_maker
 
 
 async def auto_assign_leads_from_activity():

@@ -1,11 +1,8 @@
 """
 Database configuration and session management
 
-NOTE: When running with multiple workers (uvicorn --workers N), each worker
-gets its own copy of the engine. Using NullPool prevents connection exhaustion
-by creating connections on-demand and closing them immediately after use.
-
-Connection timeouts are set to prevent stuck transactions from blocking the database.
+Production runs a single uvicorn worker with a connection pool for low latency.
+Set DB_USE_NULL_POOL=true when running multiple workers without PgBouncer.
 """
 from typing import AsyncGenerator
 
@@ -43,18 +40,29 @@ def get_engine_url_and_connect_args():
     return url, connect_args
 
 
+def create_app_engine():
+    """Create the shared async engine with pooling (or NullPool when configured)."""
+    url, connect_args = get_engine_url_and_connect_args()
+    common = {
+        "echo": False,
+        "future": True,
+        "connect_args": connect_args,
+    }
+    if settings.db_use_null_pool:
+        return create_async_engine(url, poolclass=NullPool, **common)
+    return create_async_engine(
+        url,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+        **common,
+    )
+
+
 _engine_url, _connect_args = get_engine_url_and_connect_args()
 
-# Create async engine with NullPool for multi-worker compatibility
-# NullPool creates connections on-demand and closes them immediately after use
-# This prevents connection exhaustion when running with multiple workers
-engine = create_async_engine(
-    _engine_url,
-    echo=False,  # Disable SQL logging for better performance
-    future=True,
-    poolclass=NullPool,  # Each query gets a fresh connection - works with multi-worker
-    connect_args=_connect_args,
-)
+engine = create_app_engine()
 
 # Create async session factory
 async_session_maker = async_sessionmaker(

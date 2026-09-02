@@ -210,7 +210,6 @@ export function BdcDashboard() {
             const [
                 statsData,
                 freshData,
-                freshTopData,
                 overdueFuData,
                 todayFuData,
                 todayApptData,
@@ -219,7 +218,6 @@ export function BdcDashboard() {
             ] = await Promise.all([
                 DashboardService.getBdcStats(),
                 LeadService.listLeads({ fresh_only: true, page_size: 8, ...leadFilters }).catch(() => ({ items: [] })),
-                LeadService.listLeads({ fresh_only: true, page_size: 5, ...leadFilters }).catch(() => ({ items: [] })),
                 FollowUpService.listFollowUps({ overdue: true, status: "pending", page_size: 8 }).catch(() => ({
                     items: [],
                 })),
@@ -233,9 +231,10 @@ export function BdcDashboard() {
                 AppointmentService.list({ upcoming_only: true, page_size: 3 }).catch(() => ({ items: [] })),
                 ShowroomService.getCurrent().catch(() => ({ count: 0, visits: [] })),
             ])
+            const freshItems = freshData.items || []
             setStats(statsData)
-            setFreshLeads(freshData.items || [])
-            setFreshLeadsTop(freshTopData.items || [])
+            setFreshLeads(freshItems)
+            setFreshLeadsTop(freshItems.slice(0, 5))
             setOverdueFollowUps(
                 filterByDealership(overdueFuData.items || [], selectedDealershipId, (fu) => fu.assigned_to_user?.dealership_id)
             )
@@ -269,12 +268,20 @@ export function BdcDashboard() {
         }
     }, [selectedDealershipId])
 
+    const reloadTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+    const scheduleReload = React.useCallback(() => {
+        if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current)
+        reloadTimerRef.current = setTimeout(() => {
+            loadData()
+        }, 1500)
+    }, [loadData])
+
     useStatsRefresh(loadData)
-    useShowroomUpdates(loadData)
-    useWebSocketEvent("lead:created", () => loadData(), [loadData])
-    useWebSocketEvent("lead:updated", () => loadData(), [loadData])
-    useWebSocketEvent("badges:refresh", () => loadData(), [loadData])
-    useWebSocketEvent("stats:refresh", () => loadData(), [loadData])
+    useShowroomUpdates(scheduleReload)
+    useWebSocketEvent("lead:created", scheduleReload, [scheduleReload])
+    useWebSocketEvent("lead:updated", scheduleReload, [scheduleReload])
+    useWebSocketEvent("badges:refresh", scheduleReload, [scheduleReload])
+    useWebSocketEvent("stats:refresh", scheduleReload, [scheduleReload])
 
     React.useEffect(() => {
         setIsLoading(true)

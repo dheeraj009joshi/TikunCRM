@@ -5,11 +5,14 @@ import asyncio
 import logging
 import os
 import fcntl
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 from app.core.config import settings
 from app.api.v1.router import api_router
@@ -23,6 +26,25 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+class RequestTimingMiddleware(BaseHTTPMiddleware):
+    """Log slow requests and expose timing in response headers."""
+
+    async def dispatch(self, request: Request, call_next):
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration_ms = (time.perf_counter() - start) * 1000
+        response.headers["X-Process-Time-Ms"] = f"{duration_ms:.1f}"
+        if duration_ms >= 1000 and request.url.path.startswith("/api/"):
+            logger.warning(
+                "Slow request: %s %s took %.0fms",
+                request.method,
+                request.url.path,
+                duration_ms,
+            )
+        return response
+
 
 # Lock file for scheduler (only one worker should run scheduler)
 SCHEDULER_LOCK_FILE = Path("/tmp/tikuncrm_scheduler.lock")
@@ -186,6 +208,7 @@ def create_application() -> FastAPI:
     # Configure CORS - Use explicit origins when credentials=True (required by spec)
     _cors = settings.cors_origins_list or ["http://localhost:3000"]
     logger.info("CORS allow_origins (%d): %s", len(_cors), ", ".join(_cors))
+    app.add_middleware(RequestTimingMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors,

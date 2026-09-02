@@ -58,16 +58,10 @@ LEGACY_GOOGLE_SHEET_GID = "0"
 
 
 def get_sync_session_maker():
-    """Create a dedicated engine and session maker for sync operations."""
-    from sqlalchemy.pool import NullPool
-    url, connect_args = get_engine_url_and_connect_args()
-    engine = create_async_engine(
-        url,
-        echo=False,
-        poolclass=NullPool,
-        connect_args=connect_args,
-    )
-    return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    """Return the shared session maker (reuses the app connection pool)."""
+    from app.db.database import async_session_maker
+
+    return async_session_maker
 
 
 def parse_full_name(full_name: str) -> tuple[str, Optional[str]]:

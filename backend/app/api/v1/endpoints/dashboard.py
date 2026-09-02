@@ -13,6 +13,8 @@ from pydantic import BaseModel
 from app.api import deps
 from app.core.permissions import Permission, UserRole
 from app.core.access_scope import get_accessible_dealership_ids
+from app.core.cache import cache_get, cache_set
+from app.core.config import settings
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.lead import Lead, LeadSource
@@ -25,6 +27,14 @@ from app.models.follow_up import FollowUp, FollowUpStatus
 from app.models.appointment import Appointment, AppointmentStatus
 
 router = APIRouter()
+
+_DASHBOARD_TTL = settings.dashboard_cache_ttl_seconds
+
+
+def _scope_cache_key(accessible_ids: Optional[List[UUID]]) -> str:
+    if accessible_ids is None:
+        return "all"
+    return ",".join(sorted(str(i) for i in accessible_ids))
 
 
 def _lead_dealership_clause(accessible_ids: Optional[List[UUID]]):
@@ -143,53 +153,57 @@ async def get_super_admin_stats(
     current_user: User = Depends(deps.require_permission(Permission.VIEW_SYSTEM_REPORTS))
 ) -> Any:
     """Get global statistics for Super Admin dashboard"""
-    # Count total leads
-    total_leads_result = await db.execute(select(func.count()).select_from(Lead))
-    total_leads = total_leads_result.scalar() or 0
-    
-    # Count unassigned leads (not assigned to any dealership)
-    unassigned_result = await db.execute(
-        select(func.count()).select_from(Lead).where(Lead.dealership_id.is_(None))
-    )
-    unassigned_leads = unassigned_result.scalar() or 0
-    
-    # Count dealerships
-    total_dealers_result = await db.execute(select(func.count()).select_from(Dealership))
-    total_dealers = total_dealers_result.scalar() or 0
-    
-    # Count active dealerships
-    active_dealers_result = await db.execute(
-        select(func.count()).select_from(Dealership).where(Dealership.is_active == True)
-    )
-    active_dealers = active_dealers_result.scalar() or 0
-    
-    # Conversion rate
-    converted_result = await db.execute(
-        select(func.count()).select_from(Lead).where(Lead.outcome == "converted")
-    )
-    total_converted = converted_result.scalar() or 0
-    conversion_rate = (total_converted / total_leads * 100) if total_leads > 0 else 0
-    
-    # Total sales force
-    total_sales_result = await db.execute(
-        select(func.count()).select_from(User).where(
-            and_(User.role == UserRole.SALESPERSON, User.is_active == True)
+    cache_key = f"dash:super-admin:stats:{current_user.id}"
+
+    async def _build():
+        total_leads_result = await db.execute(select(func.count()).select_from(Lead))
+        total_leads = total_leads_result.scalar() or 0
+
+        unassigned_result = await db.execute(
+            select(func.count()).select_from(Lead).where(Lead.dealership_id.is_(None))
         )
-    )
-    total_sales = total_sales_result.scalar() or 0
-    
-    return SuperAdminStats(
-        total_leads=total_leads,
-        unassigned_leads=unassigned_leads,
-        total_dealerships=total_dealers,
-        active_dealerships=active_dealers,
-        conversion_rate=f"{conversion_rate:.1f}%",
-        total_salesforce=total_sales,
-        leads_change="+5.2%",  # TODO: Calculate from historical data
-        conversion_change="+1.1%",
-        dealerships_change=f"+{total_dealers - active_dealers}" if total_dealers > active_dealers else "0",
-        salesforce_change="+8"
-    )
+        unassigned_leads = unassigned_result.scalar() or 0
+
+        total_dealers_result = await db.execute(select(func.count()).select_from(Dealership))
+        total_dealers = total_dealers_result.scalar() or 0
+
+        active_dealers_result = await db.execute(
+            select(func.count()).select_from(Dealership).where(Dealership.is_active == True)
+        )
+        active_dealers = active_dealers_result.scalar() or 0
+
+        converted_result = await db.execute(
+            select(func.count()).select_from(Lead).where(Lead.outcome == "converted")
+        )
+        total_converted = converted_result.scalar() or 0
+        conversion_rate = (total_converted / total_leads * 100) if total_leads > 0 else 0
+
+        total_sales_result = await db.execute(
+            select(func.count()).select_from(User).where(
+                and_(User.role == UserRole.SALESPERSON, User.is_active == True)
+            )
+        )
+        total_sales = total_sales_result.scalar() or 0
+
+        return SuperAdminStats(
+            total_leads=total_leads,
+            unassigned_leads=unassigned_leads,
+            total_dealerships=total_dealers,
+            active_dealerships=active_dealers,
+            conversion_rate=f"{conversion_rate:.1f}%",
+            total_salesforce=total_sales,
+            leads_change="+5.2%",
+            conversion_change="+1.1%",
+            dealerships_change=f"+{total_dealers - active_dealers}" if total_dealers > active_dealers else "0",
+            salesforce_change="+8",
+        )
+
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return SuperAdminStats(**cached)
+    result = await _build()
+    await cache_set(cache_key, result.model_dump(mode="json"), _DASHBOARD_TTL)
+    return result
 
 
 @router.get("/super-admin/dealership-performance", response_model=List[DealershipPerformance])
@@ -199,53 +213,49 @@ async def get_dealership_performance(
     limit: int = 10
 ) -> Any:
     """Get performance metrics for all dealerships"""
-    # Get all active dealerships
-    dealerships_result = await db.execute(
-        select(Dealership).where(Dealership.is_active == True).limit(limit)
+    cache_key = f"dash:super-admin:dealer-perf:{current_user.id}:{limit}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return [DealershipPerformance(**row) for row in cached]
+
+    stats_result = await db.execute(
+        select(
+            Dealership.id,
+            Dealership.name,
+            func.count(Lead.id).label("total_leads"),
+            func.count().filter(Lead.outcome == "converted").label("converted_leads"),
+            func.count().filter(Lead.is_active == True).label("active_leads"),
+        )
+        .select_from(Dealership)
+        .outerjoin(Lead, Lead.dealership_id == Dealership.id)
+        .where(Dealership.is_active == True)
+        .group_by(Dealership.id, Dealership.name)
+        .order_by(Dealership.name)
+        .limit(limit)
     )
-    dealerships = dealerships_result.scalars().all()
-    
+
     performance_data = []
-    for dealership in dealerships:
-        # Total leads for this dealership
-        total_result = await db.execute(
-            select(func.count()).select_from(Lead).where(Lead.dealership_id == dealership.id)
-        )
-        total_leads = total_result.scalar() or 0
-        
-        # Converted leads
-        converted_result = await db.execute(
-            select(func.count()).select_from(Lead).where(
-                and_(Lead.dealership_id == dealership.id, Lead.outcome == "converted")
-            )
-        )
-        converted_leads = converted_result.scalar() or 0
-        
-        # Active leads (not converted or lost)
-        active_result = await db.execute(
-            select(func.count()).select_from(Lead).where(
-                and_(
-                    Lead.dealership_id == dealership.id,
-                    Lead.is_active == True
-                )
-            )
-        )
-        active_leads = active_result.scalar() or 0
-
+    for row in stats_result.all():
+        total_leads = row.total_leads or 0
+        converted_leads = row.converted_leads or 0
         conversion_rate = (converted_leads / total_leads * 100) if total_leads > 0 else 0
+        performance_data.append(
+            DealershipPerformance(
+                id=row.id,
+                name=row.name,
+                total_leads=total_leads,
+                converted_leads=converted_leads,
+                conversion_rate=round(conversion_rate, 1),
+                active_leads=row.active_leads or 0,
+            )
+        )
 
-        performance_data.append(DealershipPerformance(
-            id=dealership.id,
-            name=dealership.name,
-            total_leads=total_leads,
-            converted_leads=converted_leads,
-            conversion_rate=round(conversion_rate, 1),
-            active_leads=active_leads
-        ))
-    
-    # Sort by conversion rate descending
     performance_data.sort(key=lambda x: x.conversion_rate, reverse=True)
-    
+    await cache_set(
+        cache_key,
+        [item.model_dump(mode="json") for item in performance_data],
+        _DASHBOARD_TTL,
+    )
     return performance_data
 
 
@@ -255,23 +265,36 @@ async def get_leads_by_source(
     current_user: User = Depends(deps.require_permission(Permission.VIEW_SYSTEM_REPORTS))
 ) -> Any:
     """Get lead distribution by source"""
+    cache_key = f"dash:super-admin:leads-by-source:{current_user.id}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return [LeadsBySource(**row) for row in cached]
+
     total_result = await db.execute(select(func.count()).select_from(Lead))
     total_leads = total_result.scalar() or 0
-    
+
+    counts_result = await db.execute(
+        select(Lead.source, func.count().label("count")).group_by(Lead.source)
+    )
+    count_by_source = {row.source: row.count for row in counts_result.all()}
+
     source_data = []
     for source in LeadSource:
-        count_result = await db.execute(
-            select(func.count()).select_from(Lead).where(Lead.source == source)
-        )
-        count = count_result.scalar() or 0
+        count = count_by_source.get(source, 0)
         percentage = (count / total_leads * 100) if total_leads > 0 else 0
-        
-        source_data.append(LeadsBySource(
-            source=source.value,
-            count=count,
-            percentage=round(percentage, 1)
-        ))
-    
+        source_data.append(
+            LeadsBySource(
+                source=source.value,
+                count=count,
+                percentage=round(percentage, 1),
+            )
+        )
+
+    await cache_set(
+        cache_key,
+        [item.model_dump(mode="json") for item in source_data],
+        _DASHBOARD_TTL,
+    )
     return source_data
 
 
@@ -282,6 +305,11 @@ async def get_dealership_admin_stats(
 ) -> Any:
     """Get statistics for Dealership Admin / Manager dashboard (single-org)."""
     accessible_ids = await get_accessible_dealership_ids(db, current_user)
+    cache_key = f"dash:dealership-admin:{current_user.id}:{_scope_cache_key(accessible_ids)}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return DealershipAdminStats(**cached)
+
     lead_scope = _lead_dealership_clause(accessible_ids)
     user_scope = _user_dealership_clause(accessible_ids)
 
@@ -380,8 +408,8 @@ async def get_dealership_admin_stats(
         )
     )
     fresh_leads = fresh_result.scalar() or 0
-    
-    return DealershipAdminStats(
+
+    result = DealershipAdminStats(
         total_leads=total_leads,
         unassigned_to_salesperson=unassigned_leads,
         active_leads=active_leads,
@@ -390,8 +418,10 @@ async def get_dealership_admin_stats(
         team_size=team_size,
         pending_follow_ups=pending_follow_ups,
         overdue_follow_ups=overdue_follow_ups,
-        fresh_leads=fresh_leads
+        fresh_leads=fresh_leads,
     )
+    await cache_set(cache_key, result.model_dump(mode="json"), _DASHBOARD_TTL)
+    return result
 
 
 @router.get("/salesperson/stats", response_model=SalespersonStats)
@@ -401,23 +431,24 @@ async def get_salesperson_stats(
 ) -> Any:
     """Get statistics for Salesperson dashboard"""
     user_id = current_user.id
-    
-    # Total assigned leads
+    cache_key = f"dash:salesperson:{user_id}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return SalespersonStats(**cached)
+
     total_result = await db.execute(
         select(func.count()).select_from(Lead).where(Lead.assigned_to == user_id)
     )
     total_leads = total_result.scalar() or 0
-    
-    # Leads by stage (dynamic)
-    leads_by_status = {}
+
     all_stages = await LeadStageService.list_stages(db, current_user.dealership_id)
-    for stage in all_stages:
-        count_result = await db.execute(
-            select(func.count()).select_from(Lead).where(
-                and_(Lead.assigned_to == user_id, Lead.stage_id == stage.id)
-            )
-        )
-        leads_by_status[stage.name] = count_result.scalar() or 0
+    stage_counts_result = await db.execute(
+        select(Lead.stage_id, func.count().label("count"))
+        .where(Lead.assigned_to == user_id)
+        .group_by(Lead.stage_id)
+    )
+    stage_count_map = {row.stage_id: row.count for row in stage_counts_result.all()}
+    leads_by_status = {stage.name: stage_count_map.get(stage.id, 0) for stage in all_stages}
 
     # Active = is_active True
     active_result_sp = await db.execute(
@@ -485,8 +516,8 @@ async def get_salesperson_stats(
         )
     )
     fresh_leads = fresh_result.scalar() or 0
-    
-    return SalespersonStats(
+
+    result = SalespersonStats(
         total_leads=total_leads,
         active_leads=active_leads,
         converted_leads=converted_leads,
@@ -495,8 +526,10 @@ async def get_salesperson_stats(
         todays_follow_ups=todays_follow_ups,
         overdue_follow_ups=overdue_follow_ups,
         leads_by_status=leads_by_status,
-        fresh_leads=fresh_leads
+        fresh_leads=fresh_leads,
     )
+    await cache_set(cache_key, result.model_dump(mode="json"), _DASHBOARD_TTL)
+    return result
 
 
 @router.get("/bdc/stats", response_model=BdcStats)
@@ -520,6 +553,11 @@ async def get_bdc_stats(
             dealership_count=0,
             dealerships=[],
         )
+
+    cache_key = f"dash:bdc:{current_user.id}:{_scope_cache_key(accessible_ids)}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return BdcStats(**cached)
 
     lead_scope = _lead_dealership_clause(accessible_ids)
     appt_scope = _appointment_dealership_clause(accessible_ids)
@@ -616,58 +654,73 @@ async def get_bdc_stats(
             .where(Dealership.id.in_(accessible_ids))
             .order_by(Dealership.name)
         )
+    dealers = {did: dname for did, dname in dealer_rows.fetchall()}
+    dealer_ids = list(dealers.keys())
+
+    lead_agg_map: dict = {}
+    overdue_map: dict = {}
+    today_fu_map: dict = {}
+
+    if dealer_ids:
+        lead_agg_clauses = [Lead.dealership_id.in_(dealer_ids)]
+        if lead_scope is not None:
+            lead_agg_clauses.append(lead_scope)
+
+        lead_agg_result = await db.execute(
+            select(
+                Lead.dealership_id,
+                func.count().label("total"),
+                func.count().filter(Lead.assigned_to.is_(None)).label("unassigned"),
+                func.count().filter(
+                    and_(Lead.assigned_to.is_(None), Lead.id.in_(fresh_subq))
+                ).label("fresh"),
+            )
+            .where(and_(*lead_agg_clauses))
+            .group_by(Lead.dealership_id)
+        )
+        lead_agg_map = {row.dealership_id: row for row in lead_agg_result.all()}
+
+        fu_clauses = [
+            FollowUp.status == FollowUpStatus.PENDING,
+            Lead.dealership_id.in_(dealer_ids),
+        ]
+        if lead_scope is not None:
+            fu_clauses.append(lead_scope)
+
+        fu_overdue_result = await db.execute(
+            select(Lead.dealership_id, func.count().label("cnt"))
+            .select_from(FollowUp)
+            .join(Lead, FollowUp.lead_id == Lead.id)
+            .where(and_(*fu_clauses, FollowUp.scheduled_at < now))
+            .group_by(Lead.dealership_id)
+        )
+        overdue_map = {row.dealership_id: row.cnt for row in fu_overdue_result.all()}
+
+        fu_today_result = await db.execute(
+            select(Lead.dealership_id, func.count().label("cnt"))
+            .select_from(FollowUp)
+            .join(Lead, FollowUp.lead_id == Lead.id)
+            .where(and_(*fu_clauses, func.date(FollowUp.scheduled_at) == today))
+            .group_by(Lead.dealership_id)
+        )
+        today_fu_map = {row.dealership_id: row.cnt for row in fu_today_result.all()}
+
     breakdown = []
-    for did, dname in dealer_rows.fetchall():
-        d_scope = Lead.dealership_id == did
-        d_lead_ids = select(Lead.id).where(d_scope)
-        d_total = await db.execute(
-            select(func.count()).select_from(Lead).where(d_scope)
-        )
-        d_unassigned = await db.execute(
-            select(func.count()).select_from(Lead).where(
-                and_(d_scope, Lead.assigned_to.is_(None))
-            )
-        )
-        d_overdue = await db.execute(
-            select(func.count()).select_from(FollowUp).where(
-                and_(
-                    FollowUp.lead_id.in_(d_lead_ids),
-                    FollowUp.status == FollowUpStatus.PENDING,
-                    FollowUp.scheduled_at < now,
-                )
-            )
-        )
-        d_today_fu = await db.execute(
-            select(func.count()).select_from(FollowUp).where(
-                and_(
-                    FollowUp.lead_id.in_(d_lead_ids),
-                    FollowUp.status == FollowUpStatus.PENDING,
-                    func.date(FollowUp.scheduled_at) == today,
-                )
-            )
-        )
-        d_fresh = await db.execute(
-            select(func.count()).select_from(Lead).where(
-                and_(
-                    d_scope,
-                    Lead.assigned_to.is_(None),
-                    Lead.id.in_(fresh_subq),
-                )
-            )
-        )
+    for did, dname in sorted(dealers.items(), key=lambda item: item[1]):
+        agg = lead_agg_map.get(did)
         breakdown.append(
             BdcDealershipBreakdown(
                 id=did,
                 name=dname,
-                total_leads=d_total.scalar() or 0,
-                unassigned_leads=d_unassigned.scalar() or 0,
-                overdue_follow_ups=d_overdue.scalar() or 0,
-                todays_follow_ups=d_today_fu.scalar() or 0,
-                fresh_leads=d_fresh.scalar() or 0,
+                total_leads=agg.total if agg else 0,
+                unassigned_leads=agg.unassigned if agg else 0,
+                overdue_follow_ups=overdue_map.get(did, 0),
+                todays_follow_ups=today_fu_map.get(did, 0),
+                fresh_leads=agg.fresh if agg else 0,
             )
         )
 
-    return BdcStats(
+    result = BdcStats(
         total_leads=total_leads,
         active_leads=active_leads,
         unassigned_to_salesperson=unassigned_leads,
@@ -680,6 +733,8 @@ async def get_bdc_stats(
         dealership_count=len(breakdown),
         dealerships=breakdown,
     )
+    await cache_set(cache_key, result.model_dump(mode="json"), _DASHBOARD_TTL)
+    return result
 
 
 @router.get("/stats")
