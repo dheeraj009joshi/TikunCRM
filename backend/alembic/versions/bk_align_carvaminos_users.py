@@ -77,6 +77,13 @@ def upgrade() -> None:
         SET dealership_id = :cid, updated_at = NOW()
         WHERE is_active = true
           AND (dealership_id IS NULL OR dealership_id != :cid)
+          AND NOT EXISTS (
+              SELECT 1 FROM users AS u2
+              WHERE lower(u2.email) = lower(users.email)
+                AND u2.dealership_id = :cid
+                AND u2.id != users.id
+                AND u2.is_active = true
+          )
     """), {"cid": cid})
 
     # Ensure no orphaned leads outside the active org
