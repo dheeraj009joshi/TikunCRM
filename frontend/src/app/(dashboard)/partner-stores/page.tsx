@@ -51,7 +51,7 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { useRole } from "@/hooks/use-role"
-import { useToast } from "@/components/ui/use-toast"
+import { useToast } from "@/hooks/use-toast"
 import {
     PartnerStoreService,
     type PartnerStore,
