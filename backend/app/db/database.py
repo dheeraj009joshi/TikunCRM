@@ -32,7 +32,7 @@ def get_engine_url_and_connect_args():
         new_query = urlencode([(k, v[0]) for k, v in qs.items()])
         url = urlunparse(parsed._replace(query=new_query))
     connect_args = {
-        "command_timeout": 30,
+        "command_timeout": settings.db_command_timeout,
         "timeout": 15,
     }
     if use_ssl:
@@ -102,3 +102,46 @@ async def drop_tables():
     """Drop all tables (for development only)"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+
+_background_engine = None
+_background_session_maker = None
+
+
+def get_background_session_maker():
+    """
+    Session maker for long-running background jobs (Google Sheets sync, etc.).
+    Uses a separate pool with a longer asyncpg command_timeout so large syncs
+    don't hit the 60s API query limit.
+    """
+    global _background_engine, _background_session_maker
+    if _background_session_maker is None:
+        url, connect_args = get_engine_url_and_connect_args()
+        connect_args = {
+            **connect_args,
+            "command_timeout": settings.db_background_command_timeout,
+        }
+        common = {
+            "echo": False,
+            "future": True,
+            "connect_args": connect_args,
+        }
+        if settings.db_use_null_pool:
+            _background_engine = create_async_engine(url, poolclass=NullPool, **common)
+        else:
+            _background_engine = create_async_engine(
+                url,
+                pool_size=2,
+                max_overflow=2,
+                pool_pre_ping=True,
+                pool_recycle=1800,
+                **common,
+            )
+        _background_session_maker = async_sessionmaker(
+            _background_engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autocommit=False,
+            autoflush=False,
+        )
+    return _background_session_maker

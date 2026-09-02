@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     db_pool_size: int = 10
     db_max_overflow: int = 10
     db_use_null_pool: bool = False
+    db_command_timeout: int = 60
+    db_background_command_timeout: int = 300
     dashboard_cache_ttl_seconds: int = 45
     
     # JWT Settings (.env may use SECRET_KEY or JWT_SECRET)

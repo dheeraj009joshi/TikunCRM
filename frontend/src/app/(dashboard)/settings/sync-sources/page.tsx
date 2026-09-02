@@ -631,9 +631,13 @@ export default function SyncSourcesSettingsPage() {
                                             </div>
                                         )}
                                         {source.last_sync_error && (
-                                            <div className="flex items-center gap-1 text-destructive">
-                                                <AlertCircle className="h-3.5 w-3.5" />
-                                                Error: {source.last_sync_error.slice(0, 50)}
+                                            <div
+                                                className="flex items-center gap-1 text-destructive"
+                                                title={source.last_sync_error}
+                                            >
+                                                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                                                Error: {source.last_sync_error.slice(0, 120)}
+                                                {source.last_sync_error.length > 120 ? "…" : ""}
                                             </div>
                                         )}
                                         <div>

@@ -58,10 +58,10 @@ LEGACY_GOOGLE_SHEET_GID = "0"
 
 
 def get_sync_session_maker():
-    """Return the shared session maker (reuses the app connection pool)."""
-    from app.db.database import async_session_maker
+    """Return a session maker tuned for long-running sheet sync jobs."""
+    from app.db.database import get_background_session_maker
 
-    return async_session_maker
+    return get_background_session_maker()
 
 
 def parse_full_name(full_name: str) -> tuple[str, Optional[str]]:
@@ -423,6 +423,20 @@ def _empty_sync_result(error: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
+def _format_sync_error(exc: Exception) -> str:
+    """Store a concise, user-facing sync error message."""
+    msg = str(exc).strip()
+    lower = msg.lower()
+    if "command timeout" in lower or "query canceled" in lower or "timeout" in lower:
+        return (
+            "Sync timed out while writing to the database. "
+            "Large sheets need more time — retry after the server update, or reduce batch size."
+        )
+    if len(msg) > 500:
+        return msg[:500] + "…"
+    return msg
+
+
 async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[str, Any]:
     """
     Sync leads from a specific LeadSyncSource.
@@ -773,14 +787,14 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                 async with sync_session_maker() as error_session:
                     source_update = await error_session.get(LeadSyncSource, source_id)
                     if source_update:
-                        source_update.last_sync_error = str(e)
+                        source_update.last_sync_error = _format_sync_error(e)
                         await error_session.commit()
 
                 raise
 
     except Exception as e:
         logger.error(f"Sync failed for source {source_id}: {e}")
-        return _empty_sync_result(str(e))
+        return _empty_sync_result(_format_sync_error(e))
 
 
 async def fetch_sheet_preview(source: LeadSyncSource, limit: int = 10) -> Dict[str, Any]:
