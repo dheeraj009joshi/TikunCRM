@@ -1,39 +1,43 @@
-import asyncio
+import os
+import sys
 from logging.config import fileConfig
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy import create_engine, pool
 
 from alembic import context
 
-# Import our app settings and models
-import os
-import sys
-# Add app to path
 sys.path.append(os.path.join(os.getcwd()))
 
 from app.core.config import settings
 from app.db.database import Base
-# Import all models so they are registered with Base.metadata
 from app.models import *
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
 target_metadata = Base.metadata
 
 
+def _sync_database_url(raw_url: str) -> str:
+    """Use psycopg2 for migrations — avoids asyncpg command_timeout on large data updates."""
+    url = raw_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    parsed = urlparse(url)
+    if parsed.query:
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        for key in ("ssl", "sslmode", "channel_binding"):
+            qs.pop(key, None)
+        new_query = urlencode([(k, v[0]) for k, v in qs.items()])
+        url = urlunparse(parsed._replace(query=new_query))
+    return url
+
+
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode."""
-    url = settings.database_url
+    url = _sync_database_url(settings.database_url)
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -52,42 +56,25 @@ def do_run_migrations(connection):
         context.run_migrations()
 
 
-def _migration_url_and_connect_args():
-    """Same as database.py: strip sslmode/ssl from URL and set connect_args for asyncpg."""
-    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
-    url = settings.database_url
-    use_ssl = "ssl=require" in url or "sslmode=require" in url
-    parsed = urlparse(url)
-    if parsed.query:
-        qs = parse_qs(parsed.query, keep_blank_values=True)
-        qs.pop("ssl", None)
-        qs.pop("sslmode", None)
-        qs.pop("channel_binding", None)
-        new_query = urlencode([(k, v[0]) for k, v in qs.items()])
-        url = urlunparse(parsed._replace(query=new_query))
-    connect_args = {"command_timeout": 30, "timeout": 15}
-    if use_ssl:
-        connect_args["ssl"] = True
-    return url, connect_args
-
-
-async def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
-    from sqlalchemy.ext.asyncio import create_async_engine
-    migration_url, connect_args = _migration_url_and_connect_args()
-    connectable = create_async_engine(
-        migration_url,
+def run_migrations_online() -> None:
+    url = _sync_database_url(settings.database_url)
+    connectable = create_engine(
+        url,
         poolclass=pool.NullPool,
-        connect_args=connect_args,
+        connect_args={"connect_timeout": 60, "options": "-c statement_timeout=0"},
     )
 
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-
-    await connectable.dispose()
+    with connectable.connect() as connection:
+        connection.execute(
+            __import__("sqlalchemy").text("SET statement_timeout TO 0")
+        )
+        connection.execute(
+            __import__("sqlalchemy").text("SET lock_timeout TO 0")
+        )
+        do_run_migrations(connection)
 
 
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    asyncio.run(run_migrations_online())
+    run_migrations_online()

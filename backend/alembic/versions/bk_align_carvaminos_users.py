@@ -20,6 +20,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     conn = op.get_bind()
+    conn.execute(text("SET statement_timeout TO 0"))
+    conn.execute(text("SET lock_timeout TO 0"))
 
     row = conn.execute(
         text(
