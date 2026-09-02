@@ -66,25 +66,28 @@ async def run_google_sheets_sync():
         }
         
         for source in sources:
-            # Check if this source is due for sync
-            if source.last_synced_at:
-                time_since_last_sync = now - source.last_synced_at
-                interval = timedelta(minutes=source.sync_interval_minutes)
-                
+            source_id = source.id
+            source_name = source.name
+            last_synced_at = source.last_synced_at
+            sync_interval_minutes = source.sync_interval_minutes
+
+            if last_synced_at:
+                time_since_last_sync = now - last_synced_at
+                interval = timedelta(minutes=sync_interval_minutes)
+
                 if time_since_last_sync < interval:
                     remaining = interval - time_since_last_sync
                     logger.debug(
-                        f"Skipping {source.name}: synced {time_since_last_sync.total_seconds():.0f}s ago, "
+                        f"Skipping {source_name}: synced {time_since_last_sync.total_seconds():.0f}s ago, "
                         f"next sync in {remaining.total_seconds():.0f}s"
                     )
                     total_stats["sources_skipped"] += 1
                     continue
-            
-            # Source is due for sync
-            logger.info(f"Syncing source: {source.name}")
-            
+
+            logger.info(f"Syncing source: {source_name}")
+
             try:
-                stats = await sync_leads_from_source(source)
+                stats = await sync_leads_from_source(source_id)
                 total_stats["sheet_total_rows"] += stats.get("sheet_total_rows", 0)
                 total_stats["sheet_valid_leads"] += stats.get("sheet_valid_leads", 0)
                 total_stats["new_added"] += stats.get("new_added", 0)
@@ -94,11 +97,11 @@ async def run_google_sheets_sync():
                 total_stats["sources_synced"] += 1
                 
                 if stats.get("error"):
-                    total_stats["errors"].append(f"{source.name}: {stats['error']}")
-            
+                    total_stats["errors"].append(f"{source_name}: {stats['error']}")
+
             except Exception as e:
-                logger.error(f"Failed to sync source {source.name}: {e}")
-                total_stats["errors"].append(f"{source.name}: {str(e)}")
+                logger.error(f"Failed to sync source {source_name}: {e}")
+                total_stats["errors"].append(f"{source_name}: {str(e)}")
         
         sources_synced = total_stats["sources_synced"]
         sources_skipped = total_stats["sources_skipped"]

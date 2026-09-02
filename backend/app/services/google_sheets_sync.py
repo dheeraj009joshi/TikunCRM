@@ -8,7 +8,7 @@ import logging
 import csv
 import io
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any, Set, Tuple
+from typing import Optional, List, Dict, Any, Set, Tuple, Union
 from uuid import UUID
 
 from dateutil import parser as dateutil_parser
@@ -423,36 +423,44 @@ def _empty_sync_result(error: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
-async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
+async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[str, Any]:
     """
     Sync leads from a specific LeadSyncSource.
     Returns stats about the sync operation.
     """
-    logger.info(f"Starting sync for source: {source.name} (id: {source.id})")
-    
+    source_id = source if isinstance(source, UUID) else source.id
     sync_session_maker = get_sync_session_maker()
-    
+
     try:
-        # Fetch data from sheet
-        rows, headers = await fetch_sheet_data_from_url(source.export_url)
-        
+        async with sync_session_maker() as session:
+            bootstrap = await session.get(LeadSyncSource, source_id)
+            if not bootstrap:
+                return _empty_sync_result("Sync source not found")
+            export_url = bootstrap.export_url
+            source_name = bootstrap.name
+
+        logger.info(f"Starting sync for source: {source_name} (id: {source_id})")
+
+        rows, headers = await fetch_sheet_data_from_url(export_url)
+
         if not rows:
-            logger.info(f"No data fetched from source {source.name}")
-            # Still stamp last_synced_at so the UI shows the job ran (vs scheduler dead)
+            logger.info(f"No data fetched from source {source_name}")
             async with sync_session_maker() as session:
-                source = await session.merge(source)
-                source.last_synced_at = utc_now()
-                source.last_sync_lead_count = 0
-                source.last_sync_error = "No data from sheet"
-                await session.commit()
+                db_source = await session.get(LeadSyncSource, source_id)
+                if db_source:
+                    db_source.last_synced_at = utc_now()
+                    db_source.last_sync_lead_count = 0
+                    db_source.last_sync_error = "No data from sheet"
+                    await session.commit()
             return _empty_sync_result("No data from sheet")
-        
+
         sheet_total_rows = len(rows)
-        
+
         async with sync_session_maker() as session:
             try:
-                # Merge source into this session so updates (last_synced_at, etc.) are persisted
-                source = await session.merge(source)
+                source = await session.get(LeadSyncSource, source_id)
+                if not source:
+                    return _empty_sync_result("Sync source not found")
                 
                 # Get campaign mappings for this source
                 mappings_result = await session.execute(
@@ -760,19 +768,18 @@ async def sync_leads_from_source(source: LeadSyncSource) -> Dict[str, Any]:
                 
             except Exception as e:
                 await session.rollback()
-                logger.error(f"Sync failed for source {source.name}: {e}")
-                
-                # Update error status
+                logger.error(f"Sync failed for source {source_id}: {e}")
+
                 async with sync_session_maker() as error_session:
-                    source_update = await error_session.get(LeadSyncSource, source.id)
+                    source_update = await error_session.get(LeadSyncSource, source_id)
                     if source_update:
                         source_update.last_sync_error = str(e)
                         await error_session.commit()
-                
+
                 raise
-    
+
     except Exception as e:
-        logger.error(f"Sync failed for source {source.name}: {e}")
+        logger.error(f"Sync failed for source {source_id}: {e}")
         return _empty_sync_result(str(e))
 
 
@@ -863,17 +870,18 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
     
     try:
         async with sync_session_maker() as session:
-            # Get all active sync sources
             result = await session.execute(
                 select(LeadSyncSource).where(LeadSyncSource.is_active == True)
             )
-            sources = result.scalars().all()
-        
+            sources = [
+                (row.id, row.name)
+                for row in result.scalars().all()
+            ]
+
         if not sources:
             logger.info("No active sync sources configured - using legacy sync")
             return await _legacy_sync_google_sheet_leads()
-        
-        # Sync each source
+
         total_stats = {
             "sheet_total_rows": 0,
             "sheet_valid_leads": 0,
@@ -884,10 +892,10 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
             "sources_synced": 0,
             "errors": [],
         }
-        
-        for source in sources:
+
+        for source_id, source_name in sources:
             try:
-                stats = await sync_leads_from_source(source)
+                stats = await sync_leads_from_source(source_id)
                 total_stats["sheet_total_rows"] += stats.get("sheet_total_rows", 0)
                 total_stats["sheet_valid_leads"] += stats.get("sheet_valid_leads", 0)
                 total_stats["new_added"] += stats.get("new_added", 0)
@@ -895,13 +903,13 @@ async def sync_google_sheet_leads() -> Dict[str, Any]:
                 total_stats["duplicates_skipped"] += stats.get("duplicates_skipped", 0)
                 total_stats["skipped_invalid"] += stats.get("skipped_invalid", 0)
                 total_stats["sources_synced"] += 1
-                
+
                 if stats.get("error"):
-                    total_stats["errors"].append(f"{source.name}: {stats['error']}")
-            
+                    total_stats["errors"].append(f"{source_name}: {stats['error']}")
+
             except Exception as e:
-                logger.error(f"Failed to sync source {source.name}: {e}")
-                total_stats["errors"].append(f"{source.name}: {str(e)}")
+                logger.error(f"Failed to sync source {source_name}: {e}")
+                total_stats["errors"].append(f"{source_name}: {str(e)}")
         
         logger.info(f"Sync complete: {total_stats['sources_synced']} sources, {total_stats['new_added']} new leads")
         

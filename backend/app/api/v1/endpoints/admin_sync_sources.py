@@ -502,18 +502,20 @@ async def trigger_manual_sync(
         )
     
     start_time = time.time()
-    
+    source_id = source.id
+    source_name = source.name
+
     try:
         from app.services.google_sheets_sync import sync_leads_from_source
-        sync_result = await sync_leads_from_source(source)
-        
+        sync_result = await sync_leads_from_source(source_id)
+
         duration = time.time() - start_time
-        
-        logger.info(f"Manual sync completed for {source.name}: {sync_result}")
-        
+
+        logger.info(f"Manual sync completed for {source_name}: {sync_result}")
+
         return ManualSyncResponse(
-            source_id=source.id,
-            source_name=source.name,
+            source_id=source_id,
+            source_name=source_name,
             leads_synced=sync_result.get("new_leads", 0),
             leads_updated=sync_result.get("updated_leads", 0),
             leads_skipped=sync_result.get("skipped_leads", 0),
@@ -521,7 +523,7 @@ async def trigger_manual_sync(
             sync_duration_seconds=round(duration, 2),
         )
     except Exception as e:
-        logger.error(f"Manual sync failed for {source.name}: {e}")
+        logger.error(f"Manual sync failed for {source_name}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Sync failed: {str(e)}"
