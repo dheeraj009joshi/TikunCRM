@@ -23,6 +23,54 @@ depends_on: Union[str, Sequence[str], None] = None
 CARVAMINOS_ID = "00000000-0000-4000-a000-000000000001"
 
 
+def _consolidate_users_to_carvaminos(conn, cid: str) -> None:
+    """
+    Merge users into the single Carvaminos org without violating
+    ix_users_email_per_dealership (unique lower(email), dealership_id).
+    """
+    dup_emails = conn.execute(text("""
+        SELECT lower(email) AS em
+        FROM users
+        GROUP BY lower(email)
+        HAVING COUNT(*) > 1
+    """)).fetchall()
+
+    for row in dup_emails:
+        em = row[0]
+        keeper = conn.execute(text("""
+            SELECT id FROM users
+            WHERE lower(email) = :em
+            ORDER BY
+                CASE WHEN dealership_id = :cid THEN 0 ELSE 1 END,
+                CASE WHEN is_active = true THEN 0 ELSE 1 END,
+                last_login_at DESC NULLS LAST,
+                created_at DESC
+            LIMIT 1
+        """), {"em": em, "cid": cid}).fetchone()
+        if not keeper:
+            continue
+        keep_id = str(keeper[0])
+        conn.execute(text("""
+            UPDATE users
+            SET is_active = false, updated_at = NOW()
+            WHERE lower(email) = :em AND id != :keep_id
+        """), {"em": em, "keep_id": keep_id})
+        conn.execute(text("""
+            UPDATE users
+            SET dealership_id = :cid, updated_at = NOW()
+            WHERE id = :keep_id
+              AND (dealership_id IS NULL OR dealership_id != :cid)
+        """), {"cid": cid, "keep_id": keep_id})
+
+    # Move remaining active users (unique emails) to Carvaminos
+    conn.execute(text("""
+        UPDATE users
+        SET dealership_id = :cid, updated_at = NOW()
+        WHERE is_active = true
+          AND (dealership_id IS NULL OR dealership_id != :cid)
+    """), {"cid": cid})
+
+
 def upgrade() -> None:
     conn = op.get_bind()
 
@@ -98,38 +146,7 @@ def upgrade() -> None:
     conn.execute(text("DELETE FROM user_dealership_access"))
 
     # ── Step 4: Consolidate users ─────────────────────────────────
-    # Check for email conflicts across dealerships
-    conflicts = conn.execute(text("""
-        SELECT lower(email) AS em
-        FROM users
-        WHERE dealership_id IS NOT NULL
-        GROUP BY lower(email)
-        HAVING COUNT(DISTINCT dealership_id) > 1
-    """)).fetchall()
-
-    for row in conflicts:
-        # Deactivate older duplicates, keep the most recently active
-        conn.execute(text("""
-            UPDATE users SET is_active = false
-            WHERE lower(email) = :em
-              AND dealership_id IS NOT NULL
-              AND id NOT IN (
-                  SELECT id FROM users
-                  WHERE lower(email) = :em
-                    AND dealership_id IS NOT NULL
-                  ORDER BY last_login_at DESC NULLS LAST,
-                           created_at DESC
-                  LIMIT 1
-              )
-        """), {"em": row[0]})
-
-    # Move all non-super-admin users to Carvaminos
-    conn.execute(text("""
-        UPDATE users
-        SET dealership_id = :cid, updated_at = NOW()
-        WHERE dealership_id IS NOT NULL
-          AND dealership_id != :cid
-    """), {"cid": cid})
+    _consolidate_users_to_carvaminos(conn, cid)
 
     # ── Step 5: Consolidate all data tables ───────────────────────
 
