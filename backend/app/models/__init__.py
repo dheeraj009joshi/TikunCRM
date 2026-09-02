@@ -58,6 +58,7 @@ from app.models.lead_credit_application import (
     CreditApplicationTransactionType,
     CreditApplicationType,
 )
+from app.models.partner_store import PartnerStore
 
 __all__ = [
     "Customer",
@@ -137,4 +138,5 @@ __all__ = [
     "CreditApplicationStatus",
     "CreditApplicationTransactionType",
     "CreditApplicationType",
+    "PartnerStore",
 ]

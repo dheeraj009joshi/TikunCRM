@@ -46,6 +46,7 @@ class LeadCreate(BaseModel):
     notes: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
     interested_in: Optional[str] = None
+    interested_brand: Optional[str] = None
     budget_range: Optional[str] = None
     dealership_id: Optional[UUID] = None
     assigned_to: Optional[UUID] = None
@@ -71,6 +72,7 @@ class LeadUpdate(BaseModel):
     notes: Optional[str] = None
     meta_data: Optional[Dict[str, Any]] = None
     interested_in: Optional[str] = None
+    interested_brand: Optional[str] = None
     budget_range: Optional[str] = None
     secondary_customer_id: Optional[UUID] = None
     
@@ -166,6 +168,22 @@ class DealershipBrief(BaseModel):
         from_attributes = True
 
 
+class PartnerStoreBrief(BaseModel):
+    """Brief partner store info for lead responses."""
+    id: UUID
+    name: str
+    brand: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ConnectToPartnerRequest(BaseModel):
+    """Schema for connecting a lead to a partner store."""
+    partner_store_id: UUID
+    notes: Optional[str] = None
+
+
 class LeadCampaignResponse(BaseModel):
     """Response schema for a campaign association on a lead."""
     id: UUID
@@ -215,8 +233,11 @@ class LeadResponse(BaseModel):
     meta_data: Dict[str, Any] = Field(default_factory=dict)
     external_id: Optional[str] = None
     interested_in: Optional[str] = None
+    interested_brand: Optional[str] = None
     budget_range: Optional[str] = None
     down_payment: Optional[float] = None
+    partner_store_id: Optional[UUID] = None
+    partner_connected_at: Optional[datetime] = None
     has_ssn_stip: bool = False
     has_dl_stip: bool = False
     is_business: Optional[bool] = None
@@ -282,6 +303,7 @@ class LeadDetail(LeadResponse):
     bdc_assigned_to_user: Optional[UserBrief] = None
     created_by_user: Optional[UserBrief] = None
     dealership: Optional[DealershipBrief] = None
+    partner_store: Optional[PartnerStoreBrief] = None
     access_level: Optional[str] = None
 
 

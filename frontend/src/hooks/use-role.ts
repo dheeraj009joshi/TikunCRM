@@ -20,7 +20,7 @@ export type Permission =
     | "create_user"
     | "update_user"
     | "delete_user"
-    // Dealership permissions
+    // Dealership / org permissions
     | "view_all_dealerships"
     | "view_own_dealership"
     | "create_dealership"
@@ -42,78 +42,53 @@ export type Permission =
     // Report permissions
     | "view_system_reports"
     | "view_dealership_reports"
+    // Partner store permissions
+    | "manage_partner_stores"
+    | "connect_lead_to_partner"
+
+const _MANAGER_PERMISSIONS: Permission[] = [
+    "view_all_leads",
+    "view_dealership_leads",
+    "create_lead",
+    "update_lead",
+    "assign_lead_to_salesperson",
+    "connect_lead_to_partner",
+    "view_all_users",
+    "view_dealership_users",
+    "create_user",
+    "update_user",
+    "delete_user",
+    "view_own_dealership",
+    "update_dealership",
+    "view_all_activities",
+    "view_dealership_activities",
+    "manage_dealership_schedules",
+    "send_email",
+    "send_sms",
+    "log_call",
+    "manage_integrations",
+    "view_system_reports",
+    "view_dealership_reports",
+]
 
 const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     super_admin: [
-        "view_all_leads",
-        "view_dealership_leads",
+        ..._MANAGER_PERMISSIONS,
         "view_own_leads",
-        "create_lead",
-        "update_lead",
         "delete_lead",
         "assign_lead_to_dealership",
-        "assign_lead_to_salesperson",
-        "view_all_users",
-        "view_dealership_users",
-        "create_user",
-        "update_user",
-        "delete_user",
         "view_all_dealerships",
-        "view_own_dealership",
         "create_dealership",
-        "update_dealership",
         "delete_dealership",
-        "view_all_activities",
-        "view_dealership_activities",
         "view_own_activities",
-        "manage_dealership_schedules",
         "view_own_schedule",
-        "send_email",
-        "send_sms",
-        "log_call",
-        "manage_integrations",
-        "view_system_reports",
-        "view_dealership_reports",
+        "manage_partner_stores",
     ],
-    dealership_owner: [
-        "view_dealership_leads",
-        "create_lead",
-        "update_lead",
-        "assign_lead_to_salesperson",
-        "view_dealership_users",
-        "create_user",
-        "update_user",
-        "delete_user",
-        "view_own_dealership",
-        "update_dealership",
-        "view_dealership_activities",
-        "manage_dealership_schedules",
-        "send_email",
-        "send_sms",
-        "log_call",
-        "manage_integrations",
-        "view_dealership_reports",
-    ],
-    dealership_admin: [
-        "view_dealership_leads",
-        "create_lead",
-        "update_lead",
-        "assign_lead_to_salesperson",
-        "view_dealership_users",
-        "create_user",
-        "update_user",
-        "view_own_dealership",
-        "update_dealership",
-        "view_dealership_activities",
-        "manage_dealership_schedules",
-        "send_email",
-        "send_sms",
-        "log_call",
-        "view_dealership_reports",
-    ],
+    dealership_owner: _MANAGER_PERMISSIONS,
+    dealership_admin: _MANAGER_PERMISSIONS,
     salesperson: [
         "view_own_leads",
-        "create_lead",  // Salesperson can create leads (auto-assigned to them)
+        "create_lead",
         "update_lead",
         "view_own_activities",
         "view_own_schedule",
@@ -123,9 +98,11 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     ],
     bdc: [
         "view_group_leads",
+        "view_dealership_leads",
         "create_lead",
         "update_lead",
         "assign_lead_to_salesperson",
+        "connect_lead_to_partner",
         "view_own_activities",
         "view_own_schedule",
         "send_email",
@@ -163,8 +140,11 @@ export function useRole() {
     const canAssignToSalesperson = hasPermission("assign_lead_to_salesperson")
     const canManageUsers = hasPermission("create_user")
     const canManageDealerships = hasPermission("create_dealership")
+    const canManagePartnerStores = hasPermission("manage_partner_stores")
+    const canConnectToPartner = hasPermission("connect_lead_to_partner")
     const canViewSystemReports = hasPermission("view_system_reports")
     const canViewDealershipReports = hasPermission("view_dealership_reports")
+    const isManagerOrAbove = isSuperAdmin || isDealershipOwner || isDealershipAdmin
 
     return {
         user,
@@ -174,6 +154,7 @@ export function useRole() {
         isDealershipOwner,
         isDealershipAdmin,
         isDealershipLevel,
+        isManagerOrAbove,
         isSalesperson,
         isBdc,
         permissions,
@@ -186,6 +167,8 @@ export function useRole() {
         canAssignToSalesperson,
         canManageUsers,
         canManageDealerships,
+        canManagePartnerStores,
+        canConnectToPartner,
         canViewSystemReports,
         canViewDealershipReports,
     }
@@ -193,9 +176,9 @@ export function useRole() {
 
 // Role display names
 export const ROLE_DISPLAY_NAMES: Record<UserRole, string> = {
-    super_admin: "Super Admin",
-    dealership_owner: "Dealership Owner",
-    dealership_admin: "Dealership Admin",
+    super_admin: "Admin",
+    dealership_owner: "Manager",
+    dealership_admin: "Manager",
     salesperson: "Salesperson",
     bdc: "BDC Agent",
 }

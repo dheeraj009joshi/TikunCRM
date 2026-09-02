@@ -4,13 +4,13 @@ import * as React from "react"
 import Link from "next/link"
 import Image from "next/image"
 import { useRouter, useSearchParams } from "next/navigation"
-import { Mail, Lock, Eye, EyeOff, UserX, Building2, ArrowLeft, ChevronRight } from "lucide-react"
+import { Mail, Lock, Eye, EyeOff, UserX } from "lucide-react"
 
 import { useAuthStore } from "@/stores/auth-store"
 import { registerFCMToken } from "@/hooks/use-fcm-notifications"
 import { AuthService, DealershipOption, dealershipLoginKey } from "@/services/auth-service"
 
-type Step = "email" | "dealership" | "password"
+type Step = "email" | "password"
 
 export default function LoginPage() {
     const router = useRouter()
@@ -35,14 +35,6 @@ export default function LoginPage() {
         router.replace("/login", { scroll: false })
     }
 
-    const resetToEmail = () => {
-        setStep("email")
-        setError(null)
-        setPassword("")
-        setSelectedDealership(null)
-        setDealerships([])
-    }
-
     async function onEmailSubmit(event: React.SyntheticEvent) {
         event.preventDefault()
         setIsLoading(true)
@@ -55,24 +47,14 @@ export default function LoginPage() {
                 return
             }
             setDealerships(options)
-            if (options.length === 1) {
-                setSelectedDealership(options[0])
-                setStep("password")
-            } else {
-                setStep("dealership")
-            }
+            setSelectedDealership(options[0])
+            setStep("password")
         } catch (err: any) {
             console.error("Dealership lookup failed:", err)
             setError(err?.response?.data?.detail || "Could not look up your account. Please try again.")
         } finally {
             setIsLoading(false)
         }
-    }
-
-    function pickDealership(option: DealershipOption) {
-        setSelectedDealership(option)
-        setStep("password")
-        setError(null)
     }
 
     async function onPasswordSubmit(event: React.SyntheticEvent) {
@@ -105,14 +87,6 @@ export default function LoginPage() {
             if (!response.ok) {
                 if (response.status === 403 && (detail === "account_deactivated" || detail === "Account deactivated")) {
                     setAccountDeactivated(true)
-                    return
-                }
-                // Edge case: backend returned 409 dealership_required (e.g. someone added a
-                // new dealership account between lookup and login). Re-prompt picker.
-                if (response.status === 409 && detail?.code === "dealership_required") {
-                    setDealerships(detail.dealerships || [])
-                    setSelectedDealership(null)
-                    setStep("dealership")
                     return
                 }
                 throw new Error(typeof detail === "string" ? detail : "Login failed")
@@ -155,9 +129,9 @@ export default function LoginPage() {
                 <div className="relative z-20 mt-auto">
                     <blockquote className="space-y-2">
                         <p className="text-lg">
-                            &ldquo;This platform has completely transformed how we manage leads across our 15 regional dealerships. The multi-level hierarchy is a game changer.&rdquo;
+                            &ldquo;This platform has completely transformed how we manage leads and close deals. Carvaminos is a game changer.&rdquo;
                         </p>
-                        <footer className="text-sm">Sofia Davis, Regional Manager</footer>
+                        <footer className="text-sm">Sofia Davis, Sales Manager</footer>
                     </blockquote>
                 </div>
             </div>
@@ -176,7 +150,7 @@ export default function LoginPage() {
                                     Your account has been deactivated. You cannot sign in at this time.
                                 </p>
                                 <p className="text-sm text-muted-foreground">
-                                    Contact your <strong>dealership administrator</strong> or <strong>owner</strong> for further assistance. Only an admin or owner can reactivate your account.
+                                    Contact your <strong>Carvaminos administrator</strong> for further assistance. Only an admin can reactivate your account.
                                 </p>
                             </div>
                             <div className="flex flex-col gap-2">
@@ -195,7 +169,6 @@ export default function LoginPage() {
                                 <h1 className="text-2xl font-semibold tracking-tight">Welcome back</h1>
                                 <p className="text-sm text-muted-foreground">
                                     {step === "email" && "Enter your email to continue"}
-                                    {step === "dealership" && "Select the dealership to sign in to"}
                                     {step === "password" && "Enter your password to sign in"}
                                 </p>
                             </div>
@@ -218,7 +191,7 @@ export default function LoginPage() {
                                                     <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                                                     <input
                                                         id="email"
-                                                        placeholder="name@dealership.com"
+                                                        placeholder="name@carvaminos.com"
                                                         type="email"
                                                         autoCapitalize="none"
                                                         autoComplete="email"
@@ -244,62 +217,18 @@ export default function LoginPage() {
                                     </form>
                                 )}
 
-                                {step === "dealership" && (
-                                    <div className="grid gap-4">
-                                        <button
-                                            type="button"
-                                            onClick={resetToEmail}
-                                            className="inline-flex items-center self-start gap-1 text-sm text-muted-foreground hover:text-foreground"
-                                        >
-                                            <ArrowLeft className="h-4 w-4" /> Use a different email
-                                        </button>
-                                        <div className="text-xs text-muted-foreground">
-                                            <span className="font-medium text-foreground">{email}</span> is registered with multiple dealerships. Pick one to continue.
-                                        </div>
-                                        <div className="grid gap-2">
-                                            {dealerships.map((d) => (
-                                                <button
-                                                    key={dealershipLoginKey(d)}
-                                                    type="button"
-                                                    onClick={() => pickDealership(d)}
-                                                    className="group flex items-center justify-between rounded-md border border-input bg-background px-4 py-3 text-left text-sm shadow-sm transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground"
-                                                >
-                                                    <span className="flex items-center gap-3">
-                                                        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-muted">
-                                                            <Building2 className="h-4 w-4 text-muted-foreground" />
-                                                        </span>
-                                                        <span>
-                                                            <span className="block font-medium">{d.name}</span>
-                                                            {d.is_super_admin && (
-                                                                <span className="block text-xs text-muted-foreground">System administrator</span>
-                                                            )}
-                                                            {d.is_bdc && (
-                                                                <span className="block text-xs text-muted-foreground">BDC agent</span>
-                                                            )}
-                                                        </span>
-                                                    </span>
-                                                    <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-
                                 {step === "password" && selectedDealership && (
                                     <form onSubmit={onPasswordSubmit}>
                                         <div className="grid gap-4">
                                             <div className="rounded-md border border-input bg-muted/30 px-3 py-2 text-sm">
                                                 <div className="flex items-center justify-between gap-2">
                                                     <div className="flex items-center gap-2 min-w-0">
-                                                        <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
-                                                        <div className="min-w-0">
-                                                            <div className="truncate font-medium">{selectedDealership.name}</div>
-                                                            <div className="truncate text-xs text-muted-foreground">{email}</div>
-                                                        </div>
+                                                        <Mail className="h-4 w-4 text-muted-foreground shrink-0" />
+                                                        <div className="truncate text-muted-foreground">{email}</div>
                                                     </div>
                                                     <button
                                                         type="button"
-                                                        onClick={resetToEmail}
+                                                        onClick={() => { setStep("email"); setError(null); setPassword("") }}
                                                         className="text-xs text-primary hover:underline shrink-0"
                                                     >
                                                         Change

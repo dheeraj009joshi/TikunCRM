@@ -75,8 +75,12 @@ export interface Lead {
     meta_data: Record<string, unknown>;
     external_id?: string;
     interested_in?: string;
+    interested_brand?: string | null;
     budget_range?: string;
     down_payment?: number | null;
+    partner_store_id?: string | null;
+    partner_connected_at?: string | null;
+    partner_store?: { id: string; name: string; brand?: string | null } | null;
     has_ssn_stip?: boolean;
     has_dl_stip?: boolean;
     is_business?: boolean | null;
@@ -199,6 +203,7 @@ export interface LeadUpdateData {
     notes?: string;
     meta_data?: Record<string, unknown>;
     interested_in?: string;
+    interested_brand?: string;
     budget_range?: string;
     secondary_customer_id?: string | null;
     // Customer contact fields (updates associated customer)
@@ -253,6 +258,7 @@ export const LeadService = {
         source?: string;
         notes?: string;
         interested_in?: string;
+        interested_brand?: string;
         budget_range?: string;
         dealership_id?: string;
         assigned_to?: string;

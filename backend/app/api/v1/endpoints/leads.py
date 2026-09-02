@@ -38,7 +38,8 @@ from app.schemas.lead import (
     LeadStageChangeRequest, LeadStatusUpdateCompat, LeadAssignment, LeadListResponse,
     LeadDealershipAssignment, BulkLeadDealershipAssignment,
     CampaignFilterOption,
-    LeadSecondaryAssignment, LeadSwapSalespersons, LeadBdcAssignment
+    LeadSecondaryAssignment, LeadSwapSalespersons, LeadBdcAssignment,
+    ConnectToPartnerRequest,
 )
 from app.schemas.activity import NoteCreate
 from app.schemas.stips import StipDocumentResponse, StipDocumentViewUrl
@@ -2590,6 +2591,113 @@ async def bulk_assign_leads_to_dealership(
         "assigned_count": assigned_count,
         "dealership_id": str(assignment_in.dealership_id)
     }
+
+
+# ── Partner Store Connection ──────────────────────────────────────
+
+@router.post("/{lead_id}/connect-partner", response_model=LeadResponse)
+async def connect_lead_to_partner(
+    lead_id: UUID,
+    body: ConnectToPartnerRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.CONNECT_LEAD_TO_PARTNER)),
+) -> Any:
+    """
+    Connect an approved lead to a partner store for vehicle purchase.
+    Sets partner_store_id and partner_connected_at on the lead.
+    """
+    from app.models.partner_store import PartnerStore
+
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    can_access = await user_can_access_lead(
+        db, current_user, lead.dealership_id, lead.assigned_to
+    )
+    if not can_access:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    store_result = await db.execute(
+        select(PartnerStore).where(PartnerStore.id == body.partner_store_id)
+    )
+    store = store_result.scalar_one_or_none()
+    if not store:
+        raise HTTPException(status_code=404, detail="Partner store not found")
+    if not store.is_active:
+        raise HTTPException(status_code=400, detail="Partner store is not active")
+
+    lead.partner_store_id = body.partner_store_id
+    lead.partner_connected_at = utc_now()
+
+    _c_obj = (await db.execute(
+        select(Customer).where(Customer.id == lead.customer_id)
+    )).scalar_one_or_none()
+    lead_name = _c_obj.full_name if _c_obj else "Lead"
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
+
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.LEAD_UPDATED,
+        description=f"Lead connected to partner store {store.name} by {performer_name}",
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=lead.dealership_id,
+        meta_data={
+            "partner_store_id": str(store.id),
+            "partner_store_name": store.name,
+            "partner_store_brand": store.brand,
+            "performer_name": performer_name,
+            "notes": body.notes,
+        },
+    )
+
+    await db.commit()
+    await db.refresh(lead)
+
+    try:
+        from app.services.notification_service import emit_lead_updated
+        await emit_lead_updated(
+            str(lead.id),
+            str(lead.dealership_id) if lead.dealership_id else None,
+            "partner_connected",
+            {
+                "partner_store_id": str(store.id),
+                "partner_store_name": store.name,
+            },
+        )
+    except Exception as e:
+        logger.error(f"Failed to emit partner_connected WebSocket event: {e}")
+
+    return lead
+
+
+@router.delete("/{lead_id}/connect-partner", response_model=LeadResponse)
+async def disconnect_lead_from_partner(
+    lead_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.CONNECT_LEAD_TO_PARTNER)),
+) -> Any:
+    """Remove the partner store connection from a lead."""
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    can_access = await user_can_access_lead(
+        db, current_user, lead.dealership_id, lead.assigned_to
+    )
+    if not can_access:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    lead.partner_store_id = None
+    lead.partner_connected_at = None
+
+    await db.commit()
+    await db.refresh(lead)
+    return lead
 
 
 @router.post("/{lead_id}/notes", response_model=LeadResponse)

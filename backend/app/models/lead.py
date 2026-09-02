@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from app.models.campaign_mapping import CampaignMapping
     from app.models.lead_campaign import LeadCampaign
     from app.models.ai_outbound_call import AiOutboundCall
+    from app.models.partner_store import PartnerStore
 
 
 class LeadSource(str, Enum):
@@ -162,7 +163,24 @@ class Lead(Base):
     )
 
     interested_in: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    interested_brand: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, index=True,
+        comment="Vehicle brand the customer is interested in (e.g. Toyota, Ford)",
+    )
     budget_range: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Partner store — assigned when customer is approved and ready to buy
+    partner_store_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("partner_stores.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Partner dealership where approved customer will purchase",
+    )
+    partner_connected_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+        comment="When the lead was connected to a partner store",
+    )
 
     # Typed down payment for the eligibility engine (legacy meta_data["downpayment"] is fallback)
     down_payment: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
@@ -280,6 +298,9 @@ class Lead(Base):
     )
     ai_outbound_call: Mapped[Optional["AiOutboundCall"]] = relationship(
         "AiOutboundCall", back_populates="lead", lazy="noload", uselist=False
+    )
+    partner_store: Mapped[Optional["PartnerStore"]] = relationship(
+        "PartnerStore", foreign_keys=[partner_store_id], lazy="noload"
     )
 
     # ── Backward-compat proxy properties (contact info lives on Customer) ──

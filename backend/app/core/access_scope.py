@@ -1,5 +1,10 @@
 """
-Dealership access scoping for multi-store BDC and other roles.
+Access scoping for single-org Carvaminos model.
+
+All users belong to the same organization. Scoping is now role-based only:
+  - SUPER_ADMIN / DEALERSHIP_ADMIN: see all leads
+  - BDC: see all leads (was multi-store, now single-org)
+  - SALESPERSON: see only assigned leads (+ unassigned in their org)
 """
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -13,18 +18,11 @@ from app.models.user_dealership_access import UserDealershipAccess
 
 
 async def build_ws_token_claims(db: AsyncSession, user: User) -> Dict[str, Any]:
-    """
-    JWT claims used by the WebSocket endpoint to subscribe users to the right
-    dealership broadcast channels (especially BDC multi-store access).
-    """
+    """JWT claims for WebSocket channel subscriptions."""
     role = user.role.value if hasattr(user.role, "value") else str(user.role)
     claims: Dict[str, Any] = {"role": role}
     if user.dealership_id:
         claims["dealership_id"] = str(user.dealership_id)
-    if user.role == UserRole.BDC:
-        ids = await get_accessible_dealership_ids(db, user)
-        if ids:
-            claims["accessible_dealership_ids"] = [str(i) for i in ids]
     return claims
 
 
@@ -35,20 +33,17 @@ async def get_accessible_dealership_ids(
     """
     Return dealership IDs the user may access.
 
-    - None: all dealerships (super_admin)
-    - []: no dealership access
-    - [uuid, ...]: explicit scope (bdc via junction, single store for dealership roles)
+    Single-org model: everyone accesses the same Carvaminos dealership.
+    Returns None (= no filter) for admin/manager/BDC roles,
+    or [user.dealership_id] for salesperson.
     """
-    if user.role == UserRole.SUPER_ADMIN:
+    if user.role in (
+        UserRole.SUPER_ADMIN,
+        UserRole.DEALERSHIP_ADMIN,
+        UserRole.DEALERSHIP_OWNER,
+        UserRole.BDC,
+    ):
         return None
-
-    if user.role == UserRole.BDC:
-        result = await db.execute(
-            select(UserDealershipAccess.dealership_id).where(
-                UserDealershipAccess.user_id == user.id
-            )
-        )
-        return list(result.scalars().all())
 
     if user.dealership_id is not None:
         return [user.dealership_id]
@@ -61,20 +56,25 @@ async def user_can_access_dealership(
     user: User,
     dealership_id: Optional[UUID],
 ) -> bool:
-    """Check if user can access a specific dealership."""
-    if dealership_id is None:
-        return user.role == UserRole.SUPER_ADMIN
-
-    accessible = await get_accessible_dealership_ids(db, user)
-    if accessible is None:
+    """Check if user can access a specific dealership (always true in single-org)."""
+    if user.role in (
+        UserRole.SUPER_ADMIN,
+        UserRole.DEALERSHIP_ADMIN,
+        UserRole.DEALERSHIP_OWNER,
+        UserRole.BDC,
+    ):
         return True
-    return dealership_id in accessible
+
+    if dealership_id is None:
+        return False
+
+    return user.dealership_id == dealership_id
 
 
 def apply_dealership_scope_to_lead_query(query, accessible_ids: Optional[List[UUID]], lead_model):
     """
     Apply dealership filter to a Lead SELECT query.
-    accessible_ids=None means no filter (super admin).
+    accessible_ids=None means no filter (admin / manager / BDC).
     """
     if accessible_ids is None:
         return query
@@ -97,19 +97,6 @@ async def user_can_access_lead(
     lead_assigned_to: Optional[UUID] = None,
 ) -> bool:
     """Check if user may view/act on a lead."""
-    if lead_dealership_id is None:
-        return user.role == UserRole.SUPER_ADMIN
-
-    accessible = await get_accessible_dealership_ids(db, user)
-    if accessible is not None and lead_dealership_id not in accessible:
-        return False
-
-    if user.role == UserRole.SALESPERSON:
-        return (
-            lead_assigned_to == user.id
-            or lead_dealership_id == user.dealership_id
-        )
-
     if user.role in (
         UserRole.SUPER_ADMIN,
         UserRole.DEALERSHIP_ADMIN,
@@ -117,5 +104,11 @@ async def user_can_access_lead(
         UserRole.BDC,
     ):
         return True
+
+    if user.role == UserRole.SALESPERSON:
+        return (
+            lead_assigned_to == user.id
+            or lead_dealership_id == user.dealership_id
+        )
 
     return False

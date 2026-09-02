@@ -1,5 +1,14 @@
 """
 Role-Based Access Control (RBAC) System
+
+Single-org Carvaminos model:
+  - SUPER_ADMIN: Full system access (settings, users, partner stores, integrations)
+  - DEALERSHIP_ADMIN: Manager — all leads, team management, reports
+  - SALESPERSON: Own assigned leads, communications
+  - BDC: Multi-queue lead workers (retained for pipeline flexibility)
+
+Legacy roles kept in enum for DB backward compatibility:
+  - DEALERSHIP_OWNER: mapped to same permissions as DEALERSHIP_ADMIN
 """
 from enum import Enum
 from typing import Set
@@ -8,8 +17,8 @@ from typing import Set
 class UserRole(str, Enum):
     """User roles in the system"""
     SUPER_ADMIN = "super_admin"
-    DEALERSHIP_OWNER = "dealership_owner"  # Can add admins within their dealership
-    DEALERSHIP_ADMIN = "dealership_admin"  # Can only add salespersons
+    DEALERSHIP_OWNER = "dealership_owner"  # Legacy — treated as DEALERSHIP_ADMIN
+    DEALERSHIP_ADMIN = "dealership_admin"  # Manager role
     SALESPERSON = "salesperson"
     BDC = "bdc"
 
@@ -26,118 +35,103 @@ class Permission(str, Enum):
     DELETE_LEAD = "delete_lead"
     ASSIGN_LEAD_TO_DEALERSHIP = "assign_lead_to_dealership"
     ASSIGN_LEAD_TO_SALESPERSON = "assign_lead_to_salesperson"
-    
+
     # User permissions
     VIEW_ALL_USERS = "view_all_users"
     VIEW_DEALERSHIP_USERS = "view_dealership_users"
     CREATE_USER = "create_user"
     UPDATE_USER = "update_user"
     DELETE_USER = "delete_user"
-    
-    # Dealership permissions
+
+    # Dealership / org permissions (kept for backward compat)
     VIEW_ALL_DEALERSHIPS = "view_all_dealerships"
     VIEW_OWN_DEALERSHIP = "view_own_dealership"
     CREATE_DEALERSHIP = "create_dealership"
     UPDATE_DEALERSHIP = "update_dealership"
     DELETE_DEALERSHIP = "delete_dealership"
-    
+
     # Activity permissions
     VIEW_ALL_ACTIVITIES = "view_all_activities"
     VIEW_DEALERSHIP_ACTIVITIES = "view_dealership_activities"
     VIEW_OWN_ACTIVITIES = "view_own_activities"
-    
+
     # Schedule permissions
     MANAGE_DEALERSHIP_SCHEDULES = "manage_dealership_schedules"
     VIEW_OWN_SCHEDULE = "view_own_schedule"
-    
+
     # Communication permissions
     SEND_EMAIL = "send_email"
     SEND_SMS = "send_sms"
     LOG_CALL = "log_call"
-    
+
     # Integration permissions
     MANAGE_INTEGRATIONS = "manage_integrations"
-    
+
     # Report permissions
     VIEW_SYSTEM_REPORTS = "view_system_reports"
     VIEW_DEALERSHIP_REPORTS = "view_dealership_reports"
 
+    # Partner store permissions
+    MANAGE_PARTNER_STORES = "manage_partner_stores"
+    CONNECT_LEAD_TO_PARTNER = "connect_lead_to_partner"
+
+
+_MANAGER_PERMISSIONS: Set[Permission] = {
+    # Leads — full access
+    Permission.VIEW_ALL_LEADS,
+    Permission.VIEW_DEALERSHIP_LEADS,
+    Permission.CREATE_LEAD,
+    Permission.UPDATE_LEAD,
+    Permission.ASSIGN_LEAD_TO_SALESPERSON,
+    Permission.CONNECT_LEAD_TO_PARTNER,
+
+    # Users — team management
+    Permission.VIEW_ALL_USERS,
+    Permission.VIEW_DEALERSHIP_USERS,
+    Permission.CREATE_USER,
+    Permission.UPDATE_USER,
+    Permission.DELETE_USER,
+
+    # Org
+    Permission.VIEW_OWN_DEALERSHIP,
+    Permission.UPDATE_DEALERSHIP,
+
+    # Activities
+    Permission.VIEW_ALL_ACTIVITIES,
+    Permission.VIEW_DEALERSHIP_ACTIVITIES,
+
+    # Schedules
+    Permission.MANAGE_DEALERSHIP_SCHEDULES,
+
+    # Communications
+    Permission.SEND_EMAIL,
+    Permission.SEND_SMS,
+    Permission.LOG_CALL,
+
+    # Integrations
+    Permission.MANAGE_INTEGRATIONS,
+
+    # Reports
+    Permission.VIEW_SYSTEM_REPORTS,
+    Permission.VIEW_DEALERSHIP_REPORTS,
+}
 
 # Role to permissions mapping
 ROLE_PERMISSIONS: dict[UserRole, Set[Permission]] = {
     UserRole.SUPER_ADMIN: set(Permission),  # All permissions
-    
-    UserRole.DEALERSHIP_OWNER: {
-        # Lead permissions
-        Permission.VIEW_DEALERSHIP_LEADS,
-        Permission.CREATE_LEAD,
-        Permission.UPDATE_LEAD,
-        Permission.ASSIGN_LEAD_TO_SALESPERSON,
-        
-        # User permissions - can create admins and salespersons
-        Permission.VIEW_DEALERSHIP_USERS,
-        Permission.CREATE_USER,
-        Permission.UPDATE_USER,
-        Permission.DELETE_USER,
-        
-        # Dealership permissions - full control of own dealership
-        Permission.VIEW_OWN_DEALERSHIP,
-        Permission.UPDATE_DEALERSHIP,
-        
-        # Activity permissions
-        Permission.VIEW_DEALERSHIP_ACTIVITIES,
-        
-        # Schedule permissions
-        Permission.MANAGE_DEALERSHIP_SCHEDULES,
-        
-        # Communication permissions
-        Permission.SEND_EMAIL,
-        Permission.SEND_SMS,
-        Permission.LOG_CALL,
-        
-        # Integration permissions
-        Permission.MANAGE_INTEGRATIONS,
-        
-        # Report permissions
-        Permission.VIEW_DEALERSHIP_REPORTS,
-    },
-    
-    UserRole.DEALERSHIP_ADMIN: {
-        # Lead permissions
-        Permission.VIEW_DEALERSHIP_LEADS,
-        Permission.CREATE_LEAD,
-        Permission.UPDATE_LEAD,
-        Permission.ASSIGN_LEAD_TO_SALESPERSON,
-        
-        # User permissions - can only add salespersons
-        Permission.VIEW_DEALERSHIP_USERS,
-        Permission.CREATE_USER,
-        Permission.UPDATE_USER,
-        
-        # Dealership permissions
-        Permission.VIEW_OWN_DEALERSHIP,
-        Permission.UPDATE_DEALERSHIP,
-        
-        # Activity permissions
-        Permission.VIEW_DEALERSHIP_ACTIVITIES,
-        
-        # Schedule permissions
-        Permission.MANAGE_DEALERSHIP_SCHEDULES,
-        
-        # Communication permissions
-        Permission.SEND_EMAIL,
-        Permission.SEND_SMS,
-        Permission.LOG_CALL,
-        
-        # Report permissions
-        Permission.VIEW_DEALERSHIP_REPORTS,
-    },
-    
+
+    UserRole.DEALERSHIP_ADMIN: _MANAGER_PERMISSIONS,
+
+    # Legacy — identical to DEALERSHIP_ADMIN
+    UserRole.DEALERSHIP_OWNER: _MANAGER_PERMISSIONS,
+
     UserRole.BDC: {
         Permission.VIEW_GROUP_LEADS,
+        Permission.VIEW_DEALERSHIP_LEADS,
         Permission.CREATE_LEAD,
         Permission.UPDATE_LEAD,
         Permission.ASSIGN_LEAD_TO_SALESPERSON,
+        Permission.CONNECT_LEAD_TO_PARTNER,
         Permission.VIEW_OWN_ACTIVITIES,
         Permission.VIEW_OWN_SCHEDULE,
         Permission.SEND_EMAIL,
@@ -147,18 +141,11 @@ ROLE_PERMISSIONS: dict[UserRole, Set[Permission]] = {
     },
 
     UserRole.SALESPERSON: {
-        # Lead permissions
         Permission.VIEW_OWN_LEADS,
-        Permission.CREATE_LEAD,  # Salesperson can create leads
+        Permission.CREATE_LEAD,
         Permission.UPDATE_LEAD,
-        
-        # Activity permissions
         Permission.VIEW_OWN_ACTIVITIES,
-        
-        # Schedule permissions
         Permission.VIEW_OWN_SCHEDULE,
-        
-        # Communication permissions
         Permission.SEND_EMAIL,
         Permission.SEND_SMS,
         Permission.LOG_CALL,
@@ -182,18 +169,27 @@ def is_super_admin(role: UserRole) -> bool:
 
 
 def is_dealership_owner(role: UserRole) -> bool:
-    """Check if role is dealership owner"""
+    """Check if role is dealership owner (legacy — treated as admin/manager)"""
     return role == UserRole.DEALERSHIP_OWNER
 
 
 def is_dealership_admin(role: UserRole) -> bool:
-    """Check if role is dealership admin"""
-    return role == UserRole.DEALERSHIP_ADMIN
+    """Check if role is dealership admin / manager"""
+    return role in (UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER)
 
 
 def is_dealership_level(role: UserRole) -> bool:
-    """Check if role is dealership owner or admin"""
+    """Check if role is manager-level (dealership admin or owner)"""
     return role in (UserRole.DEALERSHIP_OWNER, UserRole.DEALERSHIP_ADMIN)
+
+
+def is_manager_or_above(role: UserRole) -> bool:
+    """Admin or manager roles."""
+    return role in (
+        UserRole.SUPER_ADMIN,
+        UserRole.DEALERSHIP_OWNER,
+        UserRole.DEALERSHIP_ADMIN,
+    )
 
 
 def is_salesperson(role: UserRole) -> bool:
@@ -207,5 +203,5 @@ def is_bdc(role: UserRole) -> bool:
 
 
 def is_multi_dealership_role(role: UserRole) -> bool:
-    """Roles that may span multiple dealerships via access table or super admin."""
+    """Legacy — all roles now belong to one org. Kept for backward compat."""
     return role in (UserRole.SUPER_ADMIN, UserRole.BDC)

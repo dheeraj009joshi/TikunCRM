@@ -7,7 +7,6 @@ import { usePathname } from "next/navigation"
 import {
     BarChart3,
     Users,
-    Building2,
     Inbox,
     Calendar,
     CalendarClock,
@@ -50,8 +49,6 @@ import { LeadService } from "@/services/lead-service"
 import { LeadStageService } from "@/services/lead-stage-service"
 import apiClient from "@/lib/api-client"
 import { GlobalSearchModal } from "@/components/search/global-search-modal"
-import { DealershipSwitcher } from "@/components/layout/dealership-switcher"
-import { BdcDealershipSwitcher } from "@/components/layout/bdc-dealership-switcher"
 
 interface SidebarLink {
     name: string
@@ -99,12 +96,6 @@ const allSidebarItems: SidebarItem[] = [
         roles: ["super_admin", "dealership_admin", "dealership_owner"]
     },
     { 
-        name: "Dealerships", 
-        icon: Building2, 
-        href: "/dealerships",
-        roles: ["super_admin"]  // Only Super Admin
-    },
-    { 
         name: "Team", 
         icon: Users, 
         href: "/team",
@@ -122,10 +113,16 @@ const allSidebarItems: SidebarItem[] = [
         href: "/appointments" 
     },
     { 
-        name: "Dealership", 
+        name: "Carvaminos", 
         icon: Store, 
         href: "/showroom",
         roles: ["super_admin", "dealership_owner", "dealership_admin", "salesperson"],
+    },
+    {
+        name: "Partner Stores",
+        icon: Car,
+        href: "/partner-stores",
+        roles: ["super_admin", "dealership_owner", "dealership_admin"],
     },
     { 
         name: "Follow-ups", 
@@ -713,9 +710,6 @@ export function Sidebar() {
                             {!collapsed && <span className="ml-2 text-xs font-medium">Collapse sidebar</span>}
                         </button>
                     )}
-
-                    <DealershipSwitcher collapsed={collapsed} />
-                    {user?.role === "bdc" && <BdcDealershipSwitcher collapsed={collapsed} />}
 
                     <div className={cn("flex items-center rounded-md bg-muted/30 px-2 py-2", collapsed && "flex-col justify-center gap-2 px-1")}>
                         <UserAvatar user={user || undefined} size={collapsed ? "sm" : "md"} />
