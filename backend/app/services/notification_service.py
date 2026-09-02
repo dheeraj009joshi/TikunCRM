@@ -4,8 +4,9 @@ Handles creating and managing notifications
 Also sends web push notifications and WebSocket events when configured
 """
 import asyncio
+import hashlib
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from uuid import UUID
 
@@ -41,6 +42,7 @@ class NotificationService:
         send_push: bool = True,
         send_email: bool = True,  # Send email for all notifications by default
         send_sms: bool = False,
+        push_tag: Optional[str] = None,
     ) -> Notification:
         """
         Create a new notification for a user.
@@ -94,7 +96,9 @@ class NotificationService:
                         title=title,
                         body=message or "",
                         url=link,
-                        tag=f"{notification_type.value}-{related_id}" if related_id else None,
+                        tag=push_tag or (
+                            f"{notification_type.value}-{related_id}" if related_id else None
+                        ),
                         data={
                             "notification_id": str(notification.id),
                             "type": notification_type.value,
@@ -811,7 +815,10 @@ class NotificationService:
             f"(duplicate). Open the lead to see campaign history before contacting them again."
         )
         link = f"/leads/{lead_id}"
-        
+        campaign_tag = hashlib.md5(new_campaign_name.encode()).hexdigest()[:12]
+        push_tag = f"dup-lead-{lead_id}-{campaign_tag}"
+        dedupe_cutoff = utc_now() - timedelta(hours=24)
+
         if not dealership_id:
             logger.warning(f"Cannot send multi-campaign notification for lead {lead_id} - no dealership_id")
             return notifications
@@ -866,9 +873,27 @@ class NotificationService:
         
         users_to_notify = list(users_by_id.values())
         
-        # Send notifications
+        # Send notifications (skip if same lead+campaign already notified in last 24h)
         for user in users_to_notify:
             try:
+                recent_dup = await self.db.execute(
+                    select(Notification.id).where(
+                        Notification.user_id == user.id,
+                        Notification.type == NotificationType.LEAD_MULTI_CAMPAIGN,
+                        Notification.related_id == lead_id,
+                        Notification.message == message,
+                        Notification.created_at >= dedupe_cutoff,
+                    ).limit(1)
+                )
+                if recent_dup.scalar_one_or_none():
+                    logger.debug(
+                        "Skipping duplicate-lead notification for user %s lead %s campaign %s",
+                        user.id,
+                        lead_id,
+                        new_campaign_name,
+                    )
+                    continue
+
                 notification = await self.create_notification(
                     user_id=user.id,
                     notification_type=NotificationType.LEAD_MULTI_CAMPAIGN,
@@ -885,6 +910,7 @@ class NotificationService:
                     send_push=True,
                     send_email=True,
                     send_sms=False,  # Don't spam SMS for multi-campaign
+                    push_tag=push_tag,
                 )
                 notifications.append(notification)
             except Exception as e:

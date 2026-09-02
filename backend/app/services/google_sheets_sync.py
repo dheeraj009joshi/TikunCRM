@@ -558,7 +558,8 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
 
                 tracked_external_ids: Set[str] = set()
                 tracked_phone_dealership: Set[Tuple[str, Optional[UUID]]] = set()
-                
+                linked_this_run: Set[Tuple[UUID, Optional[UUID], str]] = set()
+
                 new_leads_data: List[Dict[str, Any]] = []
                 updated_count = 0
                 duplicate_count = 0
@@ -595,6 +596,15 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                         # Multi-campaign: same dealership, same phone — another campaign row
                         campaign_name = lead_data.get("campaign_name_raw") or "Unknown Campaign"
                         matched_mapping = lead_data.get("matched_mapping")
+                        link_key = (
+                            existing_lead.id,
+                            matched_mapping.id if matched_mapping else None,
+                            campaign_name,
+                        )
+
+                        if link_key in linked_this_run:
+                            duplicate_count += 1
+                            continue
 
                         already_linked = await _lead_campaign_association_exists(
                             session,
@@ -616,6 +626,7 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                             if matched_mapping:
                                 matched_mapping.leads_matched += 1
 
+                            linked_this_run.add(link_key)
                             multi_campaign_leads.append((existing_lead, lead_data))
 
                             logger.info(
