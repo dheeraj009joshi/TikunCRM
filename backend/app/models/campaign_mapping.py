@@ -72,6 +72,12 @@ class CampaignMapping(Base):
         comment="Display name shown in frontend (editable by dealership admin)"
     )
 
+    # Optional audience / targeting notes (hover on display name in UI)
+    targeting_message: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True,
+        comment="Targeting or audience description shown on hover in campaign mappings UI"
+    )
+
     # Dealership assignment (override sync source default)
     dealership_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

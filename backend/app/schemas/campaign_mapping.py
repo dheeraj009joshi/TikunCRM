@@ -17,6 +17,11 @@ class CampaignMappingBase(BaseModel):
     match_pattern: str = Field(..., min_length=1, max_length=255, description="Pattern to match in campaign name")
     match_type: MatchTypeStr = Field(default="contains", description="How to match the pattern")
     display_name: str = Field(..., min_length=1, max_length=255, description="Display name for frontend")
+    targeting_message: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="Targeting/audience description shown on hover in the UI",
+    )
     dealership_id: Optional[UUID] = Field(None, description="Dealership for leads (overrides sync source default)")
     priority: int = Field(default=100, ge=0, le=1000, description="Priority for matching (lower = higher priority)")
 
@@ -31,6 +36,7 @@ class CampaignMappingUpdate(BaseModel):
     match_pattern: Optional[str] = Field(None, min_length=1, max_length=255)
     match_type: Optional[MatchTypeStr] = None
     display_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    targeting_message: Optional[str] = Field(None, max_length=2000)
     dealership_id: Optional[UUID] = None
     priority: Optional[int] = Field(None, ge=0, le=1000)
     is_active: Optional[bool] = None
@@ -117,6 +123,7 @@ class CampaignMappingForDealership(BaseModel):
     match_pattern: str
     match_type: MatchTypeStr
     display_name: str
+    targeting_message: Optional[str] = None
     is_active: bool
     leads_matched: int
     updated_at: Optional[datetime] = None

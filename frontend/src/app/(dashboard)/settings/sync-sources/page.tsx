@@ -22,6 +22,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
@@ -53,6 +54,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table"
+import { CampaignDisplayWithTargeting } from "@/components/campaigns/campaign-targeting-info"
 import { useRole } from "@/hooks/use-role"
 import { useToast } from "@/hooks/use-toast"
 import {
@@ -85,6 +87,7 @@ const MATCH_TYPE_OPTIONS: { value: MatchType; label: string }[] = [
 interface CampaignMappingEntry {
     rawName: string
     displayName: string
+    targetingMessage: string
     dealershipId: string
     matchType: MatchType
 }
@@ -133,6 +136,7 @@ export default function SyncSourcesSettingsPage() {
         match_pattern: "",
         match_type: "contains" as MatchType,
         display_name: "",
+        targeting_message: "",
         dealership_id: "none",
         priority: 100,
         is_active: true,
@@ -219,6 +223,7 @@ export default function SyncSourcesSettingsPage() {
             const mappings: CampaignMappingEntry[] = preview.unique_campaigns.map((campaign) => ({
                 rawName: campaign,
                 displayName: "",
+                targetingMessage: "",
                 dealershipId: "default",
                 matchType: "contains" as MatchType,
             }))
@@ -293,6 +298,7 @@ export default function SyncSourcesSettingsPage() {
                 match_pattern: m.rawName,
                 match_type: m.matchType,
                 display_name: m.displayName,
+                targeting_message: m.targetingMessage.trim() || null,
                 dealership_id: m.dealershipId === "default" || m.dealershipId === "none" ? null : m.dealershipId,
                 priority: idx * 10,
                 is_active: true,
@@ -420,6 +426,7 @@ export default function SyncSourcesSettingsPage() {
             match_pattern: "",
             match_type: "contains",
             display_name: "",
+            targeting_message: "",
             dealership_id: "none",
             priority: 100,
             is_active: true,
@@ -434,6 +441,7 @@ export default function SyncSourcesSettingsPage() {
             match_pattern: mapping.match_pattern,
             match_type: mapping.match_type,
             display_name: mapping.display_name,
+            targeting_message: mapping.targeting_message || "",
             dealership_id: mapping.dealership_id || "none",
             priority: mapping.priority,
             is_active: mapping.is_active,
@@ -455,6 +463,7 @@ export default function SyncSourcesSettingsPage() {
         try {
             const payload = {
                 ...mappingForm,
+                targeting_message: mappingForm.targeting_message.trim() || null,
                 dealership_id: mappingForm.dealership_id === "none" ? null : mappingForm.dealership_id,
             }
             
@@ -678,9 +687,11 @@ export default function SyncSourcesSettingsPage() {
                                                         >
                                                             <div className="flex-1 min-w-0">
                                                                 <div className="flex items-center gap-2">
-                                                                    <span className="font-medium text-sm">
-                                                                        {mapping.display_name}
-                                                                    </span>
+                                                                    <CampaignDisplayWithTargeting
+                                                                        displayName={mapping.display_name}
+                                                                        targetingMessage={mapping.targeting_message}
+                                                                        nameClassName="text-sm font-medium"
+                                                                    />
                                                                     {!mapping.is_active && (
                                                                         <Badge variant="secondary" className="text-[10px]">
                                                                             Inactive
@@ -846,9 +857,10 @@ export default function SyncSourcesSettingsPage() {
                                         <Table>
                                             <TableHeader>
                                                 <TableRow>
-                                                    <TableHead className="w-[30%]">Campaign Name (Raw)</TableHead>
-                                                    <TableHead className="w-[35%]">Display Name *</TableHead>
-                                                    <TableHead className="w-[35%]">Dealership</TableHead>
+                                                    <TableHead className="w-[22%]">Campaign Name (Raw)</TableHead>
+                                                    <TableHead className="w-[26%]">Display Name *</TableHead>
+                                                    <TableHead className="w-[28%]">Targeting Message</TableHead>
+                                                    <TableHead className="w-[24%]">Dealership</TableHead>
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>
@@ -863,6 +875,15 @@ export default function SyncSourcesSettingsPage() {
                                                                 onChange={(e) => handleCampaignMappingChange(idx, "displayName", e.target.value)}
                                                                 placeholder="Enter display name..."
                                                                 className={!mapping.displayName ? "border-destructive" : ""}
+                                                            />
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <Textarea
+                                                                value={mapping.targetingMessage}
+                                                                onChange={(e) => handleCampaignMappingChange(idx, "targetingMessage", e.target.value)}
+                                                                placeholder="Audience / targeting notes (optional)"
+                                                                rows={2}
+                                                                className="min-h-[60px] text-xs resize-y"
                                                             />
                                                         </TableCell>
                                                         <TableCell>
@@ -1046,6 +1067,19 @@ export default function SyncSourcesSettingsPage() {
                                 onChange={(e) => setMappingForm({ ...mappingForm, display_name: e.target.value })}
                                 placeholder="e.g. Facebook Summer Campaign"
                             />
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Targeting Message</Label>
+                            <Textarea
+                                value={mappingForm.targeting_message}
+                                onChange={(e) => setMappingForm({ ...mappingForm, targeting_message: e.target.value })}
+                                placeholder="Describe the audience or ad targeting (shown on hover in campaign mappings)"
+                                rows={3}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Optional. Team members see this when they hover the info icon next to the display name.
+                            </p>
                         </div>
                         
                         <div className="space-y-2">

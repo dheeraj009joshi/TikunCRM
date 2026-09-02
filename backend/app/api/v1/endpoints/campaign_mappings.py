@@ -99,6 +99,7 @@ def _build_mapping_response(
         match_pattern=m.match_pattern,
         match_type=m.match_type,
         display_name=m.display_name,
+        targeting_message=m.targeting_message,
         is_active=m.is_active,
         leads_matched=lead_count,
         updated_at=m.updated_at,

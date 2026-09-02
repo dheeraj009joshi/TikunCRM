@@ -37,6 +37,7 @@ export interface CampaignMapping {
     match_pattern: string;
     match_type: MatchType;
     display_name: string;
+    targeting_message?: string | null;
     dealership_id?: string | null;
     priority: number;
     is_active: boolean;
@@ -53,6 +54,7 @@ export interface CampaignMappingCreate {
     match_pattern: string;
     match_type?: MatchType;
     display_name: string;
+    targeting_message?: string | null;
     dealership_id?: string | null;
     priority?: number;
     is_active?: boolean;
@@ -62,6 +64,7 @@ export interface CampaignMappingUpdate {
     match_pattern?: string;
     match_type?: MatchType;
     display_name?: string;
+    targeting_message?: string | null;
     dealership_id?: string | null;
     priority?: number;
     is_active?: boolean;
@@ -234,6 +237,7 @@ export interface CampaignMappingInput {
     match_pattern: string;
     match_type: MatchType;
     display_name: string;
+    targeting_message?: string | null;
     dealership_id?: string | null;
     priority?: number;
     is_active?: boolean;
@@ -283,6 +287,7 @@ export interface DealershipCampaignMappingResponse {
     match_pattern: string;
     match_type: MatchType;
     display_name: string;
+    targeting_message?: string | null;
     is_active: boolean;
     leads_matched: number;
     updated_at?: string | null;

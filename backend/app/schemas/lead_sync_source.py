@@ -93,6 +93,7 @@ class CampaignMappingBrief(BaseModel):
     match_pattern: str
     match_type: str
     display_name: str
+    targeting_message: Optional[str] = None
     dealership_id: Optional[UUID] = None
     dealership: Optional[DealershipBrief] = None
     priority: int
@@ -204,6 +205,7 @@ class CampaignMappingInput(BaseModel):
     match_pattern: str = Field(..., min_length=1)
     match_type: str = Field(default="contains")
     display_name: str = Field(..., min_length=1)
+    targeting_message: Optional[str] = Field(None, max_length=2000)
     dealership_id: Optional[UUID] = None
     priority: int = Field(default=100)
     is_active: bool = Field(default=True)

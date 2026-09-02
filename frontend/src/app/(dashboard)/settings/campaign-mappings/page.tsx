@@ -43,6 +43,7 @@ import {
     updateCampaignWhatsAppTemplate,
 } from "@/services/sync-source-service"
 import { whatsappService, WhatsAppTemplateItem } from "@/services/whatsapp-service"
+import { CampaignDisplayWithTargeting } from "@/components/campaigns/campaign-targeting-info"
 
 /** Radix Select rejects empty string as SelectItem value — use this sentinel for "no template". */
 const NO_WHATSAPP_TEMPLATE = "__none__"
@@ -239,6 +240,7 @@ export default function CampaignMappingsPage() {
                 <h1 className="text-2xl font-bold tracking-tight">Campaign mappings</h1>
                 <p className="text-muted-foreground">
                     Edit display names for each sheet campaign and assign WhatsApp templates (green icon per row).
+                    Hover the info icon beside a display name to see targeting notes.
                 </p>
             </div>
 
@@ -328,9 +330,10 @@ export default function CampaignMappingsPage() {
                                                         <span className="text-xs text-muted-foreground">
                                                             Display:
                                                         </span>
-                                                        <span className="font-medium">
-                                                            {mapping.display_name}
-                                                        </span>
+                                                        <CampaignDisplayWithTargeting
+                                                            displayName={mapping.display_name}
+                                                            targetingMessage={mapping.targeting_message}
+                                                        />
                                                     </div>
                                                 )}
                                                 
