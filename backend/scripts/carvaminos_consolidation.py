@@ -272,6 +272,21 @@ def run_consolidation(engine: Engine) -> str:
         )
         _commit_step(conn, "Stages + sync sources")
 
+        print("Step 5b: Align activity dealership_id with leads")
+        result = conn.execute(
+            text("""
+                UPDATE activities a
+                SET dealership_id = l.dealership_id
+                FROM leads l
+                WHERE a.lead_id = l.id
+                  AND (a.dealership_id IS DISTINCT FROM l.dealership_id)
+            """)
+        )
+        n = result.rowcount or 0
+        if n:
+            print(f"    activities: {n} rows aligned to lead dealership")
+        _commit_step(conn, "Activities aligned")
+
         print("Step 6: Archive old dealerships")
         conn.execute(
             text("UPDATE dealerships SET is_active = false WHERE id != :cid"),

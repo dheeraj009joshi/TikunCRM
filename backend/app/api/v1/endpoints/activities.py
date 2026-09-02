@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
-from app.core.access_scope import get_accessible_dealership_ids, is_org_wide_role
+from app.core.access_scope import get_accessible_dealership_ids, user_can_access_lead
 from app.db.database import get_db
 from app.models.activity import Activity, ActivityType
 from app.models.lead import Lead

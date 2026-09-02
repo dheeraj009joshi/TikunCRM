@@ -93,6 +93,15 @@ def upgrade() -> None:
         WHERE dealership_id IS NULL OR dealership_id != :cid
     """), {"cid": cid})
 
+    # Sync activity dealership_id from parent lead (timeline uses lead_id; this fixes org-wide lists)
+    conn.execute(text("""
+        UPDATE activities a
+        SET dealership_id = l.dealership_id
+        FROM leads l
+        WHERE a.lead_id = l.id
+          AND (a.dealership_id IS DISTINCT FROM l.dealership_id)
+    """))
+
 
 def downgrade() -> None:
     pass
