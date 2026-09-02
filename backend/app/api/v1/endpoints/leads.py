@@ -21,7 +21,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
-from app.core.access_scope import get_accessible_dealership_ids, user_can_access_dealership, user_can_access_lead
+from app.core.access_scope import get_accessible_dealership_ids, user_can_access_dealership, user_can_access_lead, apply_dealership_scope_to_lead_query
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
@@ -603,48 +603,14 @@ def _build_leads_list_select(
 
     if pool == "mine":
         query = query.where(Lead.assigned_to == current_user.id)
-
     elif pool == "unassigned":
-        if current_user.role == UserRole.SUPER_ADMIN:
-            query = query.where(Lead.dealership_id.is_(None))
-        elif current_user.role == UserRole.BDC:
-            if accessible_dealership_ids:
-                query = query.where(
-                    and_(
-                        Lead.dealership_id.in_(accessible_dealership_ids),
-                        Lead.assigned_to.is_(None),
-                    )
-                )
-            else:
-                query = query.where(Lead.id.is_(None))
-        elif current_user.dealership_id:
-            query = query.where(
-                and_(
-                    Lead.dealership_id == current_user.dealership_id,
-                    Lead.assigned_to.is_(None),
-                )
-            )
-        else:
-            query = query.where(Lead.id.is_(None))
+        query = query.where(Lead.assigned_to.is_(None))
 
-    else:
-        if current_user.role == UserRole.SALESPERSON:
-            if current_user.dealership_id:
-                query = query.where(Lead.dealership_id == current_user.dealership_id)
-            else:
-                query = query.where(Lead.id.is_(None))
-
-        elif current_user.role == UserRole.BDC:
-            if accessible_dealership_ids:
-                query = query.where(Lead.dealership_id.in_(accessible_dealership_ids))
-            else:
-                query = query.where(Lead.id.is_(None))
-
-        elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-            if current_user.dealership_id:
-                query = query.where(Lead.dealership_id == current_user.dealership_id)
-            else:
-                query = query.where(Lead.id.is_(None))
+    # Single-org scope: admins/managers/BDC see all; salesperson scoped to their org.
+    if pool != "mine":
+        query = apply_dealership_scope_to_lead_query(
+            query, accessible_dealership_ids, Lead
+        )
 
     if assigned_to is not None:
         if current_user.role not in (
@@ -669,10 +635,18 @@ def _build_leads_list_select(
             query = query.where(Lead.bdc_assigned_to_id == bdc_agent_id)
 
     if dealership_id is not None:
-        may_filter = current_user.role == UserRole.SUPER_ADMIN
+        # Single-org: unrestricted roles may filter by any dealership_id.
+        may_filter = accessible_dealership_ids is None
         if accessible_dealership_ids and dealership_id in accessible_dealership_ids:
             may_filter = True
         if current_user.dealership_id == dealership_id:
+            may_filter = True
+        if current_user.role in (
+            UserRole.SUPER_ADMIN,
+            UserRole.DEALERSHIP_ADMIN,
+            UserRole.DEALERSHIP_OWNER,
+            UserRole.BDC,
+        ):
             may_filter = True
         if may_filter:
             query = query.where(Lead.dealership_id == dealership_id)
