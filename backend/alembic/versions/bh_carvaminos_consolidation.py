@@ -20,7 +20,7 @@ from alembic import op
 from sqlalchemy import text
 
 revision: str = "bh_carvaminos"
-down_revision: Union[str, None] = "bg_lead_credit_apps"
+down_revision: Union[str, None] = "bl_partner_stores"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

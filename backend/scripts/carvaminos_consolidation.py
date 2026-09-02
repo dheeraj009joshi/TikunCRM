@@ -218,8 +218,14 @@ def _collapse_auto_whatsapp(conn, cid: str) -> None:
 
 
 def run_consolidation(engine: Engine) -> str:
+    from scripts.ensure_partner_schema import ensure_partner_schema
+
     with engine.connect() as conn:
         _disable_timeouts(conn)
+
+        print("Step 0: Partner schema (prevents API 500)")
+        ensure_partner_schema(conn)
+        _commit_step(conn, "Partner schema OK")
 
         print("Step 1: Carvaminos dealership")
         cid = _resolve_carvaminos_id(conn)
