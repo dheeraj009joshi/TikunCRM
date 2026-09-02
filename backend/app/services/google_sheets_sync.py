@@ -80,13 +80,25 @@ def clean_phone(phone: str) -> Optional[str]:
     """Clean phone number - remove prefix 'p:' if present."""
     if not phone:
         return None
-    
+
     phone = phone.strip()
     if phone.startswith("p:"):
         phone = phone[2:]
-    
-    cleaned = ''.join(c for c in phone if c.isdigit() or c == '+')
-    return cleaned if cleaned else None
+
+    cleaned = "".join(c for c in phone if c.isdigit() or c == "+")
+    return _truncate(cleaned, 20) if cleaned else None
+
+
+def _truncate(value: Optional[str], max_len: int) -> Optional[str]:
+    """Trim strings to fit VARCHAR columns during sheet import."""
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) <= max_len:
+        return text
+    return text[:max_len]
 
 
 def _get_first_non_empty(row: Dict[str, str], *keys: str) -> Optional[str]:
@@ -155,14 +167,16 @@ def parse_sheet_row(
             return None
         
         first_name, last_name = parse_full_name(full_name)
-        
-        lead_id_col = row.get('lead_id_col', '').strip()
-        if lead_id_col.startswith('l:'):
+        first_name = _truncate(first_name, 100) or "Unknown"
+        last_name = _truncate(last_name, 100)
+
+        lead_id_col = row.get("lead_id_col", "").strip()
+        if lead_id_col.startswith("l:"):
             sheet_lead_id = lead_id_col
-            external_id = lead_id_col
+            external_id = _truncate(lead_id_col, 255)
         else:
             sheet_lead_id = None
-            external_id = f"sheet:{phone}"
+            external_id = _truncate(f"sheet:{phone}", 255)
         
         notes_parts = []
         if row.get('notes'):
@@ -182,10 +196,14 @@ def parse_sheet_row(
         sheet_status = row.get('lead_status', 'CREATED').strip()
         platform = row.get('platform', '').strip()
         
-        campaign_name = (
-            row.get('campaign_name', '') or row.get('Campaign', '') or 
-            row.get('campaign', '') or row.get('Lead Type', '') or row.get('lead_type', '')
+        campaign_name_raw = (
+            row.get("campaign_name", "")
+            or row.get("Campaign", "")
+            or row.get("campaign", "")
+            or row.get("Lead Type", "")
+            or row.get("lead_type", "")
         ).strip()
+        campaign_name = _truncate(campaign_name_raw, 255) or ""
         campaign_id = row.get('campaign_id', '').strip()
         ad_name = row.get('ad_name', '').strip()
         ad_id = row.get('ad_id', '').strip()
@@ -214,10 +232,10 @@ def parse_sheet_row(
                 source_display = sync_source.default_campaign_display
         
         meta_data = {
-            'sheet_lead_id': sheet_lead_id,
-            'platform': platform,
-            'campaign_name': campaign_name,
-            'campaign_id': campaign_id,
+            "sheet_lead_id": sheet_lead_id,
+            "platform": platform,
+            "campaign_name": campaign_name_raw or campaign_name,
+            "campaign_id": campaign_id,
             'ad_name': ad_name,
             'ad_id': ad_id,
             'adset_name': adset_name,
@@ -266,9 +284,9 @@ def parse_sheet_row(
             'source': LeadSource.GOOGLE_SHEETS,
             'notes': notes,
             'meta_data': meta_data,
-            'created_at': created_at,
-            'campaign_name_raw': campaign_name,
-            'matched_mapping': matched_mapping,
+            "created_at": created_at,
+            "campaign_name_raw": campaign_name,
+            "matched_mapping": matched_mapping,
             'target_dealership_id': target_dealership_id,
         }
         
@@ -431,6 +449,11 @@ def _format_sync_error(exc: Exception) -> str:
         return (
             "Sync timed out while writing to the database. "
             "Large sheets need more time — retry after the server update, or reduce batch size."
+        )
+    if "stringdatarighttruncation" in lower or "value too long" in lower:
+        return (
+            "A value from the sheet was too long for the database "
+            "(name, phone, campaign, or lead ID). Values are now auto-trimmed — please sync again."
         )
     if len(msg) > 500:
         return msg[:500] + "…"
