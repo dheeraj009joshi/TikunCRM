@@ -10,7 +10,7 @@ const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/g/"]
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const router = useRouter()
     const pathname = usePathname()
-    const { isAuthenticated, token, user, setLoading } = useAuthStore()
+    const { isAuthenticated, token, user, setLoading, updateUser } = useAuthStore()
     const [isChecking, setIsChecking] = React.useState(true)
     const fcmRegisteredRef = React.useRef(false)
 
@@ -106,6 +106,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         checkAuth()
     }, [pathname])
+
+    // Refresh /me so org_dealership_id is available for single-org scoping
+    React.useEffect(() => {
+        if (!token || !user || user.org_dealership_id) return
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1"
+        fetch(`${apiUrl}/auth/me`, {
+            headers: { Authorization: `Bearer ${token}` },
+        })
+            .then((res) => (res.ok ? res.json() : null))
+            .then((data) => {
+                if (data) updateUser(data)
+            })
+            .catch(() => {})
+    }, [token, user, updateUser])
 
     // Show loading while checking auth
     if (isChecking) {

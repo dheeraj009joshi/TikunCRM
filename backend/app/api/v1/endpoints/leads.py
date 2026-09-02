@@ -21,7 +21,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
-from app.core.access_scope import get_accessible_dealership_ids, user_can_access_dealership, user_can_access_lead, apply_dealership_scope_to_lead_query
+from app.core.access_scope import get_accessible_dealership_ids, user_can_access_dealership, user_can_access_lead, apply_dealership_scope_to_lead_query, resolve_user_dealership_id, is_org_wide_role
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.user import User
@@ -880,16 +880,7 @@ async def list_leads_unassigned_to_salesperson(
     )
 
     accessible_ids = await get_accessible_dealership_ids(db, current_user)
-    if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER, UserRole.SALESPERSON]:
-        if current_user.dealership_id:
-            query = query.where(Lead.dealership_id == current_user.dealership_id)
-        else:
-            query = query.where(Lead.id.is_(None))
-    elif current_user.role == UserRole.BDC:
-        if accessible_ids:
-            query = query.where(Lead.dealership_id.in_(accessible_ids))
-        else:
-            query = query.where(Lead.id.is_(None))
+    query = apply_dealership_scope_to_lead_query(query, accessible_ids, Lead)
 
     if search:
         query = query.join(Customer, Lead.customer_id == Customer.id)
@@ -991,10 +982,10 @@ async def create_lead(
     assigned_to = None
 
     if current_user.role == UserRole.SALESPERSON:
-        dealership_id = current_user.dealership_id
+        dealership_id = await resolve_user_dealership_id(db, current_user)
         assigned_to = current_user.id
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        dealership_id = current_user.dealership_id
+        dealership_id = await resolve_user_dealership_id(db, current_user)
     elif current_user.role == UserRole.BDC:
         if not dealership_id:
             raise HTTPException(
@@ -1484,27 +1475,10 @@ async def get_lead(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
-    # Unassigned pool: lead has no dealership - visible to everyone who can see unassigned in list
-    if lead.dealership_id is None:
-        if current_user.role == UserRole.SUPER_ADMIN or current_user.dealership_id is not None:
-            access_level = "full"  # Super Admin or any dealership user can access unassigned leads
-        else:
-            access_level = None  # User with no dealership - check mention only
-    else:
-        access_level = "full"
-    
-    # Role-based access for assigned/dealership leads
-    # Salespersons can view any lead in their dealership (assigned or not); admins/owners only their dealership
-    if access_level is not None and lead.dealership_id is not None:
-        if current_user.role == UserRole.SALESPERSON:
-            if lead.dealership_id != current_user.dealership_id:
-                access_level = None  # different dealership - no access unless mentioned
-            # else: same dealership - keep full access (view unassigned-to-salesperson leads)
-        elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER] and lead.dealership_id != current_user.dealership_id:
-            access_level = None  # no access unless mentioned
-        elif current_user.role == UserRole.BDC:
-            if not await user_can_access_dealership(db, current_user, lead.dealership_id):
-                access_level = None
+    has_access = await user_can_access_lead(
+        db, current_user, lead.dealership_id, lead.assigned_to
+    )
+    access_level: Optional[str] = "full" if has_access else None
 
     if access_level is None:
         # Check if user is mentioned in any note on this lead (allows read + reply only)
@@ -1524,7 +1498,7 @@ async def get_lead(
             access_level = "mention_only"
         else:
             raise HTTPException(status_code=403, detail="Not authorized")
-    
+
     # Fetch customer info
     cust_result = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
     customer = cust_result.scalar_one_or_none()
@@ -1967,8 +1941,9 @@ async def assign_lead(
             raise HTTPException(status_code=403, detail="Not authorized for this lead's dealership")
         if assign_to_user.dealership_id != lead.dealership_id:
             raise HTTPException(status_code=400, detail="Cannot assign to user in different dealership")
-    elif current_user.role != UserRole.SUPER_ADMIN:
-        if assign_to_user.dealership_id != current_user.dealership_id:
+    elif not is_org_wide_role(current_user):
+        user_org = await resolve_user_dealership_id(db, current_user)
+        if user_org and assign_to_user.dealership_id and assign_to_user.dealership_id != user_org:
             raise HTTPException(status_code=400, detail="Cannot assign to user in different dealership")
 
     # Check if this is a reassignment
@@ -2113,9 +2088,8 @@ async def unassign_lead(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    # Verify lead is in same dealership (unless super admin)
-    if current_user.role != UserRole.SUPER_ADMIN and lead.dealership_id != current_user.dealership_id:
-        raise HTTPException(status_code=403, detail="Cannot unassign lead from different dealership")
+    if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
+        raise HTTPException(status_code=403, detail="Cannot unassign lead you do not have access to")
 
     if not lead.assigned_to:
         raise HTTPException(status_code=400, detail="Lead is not assigned to anyone")

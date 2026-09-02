@@ -140,7 +140,7 @@ function DealershipRow({ d, maxUnassigned }: { d: BdcDealershipBreakdown; maxUna
     return (
         <TableRow>
             <TableCell>
-                <Link href={`/leads?dealership_id=${d.id}`} className="font-medium hover:text-primary hover:underline">
+                <Link href="/leads" className="font-medium hover:text-primary hover:underline">
                     {d.name}
                 </Link>
                 <div className="mt-2 h-1.5 max-w-[180px] rounded-full bg-muted overflow-hidden">
@@ -150,7 +150,7 @@ function DealershipRow({ d, maxUnassigned }: { d: BdcDealershipBreakdown; maxUna
             <TableCell className="text-right tabular-nums">{d.total_leads.toLocaleString()}</TableCell>
             <TableCell className="text-right">
                 {d.unassigned_leads > 0 ? (
-                    <Link href={`/leads?dealership_id=${d.id}&filter=unassigned`}>
+                    <Link href="/leads?filter=unassigned">
                         <Badge variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50">
                             {d.unassigned_leads}
                         </Badge>
@@ -161,7 +161,7 @@ function DealershipRow({ d, maxUnassigned }: { d: BdcDealershipBreakdown; maxUna
             </TableCell>
             <TableCell className="text-right">
                 {d.fresh_leads > 0 ? (
-                    <Link href={`/leads?dealership_id=${d.id}&filter=fresh`}>
+                    <Link href="/leads?filter=fresh">
                         <Badge variant="outline" className="border-emerald-300 text-emerald-700 hover:bg-emerald-50">
                             {d.fresh_leads}
                         </Badge>
@@ -300,12 +300,8 @@ export function BdcDashboard() {
     const maxUnassigned = Math.max(...stats.dealerships.map((d) => d.unassigned_leads), 1)
     const freshCount = stats.fresh_leads ?? 0
     const scoped = getScopedMetrics(stats, selectedDealershipId)
-    const unassignedHref = selectedDealershipId
-        ? `/leads?dealership_id=${selectedDealershipId}&filter=unassigned`
-        : "/leads?filter=unassigned"
-    const freshHref = selectedDealershipId
-        ? `/leads?dealership_id=${selectedDealershipId}&filter=fresh`
-        : "/leads?filter=fresh"
+    const unassignedHref = "/leads?filter=unassigned"
+    const freshHref = "/leads?filter=fresh"
 
     return (
         <div className="space-y-8 p-6 pb-10">
@@ -329,7 +325,7 @@ export function BdcDashboard() {
                             </Button>
                         </Link>
                     )}
-                    <Link href={selectedDealershipId ? `/leads?dealership_id=${selectedDealershipId}` : "/leads"}>
+                    <Link href="/leads">
                         <Button leftIcon={<Inbox className="h-4 w-4" />}>
                             View All Leads
                         </Button>

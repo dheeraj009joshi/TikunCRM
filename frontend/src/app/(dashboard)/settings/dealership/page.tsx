@@ -17,11 +17,13 @@ import { TimezonePicker } from "@/components/ui/timezone-picker"
 import { DealershipService, Dealership } from "@/services/dealership-service"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { clearDealershipTimezoneCache } from "@/hooks/use-dealership-timezone"
 
 export default function DealershipSettingsPage() {
     const router = useRouter()
     const { user } = useAuthStore()
+    const orgDealershipId = useOrgDealershipId()
     const { isDealershipAdmin, isDealershipOwner, isSuperAdmin } = useRole()
     
     const [isLoading, setIsLoading] = React.useState(true)
@@ -34,14 +36,15 @@ export default function DealershipSettingsPage() {
     // Load dealership settings
     React.useEffect(() => {
         const loadDealership = async () => {
-            if (!user?.dealership_id) {
+            const dealershipId = orgDealershipId
+            if (!dealershipId) {
                 setIsLoading(false)
                 return
             }
             
             setIsLoading(true)
             try {
-                const data = await DealershipService.getDealership(user.dealership_id)
+                const data = await DealershipService.getDealership(dealershipId)
                 setDealership(data)
                 setTimezone(data.timezone || "UTC")
             } catch (err: any) {
@@ -53,10 +56,10 @@ export default function DealershipSettingsPage() {
         }
         
         loadDealership()
-    }, [user?.dealership_id])
+    }, [orgDealershipId])
     
     const handleSave = async () => {
-        if (!dealership || !user?.dealership_id) return
+        if (!dealership || !orgDealershipId) return
         
         setIsSaving(true)
         setError(null)

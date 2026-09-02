@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/dialog"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import {
     EligibilityService,
     AUTO_FIELD_OPTIONS,
@@ -101,6 +102,7 @@ function buildConfig(form: FormState): CriterionConfig {
 function EligibilitySettingsInner() {
     const searchParams = useSearchParams()
     const { user } = useAuthStore()
+    const orgDealershipId = useOrgDealershipId()
     const { isSuperAdmin, isDealershipAdmin, isDealershipOwner, isBdc } = useRole()
     const canManage = isSuperAdmin || isDealershipAdmin || isDealershipOwner || isBdc
 
@@ -114,9 +116,8 @@ function EligibilitySettingsInner() {
     const dealershipIdFromQuery = searchParams.get("dealership_id")
     const contextDealershipId = React.useMemo(() => {
         if (isSuperAdmin && dealershipIdFromQuery) return dealershipIdFromQuery
-        if (user?.dealership_id) return user.dealership_id
-        return undefined
-    }, [isSuperAdmin, dealershipIdFromQuery, user?.dealership_id])
+        return orgDealershipId ?? user?.dealership_id ?? undefined
+    }, [isSuperAdmin, dealershipIdFromQuery, orgDealershipId, user?.dealership_id])
 
     const load = React.useCallback(async () => {
         setIsLoading(true)

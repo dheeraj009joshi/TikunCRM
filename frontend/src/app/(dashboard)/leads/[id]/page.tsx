@@ -96,6 +96,7 @@ import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/ser
 import { ActivityService, Activity, ACTIVITY_TYPE_INFO, ActivityType } from "@/services/activity-service"
 import { ShowroomService, ShowroomVisit, ShowroomOutcome, getOutcomeLabel } from "@/services/showroom-service"
 import { useRole } from "@/hooks/use-role"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { TeamService, UserBrief } from "@/services/team-service"
 import { useAuthStore } from "@/stores/auth-store"
 import { AssignToDealershipModal, AssignToSalespersonModal, AssignSecondaryCustomerModal } from "@/components/leads/assignment-modal"
@@ -486,6 +487,7 @@ export default function LeadDetailsPage() {
     const noteIdFromUrl = searchParams.get("note")
     const [backToLeadsHref, setBackToLeadsHref] = React.useState("/leads")
     const { canAssignToSalesperson, canAssignToDealership, role, isDealershipLevel, isSuperAdmin, isSalesperson, isBdc } = useRole()
+    const orgDealershipId = useOrgDealershipId()
     const user = useAuthStore(state => state.user)
     const { timezone } = useBrowserTimezone()
     const { toast } = useToast()
@@ -495,6 +497,7 @@ export default function LeadDetailsPage() {
     }, [])
 
     const [lead, setLead] = React.useState<Lead | null>(null)
+    const [fetchError, setFetchError] = React.useState<"not_found" | "forbidden" | null>(null)
     const [activities, setActivities] = React.useState<Activity[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const [isLoadingActivities, setIsLoadingActivities] = React.useState(false)
@@ -715,11 +718,16 @@ export default function LeadDetailsPage() {
     }, [])
 
     const fetchLead = React.useCallback(async () => {
+        setFetchError(null)
         try {
             const data = await LeadService.getLead(leadId)
             setLead(data)
-        } catch (error) {
+        } catch (error: unknown) {
             console.error("Failed to fetch lead:", error)
+            setLead(null)
+            const status = (error as { response?: { status?: number } })?.response?.status
+            if (status === 403) setFetchError("forbidden")
+            else setFetchError("not_found")
         } finally {
             setIsLoading(false)
         }
@@ -2123,14 +2131,19 @@ export default function LeadDetailsPage() {
     }
 
     if (!lead) {
+        const isForbidden = fetchError === "forbidden"
         return (
             <div className="flex h-[50vh] items-center justify-center">
                 <Card className="max-w-md">
                     <CardContent className="p-6 text-center">
                         <AlertCircle className="mx-auto h-12 w-12 text-muted-foreground/20" />
-                        <h2 className="mt-4 text-lg font-semibold">Lead Not Found</h2>
+                        <h2 className="mt-4 text-lg font-semibold">
+                            {isForbidden ? "Access Denied" : "Lead Not Found"}
+                        </h2>
                         <p className="mt-2 text-sm text-muted-foreground">
-                            The lead you're looking for doesn't exist or you don't have access.
+                            {isForbidden
+                                ? "You don't have permission to view this lead. Contact your manager if you believe this is an error."
+                                : "The lead you're looking for doesn't exist or may have been removed."}
                         </p>
                         <Link href={backToLeadsHref}>
                             <Button className="mt-4">Back to Leads</Button>
@@ -2140,6 +2153,8 @@ export default function LeadDetailsPage() {
             </div>
         )
     }
+
+    const effectiveDealershipId = lead.dealership_id ?? orgDealershipId
 
     const isMentionOnly = lead.access_level === "mention_only"
 
@@ -2409,8 +2424,8 @@ export default function LeadDetailsPage() {
                                             variant="outline" 
                                             className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
                                             onClick={handleCheckIn}
-                                            disabled={isCheckingIn || !lead.dealership_id}
-                                            title={!lead.dealership_id ? "Assign this lead to a dealership first (Edit lead or assign from Unassigned Pool)." : undefined}
+                                            disabled={isCheckingIn || !effectiveDealershipId}
+                                            title={!effectiveDealershipId ? "Organization dealership is not configured yet." : undefined}
                                         >
                                             {isCheckingIn ? (
                                                 <Loader2 className="h-4 w-4 mr-2 animate-spin shrink-0" />
@@ -2598,7 +2613,7 @@ export default function LeadDetailsPage() {
                                     <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest">
                                         Assigned To
                                     </p>
-                                    {!isMentionOnly && (canAssignToSalesperson || isDealershipLevel || isSuperAdmin) && lead.dealership_id && (
+                                    {!isMentionOnly && (canAssignToSalesperson || isDealershipLevel || isSuperAdmin) && effectiveDealershipId && (
                                         <div className="flex items-center gap-1">
                                             <Button 
                                                 size="sm" 
@@ -2705,7 +2720,7 @@ export default function LeadDetailsPage() {
                                 )}
                             </div>
 
-                            {(isSuperAdmin || isDealershipLevel || isBdc) && lead.dealership_id && (
+                            {(isSuperAdmin || isDealershipLevel || isBdc) && effectiveDealershipId && (
                                 <div>
                                     <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
                                         BDC Agent
@@ -3259,8 +3274,8 @@ export default function LeadDetailsPage() {
                                     className="w-full justify-start" 
                                     variant="outline"
                                     onClick={handleCheckIn}
-                                    disabled={isCheckingIn || !lead.dealership_id}
-                                    title={!lead.dealership_id ? "Assign this lead to a dealership first (Edit lead or assign from Unassigned Pool)." : undefined}
+                                    disabled={isCheckingIn || !effectiveDealershipId}
+                                    title={!effectiveDealershipId ? "Organization dealership is not configured yet." : undefined}
                                 >
                                     {isCheckingIn ? (
                                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />

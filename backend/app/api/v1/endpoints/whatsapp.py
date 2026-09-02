@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.permissions import UserRole
+from app.core.access_scope import user_can_access_lead
 from app.db.database import get_db
 from app.models.user import User
 from app.models.lead import Lead
@@ -606,11 +607,10 @@ async def send_whatsapp(
             lead_for_window = lead_result.scalar_one_or_none()
             if not lead_for_window:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
-            if current_user.role == UserRole.SALESPERSON and lead_for_window.assigned_to != current_user.id:
+            if not await user_can_access_lead(
+                db, current_user, lead_for_window.dealership_id, lead_for_window.assigned_to
+            ):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-            if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-                if current_user.dealership_id and lead_for_window.dealership_id != current_user.dealership_id:
-                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
             if not await service.is_within_whatsapp_session_window(request.lead_id):
                 return SendWhatsAppResponse(
                     success=False,
@@ -993,11 +993,8 @@ async def get_whatsapp_conversation(
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
-    if current_user.role == UserRole.SALESPERSON and lead.assigned_to != current_user.id:
+    if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-    if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        if current_user.dealership_id and lead.dealership_id != current_user.dealership_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     service = get_whatsapp_conversation_service(db)
     messages = await service.get_conversation(lead_id=lead_id, limit=limit, before=before)
     
@@ -1071,11 +1068,8 @@ async def get_whatsapp_session_window(
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
-    if current_user.role == UserRole.SALESPERSON and lead.assigned_to != current_user.id:
+    if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-    if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        if current_user.dealership_id and lead.dealership_id != current_user.dealership_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     service = get_whatsapp_conversation_service(db)
     within_window, last_inbound_at = await service.get_session_window_state(lead_id)
     return SessionWindowResponse(within_window=within_window, last_inbound_at=last_inbound_at)
@@ -1103,11 +1097,8 @@ async def get_whatsapp_timeline(
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
-    if current_user.role == UserRole.SALESPERSON and lead.assigned_to != current_user.id:
+    if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-    if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        if current_user.dealership_id and lead.dealership_id != current_user.dealership_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     # Fetch WhatsApp messages - get messages BEFORE the cursor (older messages)
     msg_query = select(WhatsAppLog).where(WhatsAppLog.lead_id == lead_id)

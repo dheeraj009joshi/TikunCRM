@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
+from app.core.access_scope import user_can_access_lead
 from app.db.database import get_db
 from app.models.user import User
 from app.models.lead import Lead
@@ -328,12 +329,8 @@ async def get_lead_email_history(
         raise HTTPException(status_code=404, detail="Lead not found")
     
     # Check access
-    if current_user.role == UserRole.SALESPERSON:
-        if lead.assigned_to != current_user.id:
-            raise HTTPException(status_code=403, detail="Not authorized to view this lead's emails")
-    elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        if lead.dealership_id != current_user.dealership_id:
-            raise HTTPException(status_code=403, detail="Not authorized to view this lead's emails")
+    if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
+        raise HTTPException(status_code=403, detail="Not authorized to view this lead's emails")
     
     # Query emails
     query = select(EmailLog).where(EmailLog.lead_id == lead_id)

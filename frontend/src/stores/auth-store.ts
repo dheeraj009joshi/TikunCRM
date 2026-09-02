@@ -10,6 +10,8 @@ export interface User {
     last_name: string;
     role: UserRole;
     dealership_id: string | null;
+    /** Resolved Carvaminos org id from /me (when user.dealership_id is stale/null) */
+    org_dealership_id?: string | null;
     is_active: boolean;
     email_config_verified?: boolean;
     must_change_password?: boolean;

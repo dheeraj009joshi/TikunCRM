@@ -28,11 +28,13 @@ import {
 import { LeadStageService, LeadStage } from "@/services/lead-stage-service"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
 function LeadStagesSettingsInner() {
     const searchParams = useSearchParams()
     const { user } = useAuthStore()
+    const orgDealershipId = useOrgDealershipId()
     const [stages, setStages] = React.useState<LeadStage[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     const [editStage, setEditStage] = React.useState<LeadStage | null>(null)
@@ -50,9 +52,8 @@ function LeadStagesSettingsInner() {
     /** Super Admin + ?dealership_id=… → that dealership; otherwise logged-in user’s dealership; Super Admin without query → global default stages */
     const contextDealershipId = React.useMemo(() => {
         if (isSuperAdmin && dealershipIdFromQuery) return dealershipIdFromQuery
-        if (user?.dealership_id) return user.dealership_id
-        return undefined
-    }, [isSuperAdmin, dealershipIdFromQuery, user?.dealership_id])
+        return orgDealershipId ?? user?.dealership_id ?? undefined
+    }, [isSuperAdmin, dealershipIdFromQuery, orgDealershipId, user?.dealership_id])
 
     const loadStages = React.useCallback(async () => {
         setIsLoading(true)

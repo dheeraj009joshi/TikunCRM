@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import Image from "next/image"
-import { usePathname } from "next/navigation"
+import { usePathname, useSearchParams } from "next/navigation"
 import {
     BarChart3,
     Users,
@@ -170,7 +170,7 @@ const allSidebarItems: SidebarItem[] = [
         name: "Integrations", 
         icon: Share2, 
         href: "/integrations",
-        roles: ["super_admin", "dealership_owner"]  // Dealership Owner can manage integrations
+        roles: ["super_admin", "dealership_admin", "dealership_owner"]  // Manager can manage integrations
     },
     { 
         name: "Settings", 
@@ -200,8 +200,28 @@ interface BadgeCounts {
     whatsappUnread: number
 }
 
+function isSidebarLinkActive(pathname: string, searchParams: URLSearchParams, href: string): boolean {
+    if (href.includes("?")) {
+        const [path, query] = href.split("?", 2)
+        if (pathname !== path) return false
+        const expected = new URLSearchParams(query)
+        for (const [key, value] of expected.entries()) {
+            if (searchParams.get(key) !== value) return false
+        }
+        return true
+    }
+    if (href === "/leads") {
+        return (
+            (pathname === "/leads" || pathname.startsWith("/leads/"))
+            && !searchParams.get("filter")
+        )
+    }
+    return pathname === href || (href !== "/dashboard" && pathname.startsWith(href))
+}
+
 export function Sidebar() {
     const pathname = usePathname()
+    const searchParams = useSearchParams()
     const { user, logout } = useAuthStore()
     const { role, isSuperAdmin, isDealershipAdmin, isSalesperson } = useRole()
     const sidebarContext = useSidebarOptional()
@@ -652,7 +672,7 @@ export function Sidebar() {
                                 </div>
                             )
                         }
-                        const isActive = pathname === item.href || (item.href != null && item.href !== "/dashboard" && pathname.startsWith(item.href))
+                        const isActive = isSidebarLinkActive(pathname, searchParams, item.href!)
                         return (
                             <Link
                                 key={item.href!}

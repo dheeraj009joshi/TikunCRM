@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api import deps
-from app.core.access_scope import get_accessible_dealership_ids
+from app.core.access_scope import is_org_wide_role
 from app.core.permissions import UserRole
 from app.core.timezone import utc_now
 from app.db.database import get_db
@@ -31,22 +31,11 @@ router = APIRouter()
 
 
 async def _scope_filters(db: AsyncSession, current_user: User) -> list:
-    """RBAC scoping: salespeople see their own tasks, managers see their store's."""
-    if current_user.role == UserRole.SUPER_ADMIN:
+    """RBAC scoping: salespeople see their own tasks; org-wide roles see all."""
+    if is_org_wide_role(current_user) or current_user.role == UserRole.SUPER_ADMIN:
         return []
     if current_user.role == UserRole.SALESPERSON:
         return [Task.assigned_to == current_user.id]
-    if current_user.role in (UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER):
-        user_ids_subq = select(User.id).where(User.dealership_id == current_user.dealership_id)
-        return [Task.assigned_to.in_(user_ids_subq)]
-    if current_user.role == UserRole.BDC:
-        accessible = await get_accessible_dealership_ids(db, current_user)
-        if not accessible:
-            return [Task.id.is_(None)]
-        return [
-            (Task.assigned_to == current_user.id)
-            | Task.dealership_id.in_(accessible)
-        ]
     return [Task.assigned_to == current_user.id]
 
 

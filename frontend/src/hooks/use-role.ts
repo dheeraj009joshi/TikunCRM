@@ -53,6 +53,7 @@ const _MANAGER_PERMISSIONS: Permission[] = [
     "update_lead",
     "assign_lead_to_salesperson",
     "connect_lead_to_partner",
+    "manage_partner_stores",
     "view_all_users",
     "view_dealership_users",
     "create_user",

@@ -84,6 +84,7 @@ _MANAGER_PERMISSIONS: Set[Permission] = {
     Permission.UPDATE_LEAD,
     Permission.ASSIGN_LEAD_TO_SALESPERSON,
     Permission.CONNECT_LEAD_TO_PARTNER,
+    Permission.MANAGE_PARTNER_STORES,
 
     # Users — team management
     Permission.VIEW_ALL_USERS,

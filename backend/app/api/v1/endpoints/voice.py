@@ -863,14 +863,7 @@ async def get_call(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied"
         )
-    
-    if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        if current_user.dealership_id and call.dealership_id != current_user.dealership_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied"
-            )
-    
+
     return CallLogResponse(
         id=call.id,
         lead_id=call.lead_id,

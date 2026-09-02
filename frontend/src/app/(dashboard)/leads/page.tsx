@@ -86,6 +86,7 @@ import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/ser
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
 import { useRole } from "@/hooks/use-role"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { useAuthStore } from "@/stores/auth-store"
 import { TeamService } from "@/services/team-service"
 import { cn } from "@/lib/utils"
@@ -172,7 +173,9 @@ export default function LeadsPage() {
     const dealershipIdParam = searchParams.get("dealership_id")
     const { timezone } = useBrowserTimezone()
 
-    const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, isSalesperson, canAssignToSalesperson, hasPermission } = useRole()
+    const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, isSalesperson, isBdc, canAssignToSalesperson, hasPermission } = useRole()
+    const orgDealershipId = useOrgDealershipId()
+    const isOrgWide = isDealershipLevel || isSuperAdmin || isBdc
     const canCreateLead = hasPermission("create_lead")
 
     const [leads, setLeads] = React.useState<Lead[]>([])
@@ -208,7 +211,6 @@ export default function LeadsPage() {
         authUser?.role === "dealership_admin" ||
         authUser?.role === "dealership_owner" ||
         authUser?.role === "super_admin"
-    const isBdc = authUser?.role === "bdc"
 
     const [viewMode, setViewMode] = React.useState<ViewMode>(
         filterParam === "unassigned"
@@ -369,12 +371,16 @@ export default function LeadsPage() {
         }
 
         const urlDealershipId = searchParams.get("dealership_id")
-        if (urlDealershipId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(urlDealershipId)) {
+        if (
+            !isOrgWide
+            && urlDealershipId
+            && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(urlDealershipId)
+        ) {
             setDealershipFilter(urlDealershipId)
         } else {
             setDealershipFilter("all")
         }
-    }, [searchParams])
+    }, [searchParams, isOrgWide])
 
     // List page index in URL (?page=) so Back from lead detail restores the same slice
     React.useEffect(() => {
@@ -468,18 +474,18 @@ export default function LeadsPage() {
     // Load team members for admin/owner salesperson filter
     React.useEffect(() => {
         if (!isDealershipLevel && !isSuperAdmin) return
-        TeamService.getSalespersons(authUser?.dealership_id ?? undefined)
+        TeamService.getSalespersons(orgDealershipId ?? undefined)
             .then((list) => setTeamMembers(list))
             .catch(() => setTeamMembers([]))
-    }, [isDealershipLevel, isSuperAdmin, authUser?.dealership_id])
+    }, [isDealershipLevel, isSuperAdmin, orgDealershipId])
 
     // Load BDC agents for admin/owner BDC filter
     React.useEffect(() => {
         if (!isDealershipLevel && !isSuperAdmin) return
-        TeamService.listBdcAgents(authUser?.dealership_id ?? undefined)
+        TeamService.listBdcAgents(orgDealershipId ?? undefined)
             .then((list) => setBdcAgents(list))
             .catch(() => setBdcAgents([]))
-    }, [isDealershipLevel, isSuperAdmin, authUser?.dealership_id])
+    }, [isDealershipLevel, isSuperAdmin, orgDealershipId])
 
     React.useEffect(() => {
         LeadService.getCampaignFilterOptions().then(setCampaignOptions).catch(() => setCampaignOptions([]))
@@ -531,10 +537,10 @@ export default function LeadsPage() {
         if (assignedTo !== "all") f.assigned_to = assignedTo
         if (bdcAgentFilter !== "all") f.bdc_agent_id = bdcAgentFilter
         if (campaignFilter !== "all") f.campaign = campaignFilter
-        if (dealershipFilter !== "all") f.dealership_id = dealershipFilter
+        if (!isOrgWide && dealershipFilter !== "all") f.dealership_id = dealershipFilter
         if (displayView === "pipeline") f.view = "pipeline"
         return f
-    }, [viewMode, status, source, assignedTo, bdcAgentFilter, campaignFilter, dealershipFilter, displayView])
+    }, [viewMode, status, source, assignedTo, bdcAgentFilter, campaignFilter, dealershipFilter, displayView, isOrgWide])
 
     const applySavedView = React.useCallback(
         (view: SavedView) => {
@@ -608,7 +614,7 @@ export default function LeadsPage() {
         }
         if (assignedTo && assignedTo !== "all") params.assigned_to = assignedTo
         if (bdcAgentFilter && bdcAgentFilter !== "all") params.bdc_agent_id = bdcAgentFilter
-        if (dealershipFilter && dealershipFilter !== "all") params.dealership_id = dealershipFilter
+        if (!isOrgWide && dealershipFilter && dealershipFilter !== "all") params.dealership_id = dealershipFilter
 
         if (dateMode === "single" && specificDate) {
             params.date_from = startOfDay(specificDate).toISOString()
@@ -648,6 +654,7 @@ export default function LeadsPage() {
         assignedTo,
         bdcAgentFilter,
         dealershipFilter,
+        isOrgWide,
         dateMode,
         specificDate,
         dateFrom,
@@ -690,7 +697,7 @@ export default function LeadsPage() {
             if (campaignFilter !== "all") baseParams.campaign_mapping_id = campaignFilter
             if (assignedTo && assignedTo !== "all") baseParams.assigned_to = assignedTo
             if (bdcAgentFilter && bdcAgentFilter !== "all") baseParams.bdc_agent_id = bdcAgentFilter
-            if (dealershipFilter && dealershipFilter !== "all") baseParams.dealership_id = dealershipFilter
+            if (!isOrgWide && dealershipFilter && dealershipFilter !== "all") baseParams.dealership_id = dealershipFilter
 
             // Date range filters
             if (dateMode === "single" && specificDate) {

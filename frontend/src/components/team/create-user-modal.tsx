@@ -24,6 +24,7 @@ import { TeamService } from "@/services/team-service"
 import { getApiErrorMessage } from "@/lib/api-errors"
 import { DealershipService } from "@/services/dealership-service"
 import { useRole } from "@/hooks/use-role"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 
 interface CreateUserModalProps {
     isOpen: boolean
@@ -34,8 +35,7 @@ interface CreateUserModalProps {
 
 const ROLE_OPTIONS = [
     { value: "salesperson", label: "Salesperson" },
-    { value: "dealership_admin", label: "Dealership Admin" },
-    { value: "dealership_manager", label: "Dealership Manager" },
+    { value: "dealership_admin", label: "Manager" },
 ]
 
 const SUPER_ADMIN_ROLE_OPTIONS = [
@@ -46,6 +46,8 @@ const SUPER_ADMIN_ROLE_OPTIONS = [
 
 export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipId }: CreateUserModalProps) {
     const { isSuperAdmin } = useRole()
+    const orgDealershipId = useOrgDealershipId()
+    const resolvedDefaultDealershipId = defaultDealershipId || orgDealershipId || ""
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState("")
     const [dealerships, setDealerships] = React.useState<any[]>([])
@@ -59,7 +61,7 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
         last_name: "",
         phone: "",
         role: "salesperson",
-        dealership_id: defaultDealershipId || "",
+        dealership_id: resolvedDefaultDealershipId,
     })
 
     React.useEffect(() => {
@@ -69,10 +71,10 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
     }, [isOpen, isSuperAdmin])
 
     React.useEffect(() => {
-        if (defaultDealershipId) {
-            setFormData(prev => ({ ...prev, dealership_id: defaultDealershipId }))
+        if (resolvedDefaultDealershipId) {
+            setFormData(prev => ({ ...prev, dealership_id: resolvedDefaultDealershipId }))
         }
-    }, [defaultDealershipId])
+    }, [resolvedDefaultDealershipId])
 
     const loadDealerships = async () => {
         try {
@@ -91,7 +93,7 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
             last_name: "",
             phone: "",
             role: "salesperson",
-            dealership_id: defaultDealershipId || "",
+            dealership_id: resolvedDefaultDealershipId,
         })
         setBdcDealershipIds([])
         setError("")

@@ -389,12 +389,17 @@ async def refresh_access_token(
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
-    current_user: User = Depends(deps.get_current_active_user)
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """
     Get current user information
     """
-    return current_user
+    from app.core.access_scope import resolve_user_dealership_id
+
+    org_id = await resolve_user_dealership_id(db, current_user)
+    data = UserResponse.model_validate(current_user)
+    return data.model_copy(update={"org_dealership_id": org_id})
 
 
 async def _issue_tokens_for_user(db: AsyncSession, user: User) -> dict:

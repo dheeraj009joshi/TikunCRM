@@ -11,6 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
+from app.core.access_scope import (
+    get_accessible_dealership_ids,
+    user_can_access_dealership,
+    resolve_user_dealership_id,
+    is_org_wide_role,
+)
 from app.db.database import get_db
 from app.models.user import User
 from app.models.lead import Lead
@@ -103,9 +109,11 @@ async def list_users(
     """
     query = select(User)
     
-    # Role-based filtering
+    # Role-based filtering — single-org: managers see entire team
     if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        query = query.where(User.dealership_id == current_user.dealership_id)
+        org_id = await resolve_user_dealership_id(db, current_user)
+        if org_id:
+            query = query.where(or_(User.dealership_id == org_id, User.dealership_id.is_(None)))
     elif current_user.role == UserRole.BDC:
         query = query.where(User.id == current_user.id)
     elif current_user.role == UserRole.SALESPERSON:
@@ -346,9 +354,11 @@ async def list_salespersons(
         )
     )
     
-    # Filter by dealership
+    # Filter by dealership — single-org: managers see all org team members
     if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-        query = query.where(User.dealership_id == current_user.dealership_id)
+        org_id = await resolve_user_dealership_id(db, current_user)
+        if org_id:
+            query = query.where(or_(User.dealership_id == org_id, User.dealership_id.is_(None)))
     elif current_user.role == UserRole.BDC:
         if not dealership_id:
             raise HTTPException(

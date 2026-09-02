@@ -104,6 +104,7 @@ class UserResponse(UserBase):
     created_at: datetime
     updated_at: datetime
     config_access_password_set: bool = False
+    org_dealership_id: Optional[UUID] = None
     
     class Config:
         from_attributes = True

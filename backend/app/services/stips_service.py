@@ -122,37 +122,14 @@ async def _lead_access(
     """Load lead and check access; raise HTTPException if not found or no access."""
     from fastapi import HTTPException
     from app.core.permissions import UserRole
-    from app.core.access_scope import user_can_access_dealership
+    from app.core.access_scope import user_can_access_lead
 
     result = await db.execute(select(Lead).where(Lead.id == lead_id))
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    is_unassigned = lead.dealership_id is None
-    if not is_unassigned:
-        has_access = (
-            current_user.role == UserRole.SUPER_ADMIN
-            or (
-                current_user.role == UserRole.SALESPERSON
-                and (
-                    lead.assigned_to == current_user.id
-                    or lead.dealership_id == current_user.dealership_id
-                )
-            )
-            or (
-                current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]
-                and lead.dealership_id == current_user.dealership_id
-            )
-            or (
-                current_user.role == UserRole.BDC
-                and await user_can_access_dealership(db, current_user, lead.dealership_id)
-            )
-        )
-        if not has_access:
-            raise HTTPException(status_code=403, detail="Not authorized to access this lead")
-    else:
-        if current_user.role != UserRole.SUPER_ADMIN and not current_user.dealership_id:
-            raise HTTPException(status_code=403, detail="Not authorized to access this lead")
+    if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
+        raise HTTPException(status_code=403, detail="Not authorized to access this lead")
     return lead
 
 

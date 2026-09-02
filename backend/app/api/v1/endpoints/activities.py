@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.permissions import Permission, UserRole
-from app.core.access_scope import get_accessible_dealership_ids, user_can_access_lead
+from app.core.access_scope import get_accessible_dealership_ids, is_org_wide_role
 from app.db.database import get_db
 from app.models.activity import Activity, ActivityType
 from app.models.lead import Lead
@@ -18,24 +18,6 @@ from app.models.user import User
 from app.schemas.activity import ActivityListResponse, ActivityWithUser
 
 router = APIRouter()
-
-
-def _user_has_lead_access(lead: Lead, current_user: User) -> bool:
-    """Same access logic as get_lead: can this user view this lead (and thus its timeline)?"""
-    if lead.dealership_id is None:
-        if current_user.role == UserRole.SUPER_ADMIN or current_user.dealership_id is not None:
-            return True
-        # Check mention below
-    else:
-        if current_user.role == UserRole.SUPER_ADMIN:
-            return True
-        if current_user.role == UserRole.SALESPERSON:
-            if lead.dealership_id == current_user.dealership_id:
-                return True
-        elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-            if lead.dealership_id == current_user.dealership_id:
-                return True
-    return False
 
 
 @router.get("/", response_model=ActivityListResponse)
@@ -85,14 +67,14 @@ async def list_activities(
         # No lead_id: apply role-based filter (e.g. salesperson sees only their own activities)
         if current_user.role == UserRole.SALESPERSON:
             query = query.where(Activity.user_id == current_user.id)
-        elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
-            query = query.where(Activity.dealership_id == current_user.dealership_id)
         elif current_user.role == UserRole.BDC:
             accessible_ids = await get_accessible_dealership_ids(db, current_user)
-            if accessible_ids:
-                query = query.where(Activity.dealership_id.in_(accessible_ids))
-            else:
-                query = query.where(Activity.id.is_(None))
+            if accessible_ids is not None:
+                if not accessible_ids:
+                    query = query.where(Activity.id.is_(None))
+                else:
+                    query = query.where(Activity.dealership_id.in_(accessible_ids))
+        # Managers and super admin: org-wide — no dealership filter
     
     # Additional filters
     if user_id:
