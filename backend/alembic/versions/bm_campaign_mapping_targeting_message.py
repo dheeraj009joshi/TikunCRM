@@ -16,14 +16,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "campaign_mappings",
-        sa.Column(
-            "targeting_message",
-            sa.Text(),
-            nullable=True,
-            comment="Targeting or audience description shown on hover in campaign mappings UI",
-        ),
+    # Idempotent: column may already exist if applied manually after a deploy
+    # that shipped the ORM field before this migration ran.
+    op.execute(
+        sa.text(
+            "ALTER TABLE campaign_mappings "
+            "ADD COLUMN IF NOT EXISTS targeting_message TEXT"
+        )
     )
 
 
