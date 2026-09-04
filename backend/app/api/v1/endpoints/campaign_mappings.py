@@ -1,8 +1,8 @@
 """
-Campaign Mappings Endpoints (Dealership Admin/Owner)
+Campaign Mappings Endpoints (Manager / BDC / Super Admin)
 
-Allows Dealership Admin/Owner to view and edit display names for
-campaign mappings assigned to their dealership.
+Allows managers, BDC agents, and super admins to view and edit display names
+and targeting messages for campaign mappings assigned to their organization.
 """
 import logging
 from typing import Any, Dict, List, Set
@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.permissions import UserRole
+from app.core.access_scope import resolve_user_dealership_id
 from app.db.database import get_db
 from app.models.campaign_mapping import CampaignMapping
 from app.models.lead import Lead
@@ -56,9 +57,10 @@ async def get_lead_counts_by_mapping(
     return {row[0]: row[1] for row in rows}
 
 
-def get_dealership_admin_or_higher():
+def get_campaign_mapping_editor():
     """
-    Dependency to require dealership admin, owner, or super admin.
+    Manager (dealership admin/owner), Super Admin, or BDC can view/edit
+    display names and targeting messages.
     """
     async def _check_role(
         current_user: User = Depends(deps.get_current_active_user),
@@ -67,15 +69,43 @@ def get_dealership_admin_or_higher():
             UserRole.SUPER_ADMIN,
             UserRole.DEALERSHIP_OWNER,
             UserRole.DEALERSHIP_ADMIN,
+            UserRole.BDC,
         }
         if current_user.role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only dealership admins, owners, or super admins can access this resource"
+                detail="Only managers, BDC agents, or super admins can access campaign mappings",
             )
         return current_user
     
     return _check_role
+
+
+async def _assert_can_edit_mapping(
+    db: AsyncSession,
+    current_user: User,
+    mapping: CampaignMapping,
+) -> None:
+    """Super Admin: any. Others: mapping must belong to their org dealership."""
+    if current_user.role == UserRole.SUPER_ADMIN:
+        return
+
+    org_id = await resolve_user_dealership_id(db, current_user)
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not assigned to a dealership",
+        )
+
+    mapping_dealership_id = mapping.dealership_id
+    if mapping_dealership_id is None and mapping.sync_source:
+        mapping_dealership_id = mapping.sync_source.default_dealership_id
+
+    if mapping_dealership_id != org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only edit mappings assigned to your organization",
+        )
 
 
 def _build_mapping_response(
@@ -112,13 +142,13 @@ def _build_mapping_response(
 @router.get("/", response_model=DealershipCampaignMappingList)
 async def list_my_campaign_mappings(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_dealership_admin_or_higher()),
+    current_user: User = Depends(get_campaign_mapping_editor()),
 ) -> Any:
     """
-    List campaign mappings for the current user's dealership.
+    List campaign mappings for the current user's organization.
     
     - Super Admin: sees all mappings across all dealerships
-    - Dealership Owner/Admin: sees mappings assigned to their dealership
+    - Manager / BDC: sees mappings for their org (Carvaminos)
     """
     if current_user.role == UserRole.SUPER_ADMIN:
         # Super admin sees all mappings
@@ -146,16 +176,16 @@ async def list_my_campaign_mappings(
             total=len(items),
         )
     
-    # Dealership admin/owner - get their dealership
-    if not current_user.dealership_id:
+    org_id = await resolve_user_dealership_id(db, current_user)
+    if not org_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User is not assigned to a dealership"
+            detail="User is not assigned to a dealership",
         )
     
     # Get dealership info
     dealership_result = await db.execute(
-        select(Dealership).where(Dealership.id == current_user.dealership_id)
+        select(Dealership).where(Dealership.id == org_id)
     )
     dealership = dealership_result.scalar_one_or_none()
     if not dealership:
@@ -172,10 +202,10 @@ async def list_my_campaign_mappings(
     ).where(
         CampaignMapping.is_active == True,
         or_(
-            CampaignMapping.dealership_id == current_user.dealership_id,
+            CampaignMapping.dealership_id == org_id,
             # Mapping inherits from sync source
             (CampaignMapping.dealership_id.is_(None)) & 
-            (LeadSyncSource.default_dealership_id == current_user.dealership_id)
+            (LeadSyncSource.default_dealership_id == org_id)
         )
     ).options(
         selectinload(CampaignMapping.sync_source),
@@ -205,13 +235,13 @@ async def update_campaign_display_name(
     *,
     db: AsyncSession = Depends(get_db),
     update_in: CampaignMappingDisplayNameUpdate,
-    current_user: User = Depends(get_dealership_admin_or_higher()),
+    current_user: User = Depends(get_campaign_mapping_editor()),
 ) -> Any:
     """
-    Update only the display name for a campaign mapping.
+    Update display name and targeting message for a campaign mapping.
     
     - Super Admin: can update any mapping
-    - Dealership Owner/Admin: can only update mappings assigned to their dealership
+    - Manager / BDC: can update mappings for their organization
     """
     # Get the mapping with its sync source and whatsapp template
     query = select(CampaignMapping).where(
@@ -230,35 +260,22 @@ async def update_campaign_display_name(
             detail="Campaign mapping not found"
         )
     
-    # Check permission
-    if current_user.role != UserRole.SUPER_ADMIN:
-        if not current_user.dealership_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User is not assigned to a dealership"
-            )
-        
-        # Check if mapping belongs to user's dealership
-        mapping_dealership_id = mapping.dealership_id
-        if mapping_dealership_id is None and mapping.sync_source:
-            mapping_dealership_id = mapping.sync_source.default_dealership_id
-        
-        if mapping_dealership_id != current_user.dealership_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only edit mappings assigned to your dealership"
-            )
+    await _assert_can_edit_mapping(db, current_user, mapping)
     
-    # Update only the display name
     old_display_name = mapping.display_name
+    old_targeting = mapping.targeting_message
     mapping.display_name = update_in.display_name
+    # Apply targeting_message when sent (including empty string to clear)
+    if "targeting_message" in update_in.model_fields_set:
+        mapping.targeting_message = (update_in.targeting_message or "").strip() or None
     mapping.updated_by = current_user.id
     
     await db.commit()
     await db.refresh(mapping)
     
     logger.info(
-        f"Campaign mapping display name updated: '{old_display_name}' -> '{mapping.display_name}' "
+        f"Campaign mapping updated: display '{old_display_name}' -> '{mapping.display_name}', "
+        f"targeting '{old_targeting}' -> '{mapping.targeting_message}' "
         f"by {current_user.email} (role: {current_user.role})"
     )
     
@@ -272,13 +289,10 @@ async def update_campaign_display_name(
 async def get_campaign_mapping(
     mapping_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_dealership_admin_or_higher()),
+    current_user: User = Depends(get_campaign_mapping_editor()),
 ) -> Any:
     """
     Get a specific campaign mapping.
-    
-    - Super Admin: can view any mapping
-    - Dealership Owner/Admin: can only view mappings assigned to their dealership
     """
     query = select(CampaignMapping).where(
         CampaignMapping.id == mapping_id
@@ -296,24 +310,7 @@ async def get_campaign_mapping(
             detail="Campaign mapping not found"
         )
     
-    # Check permission
-    if current_user.role != UserRole.SUPER_ADMIN:
-        if not current_user.dealership_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User is not assigned to a dealership"
-            )
-        
-        # Check if mapping belongs to user's dealership
-        mapping_dealership_id = mapping.dealership_id
-        if mapping_dealership_id is None and mapping.sync_source:
-            mapping_dealership_id = mapping.sync_source.default_dealership_id
-        
-        if mapping_dealership_id != current_user.dealership_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only view mappings assigned to your dealership"
-            )
+    await _assert_can_edit_mapping(db, current_user, mapping)
     
     # Get actual lead count dynamically
     lead_counts = await get_lead_counts_by_mapping(db, {mapping.id})
@@ -327,7 +324,7 @@ async def update_campaign_whatsapp_template(
     *,
     db: AsyncSession = Depends(get_db),
     update_in: CampaignWhatsAppTemplateUpdate,
-    current_user: User = Depends(get_dealership_admin_or_higher()),
+    current_user: User = Depends(get_campaign_mapping_editor()),
 ) -> Any:
     """
     Update WhatsApp template assignment for a campaign mapping.
@@ -355,24 +352,7 @@ async def update_campaign_whatsapp_template(
             detail="Campaign mapping not found"
         )
     
-    # Check permission
-    if current_user.role != UserRole.SUPER_ADMIN:
-        if not current_user.dealership_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User is not assigned to a dealership"
-            )
-        
-        # Check if mapping belongs to user's dealership
-        mapping_dealership_id = mapping.dealership_id
-        if mapping_dealership_id is None and mapping.sync_source:
-            mapping_dealership_id = mapping.sync_source.default_dealership_id
-        
-        if mapping_dealership_id != current_user.dealership_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only update mappings assigned to your dealership"
-            )
+    await _assert_can_edit_mapping(db, current_user, mapping)
     
     # Validate template exists and is accessible if provided
     if update_in.whatsapp_template_id is not None:

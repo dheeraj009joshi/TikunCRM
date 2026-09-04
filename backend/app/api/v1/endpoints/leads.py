@@ -1721,17 +1721,36 @@ async def get_lead(
             }
 
     # Primary campaign mapping (targeting message shown near source on lead detail)
+    mapping = None
     if getattr(lead, "campaign_mapping_id", None):
         mapping_result = await db.execute(
             select(CampaignMapping).where(CampaignMapping.id == lead.campaign_mapping_id)
         )
         mapping = mapping_result.scalar_one_or_none()
-        if mapping:
-            response_data["campaign_mapping"] = {
-                "id": mapping.id,
-                "display_name": mapping.display_name,
-                "targeting_message": mapping.targeting_message,
-            }
+
+    # Fallback: resolve by source_display / display_name when FK is missing
+    if mapping is None:
+        meta = lead.meta_data if isinstance(getattr(lead, "meta_data", None), dict) else {}
+        source_label = (meta.get("source_display") or "").strip()
+        if source_label:
+            fallback_result = await db.execute(
+                select(CampaignMapping)
+                .where(
+                    CampaignMapping.is_active == True,
+                    CampaignMapping.display_name == source_label,
+                )
+                .limit(1)
+            )
+            mapping = fallback_result.scalar_one_or_none()
+
+    if mapping:
+        response_data["campaign_mapping"] = {
+            "id": mapping.id,
+            "display_name": mapping.display_name,
+            "targeting_message": mapping.targeting_message,
+        }
+        if not response_data.get("campaign_mapping_id"):
+            response_data["campaign_mapping_id"] = mapping.id
     
     # Fetch campaigns for multi-campaign tracking
     if lead.is_starred:

@@ -96,10 +96,11 @@ const settingsSections: SettingSection[] = [
     },
     {
         title: "Campaign mappings",
-        description: "Sheet campaign display names and WhatsApp template per campaign",
+        description: "Sheet campaign display names, targeting messages, and WhatsApp templates",
         href: "/settings/campaign-mappings",
         icon: Tag,
         adminOnly: true,
+        allowBdc: true,
     },
     {
         title: "Lead Sync Sources",

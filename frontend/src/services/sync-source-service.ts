@@ -324,11 +324,15 @@ export async function getCampaignMapping(mappingId: string): Promise<DealershipC
 
 export async function updateCampaignMappingDisplayName(
     mappingId: string,
-    displayName: string
+    displayName: string,
+    targetingMessage?: string | null
 ): Promise<DealershipCampaignMappingResponse> {
     const response = await apiClient.put<DealershipCampaignMappingResponse>(
         `${CAMPAIGN_MAPPINGS_PREFIX}/${mappingId}/display-name`,
-        { display_name: displayName }
+        {
+            display_name: displayName,
+            targeting_message: targetingMessage ?? null,
+        }
     );
     return response.data;
 }

@@ -43,8 +43,13 @@ class CampaignMappingUpdate(BaseModel):
 
 
 class CampaignMappingDisplayNameUpdate(BaseModel):
-    """Schema for updating only display name (Dealership Admin/Owner)"""
+    """Schema for updating display name + targeting message (Manager / BDC / Super Admin)"""
     display_name: str = Field(..., min_length=1, max_length=255, description="New display name")
+    targeting_message: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="Targeting/audience notes shown on lead details near the source",
+    )
 
 
 class DealershipBrief(BaseModel):

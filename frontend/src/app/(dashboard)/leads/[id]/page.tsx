@@ -65,7 +65,6 @@ import {
 import { MentionInput } from "@/components/ui/mention-input"
 import { Button } from "@/components/ui/button"
 import { Badge, getStatusVariant, getSourceVariant, getRoleVariant } from "@/components/ui/badge"
-import { CampaignTargetingInfo } from "@/components/campaigns/campaign-targeting-info"
 import { UserAvatar } from "@/components/ui/avatar"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -2168,6 +2167,8 @@ export default function LeadDetailsPage() {
     const isMentionOnly = lead.access_level === "mention_only"
 
     const sourceLabel = (lead.source_display ?? lead.source)?.replace(/_/g, " ") ?? ""
+    const campaignDisplay =
+        lead.campaign_mapping?.display_name?.trim() || sourceLabel
     const primaryTargeting = lead.campaign_mapping?.targeting_message?.trim() || ""
     const extraTargeting = (lead.campaigns || [])
         .map((c) => ({
@@ -2175,6 +2176,7 @@ export default function LeadDetailsPage() {
             message: c.targeting_message?.trim() || "",
         }))
         .filter((c) => c.message && c.message !== primaryTargeting)
+    const hasCampaignMapping = Boolean(lead.campaign_mapping)
 
     return (
         <div className="h-[calc(100vh-120px)] flex flex-col max-w-7xl mx-auto overflow-hidden">
@@ -2185,12 +2187,9 @@ export default function LeadDetailsPage() {
                     Back to Leads
                 </Link>
                 <div className="flex items-center gap-2 min-w-0 flex-wrap justify-end">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                        <Badge variant={getSourceVariant(lead.source)} className="max-w-[280px] truncate" title={sourceLabel}>
-                            {sourceLabel}
-                        </Badge>
-                        <CampaignTargetingInfo message={primaryTargeting} />
-                    </div>
+                    <Badge variant={getSourceVariant(lead.source)} className="max-w-[280px] truncate" title={campaignDisplay || sourceLabel}>
+                        {campaignDisplay || sourceLabel || "—"}
+                    </Badge>
                     <span className="text-xs text-muted-foreground whitespace-nowrap">
                         Created <LocalTime date={lead.created_at} />
                     </span>
@@ -2208,14 +2207,23 @@ export default function LeadDetailsPage() {
                 </div>
             </div>
 
-            {(primaryTargeting || extraTargeting.length > 0) && (
+            {(hasCampaignMapping || sourceLabel) && (
                 <div className="shrink-0 mb-3 rounded-lg border border-sky-200 bg-sky-50 dark:border-sky-900 dark:bg-sky-950/30 px-3 py-2 text-sm">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300 mb-1">
-                        Campaign targeting
-                    </p>
-                    {primaryTargeting && (
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">
+                            Campaign
+                        </p>
+                        <Badge variant="secondary" className="text-xs max-w-[320px] truncate">
+                            {campaignDisplay || sourceLabel}
+                        </Badge>
+                    </div>
+                    {primaryTargeting ? (
                         <p className="text-sky-950 dark:text-sky-100 whitespace-pre-wrap">
                             {primaryTargeting}
+                        </p>
+                    ) : (
+                        <p className="text-sky-800/70 dark:text-sky-200/70 italic text-xs">
+                            No targeting message set. Managers / BDC can add one under Settings → Campaign mappings.
                         </p>
                     )}
                     {extraTargeting.map((item) => (

@@ -7,7 +7,6 @@ import {
     Loader2,
     AlertCircle,
     Save,
-    X,
     Tag,
     Building2,
     MessageSquare,
@@ -16,6 +15,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
@@ -43,7 +43,6 @@ import {
     updateCampaignWhatsAppTemplate,
 } from "@/services/sync-source-service"
 import { whatsappService, WhatsAppTemplateItem } from "@/services/whatsapp-service"
-import { CampaignDisplayWithTargeting } from "@/components/campaigns/campaign-targeting-info"
 
 /** Radix Select rejects empty string as SelectItem value — use this sentinel for "no template". */
 const NO_WHATSAPP_TEMPLATE = "__none__"
@@ -52,10 +51,14 @@ export default function CampaignMappingsPage() {
     const [mappings, setMappings] = React.useState<DealershipCampaignMappingResponse[]>([])
     const [templates, setTemplates] = React.useState<WhatsAppTemplateItem[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
-    const [editingId, setEditingId] = React.useState<string | null>(null)
-    const [editValue, setEditValue] = React.useState("")
     const [isSaving, setIsSaving] = React.useState(false)
-    
+
+    // Edit display + targeting dialog
+    const [editDialogOpen, setEditDialogOpen] = React.useState(false)
+    const [editingMapping, setEditingMapping] = React.useState<DealershipCampaignMappingResponse | null>(null)
+    const [editDisplayName, setEditDisplayName] = React.useState("")
+    const [editTargetingMessage, setEditTargetingMessage] = React.useState("")
+
     // WhatsApp template dialog state
     const [whatsappDialogOpen, setWhatsappDialogOpen] = React.useState(false)
     const [selectedMapping, setSelectedMapping] = React.useState<DealershipCampaignMappingResponse | null>(null)
@@ -63,9 +66,9 @@ export default function CampaignMappingsPage() {
     const [autoSendEnabled, setAutoSendEnabled] = React.useState(false)
     const [isSavingWhatsApp, setIsSavingWhatsApp] = React.useState(false)
     const [templatesLoadError, setTemplatesLoadError] = React.useState<string | null>(null)
-    
-    const { isSuperAdmin, isDealershipAdmin, isDealershipOwner } = useRole()
-    const canEdit = isSuperAdmin || isDealershipAdmin || isDealershipOwner
+
+    const { isSuperAdmin, isDealershipAdmin, isDealershipOwner, isBdc } = useRole()
+    const canEdit = isSuperAdmin || isDealershipAdmin || isDealershipOwner || isBdc
     const { toast } = useToast()
 
     const loadMappings = React.useCallback(async () => {
@@ -109,46 +112,45 @@ export default function CampaignMappingsPage() {
         }
     }, [loadMappings, loadTemplates, canEdit])
 
-    const startEdit = (mapping: DealershipCampaignMappingResponse) => {
-        setEditingId(mapping.id)
-        setEditValue(mapping.display_name)
+    const openEditDialog = (mapping: DealershipCampaignMappingResponse) => {
+        setEditingMapping(mapping)
+        setEditDisplayName(mapping.display_name)
+        setEditTargetingMessage(mapping.targeting_message ?? "")
+        setEditDialogOpen(true)
     }
 
-    const cancelEdit = () => {
-        setEditingId(null)
-        setEditValue("")
+    const closeEditDialog = () => {
+        setEditDialogOpen(false)
+        setEditingMapping(null)
+        setEditDisplayName("")
+        setEditTargetingMessage("")
     }
 
     const saveEdit = async () => {
-        if (!editingId || !editValue.trim()) return
-        
+        if (!editingMapping || !editDisplayName.trim()) return
+
         setIsSaving(true)
         try {
-            await updateCampaignMappingDisplayName(editingId, editValue.trim())
+            await updateCampaignMappingDisplayName(
+                editingMapping.id,
+                editDisplayName.trim(),
+                editTargetingMessage.trim() || null
+            )
             toast({
                 title: "Success",
-                description: "Display name updated successfully",
+                description: "Display name and targeting message updated",
             })
-            setEditingId(null)
-            setEditValue("")
+            closeEditDialog()
             await loadMappings()
         } catch (error: any) {
-            console.error("Failed to update display name:", error)
+            console.error("Failed to update campaign mapping:", error)
             toast({
                 title: "Error",
-                description: error.response?.data?.detail || "Failed to update display name",
+                description: error.response?.data?.detail || "Failed to update campaign mapping",
                 variant: "destructive",
             })
         } finally {
             setIsSaving(false)
-        }
-    }
-
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === "Enter") {
-            saveEdit()
-        } else if (e.key === "Escape") {
-            cancelEdit()
         }
     }
 
@@ -168,7 +170,7 @@ export default function CampaignMappingsPage() {
 
     const saveWhatsAppSettings = async () => {
         if (!selectedMapping) return
-        
+
         setIsSavingWhatsApp(true)
         try {
             const templateId =
@@ -204,7 +206,7 @@ export default function CampaignMappingsPage() {
                     <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                     <h2 className="text-lg font-semibold">Access Denied</h2>
                     <p className="text-muted-foreground">
-                        Only Dealership Admins, Owners, or Super Admins can edit campaign mappings.
+                        Only Managers, BDC agents, or Super Admins can edit campaign mappings.
                     </p>
                 </div>
             </div>
@@ -223,7 +225,7 @@ export default function CampaignMappingsPage() {
     const groupedMappings = mappings.reduce((acc, mapping) => {
         const sourceId = mapping.sync_source_id
         const sourceName = mapping.sync_source_name || "Unknown Source"
-        
+
         if (!acc[sourceId]) {
             acc[sourceId] = {
                 name: sourceName,
@@ -239,8 +241,8 @@ export default function CampaignMappingsPage() {
             <div>
                 <h1 className="text-2xl font-bold tracking-tight">Campaign mappings</h1>
                 <p className="text-muted-foreground">
-                    Edit display names for each sheet campaign and assign WhatsApp templates (green icon per row).
-                    Hover the info icon beside a display name to see targeting notes.
+                    Edit the display name and targeting message for each sheet campaign.
+                    Both appear on lead detail. Assign WhatsApp templates with the green icon.
                 </p>
             </div>
 
@@ -279,10 +281,10 @@ export default function CampaignMappingsPage() {
                                     {group.mappings.map((mapping) => (
                                         <div
                                             key={mapping.id}
-                                            className="flex items-center justify-between p-3 bg-muted/30 rounded-lg"
+                                            className="flex items-start justify-between gap-3 p-3 bg-muted/30 rounded-lg"
                                         >
-                                            <div className="flex-1 min-w-0 mr-4">
-                                                <div className="flex items-center gap-2 mb-1">
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2 mb-1 flex-wrap">
                                                     <span className="text-xs text-muted-foreground">
                                                         Pattern:
                                                     </span>
@@ -293,51 +295,28 @@ export default function CampaignMappingsPage() {
                                                         {mapping.match_type}
                                                     </Badge>
                                                 </div>
-                                                
-                                                {editingId === mapping.id ? (
-                                                    <div className="flex items-center gap-2 mt-2">
-                                                        <Input
-                                                            value={editValue}
-                                                            onChange={(e) => setEditValue(e.target.value)}
-                                                            onKeyDown={handleKeyDown}
-                                                            className="h-8"
-                                                            placeholder="Display name..."
-                                                            autoFocus
-                                                        />
-                                                        <Button
-                                                            size="icon"
-                                                            className="h-8 w-8"
-                                                            onClick={saveEdit}
-                                                            disabled={isSaving || !editValue.trim()}
-                                                        >
-                                                            {isSaving ? (
-                                                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                                            ) : (
-                                                                <Save className="h-3.5 w-3.5" />
-                                                            )}
-                                                        </Button>
-                                                        <Button
-                                                            size="icon"
-                                                            variant="ghost"
-                                                            className="h-8 w-8"
-                                                            onClick={cancelEdit}
-                                                        >
-                                                            <X className="h-3.5 w-3.5" />
-                                                        </Button>
-                                                    </div>
-                                                ) : (
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-xs text-muted-foreground">
-                                                            Display:
-                                                        </span>
-                                                        <CampaignDisplayWithTargeting
-                                                            displayName={mapping.display_name}
-                                                            targetingMessage={mapping.targeting_message}
-                                                        />
-                                                    </div>
-                                                )}
-                                                
-                                                <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+
+                                                <div className="mt-1">
+                                                    <span className="text-xs text-muted-foreground">Display: </span>
+                                                    <span className="text-sm font-medium">{mapping.display_name}</span>
+                                                </div>
+
+                                                <div className="mt-2 rounded-md border border-border/60 bg-background/60 px-2.5 py-2">
+                                                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-0.5">
+                                                        Targeting message
+                                                    </p>
+                                                    {mapping.targeting_message?.trim() ? (
+                                                        <p className="text-sm whitespace-pre-wrap">
+                                                            {mapping.targeting_message.trim()}
+                                                        </p>
+                                                    ) : (
+                                                        <p className="text-sm text-muted-foreground italic">
+                                                            No targeting message set — click edit to add one
+                                                        </p>
+                                                    )}
+                                                </div>
+
+                                                <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
                                                     <span>
                                                         {mapping.leads_matched} leads matched
                                                     </span>
@@ -347,7 +326,7 @@ export default function CampaignMappingsPage() {
                                                         </Badge>
                                                     )}
                                                 </div>
-                                                
+
                                                 {/* WhatsApp Template Info */}
                                                 <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border/50">
                                                     <MessageSquare className="h-3.5 w-3.5 text-green-600" />
@@ -370,19 +349,17 @@ export default function CampaignMappingsPage() {
                                                     )}
                                                 </div>
                                             </div>
-                                            
+
                                             <div className="flex flex-col gap-1 shrink-0">
-                                                {editingId !== mapping.id && (
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-8 w-8"
-                                                        onClick={() => startEdit(mapping)}
-                                                        title="Edit display name"
-                                                    >
-                                                        <Pencil className="h-3.5 w-3.5" />
-                                                    </Button>
-                                                )}
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-8 w-8"
+                                                    onClick={() => openEditDialog(mapping)}
+                                                    title="Edit display name & targeting message"
+                                                >
+                                                    <Pencil className="h-3.5 w-3.5" />
+                                                </Button>
                                                 <Button
                                                     variant="ghost"
                                                     size="icon"
@@ -405,12 +382,12 @@ export default function CampaignMappingsPage() {
             <Card className="bg-muted/30">
                 <CardContent className="py-4">
                     <p className="text-sm text-muted-foreground">
-                        <strong>Note:</strong> You can edit the display name and configure WhatsApp templates for campaigns. 
-                        The display name is what your team sees when viewing leads. 
-                        WhatsApp templates can be set to auto-send when new leads match the campaign.
+                        <strong>Note:</strong> The display name is the green source tag on leads.
+                        The targeting message appears next to it so agents know the campaign audience / pitch.
+                        WhatsApp templates can auto-send when new leads match the campaign.
                         {isSuperAdmin && (
                             <span className="block mt-1">
-                                As a Super Admin, you can manage all mapping settings in{" "}
+                                As a Super Admin, you can also manage mappings in{" "}
                                 <a href="/settings/sync-sources" className="text-primary underline">
                                     Sync Sources
                                 </a>.
@@ -419,6 +396,62 @@ export default function CampaignMappingsPage() {
                     </p>
                 </CardContent>
             </Card>
+
+            {/* Edit display name + targeting message */}
+            <Dialog open={editDialogOpen} onOpenChange={(open) => !open && closeEditDialog()}>
+                <DialogContent className="sm:max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>Edit campaign mapping</DialogTitle>
+                        <DialogDescription>
+                            Pattern: <code className="text-xs">{editingMapping?.match_pattern}</code>
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-2">
+                        <div className="space-y-2">
+                            <Label htmlFor="display-name">Display name</Label>
+                            <Input
+                                id="display-name"
+                                value={editDisplayName}
+                                onChange={(e) => setEditDisplayName(e.target.value)}
+                                placeholder="e.g. Spanish Broad Targeting"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Shown as the source badge on lead detail.
+                            </p>
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="targeting-message">Targeting message</Label>
+                            <Textarea
+                                id="targeting-message"
+                                value={editTargetingMessage}
+                                onChange={(e) => setEditTargetingMessage(e.target.value)}
+                                placeholder="Audience notes, offer, language, vehicle focus…"
+                                rows={4}
+                                className="resize-y"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Visible under the source badge on every matching lead.
+                            </p>
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={closeEditDialog}>
+                            Cancel
+                        </Button>
+                        <Button
+                            onClick={saveEdit}
+                            disabled={isSaving || !editDisplayName.trim()}
+                        >
+                            {isSaving ? (
+                                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                            ) : (
+                                <Save className="h-4 w-4 mr-2" />
+                            )}
+                            Save
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             {/* WhatsApp Template Dialog */}
             <Dialog open={whatsappDialogOpen} onOpenChange={setWhatsappDialogOpen}>
@@ -432,7 +465,7 @@ export default function CampaignMappingsPage() {
                             Configure WhatsApp template for campaign: <strong>{selectedMapping?.display_name}</strong>
                         </DialogDescription>
                     </DialogHeader>
-                    
+
                     <div className="space-y-4 py-2 min-w-0">
                         <div className="space-y-2 min-w-0">
                             <Label htmlFor="template">WhatsApp Template</Label>
