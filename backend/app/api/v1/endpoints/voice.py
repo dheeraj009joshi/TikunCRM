@@ -1224,13 +1224,22 @@ async def handle_incoming_call(
 
         if users_to_dial:
             user_identities = [service.client_identity_for_user(u) for u in users_to_dial]
+            lead_uuid = lead.id if lead else None
             if len(user_identities) == 1:
                 twiml = service.generate_twiml_for_incoming(
-                    user_identities[0], timeout=45, wake_pause_seconds=2
+                    user_identities[0],
+                    timeout=45,
+                    wake_pause_seconds=2,
+                    lead_id=lead_uuid,
+                    lead_name=lead_name,
                 )
             else:
                 twiml = service.generate_twiml_ring_group(
-                    user_identities, timeout=45, wake_pause_seconds=2
+                    user_identities,
+                    timeout=45,
+                    wake_pause_seconds=2,
+                    lead_id=lead_uuid,
+                    lead_name=lead_name,
                 )
                 logger.info(
                     "Ring group for call %s: notify=%d dial=%d (dialing=%s)",

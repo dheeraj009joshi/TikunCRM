@@ -72,10 +72,15 @@ export function IncomingCallModal({
             <User className="h-10 w-10 text-primary" />
           </div>
 
-          <h2 className="text-xl font-semibold mb-1">
+          <h2 className="text-xl font-semibold mb-1 text-center px-2">
             {call?.leadName || "Unknown Caller"}
           </h2>
-          <p className="text-muted-foreground mb-6">{call?.from}</p>
+          <p className="text-muted-foreground mb-1">{call?.from}</p>
+          {call?.leadName ? (
+            <p className="text-xs text-muted-foreground mb-6">Matched existing lead</p>
+          ) : (
+            <div className="mb-6" />
+          )}
 
           <p className="text-sm text-muted-foreground mb-2 animate-pulse">
             {isCallWaiting ? "Call waiting..." : "Incoming call..."}

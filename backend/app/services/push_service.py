@@ -134,6 +134,7 @@ class PushService:
             "call_sid": call_sid or "",
             "call_log_id": str(call_log_id) if call_log_id else "",
             "lead_id": str(lead_id) if lead_id else "",
+            "lead_name": lead_name or "",
             "from_number": from_number or "",
         }
         total = 0

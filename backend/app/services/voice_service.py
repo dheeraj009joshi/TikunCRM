@@ -1164,13 +1164,18 @@ class VoiceService:
         record: bool = True,
         timeout: int = 45,
         wake_pause_seconds: int = 2,
+        lead_id: Optional[UUID] = None,
+        lead_name: Optional[str] = None,
     ) -> str:
         """Generate TwiML for incoming call - routes to WebRTC client.
 
         A short Pause gives FCM time to wake background tabs so Twilio Device
         can re-register before Dial starts. Longer timeout covers wake races.
+
+        lead_id / lead_name are passed as <Client><Parameter> so the softphone
+        popup can show the matched customer name (same as push notifications).
         """
-        from twilio.twiml.voice_response import VoiceResponse, Dial
+        from twilio.twiml.voice_response import VoiceResponse, Dial, Client
 
         base = settings.backend_url.rstrip("/")
         status_url = f"{base}/api/v1/voice/webhook/status"
@@ -1188,12 +1193,14 @@ class VoiceService:
             recording_status_callback=recording_url,
             recording_status_callback_event="completed",
         )
-        dial.client(
+        client = Client(
             client_identity,
             status_callback=client_status_url,
             status_callback_event="answered completed",
             status_callback_method="POST",
         )
+        self._attach_lead_params_to_client(client, lead_id=lead_id, lead_name=lead_name)
+        dial.append(client)
         response.append(dial)
 
         return str(response)
@@ -1224,12 +1231,28 @@ class VoiceService:
         response.hangup()
         return str(response)
 
+    @staticmethod
+    def _attach_lead_params_to_client(
+        client,
+        *,
+        lead_id: Optional[UUID] = None,
+        lead_name: Optional[str] = None,
+    ) -> None:
+        """Attach lead identity so Twilio Device customParameters populate the UI."""
+        if lead_id:
+            client.parameter(name="lead_id", value=str(lead_id))
+        if lead_name:
+            # Keep Parameter values compact for Twilio / Client invite size limits
+            client.parameter(name="lead_name", value=lead_name.strip()[:120])
+
     def generate_twiml_ring_group(
         self,
         user_identities: List[str],
         timeout: int = 45,
         record: bool = True,
         wake_pause_seconds: int = 2,
+        lead_id: Optional[UUID] = None,
+        lead_name: Optional[str] = None,
     ) -> str:
         """
         Generate TwiML for ring group - rings multiple WebRTC clients simultaneously.
@@ -1240,7 +1263,7 @@ class VoiceService:
         Short Pause + longer timeout give background tabs time to wake via FCM
         and re-register Twilio before Dial times out.
         """
-        from twilio.twiml.voice_response import VoiceResponse, Dial
+        from twilio.twiml.voice_response import VoiceResponse, Dial, Client
 
         base = settings.backend_url.rstrip("/")
         status_url = f"{base}/api/v1/voice/webhook/status"
@@ -1274,12 +1297,14 @@ class VoiceService:
         )
 
         for identity in user_identities:
-            dial.client(
+            client = Client(
                 identity,
                 status_callback=client_status_url,
                 status_callback_event="answered completed",
                 status_callback_method="POST",
             )
+            self._attach_lead_params_to_client(client, lead_id=lead_id, lead_name=lead_name)
+            dial.append(client)
 
         response.append(dial)
         return str(response)

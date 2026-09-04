@@ -82,6 +82,14 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   const protectIncomingUntilRef = useRef(0);
   /** User tapped Accept on the push notification before the Twilio invite arrived */
   const pendingAutoAcceptRef = useRef(false);
+  /** WS may deliver lead_name before the Twilio invite — stash until the modal opens */
+  const pendingIncomingMetaRef = useRef<{
+    callSid?: string;
+    fromNumber?: string;
+    callLogId?: string;
+    leadId?: string;
+    leadName?: string;
+  } | null>(null);
   incomingCallRef.current = incomingCall;
   activeCallRef.current = currentCallInfo;
 
@@ -156,9 +164,9 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
     [matchesIncomingCall, dismissIncomingLocally]
   );
 
-  // Enrich incoming call info with parent SID / callLogId from backend WS event.
+  // Enrich incoming call info with parent SID / callLogId / lead name from backend WS.
   // Twilio's SDK doesn't always provide ParentCallSid for <Client> ring groups,
-  // but our backend sends it via WS which makes call:answered matching reliable.
+  // and older TwiML may omit lead_name Parameters — WS fills the popup.
   useWebSocketEvent(
     "call:incoming",
     (payload: {
@@ -168,6 +176,15 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       lead_id?: string;
       lead_name?: string;
     }) => {
+      const meta = {
+        callSid: payload.call_sid,
+        fromNumber: payload.from_number,
+        callLogId: payload.call_log_id,
+        leadId: payload.lead_id,
+        leadName: payload.lead_name,
+      };
+      pendingIncomingMetaRef.current = meta;
+
       const incoming = incomingCallRef.current;
       if (!incoming) return;
       // Match by from number or if parentCallSid already matches
@@ -181,6 +198,12 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
         }
         if (payload.call_log_id) {
           incoming.callLogId = payload.call_log_id;
+        }
+        if (payload.lead_id) {
+          incoming.leadId = payload.lead_id;
+        }
+        if (payload.lead_name) {
+          incoming.leadName = payload.lead_name;
         }
         setIncomingCall({ ...incoming });
       }
@@ -326,6 +349,28 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
           }
         },
         onIncomingCall: (call, info) => {
+          // Merge lead identity from WS if it arrived before this Twilio invite
+          const pending = pendingIncomingMetaRef.current;
+          if (pending) {
+            const fromDigits = info.from.replace(/\D/g, "");
+            const pendingDigits = (pending.fromNumber || "").replace(/\D/g, "");
+            const fromMatch =
+              !!pendingDigits &&
+              fromDigits.length >= 7 &&
+              pendingDigits.length >= 7 &&
+              (fromDigits.endsWith(pendingDigits.slice(-10)) ||
+                pendingDigits.endsWith(fromDigits.slice(-10)));
+            const sidMatch =
+              !!pending.callSid &&
+              (info.callSid === pending.callSid || info.parentCallSid === pending.callSid);
+            if (fromMatch || sidMatch) {
+              if (pending.callSid && !info.parentCallSid) info.parentCallSid = pending.callSid;
+              if (pending.callLogId) info.callLogId = pending.callLogId;
+              if (pending.leadId) info.leadId = pending.leadId;
+              if (pending.leadName) info.leadName = pending.leadName;
+            }
+          }
+
           // Allow call-waiting: second inbound while on a call still shows the modal
           setIncomingCall(info);
           if (!activeCallRef.current) {
