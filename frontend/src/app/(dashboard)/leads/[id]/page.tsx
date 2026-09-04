@@ -100,6 +100,7 @@ import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { TeamService, UserBrief } from "@/services/team-service"
 import { useAuthStore } from "@/stores/auth-store"
 import { AssignToDealershipModal, AssignToSalespersonModal, AssignSecondaryCustomerModal } from "@/components/leads/assignment-modal"
+import { AssignPartnerStore } from "@/components/leads/assign-partner-store"
 import { LogContactModal } from "@/components/leads/log-contact-modal"
 import { StageStepper } from "@/components/leads/stage-stepper"
 import { NextBestAction } from "@/components/leads/next-best-action"
@@ -486,7 +487,7 @@ export default function LeadDetailsPage() {
     const leadId = params.id as string
     const noteIdFromUrl = searchParams.get("note")
     const [backToLeadsHref, setBackToLeadsHref] = React.useState("/leads")
-    const { canAssignToSalesperson, canAssignToDealership, role, isDealershipLevel, isSuperAdmin, isSalesperson, isBdc } = useRole()
+    const { canAssignToSalesperson, canAssignToDealership, canConnectToPartner, role, isDealershipLevel, isSuperAdmin, isSalesperson, isBdc } = useRole()
     const orgDealershipId = useOrgDealershipId()
     const user = useAuthStore(state => state.user)
     const { timezone } = useBrowserTimezone()
@@ -2604,6 +2605,38 @@ export default function LeadDetailsPage() {
                                             </Button>
                                         )}
                             </div>
+                                )}
+                            </div>
+
+                            {/* Partner Store */}
+                            <div>
+                                <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
+                                    Partner Store
+                                </p>
+                                {!isMentionOnly && canConnectToPartner ? (
+                                    <AssignPartnerStore
+                                        leadId={lead.id}
+                                        currentPartnerStoreId={lead.partner_store_id}
+                                        currentPartnerStoreName={lead.partner_store?.name}
+                                        onAssigned={(partner) => {
+                                            setLead((prev) =>
+                                                prev
+                                                    ? {
+                                                          ...prev,
+                                                          partner_store_id: partner?.id ?? null,
+                                                          partner_store: partner,
+                                                      }
+                                                    : prev
+                                            )
+                                        }}
+                                    />
+                                ) : lead.partner_store?.name ? (
+                                    <p className="font-medium flex items-center gap-2 text-sm">
+                                        <Store className="h-4 w-4 text-primary" />
+                                        {lead.partner_store.name}
+                                    </p>
+                                ) : (
+                                    <p className="text-sm text-muted-foreground">Not assigned</p>
                                 )}
                             </div>
                             

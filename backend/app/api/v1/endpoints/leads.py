@@ -2625,7 +2625,6 @@ async def connect_lead_to_partner(
     )
 
     await db.commit()
-    await db.refresh(lead)
 
     try:
         from app.services.notification_service import emit_lead_updated
@@ -2641,7 +2640,8 @@ async def connect_lead_to_partner(
     except Exception as e:
         logger.error(f"Failed to emit partner_connected WebSocket event: {e}")
 
-    return lead
+    enriched = await enrich_leads_with_relations(db, [lead])
+    return enriched[0] if enriched else lead
 
 
 @router.delete("/{lead_id}/connect-partner", response_model=LeadResponse)
@@ -2666,8 +2666,9 @@ async def disconnect_lead_from_partner(
     lead.partner_connected_at = None
 
     await db.commit()
-    await db.refresh(lead)
-    return lead
+
+    enriched = await enrich_leads_with_relations(db, [lead])
+    return enriched[0] if enriched else lead
 
 
 @router.post("/{lead_id}/notes", response_model=LeadResponse)
