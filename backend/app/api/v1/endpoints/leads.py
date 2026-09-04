@@ -33,6 +33,7 @@ from app.models.dealership import Dealership
 from app.models.lead_campaign import LeadCampaign
 from app.models.campaign_mapping import CampaignMapping
 from app.models.lead_sync_source import LeadSyncSource
+from app.models.partner_store import PartnerStore
 from app.schemas.lead import (
     LeadResponse, LeadCreate, LeadUpdate, LeadDetail,
     LeadStageChangeRequest, LeadStatusUpdateCompat, LeadAssignment, LeadListResponse,
@@ -378,7 +379,7 @@ async def auto_assign_on_first_activity(
 
 
 async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
-    """Add customer, stage, assigned_to_user, secondary_salesperson, and dealership info to leads."""
+    """Add customer, stage, assigned_to_user, secondary_salesperson, dealership, and partner_store info to leads."""
     if not leads:
         return []
 
@@ -387,6 +388,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
     dealership_ids = set()
     customer_ids = set()
     stage_ids = set()
+    partner_store_ids = set()
     for lead in leads:
         if lead.assigned_to:
             user_ids.add(lead.assigned_to)
@@ -404,6 +406,8 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             customer_ids.add(lead.secondary_customer_id)
         if lead.stage_id:
             stage_ids.add(lead.stage_id)
+        if getattr(lead, "partner_store_id", None):
+            partner_store_ids.add(lead.partner_store_id)
 
     # Fetch customers
     customers_map = {}
@@ -457,6 +461,19 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
         dealership_result = await db.execute(select(Dealership).where(Dealership.id.in_(dealership_ids)))
         for dealership in dealership_result.scalars().all():
             dealerships_map[dealership.id] = {"id": str(dealership.id), "name": dealership.name}
+
+    # Fetch partner stores
+    partner_stores_map = {}
+    if partner_store_ids:
+        partner_result = await db.execute(
+            select(PartnerStore).where(PartnerStore.id.in_(partner_store_ids))
+        )
+        for store in partner_result.scalars().all():
+            partner_stores_map[store.id] = {
+                "id": str(store.id),
+                "name": store.name,
+                "brand": store.brand,
+            }
 
     # Activity count per lead (for "fresh" / untouched indicator: only creation activity = 1)
     lead_ids = [l.id for l in leads]
@@ -520,6 +537,8 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "interested_in": lead.interested_in,
             "budget_range": lead.budget_range,
             "down_payment": float(lead.down_payment) if getattr(lead, "down_payment", None) is not None else None,
+            "partner_store_id": str(lead.partner_store_id) if getattr(lead, "partner_store_id", None) else None,
+            "partner_store": partner_stores_map.get(lead.partner_store_id) if getattr(lead, "partner_store_id", None) else None,
             "has_ssn_stip": bool(getattr(lead, "has_ssn_stip", False)),
             "has_dl_stip": bool(getattr(lead, "has_dl_stip", False)),
             "is_business": getattr(lead, "is_business", None),

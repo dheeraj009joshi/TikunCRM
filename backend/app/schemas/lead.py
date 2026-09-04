@@ -238,6 +238,7 @@ class LeadResponse(BaseModel):
     down_payment: Optional[float] = None
     partner_store_id: Optional[UUID] = None
     partner_connected_at: Optional[datetime] = None
+    partner_store: Optional[PartnerStoreBrief] = None
     has_ssn_stip: bool = False
     has_dl_stip: bool = False
     is_business: Optional[bool] = None
@@ -303,7 +304,6 @@ class LeadDetail(LeadResponse):
     bdc_assigned_to_user: Optional[UserBrief] = None
     created_by_user: Optional[UserBrief] = None
     dealership: Optional[DealershipBrief] = None
-    partner_store: Optional[PartnerStoreBrief] = None
     access_level: Optional[str] = None
 
 

@@ -29,6 +29,7 @@ import {
     ExternalLink,
     Columns3,
     Flame,
+    Store,
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -133,7 +134,7 @@ const OPTIONAL_COLUMNS: { key: string; label: string }[] = [
     { key: "status", label: "Status" },
     { key: "source", label: "Source" },
     { key: "heat", label: "Heat" },
-    { key: "down_payment", label: "Down Payment" },
+    { key: "partner_store", label: "Partner Store" },
     { key: "assigned_to", label: "Assigned To" },
     { key: "notes", label: "Notes" },
     { key: "last_action", label: "Last action" },
@@ -141,6 +142,12 @@ const OPTIONAL_COLUMNS: { key: string; label: string }[] = [
 ]
 const DEFAULT_COLUMNS = OPTIONAL_COLUMNS.map((c) => c.key)
 const COLUMNS_STORAGE_KEY = "tikuncrm-leads-columns"
+
+/** Migrate saved column prefs: down_payment → partner_store */
+function normalizeVisibleColumns(keys: string[]): string[] {
+    const mapped = keys.map((k) => (k === "down_payment" ? "partner_store" : k))
+    return mapped.filter((k) => DEFAULT_COLUMNS.includes(k))
+}
 
 /** Heat indicator derived from interest score + recency; server heat_score wins when present */
 function getLeadHeat(lead: Lead): { score: number; level: "hot" | "warm" | "cold" } {
@@ -512,7 +519,7 @@ export default function LeadsPage() {
             const raw = localStorage.getItem(COLUMNS_STORAGE_KEY)
             if (raw) {
                 const parsed = JSON.parse(raw)
-                if (Array.isArray(parsed)) return parsed.filter((k) => DEFAULT_COLUMNS.includes(k))
+                if (Array.isArray(parsed)) return normalizeVisibleColumns(parsed)
             }
         } catch {}
         return DEFAULT_COLUMNS
@@ -558,7 +565,7 @@ export default function LeadsPage() {
             if (f.view === "pipeline") params.set("view", "pipeline")
             router.push(`/leads?${params.toString()}`)
             if (view.columns && view.columns.length > 0) {
-                const cols = view.columns.filter((k) => DEFAULT_COLUMNS.includes(k))
+                const cols = normalizeVisibleColumns(view.columns)
                 setVisibleColumns(cols)
                 try {
                     localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(cols))
@@ -1556,7 +1563,7 @@ export default function LeadsPage() {
                             {showCol("status") && <TableHead>Status</TableHead>}
                             {showCol("source") && <TableHead>Source</TableHead>}
                             {showCol("heat") && <TableHead>Heat</TableHead>}
-                            {showCol("down_payment") && <TableHead>Down Payment</TableHead>}
+                            {showCol("partner_store") && <TableHead>Partner Store</TableHead>}
                             {isBdc && <TableHead>Dealership</TableHead>}
                             {showCol("assigned_to") && <TableHead>Assigned To</TableHead>}
                             {showCol("notes") && <TableHead className="max-w-[140px]">Notes</TableHead>}
@@ -1732,19 +1739,18 @@ export default function LeadsPage() {
                                         })()}
                                     </TableCell>
                                     )}
-                                    {showCol("down_payment") && (
+                                    {showCol("partner_store") && (
                                     <TableCell>
-                                        {(() => {
-                                            const meta = lead.meta_data as Record<string, unknown> | undefined
-                                            const downpayment = meta?.downpayment != null ? String(meta.downpayment) : null
-                                            return downpayment ? (
-                                                <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                                                    {downpayment}
+                                        {lead.partner_store?.name ? (
+                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                <Store className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                                <span className="text-sm font-medium truncate" title={lead.partner_store.name}>
+                                                    {lead.partner_store.name}
                                                 </span>
-                                            ) : (
-                                                <span className="text-xs text-muted-foreground">—</span>
-                                            )
-                                        })()}
+                                            </div>
+                                        ) : (
+                                            <span className="text-xs text-muted-foreground">—</span>
+                                        )}
                                     </TableCell>
                                     )}
                                     {isBdc && (
