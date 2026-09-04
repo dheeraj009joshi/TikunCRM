@@ -2176,21 +2176,40 @@ export default function LeadDetailsPage() {
             message: c.targeting_message?.trim() || "",
         }))
         .filter((c) => c.message && c.message !== primaryTargeting)
-    const hasCampaignMapping = Boolean(lead.campaign_mapping)
 
     return (
         <div className="h-[calc(100vh-120px)] flex flex-col max-w-7xl mx-auto overflow-hidden">
             {/* Navigation */}
-            <div className="flex items-center justify-between shrink-0 mb-4 gap-3">
+            <div className="flex items-start justify-between shrink-0 mb-4 gap-3">
                 <Link href={backToLeadsHref} className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors duration-200 rounded-md hover:bg-muted/50 px-2 py-1 -mx-2 -my-1">
                     <ChevronLeft className="h-4 w-4 shrink-0" />
                     Back to Leads
                 </Link>
-                <div className="flex items-center gap-2 min-w-0 flex-wrap justify-end">
-                    <Badge variant={getSourceVariant(lead.source)} className="max-w-[280px] truncate" title={campaignDisplay || sourceLabel}>
-                        {campaignDisplay || sourceLabel || "—"}
-                    </Badge>
-                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                <div className="flex items-start gap-2 min-w-0 flex-wrap justify-end">
+                    <div className="min-w-0 max-w-[min(100%,28rem)] text-right">
+                        <Badge
+                            variant={getSourceVariant(lead.source)}
+                            className="max-w-full truncate"
+                            title={campaignDisplay || sourceLabel}
+                        >
+                            {campaignDisplay || sourceLabel || "—"}
+                        </Badge>
+                        {primaryTargeting ? (
+                            <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap text-right leading-snug">
+                                {primaryTargeting}
+                            </p>
+                        ) : null}
+                        {extraTargeting.map((item) => (
+                            <p
+                                key={item.label}
+                                className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap text-right leading-snug"
+                            >
+                                <span className="font-medium text-foreground/80">{item.label}:</span>{" "}
+                                {item.message}
+                            </p>
+                        ))}
+                    </div>
+                    <span className="text-xs text-muted-foreground whitespace-nowrap pt-0.5">
                         Created <LocalTime date={lead.created_at} />
                     </span>
                     {isSuperAdmin && !isMentionOnly && (
@@ -2206,33 +2225,6 @@ export default function LeadDetailsPage() {
                     )}
                 </div>
             </div>
-
-            {(hasCampaignMapping || sourceLabel) && (
-                <div className="shrink-0 mb-3 rounded-lg border border-sky-200 bg-sky-50 dark:border-sky-900 dark:bg-sky-950/30 px-3 py-2 text-sm">
-                    <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">
-                            Campaign
-                        </p>
-                        <Badge variant="secondary" className="text-xs max-w-[320px] truncate">
-                            {campaignDisplay || sourceLabel}
-                        </Badge>
-                    </div>
-                    {primaryTargeting ? (
-                        <p className="text-sky-950 dark:text-sky-100 whitespace-pre-wrap">
-                            {primaryTargeting}
-                        </p>
-                    ) : (
-                        <p className="text-sky-800/70 dark:text-sky-200/70 italic text-xs">
-                            No targeting message set. Managers / BDC can add one under Settings → Campaign mappings.
-                        </p>
-                    )}
-                    {extraTargeting.map((item) => (
-                        <p key={item.label} className="mt-1.5 text-sky-900/90 dark:text-sky-100/90 whitespace-pre-wrap">
-                            <span className="font-medium">{item.label}:</span> {item.message}
-                        </p>
-                    ))}
-                </div>
-            )}
 
             {isMentionOnly && (
                 <div className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-4 py-2 text-sm text-amber-800 dark:text-amber-200">
