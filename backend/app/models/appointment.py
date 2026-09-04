@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from app.models.lead import Lead
     from app.models.user import User
     from app.models.dealership import Dealership
+    from app.models.partner_store import PartnerStore
 
 
 class AppointmentType(str, Enum):
@@ -121,6 +122,14 @@ class Appointment(Base):
     # Location (for in-person) or meeting link (for video calls)
     location: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     meeting_link: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # Partner store the customer is interested in / appointment is for
+    partner_store_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("partner_stores.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     
     # Reminders
     reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -158,6 +167,10 @@ class Appointment(Base):
     dealership: Mapped[Optional["Dealership"]] = relationship(
         "Dealership",
         lazy="noload"
+    )
+    partner_store: Mapped[Optional["PartnerStore"]] = relationship(
+        "PartnerStore",
+        lazy="noload",
     )
     scheduled_by_user: Mapped[Optional["User"]] = relationship(
         "User",

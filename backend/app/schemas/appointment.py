@@ -27,6 +27,7 @@ class AppointmentCreate(AppointmentBase):
     """Schema for creating an appointment"""
     lead_id: UUID  # Required - every appointment must be linked to a lead
     assigned_to: Optional[UUID] = None
+    partner_store_id: Optional[UUID] = None  # Partner the appointment / interest is for
     confirm_skate: bool = False  # If True, user confirmed they want to proceed despite SKATE warning
 
 
@@ -41,6 +42,7 @@ class AppointmentUpdate(BaseModel):
     meeting_link: Optional[str] = Field(None, max_length=500)
     status: Optional[AppointmentStatus] = None
     assigned_to: Optional[UUID] = None
+    partner_store_id: Optional[UUID] = None
 
 
 class AppointmentComplete(BaseModel):
@@ -102,11 +104,22 @@ class DealershipBrief(BaseModel):
         from_attributes = True
 
 
+class PartnerStoreBrief(BaseModel):
+    """Brief partner store info for appointments"""
+    id: UUID
+    name: str
+    brand: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class AppointmentResponse(AppointmentBase):
     """Full appointment response"""
     id: UUID
     lead_id: Optional[UUID] = None
     dealership_id: Optional[UUID] = None
+    partner_store_id: Optional[UUID] = None
     scheduled_by: Optional[UUID] = None
     assigned_to: Optional[UUID] = None
     status: AppointmentStatus
@@ -119,6 +132,7 @@ class AppointmentResponse(AppointmentBase):
     # Nested objects (optional, included when loaded)
     lead: Optional[LeadBrief] = None
     dealership: Optional[DealershipBrief] = None
+    partner_store: Optional[PartnerStoreBrief] = None
     scheduled_by_user: Optional[UserBrief] = None
     assigned_to_user: Optional[UserBrief] = None
     

@@ -987,6 +987,9 @@ async def create_lead(
     elif current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
         dealership_id = await resolve_user_dealership_id(db, current_user)
     elif current_user.role == UserRole.BDC:
+        # Single-org: default manual leads to Carvaminos when the client omits dealership_id
+        if not dealership_id:
+            dealership_id = await resolve_user_dealership_id(db, current_user)
         if not dealership_id:
             raise HTTPException(
                 status_code=400,

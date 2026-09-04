@@ -48,6 +48,7 @@ import {
 } from "@/services/appointment-service"
 import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { TeamService, UserBrief } from "@/services/team-service"
+import { PartnerStoreService, PartnerStore } from "@/services/partner-store-service"
 import { useDealershipTimezone, useDealershipTimezoneMap } from "@/hooks/use-dealership-timezone"
 import { formatDateInDealershipTimezone, getTimezoneAbbreviation } from "@/utils/timezone"
 import { useAuthStore } from "@/stores/auth-store"
@@ -197,6 +198,9 @@ function CreateAppointmentModal({
     const [location, setLocation] = React.useState("")
     const [notes, setNotes] = React.useState("")
     const [leadId, setLeadId] = React.useState(preselectedLead?.id || "")
+    const [partnerStoreId, setPartnerStoreId] = React.useState("")
+    const [partnerStores, setPartnerStores] = React.useState<PartnerStore[]>([])
+    const [loadingPartners, setLoadingPartners] = React.useState(false)
 
     // Guest profile handoff: after booking, capture the guest and share a QR.
     const [view, setView] = React.useState<"form" | "guest">("form")
@@ -228,6 +232,16 @@ function CreateAppointmentModal({
             }
         }
     }, [isOpen, preselectedLead, isAdmin])
+
+    // Load partner stores when modal opens
+    React.useEffect(() => {
+        if (!isOpen) return
+        setLoadingPartners(true)
+        PartnerStoreService.list({ active_only: true })
+            .then((res) => setPartnerStores(res.items || []))
+            .catch(console.error)
+            .finally(() => setLoadingPartners(false))
+    }, [isOpen])
     
     // Reset form when modal opens
     React.useEffect(() => {
@@ -243,6 +257,7 @@ function CreateAppointmentModal({
             setLocation("")
             setNotes("")
             setLeadId(preselectedLead?.id || "")
+            setPartnerStoreId(preselectedLead?.partner_store_id || "")
             setError(null)
             setCalendarOpen(false)
             setAssignedTo("auto")
@@ -272,6 +287,9 @@ function CreateAppointmentModal({
                     setAssignedTo(lead.assigned_to)
                 } else {
                     setLeadAssignedToUser(null)
+                }
+                if (lead.partner_store_id) {
+                    setPartnerStoreId(lead.partner_store_id)
                 }
                 const dealershipId = lead.dealership_id || user?.dealership_id
                 if (dealershipId) {
@@ -308,6 +326,10 @@ function CreateAppointmentModal({
             setError("Date and time are required")
             return
         }
+        if (!partnerStoreId) {
+            setError("Please select a partner store")
+            return
+        }
         
         setIsLoading(true)
         
@@ -325,6 +347,7 @@ function CreateAppointmentModal({
                 location: location || undefined,
                 lead_id: leadId,
                 assigned_to: isAdmin ? (assignedTo !== "auto" ? assignedTo : undefined) : undefined,
+                partner_store_id: partnerStoreId,
             })
 
             const appointmentId = (result as { id?: string })?.id || null
@@ -560,6 +583,37 @@ function CreateAppointmentModal({
                         </div>
                     </div>
                     
+                    {/* Partner store (required) */}
+                    <div className="space-y-2">
+                        <Label className="flex items-center gap-2">
+                            <Store className="h-4 w-4" />
+                            Partner Store *
+                        </Label>
+                        {loadingPartners ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Loading partners…
+                            </div>
+                        ) : (
+                            <Select value={partnerStoreId || undefined} onValueChange={setPartnerStoreId}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select partner (e.g. Toyota South Atlanta)" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {partnerStores.map((store) => (
+                                        <SelectItem key={store.id} value={store.id}>
+                                            {store.name}
+                                            {store.brand ? ` (${store.brand})` : ""}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        )}
+                        <p className="text-xs text-muted-foreground">
+                            Links this appointment (and the lead) to the partner dealer.
+                        </p>
+                    </div>
+
                     {/* Location */}
                     <div className="space-y-2">
                         <Label htmlFor="location">Location</Label>

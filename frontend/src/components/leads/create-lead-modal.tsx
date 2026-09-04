@@ -23,7 +23,7 @@ import {
 import { LeadService, Lead } from "@/services/lead-service"
 import { DealershipService } from "@/services/dealership-service"
 import { useAuthStore } from "@/stores/auth-store"
-import { useBdcDealershipOptional } from "@/contexts/bdc-dealership-context"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { getCountryAndDial, formatPhoneForDisplay, toE164, DIAL_CODE_OPTIONS } from "@/lib/phone-utils"
 
 interface CreateLeadModalProps {
@@ -44,14 +44,14 @@ const LEAD_SOURCES = [
 
 export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalProps) {
     const user = useAuthStore((s) => s.user)
-    const bdcCtx = useBdcDealershipOptional()
+    const orgDealershipId = useOrgDealershipId()
     const isBdc = user?.role === "bdc"
 
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState("")
     const [dialCode, setDialCode] = React.useState("+1")
     const [countryCode, setCountryCode] = React.useState("US")
-    const [dealershipId, setDealershipId] = React.useState<string>("")
+    const [orgDealershipName, setOrgDealershipName] = React.useState("Carvaminos")
 
     const [formData, setFormData] = React.useState({
         first_name: "",
@@ -65,32 +65,14 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
         notes: "",
     })
 
-    const bdcDealerships = bdcCtx?.dealerships ?? []
-
-    // Prefill BDC dealership from global selector when modal opens
-    React.useEffect(() => {
-        if (!isOpen || !isBdc) {
-            if (!isOpen) setDealershipId("")
-            return
-        }
-        const preferred = bdcCtx?.selectedDealershipId
-        if (preferred && bdcDealerships.some((d) => d.id === preferred)) {
-            setDealershipId(preferred)
-        } else if (bdcDealerships.length === 1) {
-            setDealershipId(bdcDealerships[0].id)
-        } else {
-            setDealershipId("")
-        }
-    }, [isOpen, isBdc, bdcCtx?.selectedDealershipId, bdcDealerships])
-
-    // Default phone country from selected (BDC) or user's dealership
+    // Default phone country from org (Carvaminos) dealership
     React.useEffect(() => {
         if (!isOpen) {
             setDialCode("+1")
             setCountryCode("US")
             return
         }
-        const id = isBdc ? dealershipId || null : user?.dealership_id || null
+        const id = orgDealershipId || user?.dealership_id || null
         if (!id) {
             setDialCode("+1")
             setCountryCode("US")
@@ -101,12 +83,13 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                 const { countryCode: code, dialCode: dial } = getCountryAndDial(d.country ?? undefined)
                 setCountryCode(code)
                 setDialCode(dial)
+                if (d.name) setOrgDealershipName(d.name)
             })
             .catch(() => {
                 setDialCode("+1")
                 setCountryCode("US")
             })
-    }, [isOpen, isBdc, dealershipId, user?.dealership_id])
+    }, [isOpen, orgDealershipId, user?.dealership_id])
 
     const resetForm = () => {
         setFormData({
@@ -120,7 +103,6 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
             budget_range: "",
             notes: "",
         })
-        setDealershipId("")
         setError("")
     }
 
@@ -143,8 +125,8 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
             return
         }
 
-        if (isBdc && !dealershipId) {
-            setError("Please select a dealership for this lead")
+        if (isBdc && !orgDealershipId) {
+            setError("Organization dealership is not available. Please refresh and try again.")
             return
         }
 
@@ -159,8 +141,9 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                 ? toE164(formData.alternate_phone, dialCode)
                 : undefined,
         }
-        if (isBdc && dealershipId) {
-            payload.dealership_id = dealershipId
+        // BDC manual leads always go to Carvaminos (single-org)
+        if (isBdc && orgDealershipId) {
+            payload.dealership_id = orgDealershipId
         }
 
         try {
@@ -198,34 +181,14 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                 <form onSubmit={handleSubmit} className="space-y-4">
                     {isBdc && (
                         <div className="space-y-2">
-                            <Label htmlFor="dealership">Dealership *</Label>
-                            <Select
-                                value={dealershipId || undefined}
-                                onValueChange={setDealershipId}
-                                disabled={bdcCtx?.isLoading}
-                            >
-                                <SelectTrigger id="dealership" className="w-full">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                        <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                        <SelectValue placeholder="Select dealership" />
-                                    </div>
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {bdcDealerships.map((d) => (
-                                        <SelectItem key={d.id} value={d.id}>
-                                            {d.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                            <Label>Dealership</Label>
+                            <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                                <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                <span className="font-medium">{orgDealershipName}</span>
+                            </div>
                             <p className="text-xs text-muted-foreground">
-                                Lead will be assigned to this dealership.
+                                Manual leads are added to Carvaminos by default.
                             </p>
-                            {!bdcCtx?.isLoading && bdcDealerships.length === 0 && (
-                                <p className="text-xs text-destructive">
-                                    You have no dealership access. Ask an admin to grant access.
-                                </p>
-                            )}
                         </div>
                     )}
 
@@ -376,7 +339,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                         </Button>
                         <Button
                             type="submit"
-                            disabled={isLoading || (isBdc && (!dealershipId || bdcDealerships.length === 0))}
+                            disabled={isLoading || (isBdc && !orgDealershipId)}
                         >
                             {isLoading && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                             Create Lead

@@ -22,6 +22,7 @@ from app.models.lead import Lead
 from app.models.appointment import Appointment, AppointmentStatus, AppointmentType
 from app.models.activity import ActivityType
 from app.models.notification import NotificationType
+from app.models.partner_store import PartnerStore
 from app.services.activity import ActivityService
 from app.services.notification_service import NotificationService, send_skate_alert_background, emit_stats_refresh
 from app.utils.skate_helper import check_skate_condition
@@ -37,6 +38,14 @@ from app.schemas.appointment import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_APPOINTMENT_LOAD_OPTIONS = (
+    selectinload(Appointment.lead).selectinload(Lead.customer),
+    selectinload(Appointment.dealership),
+    selectinload(Appointment.partner_store),
+    selectinload(Appointment.scheduled_by_user),
+    selectinload(Appointment.assigned_to_user),
+)
 
 
 def get_date_range_for_today():
@@ -141,6 +150,20 @@ async def create_appointment(
     if not assigned_to_id:
         assigned_to_id = current_user.id
 
+    partner_store_id = appointment_in.partner_store_id
+    if partner_store_id:
+        store_result = await db.execute(
+            select(PartnerStore).where(
+                PartnerStore.id == partner_store_id,
+                PartnerStore.is_active.is_(True),
+            )
+        )
+        if not store_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Partner store not found or inactive",
+            )
+
     # Create appointment
     appointment = Appointment(
         title=appointment_in.title,
@@ -152,6 +175,7 @@ async def create_appointment(
         meeting_link=appointment_in.meeting_link,
         lead_id=appointment_in.lead_id,
         dealership_id=dealership_id,
+        partner_store_id=partner_store_id,
         scheduled_by=current_user.id,
         assigned_to=assigned_to_id,
         status=AppointmentStatus.SCHEDULED
@@ -159,6 +183,16 @@ async def create_appointment(
     
     db.add(appointment)
     await db.flush()
+
+    # Also connect the lead to this partner when booking
+    if partner_store_id and appointment.lead_id:
+        lead_for_partner = await db.execute(
+            select(Lead).where(Lead.id == appointment.lead_id)
+        )
+        lead_row = lead_for_partner.scalar_one_or_none()
+        if lead_row:
+            lead_row.partner_store_id = partner_store_id
+            lead_row.partner_connected_at = utc_now()
     
     # Log activity if associated with a lead
     if appointment.lead_id:
@@ -166,6 +200,15 @@ async def create_appointment(
         description = f"Appointment scheduled: {appointment_title}"
         if is_skate_action:
             description = f"[SKATE] {description}"
+        meta = {
+            "appointment_id": str(appointment.id),
+            "appointment_type": appointment.appointment_type.value,
+            "scheduled_at": appointment.scheduled_at.isoformat(),
+            "performer_name": current_user.full_name,
+            "is_skate_action": is_skate_action,
+        }
+        if partner_store_id:
+            meta["partner_store_id"] = str(partner_store_id)
         await ActivityService.log_activity(
             db,
             activity_type=ActivityType.APPOINTMENT_SCHEDULED,
@@ -173,13 +216,7 @@ async def create_appointment(
             user_id=current_user.id,
             lead_id=appointment.lead_id,
             dealership_id=dealership_id,
-            meta_data={
-                "appointment_id": str(appointment.id),
-                "appointment_type": appointment.appointment_type.value,
-                "scheduled_at": appointment.scheduled_at.isoformat(),
-                "performer_name": current_user.full_name,
-                "is_skate_action": is_skate_action
-            }
+            meta_data=meta,
         )
     
     # Create notification for assigned user if different from creator
@@ -231,12 +268,7 @@ async def create_appointment(
     # Re-fetch with relationships
     result = await db.execute(
         select(Appointment)
-        .options(
-            selectinload(Appointment.lead).selectinload(Lead.customer),
-            selectinload(Appointment.dealership),
-            selectinload(Appointment.scheduled_by_user),
-            selectinload(Appointment.assigned_to_user)
-        )
+        .options(*_APPOINTMENT_LOAD_OPTIONS)
         .where(Appointment.id == appointment.id)
     )
     appointment = result.scalar_one()
@@ -267,12 +299,7 @@ async def list_appointments(
     - Salesperson: Own appointments only
     """
     # Build base query (load lead.customer so appointment list shows lead name)
-    query = select(Appointment).options(
-        selectinload(Appointment.lead).selectinload(Lead.customer),
-        selectinload(Appointment.dealership),
-        selectinload(Appointment.scheduled_by_user),
-        selectinload(Appointment.assigned_to_user)
-    )
+    query = select(Appointment).options(*_APPOINTMENT_LOAD_OPTIONS)
     count_query = select(func.count(Appointment.id))
     
     query, count_query = await _scope_appointment_queries(
@@ -487,12 +514,7 @@ async def get_appointment(
     """
     result = await db.execute(
         select(Appointment)
-        .options(
-            selectinload(Appointment.lead).selectinload(Lead.customer),
-            selectinload(Appointment.dealership),
-            selectinload(Appointment.scheduled_by_user),
-            selectinload(Appointment.assigned_to_user)
-        )
+        .options(*_APPOINTMENT_LOAD_OPTIONS)
         .where(Appointment.id == appointment_id)
     )
     appointment = result.scalar_one_or_none()
@@ -559,8 +581,29 @@ async def update_appointment(
 
     # Update fields
     update_data = appointment_in.model_dump(exclude_unset=True)
+    if "partner_store_id" in update_data and update_data["partner_store_id"] is not None:
+        store_result = await db.execute(
+            select(PartnerStore).where(
+                PartnerStore.id == update_data["partner_store_id"],
+                PartnerStore.is_active.is_(True),
+            )
+        )
+        if not store_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Partner store not found or inactive",
+            )
     for field, value in update_data.items():
         setattr(appointment, field, value)
+
+    if "partner_store_id" in update_data and appointment.lead_id and update_data["partner_store_id"]:
+        lead_for_partner = await db.execute(
+            select(Lead).where(Lead.id == appointment.lead_id)
+        )
+        lead_row = lead_for_partner.scalar_one_or_none()
+        if lead_row:
+            lead_row.partner_store_id = update_data["partner_store_id"]
+            lead_row.partner_connected_at = utc_now()
     
     await db.commit()
 
@@ -572,12 +615,7 @@ async def update_appointment(
     # Re-fetch with relationships
     result = await db.execute(
         select(Appointment)
-        .options(
-            selectinload(Appointment.lead),
-            selectinload(Appointment.dealership),
-            selectinload(Appointment.scheduled_by_user),
-            selectinload(Appointment.assigned_to_user)
-        )
+        .options(*_APPOINTMENT_LOAD_OPTIONS)
         .where(Appointment.id == appointment.id)
     )
     appointment = result.scalar_one()
@@ -651,12 +689,7 @@ async def complete_appointment(
     # Re-fetch with relationships
     result = await db.execute(
         select(Appointment)
-        .options(
-            selectinload(Appointment.lead).selectinload(Lead.customer),
-            selectinload(Appointment.dealership),
-            selectinload(Appointment.scheduled_by_user),
-            selectinload(Appointment.assigned_to_user)
-        )
+        .options(*_APPOINTMENT_LOAD_OPTIONS)
         .where(Appointment.id == appointment.id)
     )
     appointment = result.scalar_one()

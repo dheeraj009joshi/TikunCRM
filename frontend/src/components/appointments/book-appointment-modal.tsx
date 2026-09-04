@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { format } from "date-fns"
-import { X, Loader2, CalendarClock, MapPin, Calendar as CalendarIcon, Clock, Users } from "lucide-react"
+import { X, Loader2, CalendarClock, MapPin, Calendar as CalendarIcon, Clock, Users, Building2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -20,6 +20,7 @@ import {
 import { AppointmentService } from "@/services/appointment-service"
 import { LeadService } from "@/services/lead-service"
 import { TeamService, UserBrief } from "@/services/team-service"
+import { PartnerStoreService, PartnerStore } from "@/services/partner-store-service"
 import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
@@ -73,6 +74,9 @@ export function BookAppointmentModal({
     const [duration, setDuration] = React.useState("30")
     const [location, setLocation] = React.useState("")
     const [notes, setNotes] = React.useState("")
+    const [partnerStoreId, setPartnerStoreId] = React.useState("")
+    const [partnerStores, setPartnerStores] = React.useState<PartnerStore[]>([])
+    const [loadingPartners, setLoadingPartners] = React.useState(false)
     
     // Salesperson assignment (for admins): primary = who handles this appointment; secondary is on the lead
     const [teamMembers, setTeamMembers] = React.useState<UserBrief[]>([])
@@ -98,6 +102,7 @@ export function BookAppointmentModal({
             setDuration("30")
             setLocation("")
             setNotes("")
+            setPartnerStoreId("")
             setError(null)
             setCalendarOpen(false)
             setAssignedTo("auto")
@@ -105,12 +110,22 @@ export function BookAppointmentModal({
             setLeadSecondaryName(null)
             setView("form")
             setBookedAppointmentId(null)
-            
-            // If admin, fetch lead to get dealership, team, and primary/secondary for display
-            if (isAdmin && leadId) {
-                setLoadingTeam(true)
+
+            setLoadingPartners(true)
+            PartnerStoreService.list({ active_only: true })
+                .then((res) => setPartnerStores(res.items || []))
+                .catch(console.error)
+                .finally(() => setLoadingPartners(false))
+
+            // Prefill partner / assignment from lead
+            if (leadId) {
+                setLoadingTeam(isAdmin)
                 LeadService.getLead(leadId)
                     .then(async (lead) => {
+                        if (lead.partner_store_id) {
+                            setPartnerStoreId(lead.partner_store_id)
+                        }
+                        if (!isAdmin) return
                         if (lead.assigned_to_user) {
                             setLeadPrimaryName(`${lead.assigned_to_user.first_name} ${lead.assigned_to_user.last_name}`.trim())
                         }
@@ -139,6 +154,10 @@ export function BookAppointmentModal({
             setError("Date and time are required")
             return
         }
+        if (!partnerStoreId) {
+            setError("Please select a partner store")
+            return
+        }
 
         setIsLoading(true)
 
@@ -157,6 +176,7 @@ export function BookAppointmentModal({
                 duration_minutes: parseInt(duration),
                 location: location || undefined,
                 assigned_to: assignedTo !== "auto" ? assignedTo : undefined,
+                partner_store_id: partnerStoreId,
                 confirmSkate,
             })
 
@@ -384,6 +404,37 @@ export function BookAppointmentModal({
                                 </SelectContent>
                             </Select>
                         </div>
+                    </div>
+
+                    {/* Partner store (required) */}
+                    <div className="space-y-2">
+                        <Label className="flex items-center gap-2">
+                            <Building2 className="h-4 w-4" />
+                            Partner Store *
+                        </Label>
+                        {loadingPartners ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Loading partners…
+                            </div>
+                        ) : (
+                            <Select value={partnerStoreId || undefined} onValueChange={setPartnerStoreId}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select partner (e.g. Toyota South Atlanta)" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {partnerStores.map((store) => (
+                                        <SelectItem key={store.id} value={store.id}>
+                                            {store.name}
+                                            {store.brand ? ` (${store.brand})` : ""}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        )}
+                        <p className="text-xs text-muted-foreground">
+                            Links this appointment (and the lead) to the partner dealer.
+                        </p>
                     </div>
 
                     {/* Location */}

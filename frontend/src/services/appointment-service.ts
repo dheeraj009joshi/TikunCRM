@@ -29,6 +29,12 @@ export interface DealershipBrief {
     name: string
 }
 
+export interface PartnerStoreBrief {
+    id: string
+    name: string
+    brand?: string | null
+}
+
 export interface Appointment {
     id: string
     title: string
@@ -40,6 +46,7 @@ export interface Appointment {
     meeting_link?: string
     lead_id?: string
     dealership_id?: string
+    partner_store_id?: string | null
     scheduled_by?: string
     assigned_to?: string
     status: AppointmentStatus
@@ -50,6 +57,7 @@ export interface Appointment {
     updated_at: string
     lead?: LeadBrief
     dealership?: DealershipBrief
+    partner_store?: PartnerStoreBrief | null
     scheduled_by_user?: UserBrief
     assigned_to_user?: UserBrief
 }
@@ -64,6 +72,7 @@ export interface AppointmentCreate {
     meeting_link?: string
     lead_id?: string
     assigned_to?: string
+    partner_store_id?: string
     confirmSkate?: boolean
 }
 
@@ -77,6 +86,7 @@ export interface AppointmentUpdate {
     meeting_link?: string
     status?: AppointmentStatus
     assigned_to?: string
+    partner_store_id?: string | null
 }
 
 export interface AppointmentComplete {
