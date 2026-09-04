@@ -67,8 +67,37 @@ export interface PartnerStoreListParams {
     search?: string;
 }
 
+/** In-memory cache for the common active-only list (avoids N duplicate requests). */
+let activeStoresCache: PartnerStoreListResponse | null = null
+let activeStoresPromise: Promise<PartnerStoreListResponse> | null = null
+
+function invalidateActiveStoresCache() {
+    activeStoresCache = null
+    activeStoresPromise = null
+}
+
 export const PartnerStoreService = {
     async list(params: PartnerStoreListParams = {}): Promise<PartnerStoreListResponse> {
+        const isDefaultActive =
+            params.active_only === true &&
+            !params.brand &&
+            !params.search
+        if (isDefaultActive) {
+            if (activeStoresCache) return activeStoresCache
+            if (!activeStoresPromise) {
+                activeStoresPromise = apiClient
+                    .get(`${PREFIX}/`, { params })
+                    .then((response) => {
+                        activeStoresCache = response.data
+                        return activeStoresCache!
+                    })
+                    .catch((err) => {
+                        activeStoresPromise = null
+                        throw err
+                    })
+            }
+            return activeStoresPromise
+        }
         const response = await apiClient.get(`${PREFIX}/`, { params });
         return response.data;
     },
@@ -84,16 +113,19 @@ export const PartnerStoreService = {
     },
 
     async create(data: PartnerStoreCreate): Promise<PartnerStore> {
+        invalidateActiveStoresCache()
         const response = await apiClient.post(`${PREFIX}/`, data);
         return response.data;
     },
 
     async update(id: string, data: PartnerStoreUpdate): Promise<PartnerStore> {
+        invalidateActiveStoresCache()
         const response = await apiClient.put(`${PREFIX}/${id}`, data);
         return response.data;
     },
 
     async delete(id: string): Promise<void> {
+        invalidateActiveStoresCache()
         await apiClient.delete(`${PREFIX}/${id}`);
     },
 

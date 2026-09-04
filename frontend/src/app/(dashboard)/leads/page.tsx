@@ -85,7 +85,6 @@ import { Calendar as CalendarPicker } from "@/components/ui/calendar"
 import { LeadService, Lead, LeadListResponse, type LeadListParams, type LeadExportFilters, type CampaignFilterOption, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool } from "@/services/lead-service"
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
-import { AssignPartnerStore } from "@/components/leads/assign-partner-store"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
 import { useRole } from "@/hooks/use-role"
 import { useOrgDealershipId } from "@/hooks/use-org-dealership"
@@ -181,7 +180,7 @@ export default function LeadsPage() {
     const dealershipIdParam = searchParams.get("dealership_id")
     const { timezone } = useBrowserTimezone()
 
-    const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, isSalesperson, isBdc, canAssignToSalesperson, canConnectToPartner, hasPermission } = useRole()
+    const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, isSalesperson, isBdc, canAssignToSalesperson, hasPermission } = useRole()
     const orgDealershipId = useOrgDealershipId()
     const isOrgWide = isDealershipLevel || isSuperAdmin || isBdc
     const canCreateLead = hasPermission("create_lead")
@@ -1741,31 +1740,8 @@ export default function LeadsPage() {
                                     </TableCell>
                                     )}
                                     {showCol("partner_store") && (
-                                    <TableCell
-                                        onClick={(e) => e.stopPropagation()}
-                                        className="min-w-[160px]"
-                                    >
-                                        {canConnectToPartner ? (
-                                            <AssignPartnerStore
-                                                compact
-                                                leadId={lead.id}
-                                                currentPartnerStoreId={lead.partner_store_id}
-                                                currentPartnerStoreName={lead.partner_store?.name}
-                                                onAssigned={(partner) => {
-                                                    setLeads((prev) =>
-                                                        prev.map((l) =>
-                                                            l.id === lead.id
-                                                                ? {
-                                                                      ...l,
-                                                                      partner_store_id: partner?.id ?? null,
-                                                                      partner_store: partner,
-                                                                  }
-                                                                : l
-                                                        )
-                                                    )
-                                                }}
-                                            />
-                                        ) : lead.partner_store?.name ? (
+                                    <TableCell>
+                                        {lead.partner_store?.name ? (
                                             <div className="flex items-center gap-1.5 min-w-0">
                                                 <Store className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                                                 <span className="text-sm font-medium truncate" title={lead.partner_store.name}>

@@ -18,28 +18,26 @@ interface AssignPartnerStoreProps {
     leadId: string
     currentPartnerStoreId?: string | null
     currentPartnerStoreName?: string | null
-    /** Compact mode for table cells */
-    compact?: boolean
     disabled?: boolean
     className?: string
     onAssigned?: (partner: { id: string; name: string; brand?: string | null } | null) => void
 }
 
 /**
- * Assign / change / clear a lead's partner store (Toyota South Atlanta, Ford Atlanta, etc.).
+ * Assign / change / clear partner store on the lead detail page only.
+ * Partner list is cached in PartnerStoreService (single request).
  */
 export function AssignPartnerStore({
     leadId,
     currentPartnerStoreId,
     currentPartnerStoreName,
-    compact = false,
     disabled = false,
     className,
     onAssigned,
 }: AssignPartnerStoreProps) {
     const { toast } = useToast()
     const [stores, setStores] = React.useState<PartnerStore[]>([])
-    const [loadingList, setLoadingList] = React.useState(false)
+    const [loadingList, setLoadingList] = React.useState(true)
     const [saving, setSaving] = React.useState(false)
     const [value, setValue] = React.useState(currentPartnerStoreId || "")
 
@@ -106,7 +104,7 @@ export function AssignPartnerStore({
         return (
             <div className={cn("flex items-center gap-2 text-sm text-muted-foreground", className)}>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                {!compact && <span>Loading partners…</span>}
+                <span>Loading partners…</span>
             </div>
         )
     }
@@ -118,13 +116,7 @@ export function AssignPartnerStore({
                 onValueChange={handleChange}
                 disabled={disabled || saving || stores.length === 0}
             >
-                <SelectTrigger
-                    className={cn(
-                        "min-w-0",
-                        compact ? "h-8 text-xs" : "h-9",
-                        compact && "max-w-[180px]"
-                    )}
-                >
+                <SelectTrigger className="h-9 min-w-0">
                     <div className="flex items-center gap-1.5 min-w-0">
                         {saving ? (
                             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
@@ -146,7 +138,7 @@ export function AssignPartnerStore({
                     ))}
                 </SelectContent>
             </Select>
-            {!compact && value && !disabled && (
+            {value && !disabled && (
                 <Button
                     type="button"
                     size="sm"

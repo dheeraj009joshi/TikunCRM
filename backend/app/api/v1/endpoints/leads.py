@@ -1599,6 +1599,10 @@ async def get_lead(
         "external_id": lead.external_id,
         "interested_in": lead.interested_in,
         "budget_range": lead.budget_range,
+        "down_payment": float(lead.down_payment) if getattr(lead, "down_payment", None) is not None else None,
+        "partner_store_id": lead.partner_store_id if getattr(lead, "partner_store_id", None) else None,
+        "partner_connected_at": getattr(lead, "partner_connected_at", None),
+        "partner_store": None,
         "is_starred": lead.is_starred,
         "campaigns": [],  # Will be populated below
         "first_contacted_at": lead.first_contacted_at,
@@ -1699,6 +1703,19 @@ async def get_lead(
             response_data["dealership"] = {
                 "id": dealership.id,
                 "name": dealership.name
+            }
+
+    # Partner store (included in lead detail — no extra client fan-out)
+    if getattr(lead, "partner_store_id", None):
+        partner_result = await db.execute(
+            select(PartnerStore).where(PartnerStore.id == lead.partner_store_id)
+        )
+        partner = partner_result.scalar_one_or_none()
+        if partner:
+            response_data["partner_store"] = {
+                "id": partner.id,
+                "name": partner.name,
+                "brand": partner.brand,
             }
     
     # Fetch campaigns for multi-campaign tracking
