@@ -65,6 +65,7 @@ import {
 import { MentionInput } from "@/components/ui/mention-input"
 import { Button } from "@/components/ui/button"
 import { Badge, getStatusVariant, getSourceVariant, getRoleVariant } from "@/components/ui/badge"
+import { CampaignTargetingInfo } from "@/components/campaigns/campaign-targeting-info"
 import { UserAvatar } from "@/components/ui/avatar"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -468,9 +469,16 @@ function LeadCampaignHistoryPanel({ lead, campaigns }: { lead: Lead; campaigns: 
                         key={campaign.campaign_mapping_id ?? `raw-${campaign.campaign_name}`}
                         className="flex items-start justify-between gap-2"
                     >
-                        <span className="font-medium text-left break-words min-w-0">
-                            {campaign.display_name ?? campaign.campaign_name}
-                        </span>
+                        <div className="min-w-0 flex-1">
+                            <span className="font-medium text-left break-words">
+                                {campaign.display_name ?? campaign.campaign_name}
+                            </span>
+                            {campaign.targeting_message?.trim() && (
+                                <p className="text-xs text-muted-foreground mt-0.5 whitespace-pre-wrap">
+                                    {campaign.targeting_message.trim()}
+                                </p>
+                            )}
+                        </div>
                         <span className="text-xs text-muted-foreground shrink-0">
                             {new Date(campaign.added_at).toLocaleDateString()}
                         </span>
@@ -2159,19 +2167,31 @@ export default function LeadDetailsPage() {
 
     const isMentionOnly = lead.access_level === "mention_only"
 
+    const sourceLabel = (lead.source_display ?? lead.source)?.replace(/_/g, " ") ?? ""
+    const primaryTargeting = lead.campaign_mapping?.targeting_message?.trim() || ""
+    const extraTargeting = (lead.campaigns || [])
+        .map((c) => ({
+            label: c.display_name || c.campaign_name,
+            message: c.targeting_message?.trim() || "",
+        }))
+        .filter((c) => c.message && c.message !== primaryTargeting)
+
     return (
         <div className="h-[calc(100vh-120px)] flex flex-col max-w-7xl mx-auto overflow-hidden">
             {/* Navigation */}
-            <div className="flex items-center justify-between shrink-0 mb-4">
+            <div className="flex items-center justify-between shrink-0 mb-4 gap-3">
                 <Link href={backToLeadsHref} className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors duration-200 rounded-md hover:bg-muted/50 px-2 py-1 -mx-2 -my-1">
                     <ChevronLeft className="h-4 w-4 shrink-0" />
                     Back to Leads
                 </Link>
-                <div className="flex items-center gap-2">
-                    <Badge variant={getSourceVariant(lead.source)}>
-                        {(lead.source_display ?? lead.source)?.replace(/_/g, ' ') ?? ''}
-                    </Badge>
-                    <span className="text-xs text-muted-foreground">
+                <div className="flex items-center gap-2 min-w-0 flex-wrap justify-end">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                        <Badge variant={getSourceVariant(lead.source)} className="max-w-[280px] truncate" title={sourceLabel}>
+                            {sourceLabel}
+                        </Badge>
+                        <CampaignTargetingInfo message={primaryTargeting} />
+                    </div>
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">
                         Created <LocalTime date={lead.created_at} />
                     </span>
                     {isSuperAdmin && !isMentionOnly && (
@@ -2187,6 +2207,24 @@ export default function LeadDetailsPage() {
                     )}
                 </div>
             </div>
+
+            {(primaryTargeting || extraTargeting.length > 0) && (
+                <div className="shrink-0 mb-3 rounded-lg border border-sky-200 bg-sky-50 dark:border-sky-900 dark:bg-sky-950/30 px-3 py-2 text-sm">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300 mb-1">
+                        Campaign targeting
+                    </p>
+                    {primaryTargeting && (
+                        <p className="text-sky-950 dark:text-sky-100 whitespace-pre-wrap">
+                            {primaryTargeting}
+                        </p>
+                    )}
+                    {extraTargeting.map((item) => (
+                        <p key={item.label} className="mt-1.5 text-sky-900/90 dark:text-sky-100/90 whitespace-pre-wrap">
+                            <span className="font-medium">{item.label}:</span> {item.message}
+                        </p>
+                    ))}
+                </div>
+            )}
 
             {isMentionOnly && (
                 <div className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-4 py-2 text-sm text-amber-800 dark:text-amber-200">

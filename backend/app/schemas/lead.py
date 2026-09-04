@@ -194,6 +194,17 @@ class LeadCampaignResponse(BaseModel):
     
     # Optional display name from campaign mapping
     display_name: Optional[str] = None
+    targeting_message: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CampaignMappingBriefOnLead(BaseModel):
+    """Primary campaign mapping summary on a lead (for targeting notes near source)."""
+    id: UUID
+    display_name: str
+    targeting_message: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -239,6 +250,8 @@ class LeadResponse(BaseModel):
     partner_store_id: Optional[UUID] = None
     partner_connected_at: Optional[datetime] = None
     partner_store: Optional[PartnerStoreBrief] = None
+    campaign_mapping_id: Optional[UUID] = None
+    campaign_mapping: Optional[CampaignMappingBriefOnLead] = None
     has_ssn_stip: bool = False
     has_dl_stip: bool = False
     is_business: Optional[bool] = None

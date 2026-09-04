@@ -32,6 +32,13 @@ export interface LeadCampaign {
     sync_source_id?: string | null;
     added_at: string;
     display_name?: string | null;
+    targeting_message?: string | null;
+}
+
+export interface LeadCampaignMappingBrief {
+    id: string;
+    display_name: string;
+    targeting_message?: string | null;
 }
 
 /** One row per campaign (mapping id or raw name); keeps earliest added_at. */
@@ -81,6 +88,8 @@ export interface Lead {
     partner_store_id?: string | null;
     partner_connected_at?: string | null;
     partner_store?: { id: string; name: string; brand?: string | null } | null;
+    campaign_mapping_id?: string | null;
+    campaign_mapping?: LeadCampaignMappingBrief | null;
     has_ssn_stip?: boolean;
     has_dl_stip?: boolean;
     is_business?: boolean | null;

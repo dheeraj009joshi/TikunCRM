@@ -1603,6 +1603,8 @@ async def get_lead(
         "partner_store_id": lead.partner_store_id if getattr(lead, "partner_store_id", None) else None,
         "partner_connected_at": getattr(lead, "partner_connected_at", None),
         "partner_store": None,
+        "campaign_mapping_id": lead.campaign_mapping_id if getattr(lead, "campaign_mapping_id", None) else None,
+        "campaign_mapping": None,
         "is_starred": lead.is_starred,
         "campaigns": [],  # Will be populated below
         "first_contacted_at": lead.first_contacted_at,
@@ -1717,11 +1719,25 @@ async def get_lead(
                 "name": partner.name,
                 "brand": partner.brand,
             }
+
+    # Primary campaign mapping (targeting message shown near source on lead detail)
+    if getattr(lead, "campaign_mapping_id", None):
+        mapping_result = await db.execute(
+            select(CampaignMapping).where(CampaignMapping.id == lead.campaign_mapping_id)
+        )
+        mapping = mapping_result.scalar_one_or_none()
+        if mapping:
+            response_data["campaign_mapping"] = {
+                "id": mapping.id,
+                "display_name": mapping.display_name,
+                "targeting_message": mapping.targeting_message,
+            }
     
     # Fetch campaigns for multi-campaign tracking
     if lead.is_starred:
         campaigns_result = await db.execute(
             select(LeadCampaign)
+            .options(selectinload(LeadCampaign.campaign_mapping))
             .where(LeadCampaign.lead_id == lead.id)
             .order_by(LeadCampaign.added_at.desc())
         )
@@ -1734,6 +1750,11 @@ async def get_lead(
                 "sync_source_id": campaign.sync_source_id,
                 "added_at": campaign.added_at,
                 "display_name": campaign.campaign_mapping.display_name if campaign.campaign_mapping else None,
+                "targeting_message": (
+                    campaign.campaign_mapping.targeting_message
+                    if campaign.campaign_mapping
+                    else None
+                ),
             }
             for campaign in campaigns
         ]
