@@ -2186,7 +2186,7 @@ export default function LeadDetailsPage() {
                     Back to Leads
                 </Link>
                 <div className="flex items-start gap-2 min-w-0 flex-wrap justify-end">
-                    <div className="min-w-0 max-w-[min(100%,28rem)] text-right">
+                    <div className="inline-flex flex-col items-start min-w-0 max-w-[min(100%,28rem)]">
                         <Badge
                             variant={getSourceVariant(lead.source)}
                             className="max-w-full truncate"
@@ -2194,18 +2194,15 @@ export default function LeadDetailsPage() {
                         >
                             {campaignDisplay || sourceLabel || "—"}
                         </Badge>
-                        {primaryTargeting ? (
-                            <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap text-right leading-snug">
-                                {primaryTargeting}
-                            </p>
-                        ) : null}
+                        <p className="mt-1 text-sm text-foreground/80 whitespace-pre-wrap leading-snug">
+                            {primaryTargeting || "no special targeting available"}
+                        </p>
                         {extraTargeting.map((item) => (
                             <p
                                 key={item.label}
-                                className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap text-right leading-snug"
+                                className="mt-0.5 text-sm text-foreground/70 whitespace-pre-wrap leading-snug"
                             >
-                                <span className="font-medium text-foreground/80">{item.label}:</span>{" "}
-                                {item.message}
+                                <span className="font-medium">{item.label}:</span> {item.message}
                             </p>
                         ))}
                     </div>
