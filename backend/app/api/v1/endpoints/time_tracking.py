@@ -1,7 +1,7 @@
 """
-Time tracking endpoints — BDC clock-in/out, timesheets, and Super Admin rates.
+Time tracking endpoints — BDC clock-in/out, timesheets, and manager pay settings.
 """
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional
 from uuid import UUID
 
@@ -18,10 +18,13 @@ from app.models.user import User
 from app.schemas.time_tracking import (
     AgentRosterItem,
     AgentRosterResponse,
+    ApproveOverCapDayRequest,
+    ApproveOverCapRequest,
     ClockInRequest,
     ClockOutRequest,
     ClockStatusResponse,
     PayoutSummaryResponse,
+    SetHourCapsRequest,
     SetHourlyRateRequest,
     TimeEntryEditRequest,
     TimeEntryListResponse,
@@ -30,6 +33,8 @@ from app.schemas.time_tracking import (
 from app.services import time_tracking_service as svc
 
 router = APIRouter()
+
+require_time_admin = deps.require_admin
 
 
 def _http_for_value_error(exc: ValueError) -> HTTPException:
@@ -41,6 +46,7 @@ def _http_for_value_error(exc: ValueError) -> HTTPException:
         "clock_in_in_future": (400, "Clock-in cannot be in the future."),
         "already_clocked_out": (409, "This session is already clocked out."),
         "invalid_times": (400, "Invalid clock times."),
+        "invalid_date": (400, "Invalid date. Use YYYY-MM-DD."),
     }
     code, detail = mapping.get(str(exc), (400, str(exc)))
     return HTTPException(status_code=code, detail=detail)
@@ -119,14 +125,14 @@ async def get_my_payouts(
         raise _http_for_value_error(exc) from exc
 
 
-# ---------- Super Admin ----------
+# ---------- Super Admin / Manager ----------
 
 
 @router.get("/admin/roster", response_model=AgentRosterResponse)
 async def admin_roster(
     timezone: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_role(UserRole.SUPER_ADMIN)),
+    current_user: User = Depends(require_time_admin),
 ) -> Any:
     """Who is on the clock, weekly/monthly hours, and labor cost for all BDC agents."""
     return await svc.get_roster(db, timezone)
@@ -138,11 +144,29 @@ async def admin_set_rate(
     body: SetHourlyRateRequest,
     timezone: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_role(UserRole.SUPER_ADMIN)),
+    current_user: User = Depends(require_time_admin),
 ) -> Any:
     """Set a BDC agent's hourly rate. Applies to future punches only."""
     user = await _load_bdc_user(db, user_id)
     await svc.set_hourly_rate(db, user, body.hourly_rate)
+    roster = await svc.get_roster(db, timezone)
+    for item in roster.items:
+        if item.id == user.id:
+            return item
+    raise HTTPException(status_code=404, detail="BDC agent not found")
+
+
+@router.patch("/admin/agents/{user_id}/caps", response_model=AgentRosterItem)
+async def admin_set_caps(
+    user_id: UUID,
+    body: SetHourCapsRequest,
+    timezone: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_time_admin),
+) -> Any:
+    """Set payable hour caps per weekday and per week. Extra clocked time is unpaid until approved."""
+    user = await _load_bdc_user(db, user_id)
+    await svc.set_hour_caps(db, user, body)
     roster = await svc.get_roster(db, timezone)
     for item in roster.items:
         if item.id == user.id:
@@ -158,7 +182,7 @@ async def admin_list_entries(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_role(UserRole.SUPER_ADMIN)),
+    current_user: User = Depends(require_time_admin),
 ) -> Any:
     return await svc.list_all_entries(db, user_id, date_from, date_to, page, page_size)
 
@@ -169,7 +193,7 @@ async def admin_agent_payouts(
     period: str = Query("this_week"),
     timezone: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_role(UserRole.SUPER_ADMIN)),
+    current_user: User = Depends(require_time_admin),
 ) -> Any:
     user = await _load_bdc_user(db, user_id)
     try:
@@ -183,7 +207,7 @@ async def admin_edit_entry(
     entry_id: UUID,
     body: TimeEntryEditRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_role(UserRole.SUPER_ADMIN)),
+    current_user: User = Depends(require_time_admin),
 ) -> Any:
     result = await db.execute(
         select(TimeEntry).options(selectinload(TimeEntry.user)).where(TimeEntry.id == entry_id)
@@ -206,12 +230,50 @@ async def admin_edit_entry(
     return svc.to_entry_response(updated, include_user=False)
 
 
+@router.patch("/admin/entries/{entry_id}/over-cap", response_model=TimeEntryResponse)
+async def admin_set_over_cap(
+    entry_id: UUID,
+    body: ApproveOverCapRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_time_admin),
+) -> Any:
+    result = await db.execute(select(TimeEntry).where(TimeEntry.id == entry_id))
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Time entry not found")
+    updated = await svc.set_over_cap_approved(db, entry, current_user, body.approved)
+    return svc.to_entry_response(updated)
+
+
+@router.post("/admin/agents/{user_id}/approve-day")
+async def admin_approve_day(
+    user_id: UUID,
+    body: ApproveOverCapDayRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_time_admin),
+) -> Any:
+    await _load_bdc_user(db, user_id)
+    try:
+        local_date = date.fromisoformat(body.date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid date. Use YYYY-MM-DD.") from exc
+    tz = svc.resolve_tz(body.timezone)
+    entries = await svc.set_over_cap_approved_for_day(
+        db, user_id, local_date, tz, current_user, body.approved
+    )
+    return {
+        "updated": len(entries),
+        "date": body.date,
+        "approved": body.approved,
+    }
+
+
 @router.post("/admin/entries/{entry_id}/force-clock-out", response_model=TimeEntryResponse)
 async def admin_force_clock_out(
     entry_id: UUID,
     body: ClockOutRequest = Body(default=ClockOutRequest()),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(deps.require_role(UserRole.SUPER_ADMIN)),
+    current_user: User = Depends(require_time_admin),
 ) -> Any:
     result = await db.execute(select(TimeEntry).where(TimeEntry.id == entry_id))
     entry = result.scalar_one_or_none()

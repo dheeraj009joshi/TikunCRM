@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -73,6 +73,22 @@ class TimeEntry(Base):
     )
     edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     edit_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    over_cap_approved: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment="When true, hours over the agent's daily/weekly cap are paid",
+    )
+    over_cap_approved_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    over_cap_approved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
@@ -93,5 +109,10 @@ class TimeEntry(Base):
     edited_by: Mapped[Optional["User"]] = relationship(
         "User",
         foreign_keys=[edited_by_id],
+        lazy="noload",
+    )
+    over_cap_approved_by: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[over_cap_approved_by_id],
         lazy="noload",
     )

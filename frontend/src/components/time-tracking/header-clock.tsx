@@ -2,11 +2,11 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Loader2, LogIn, LogOut } from "lucide-react"
+import { Loader2, LogIn, LogOut, Phone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useTimeClock } from "@/hooks/use-time-clock"
 import { useToast } from "@/hooks/use-toast"
-import { formatElapsed } from "@/lib/time-tracking"
+import { formatElapsed, formatHours } from "@/lib/time-tracking"
 import { getApiErrorMessage } from "@/lib/api-errors"
 import { cn } from "@/lib/utils"
 
@@ -55,18 +55,34 @@ export function HeaderClock() {
                         ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
                         : "border-border bg-muted/60 text-muted-foreground"
                 )}
-                title="Open timesheet"
+                title="Open timesheet — clocked time vs time on calls"
             >
                 <span
                     className={cn(
                         "h-1.5 w-1.5 rounded-full",
-                        clock.isClockedIn ? "animate-pulse bg-emerald-500" : "bg-muted-foreground/50"
+                        clock.onCall
+                            ? "animate-pulse bg-sky-500"
+                            : clock.isClockedIn
+                              ? "animate-pulse bg-emerald-500"
+                              : "bg-muted-foreground/50"
                     )}
                 />
                 {clock.isLoading ? (
                     "Time clock"
                 ) : clock.isClockedIn ? (
-                    <span className="font-mono tabular-nums">{formatElapsed(clock.elapsedSeconds)}</span>
+                    <span className="flex items-center gap-1.5 font-mono tabular-nums">
+                        {formatElapsed(clock.elapsedSeconds)}
+                        {clock.onCall ? (
+                            <span className="inline-flex items-center gap-0.5 font-sans text-[10px] font-semibold text-sky-700 dark:text-sky-300">
+                                <Phone className="h-3 w-3" />
+                                {formatElapsed(clock.currentCallSeconds)}
+                            </span>
+                        ) : (
+                            <span className="hidden font-sans font-medium text-muted-foreground lg:inline">
+                                {formatHours(clock.todayCalls.talk_hours)} calls
+                            </span>
+                        )}
+                    </span>
                 ) : (
                     "Off the clock"
                 )}

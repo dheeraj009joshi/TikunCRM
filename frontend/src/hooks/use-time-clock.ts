@@ -6,7 +6,7 @@ import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useRole } from "@/hooks/use-role"
 import { ClockStatus, TimeTrackingService } from "@/services/time-tracking-service"
 import { getApiErrorMessage } from "@/lib/api-errors"
-import { emptyBreakdown } from "@/lib/time-tracking"
+import { emptyBreakdown, emptyCallWork } from "@/lib/time-tracking"
 
 const STATUS_KEY = ["time-clock", "status"] as const
 
@@ -33,10 +33,10 @@ export function useTimeClock() {
     })
 
     React.useEffect(() => {
-        if (!query.data?.is_clocked_in) return
+        if (!query.data?.is_clocked_in && !query.data?.on_call) return
         const id = window.setInterval(() => setNowMs(Date.now()), 1000)
         return () => window.clearInterval(id)
-    }, [query.data?.is_clocked_in])
+    }, [query.data?.is_clocked_in, query.data?.on_call])
 
     const clockIn = useMutation({
         mutationFn: (note?: string) => TimeTrackingService.clockIn(note),
@@ -50,6 +50,9 @@ export function useTimeClock() {
 
     const status = query.data
     const elapsedSeconds = elapsedFromStatus(status, nowMs)
+    const currentCallSeconds = status?.on_call
+        ? (status.current_call_seconds ?? 0) + Math.max(0, Math.floor((nowMs - query.dataUpdatedAt) / 1000))
+        : 0
 
     return {
         isBdc,
@@ -63,9 +66,14 @@ export function useTimeClock() {
         hourlyRate: status?.hourly_rate ?? null,
         rateMissing: Boolean(status?.rate_missing),
         longShiftWarning: Boolean(status?.long_shift_warning),
+        overCapWarning: Boolean(status?.over_cap_warning),
         today: status?.today ?? emptyBreakdown(),
         thisWeek: status?.this_week ?? emptyBreakdown(),
         thisMonth: status?.this_month ?? emptyBreakdown(),
+        todayCalls: status?.today_calls ?? emptyCallWork(),
+        thisWeekCalls: status?.this_week_calls ?? emptyCallWork(),
+        onCall: Boolean(status?.on_call),
+        currentCallSeconds,
         clockIn,
         clockOut,
         refetch: query.refetch,

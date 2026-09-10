@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { AlertTriangle, Clock, Loader2, LogIn, LogOut, Timer } from "lucide-react"
+import { AlertTriangle, Clock, Loader2, LogIn, LogOut, Phone, Timer } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -94,6 +94,12 @@ export function ClockWidget({ compact = false }: { compact?: boolean }) {
                                     />
                                     {clock.isClockedIn ? "On the clock" : "Off the clock"}
                                 </span>
+                                {clock.onCall && (
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white">
+                                        <Phone className="h-3 w-3" />
+                                        On a call {formatElapsed(clock.currentCallSeconds)}
+                                    </span>
+                                )}
                                 <span className="text-xs text-muted-foreground">
                                     Separate from CRM login — clock in when you start working
                                 </span>
@@ -122,6 +128,15 @@ export function ClockWidget({ compact = false }: { compact?: boolean }) {
                                 </div>
                             )}
 
+                            {clock.overCapWarning && (
+                                <p className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400">
+                                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                                    Hours over your daily or weekly cap are unpaid until a manager approves them.
+                                    {num(clock.today.unpaid_hours) > 0
+                                        ? ` Unpaid today: ${formatHours(clock.today.unpaid_hours)}.`
+                                        : ""}
+                                </p>
+                            )}
                             {clock.longShiftWarning && (
                                 <p className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400">
                                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -131,7 +146,7 @@ export function ClockWidget({ compact = false }: { compact?: boolean }) {
                             {clock.rateMissing && (
                                 <p className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400">
                                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                                    No hourly rate is set yet. You can still track hours — Super Admin needs to set your rate for payouts.
+                                    No hourly rate is set yet. You can still track hours — a manager needs to set your rate for payouts.
                                 </p>
                             )}
                         </div>
@@ -178,12 +193,16 @@ export function ClockWidget({ compact = false }: { compact?: boolean }) {
                     </div>
 
                     <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                        <Stat label="Today" value={formatHours(clock.today.total_hours)} />
-                        <Stat label="This week" value={formatHours(clock.thisWeek.total_hours)} />
-                        <Stat label="This month" value={formatHours(clock.thisMonth.total_hours)} />
+                        <Stat label="Clocked today" value={formatHours(clock.today.total_hours)} />
+                        <Stat label="On calls today" value={formatHours(clock.todayCalls.talk_hours)} />
+                        <Stat label="Clocked this week" value={formatHours(clock.thisWeek.total_hours)} />
                         <Stat
-                            label="Est. week pay"
-                            value={clock.rateMissing ? "—" : formatMoney(clock.thisWeek.estimated_pay)}
+                            label="On calls this week"
+                            value={`${formatHours(clock.thisWeekCalls.talk_hours)}${
+                                clock.thisWeekCalls.call_count
+                                    ? ` · ${clock.thisWeekCalls.call_count} calls`
+                                    : ""
+                            }`}
                         />
                     </div>
                 </CardContent>

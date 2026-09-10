@@ -170,6 +170,18 @@ class User(Base):
         nullable=True,
         comment="Current hourly rate for BDC time tracking; snapshotted onto each punch",
     )
+    max_hours_week: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+        comment="Payable hours cap per Monday–Sunday week; extra clocked time is unpaid until approved",
+    )
+    max_hours_monday: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 2), nullable=True)
+    max_hours_tuesday: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 2), nullable=True)
+    max_hours_wednesday: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 2), nullable=True)
+    max_hours_thursday: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 2), nullable=True)
+    max_hours_friday: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 2), nullable=True)
+    max_hours_saturday: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 2), nullable=True)
+    max_hours_sunday: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 2), nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

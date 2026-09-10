@@ -8,6 +8,7 @@ import {
     DollarSign,
     Loader2,
     Pencil,
+    Phone,
     Timer,
     Users,
 } from "lucide-react"
@@ -47,9 +48,10 @@ import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useToast } from "@/hooks/use-toast"
 import { getApiErrorMessage } from "@/lib/api-errors"
 import { formatDateInLocal } from "@/utils/timezone"
-import { formatElapsed, formatHours, formatMoney, num } from "@/lib/time-tracking"
+import { formatElapsed, formatHours, formatMoney, formatPercent, num } from "@/lib/time-tracking"
 import {
     AgentRosterItem,
+    HourCaps,
     PayoutPeriod,
     PayoutSummary,
     TimeEntry,
@@ -66,6 +68,28 @@ const PERIODS: { id: PayoutPeriod; label: string }[] = [
     { id: "this_year", label: "This year" },
 ]
 
+const WEEKDAY_CAPS: { key: keyof HourCaps; label: string }[] = [
+    { key: "monday", label: "Mon" },
+    { key: "tuesday", label: "Tue" },
+    { key: "wednesday", label: "Wed" },
+    { key: "thursday", label: "Thu" },
+    { key: "friday", label: "Fri" },
+    { key: "saturday", label: "Sat" },
+    { key: "sunday", label: "Sun" },
+]
+
+function capInput(value: number | string | null | undefined): string {
+    if (value == null || value === "") return ""
+    return String(num(value))
+}
+
+function parseCap(raw: string): number | null {
+    const t = raw.trim()
+    if (!t) return null
+    const n = Number(t)
+    return Number.isFinite(n) && n >= 0 ? n : null
+}
+
 function toDatetimeLocal(iso?: string | null): string {
     if (!iso) return ""
     const d = new Date(iso)
@@ -75,7 +99,8 @@ function toDatetimeLocal(iso?: string | null): string {
 }
 
 export default function TimeTrackingPage() {
-    const { isBdc, isSuperAdmin } = useRole()
+    const { isBdc, isManagerOrAbove, user } = useRole()
+    const isTimeAdmin = isManagerOrAbove
     const { timezone } = useBrowserTimezone()
     const { toast } = useToast()
     const [period, setPeriod] = React.useState<PayoutPeriod>("this_week")
@@ -84,11 +109,15 @@ export default function TimeTrackingPage() {
     const [roster, setRoster] = React.useState<AgentRosterItem[]>([])
     const [clockedInCount, setClockedInCount] = React.useState(0)
     const [teamWeekPay, setTeamWeekPay] = React.useState(0)
-    const [teamMonthPay, setTeamMonthPay] = React.useState(0)
+    const [onCallCount, setOnCallCount] = React.useState(0)
+    const [teamWeekCalls, setTeamWeekCalls] = React.useState(0)
     const [selectedAgentId, setSelectedAgentId] = React.useState<string>("me")
     const [rateAgent, setRateAgent] = React.useState<AgentRosterItem | null>(null)
     const [rateValue, setRateValue] = React.useState("")
+    const [capWeek, setCapWeek] = React.useState("")
+    const [capDays, setCapDays] = React.useState<Record<string, string>>({})
     const [savingRate, setSavingRate] = React.useState(false)
+    const [approvingDay, setApprovingDay] = React.useState<string | null>(null)
     const [editEntry, setEditEntry] = React.useState<TimeEntry | null>(null)
     const [editIn, setEditIn] = React.useState("")
     const [editOut, setEditOut] = React.useState("")
@@ -97,10 +126,10 @@ export default function TimeTrackingPage() {
     const [savingEdit, setSavingEdit] = React.useState(false)
     const [nowMs, setNowMs] = React.useState(() => Date.now())
 
-    const viewingOther = isSuperAdmin && selectedAgentId !== "me"
+    const viewingOther = isTimeAdmin && selectedAgentId !== "me"
 
     const loadPayouts = React.useCallback(async () => {
-        if (isSuperAdmin && !isBdc && selectedAgentId === "me") {
+        if (isTimeAdmin && !isBdc && selectedAgentId === "me") {
             setPayouts(null)
             return
         }
@@ -116,16 +145,17 @@ export default function TimeTrackingPage() {
                 variant: "destructive",
             })
         }
-    }, [period, timezone, selectedAgentId, viewingOther, isSuperAdmin, isBdc, toast])
+    }, [period, timezone, selectedAgentId, viewingOther, isTimeAdmin, isBdc, toast])
 
     const loadRoster = React.useCallback(async () => {
-        if (!isSuperAdmin) return
+        if (!isTimeAdmin) return
         try {
             const data = await TimeTrackingService.getRoster(timezone)
             setRoster(data.items)
             setClockedInCount(data.clocked_in_count)
+            setOnCallCount(data.on_call_count ?? 0)
             setTeamWeekPay(num(data.team_week.estimated_pay))
-            setTeamMonthPay(num(data.team_month.estimated_pay))
+            setTeamWeekCalls(num(data.team_week_calls?.talk_hours))
         } catch (err) {
             toast({
                 title: "Could not load BDC roster",
@@ -133,7 +163,7 @@ export default function TimeTrackingPage() {
                 variant: "destructive",
             })
         }
-    }, [isSuperAdmin, timezone, toast])
+    }, [isTimeAdmin, timezone, toast])
 
     React.useEffect(() => {
         let cancelled = false
@@ -153,12 +183,12 @@ export default function TimeTrackingPage() {
         return () => window.clearInterval(id)
     }, [roster])
 
-    if (!isBdc && !isSuperAdmin) {
+    if (!isBdc && !isTimeAdmin) {
         return (
             <div className="p-6">
                 <Card>
                     <CardContent className="p-8 text-center text-muted-foreground">
-                        Time tracking is available for BDC agents and Super Admins.
+                        Time tracking is available for BDC agents, managers, and Super Admins.
                     </CardContent>
                 </Card>
             </div>
@@ -175,20 +205,51 @@ export default function TimeTrackingPage() {
             toast({ title: "Enter a valid hourly rate", variant: "destructive" })
             return
         }
+        const caps: HourCaps = {
+            max_hours_week: parseCap(capWeek),
+            monday: parseCap(capDays.monday || ""),
+            tuesday: parseCap(capDays.tuesday || ""),
+            wednesday: parseCap(capDays.wednesday || ""),
+            thursday: parseCap(capDays.thursday || ""),
+            friday: parseCap(capDays.friday || ""),
+            saturday: parseCap(capDays.saturday || ""),
+            sunday: parseCap(capDays.sunday || ""),
+        }
         setSavingRate(true)
         try {
             await TimeTrackingService.setHourlyRate(rateAgent.id, parsed, timezone)
+            await TimeTrackingService.setHourCaps(rateAgent.id, caps, timezone)
             toast({
-                title: "Hourly rate updated",
-                description: `${rateAgent.first_name}'s rate is now ${formatMoney(parsed)}/hr. Future punches will use this rate.`,
+                title: "Pay settings saved",
+                description: `${rateAgent.first_name}'s rate is ${formatMoney(parsed)}/hr. Hours over the daily/weekly caps are unpaid until you approve them.`,
             })
             setRateAgent(null)
             await loadRoster()
             await loadPayouts()
         } catch (err) {
-            toast({ title: "Could not save rate", description: getApiErrorMessage(err), variant: "destructive" })
+            toast({ title: "Could not save pay settings", description: getApiErrorMessage(err), variant: "destructive" })
         } finally {
             setSavingRate(false)
+        }
+    }
+
+    const approveDay = async (day: string, approved: boolean) => {
+        const agentId = selectedAgentId === "me" ? user?.id : selectedAgentId
+        if (!agentId || agentId === "me") return
+        setApprovingDay(day)
+        try {
+            await TimeTrackingService.approveOverCapDay(agentId, day, approved, timezone)
+            toast({
+                title: approved ? "Extra hours approved" : "Approval removed",
+                description: approved
+                    ? "Hours over the cap for that day will be paid."
+                    : "Hours over the cap for that day are unpaid again.",
+            })
+            await Promise.all([loadPayouts(), loadRoster()])
+        } catch (err) {
+            toast({ title: "Could not update approval", description: getApiErrorMessage(err), variant: "destructive" })
+        } finally {
+            setApprovingDay(null)
         }
     }
 
@@ -228,37 +289,42 @@ export default function TimeTrackingPage() {
     return (
         <div className="space-y-6 p-4 pb-10 sm:p-6">
             <PageHeader
-                title={isSuperAdmin && !isBdc ? "BDC time & pay" : "My time & pay"}
+                title={isTimeAdmin && !isBdc ? "BDC time & pay" : "My time & pay"}
                 description={
-                    isSuperAdmin && !isBdc
-                        ? "Set hourly rates, see who is on the clock, and review weekly and monthly payouts."
-                        : "Clock in when you start work. Review hours, overtime, and estimated payouts."
+                    isTimeAdmin && !isBdc
+                        ? "Set each agent's hourly wage and max hours per day/week. Extra clocked time is unpaid until you approve it."
+                        : "Clock in for your shift. Hours over your daily or weekly cap are unpaid until a manager approves them."
                 }
             />
 
             {isBdc && <ClockWidget />}
 
-            {isSuperAdmin && (
-                <div className="grid gap-3 sm:grid-cols-3">
+            {isTimeAdmin && (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <SummaryCard
                         icon={<Users className="h-4 w-4 text-emerald-600" />}
                         label="On the clock"
                         value={`${clockedInCount} agent${clockedInCount === 1 ? "" : "s"}`}
                     />
                     <SummaryCard
+                        icon={<Phone className="h-4 w-4 text-sky-600" />}
+                        label="On a call now"
+                        value={`${onCallCount} agent${onCallCount === 1 ? "" : "s"}`}
+                    />
+                    <SummaryCard
                         icon={<Timer className="h-4 w-4 text-blue-600" />}
-                        label="Team week pay"
-                        value={formatMoney(teamWeekPay)}
+                        label="Team week on calls"
+                        value={formatHours(teamWeekCalls)}
                     />
                     <SummaryCard
                         icon={<DollarSign className="h-4 w-4 text-amber-600" />}
-                        label="Team month pay"
-                        value={formatMoney(teamMonthPay)}
+                        label="Team week pay"
+                        value={formatMoney(teamWeekPay)}
                     />
                 </div>
             )}
 
-            {isSuperAdmin && roster.length > 0 && (
+            {isTimeAdmin && roster.length > 0 && (
                 <Card>
                     <CardHeader className="pb-3">
                         <CardTitle className="text-base">BDC agents</CardTitle>
@@ -270,10 +336,13 @@ export default function TimeTrackingPage() {
                                     <TableHead>Agent</TableHead>
                                     <TableHead>Status</TableHead>
                                     <TableHead className="text-right">Rate</TableHead>
-                                    <TableHead className="text-right">Today</TableHead>
-                                    <TableHead className="text-right">This week</TableHead>
+                                    <TableHead className="text-right">Clocked today</TableHead>
+                                    <TableHead className="text-right">On calls today</TableHead>
+                                    <TableHead className="text-right">Clocked week</TableHead>
+                                    <TableHead className="text-right">On calls week</TableHead>
+                                    <TableHead className="text-right">Util.</TableHead>
+                                    <TableHead className="text-right">Unpaid week</TableHead>
                                     <TableHead className="text-right">Week pay</TableHead>
-                                    <TableHead className="text-right">Month pay</TableHead>
                                     <TableHead />
                                 </TableRow>
                             </TableHeader>
@@ -298,13 +367,21 @@ export default function TimeTrackingPage() {
                                                 <div className="text-xs text-muted-foreground">{agent.email}</div>
                                             </TableCell>
                                             <TableCell>
-                                                {agent.is_clocked_in ? (
-                                                    <Badge variant="interested" className="font-mono tabular-nums">
-                                                        In {formatElapsed(elapsed)}
-                                                    </Badge>
-                                                ) : (
-                                                    <Badge variant="outline">Off</Badge>
-                                                )}
+                                                <div className="flex flex-col gap-1">
+                                                    {agent.is_clocked_in ? (
+                                                        <Badge variant="interested" className="w-fit font-mono tabular-nums">
+                                                            In {formatElapsed(elapsed)}
+                                                        </Badge>
+                                                    ) : (
+                                                        <Badge variant="outline" className="w-fit">Off</Badge>
+                                                    )}
+                                                    {agent.on_call && (
+                                                        <Badge variant="outline" className="w-fit border-sky-300 text-sky-700 dark:text-sky-300">
+                                                            <Phone className="mr-1 h-3 w-3" />
+                                                            On call
+                                                        </Badge>
+                                                    )}
+                                                </div>
                                             </TableCell>
                                             <TableCell className="text-right tabular-nums">
                                                 {agent.hourly_rate == null ? (
@@ -317,13 +394,29 @@ export default function TimeTrackingPage() {
                                                 {formatHours(agent.today.total_hours)}
                                             </TableCell>
                                             <TableCell className="text-right tabular-nums">
+                                                {formatHours(agent.today_calls?.talk_hours)}
+                                            </TableCell>
+                                            <TableCell className="text-right tabular-nums">
                                                 {formatHours(agent.this_week.total_hours)}
                                             </TableCell>
                                             <TableCell className="text-right tabular-nums">
-                                                {formatMoney(agent.this_week.estimated_pay)}
+                                                {formatHours(agent.this_week_calls?.talk_hours)}
+                                                {agent.this_week_calls?.call_count ? (
+                                                    <div className="text-xs text-muted-foreground">{agent.this_week_calls.call_count} calls</div>
+                                                ) : null}
                                             </TableCell>
                                             <TableCell className="text-right tabular-nums">
-                                                {formatMoney(agent.this_month.estimated_pay)}
+                                                {formatPercent(agent.this_week_calls?.utilization_pct)}
+                                            </TableCell>
+                                            <TableCell className="text-right tabular-nums">
+                                                {num(agent.this_week.unpaid_hours) > 0 ? (
+                                                    <span className="text-amber-700 dark:text-amber-400">{formatHours(agent.this_week.unpaid_hours)}</span>
+                                                ) : (
+                                                    "—"
+                                                )}
+                                            </TableCell>
+                                            <TableCell className="text-right tabular-nums">
+                                                {formatMoney(agent.this_week.estimated_pay)}
                                             </TableCell>
                                             <TableCell className="text-right">
                                                 <Button
@@ -332,10 +425,16 @@ export default function TimeTrackingPage() {
                                                     onClick={() => {
                                                         setRateAgent(agent)
                                                         setRateValue(agent.hourly_rate != null ? String(num(agent.hourly_rate)) : "")
+                                                        setCapWeek(capInput(agent.hour_caps?.max_hours_week))
+                                                        setCapDays(
+                                                            Object.fromEntries(
+                                                                WEEKDAY_CAPS.map((d) => [d.key, capInput(agent.hour_caps?.[d.key])])
+                                                            )
+                                                        )
                                                     }}
                                                 >
                                                     <Pencil className="h-3.5 w-3.5" />
-                                                    Rate
+                                                    Pay & hours
                                                 </Button>
                                             </TableCell>
                                         </TableRow>
@@ -355,11 +454,11 @@ export default function TimeTrackingPage() {
                             : "Timesheet"}
                     </h2>
                     <p className="text-sm text-muted-foreground">
-                        Overtime is 1.5× after 40 hours in a Monday–Sunday week. Pay uses the rate snapshotted on each punch.
+                        Clocked hours are attendance. On-call hours are connected talk time from Twilio. Utilization is talk time ÷ clocked time.
                     </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                    {isSuperAdmin && isBdc && (
+                    {isTimeAdmin && isBdc && (
                         <Select value={selectedAgentId} onValueChange={setSelectedAgentId}>
                             <SelectTrigger className="w-[200px]">
                                 <SelectValue placeholder="Whose timesheet" />
@@ -374,7 +473,7 @@ export default function TimeTrackingPage() {
                             </SelectContent>
                         </Select>
                     )}
-                    {isSuperAdmin && !isBdc && selectedAgentId === "me" && roster[0] && (
+                    {isTimeAdmin && !isBdc && selectedAgentId === "me" && roster[0] && (
                         <span className="text-xs text-muted-foreground">Select an agent above to open their timesheet.</span>
                     )}
                     <Tabs value={period} onValueChange={(v) => setPeriod(v as PayoutPeriod)}>
@@ -393,21 +492,39 @@ export default function TimeTrackingPage() {
                 <div className="flex h-40 items-center justify-center">
                     <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                 </div>
-            ) : isSuperAdmin && !isBdc && selectedAgentId === "me" ? (
+            ) : isTimeAdmin && !isBdc && selectedAgentId === "me" ? (
                 <Card>
                     <CardContent className="p-8 text-center text-sm text-muted-foreground">
                         Click an agent name to review their daily hours and estimated payout.
                     </CardContent>
                 </Card>
-            ) : (
+            ) : (() => {
+                                    const callWork = payouts?.call_work
+                    const clockedHours = num(totals?.total_hours)
+                    const talkHours = num(callWork?.talk_hours)
+                    return (
                 <>
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                        <SummaryCard label="Total hours" value={formatHours(totals?.total_hours)} />
-                        <SummaryCard label="Regular" value={formatHours(totals?.regular_hours)} />
-                        <SummaryCard label="Overtime" value={formatHours(totals?.overtime_hours)} />
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+                        <SummaryCard label="Clocked hours" value={formatHours(clockedHours)} />
                         <SummaryCard
-                            label="Hourly rate"
-                            value={payouts?.hourly_rate == null ? "Not set" : `${formatMoney(payouts.hourly_rate)}/hr`}
+                            label="Payable"
+                            value={formatHours(totals?.payable_hours ?? clockedHours)}
+                            hint="Within daily/weekly caps"
+                        />
+                        <SummaryCard
+                            label="Unpaid over cap"
+                            value={formatHours(totals?.unpaid_hours)}
+                            hint="Needs manager approval to pay"
+                        />
+                        <SummaryCard
+                            label="On calls"
+                            value={formatHours(talkHours)}
+                            hint={callWork?.call_count ? `${callWork.call_count} connected calls` : undefined}
+                        />
+                        <SummaryCard
+                            label="Utilization"
+                            value={formatPercent(callWork?.utilization_pct)}
+                            hint="Talk time vs clocked time"
                         />
                         <SummaryCard
                             label="Estimated payout"
@@ -415,11 +532,14 @@ export default function TimeTrackingPage() {
                             highlight
                         />
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                        Clocked hours are attendance. Pay uses payable hours (regular + OT after 40h/week). Hours over the daily or weekly cap stay unpaid until a manager approves them. Call time is the work check.
+                    </p>
 
                     {payouts?.hourly_rate == null && (
                         <p className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400">
                             <AlertTriangle className="h-4 w-4" />
-                            Payouts show $0 until Super Admin sets an hourly rate. Hours are still tracked.
+                            Payouts show $0 until a manager sets an hourly rate. Hours are still tracked.
                         </p>
                     )}
 
@@ -435,10 +555,14 @@ export default function TimeTrackingPage() {
                                     <TableHeader>
                                         <TableRow>
                                             <TableHead>Day</TableHead>
-                                            <TableHead className="text-right">Regular</TableHead>
+                                            <TableHead className="text-right">Cap</TableHead>
+                                            <TableHead className="text-right">Clocked</TableHead>
+                                            <TableHead className="text-right">Payable</TableHead>
+                                            <TableHead className="text-right">Unpaid</TableHead>
+                                            <TableHead className="text-right">On calls</TableHead>
                                             <TableHead className="text-right">OT</TableHead>
-                                            <TableHead className="text-right">Total</TableHead>
                                             <TableHead className="text-right">Est. pay</TableHead>
+                                            {isTimeAdmin && <TableHead />}
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -450,10 +574,46 @@ export default function TimeTrackingPage() {
                                                         {format(new Date(day.date + "T12:00:00"), "MMM d, yyyy")}
                                                     </div>
                                                 </TableCell>
-                                                <TableCell className="text-right tabular-nums">{formatHours(day.regular_hours)}</TableCell>
-                                                <TableCell className="text-right tabular-nums">{formatHours(day.overtime_hours)}</TableCell>
+                                                <TableCell className="text-right tabular-nums text-muted-foreground">
+                                                    {day.daily_cap == null ? "—" : formatHours(day.daily_cap)}
+                                                </TableCell>
                                                 <TableCell className="text-right tabular-nums font-medium">{formatHours(day.total_hours)}</TableCell>
+                                                <TableCell className="text-right tabular-nums">{formatHours(day.payable_hours ?? day.total_hours)}</TableCell>
+                                                <TableCell className="text-right tabular-nums">
+                                                    {num(day.unpaid_hours) > 0 ? (
+                                                        <span className="font-medium text-amber-700 dark:text-amber-400">{formatHours(day.unpaid_hours)}</span>
+                                                    ) : (
+                                                        formatHours(day.unpaid_hours)
+                                                    )}
+                                                </TableCell>
+                                                <TableCell className="text-right tabular-nums">{formatHours(day.call_work?.talk_hours)}</TableCell>
+                                                <TableCell className="text-right tabular-nums">{formatHours(day.overtime_hours)}</TableCell>
                                                 <TableCell className="text-right tabular-nums">{formatMoney(day.estimated_pay)}</TableCell>
+                                                {isTimeAdmin && (
+                                                    <TableCell className="text-right">
+                                                        {num(day.unpaid_hours) > 0 ? (
+                                                            <Button
+                                                                size="sm"
+                                                                variant="outline"
+                                                                disabled={approvingDay === day.date}
+                                                                onClick={() => approveDay(day.date, true)}
+                                                            >
+                                                                {approvingDay === day.date && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                                                                Approve extra
+                                                            </Button>
+                                                        ) : day.over_cap_approved ? (
+                                                            <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                disabled={approvingDay === day.date}
+                                                                onClick={() => approveDay(day.date, false)}
+                                                            >
+                                                                {approvingDay === day.date && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                                                                Revoke extra
+                                                            </Button>
+                                                        ) : null}
+                                                    </TableCell>
+                                                )}
                                             </TableRow>
                                         ))}
                                     </TableBody>
@@ -478,7 +638,7 @@ export default function TimeTrackingPage() {
                                             <TableHead className="text-right">Duration</TableHead>
                                             <TableHead className="text-right">Rate</TableHead>
                                             <TableHead>Notes</TableHead>
-                                            {isSuperAdmin && <TableHead />}
+                                            {isTimeAdmin && <TableHead />}
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -499,9 +659,14 @@ export default function TimeTrackingPage() {
                                                     {entry.hourly_rate == null ? "—" : `${formatMoney(entry.hourly_rate)}/hr`}
                                                 </TableCell>
                                                 <TableCell className="max-w-[220px] truncate text-sm text-muted-foreground">
+                                                    {entry.over_cap_approved && (
+                                                        <Badge variant="outline" className="mr-1 border-emerald-300 text-emerald-700">
+                                                            Extra paid
+                                                        </Badge>
+                                                    )}
                                                     {entry.notes || entry.clock_in_note || entry.edit_reason || "—"}
                                                 </TableCell>
-                                                {isSuperAdmin && (
+                                                {isTimeAdmin && (
                                                     <TableCell className="text-right">
                                                         <div className="flex justify-end gap-1">
                                                             {entry.is_open && (
@@ -533,18 +698,19 @@ export default function TimeTrackingPage() {
                         </CardContent>
                     </Card>
                 </>
-            )}
+                    )
+                })()}
 
             <Dialog open={!!rateAgent} onOpenChange={(open) => !open && setRateAgent(null)}>
-                <DialogContent>
+                <DialogContent className="max-w-lg">
                     <DialogHeader>
                         <DialogTitle>
-                            Hourly rate
+                            Pay &amp; hours
                             {rateAgent ? ` — ${rateAgent.first_name} ${rateAgent.last_name}` : ""}
                         </DialogTitle>
                     </DialogHeader>
                     <p className="text-sm text-muted-foreground">
-                        This rate applies to punches from now on. Past sessions keep the rate they were clocked in with.
+                        Hourly rate applies to new punches. Daily and weekly caps are payable limits — they can still clock extra hours, but that time is unpaid until you approve it.
                     </p>
                     <div className="space-y-2">
                         <Label htmlFor="hourly-rate">USD per hour</Label>
@@ -558,11 +724,46 @@ export default function TimeTrackingPage() {
                             onChange={(e) => setRateValue(e.target.value)}
                         />
                     </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="cap-week">Max payable hours / week</Label>
+                        <Input
+                            id="cap-week"
+                            type="number"
+                            min={0}
+                            step="0.25"
+                            placeholder="No weekly cap"
+                            value={capWeek}
+                            onChange={(e) => setCapWeek(e.target.value)}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <Label>Max payable hours / day</Label>
+                        <p className="text-xs text-muted-foreground">
+                            Leave blank for no cap that day. Example: 6 on weekdays, 10 on Friday and Saturday, 0 on Sunday.
+                        </p>
+                        <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
+                            {WEEKDAY_CAPS.map((day) => (
+                                <div key={day.key} className="space-y-1">
+                                    <Label htmlFor={`cap-${day.key}`} className="text-xs">{day.label}</Label>
+                                    <Input
+                                        id={`cap-${day.key}`}
+                                        type="number"
+                                        min={0}
+                                        max={24}
+                                        step="0.25"
+                                        placeholder="—"
+                                        value={capDays[day.key] || ""}
+                                        onChange={(e) => setCapDays((prev) => ({ ...prev, [day.key]: e.target.value }))}
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setRateAgent(null)}>Cancel</Button>
                         <Button onClick={saveRate} disabled={savingRate}>
                             {savingRate && <Loader2 className="h-4 w-4 animate-spin" />}
-                            Save rate
+                            Save
                         </Button>
                     </DialogFooter>
                 </DialogContent>
@@ -617,11 +818,13 @@ function SummaryCard({
     value,
     icon,
     highlight,
+    hint,
 }: {
     label: string
     value: string
     icon?: React.ReactNode
     highlight?: boolean
+    hint?: string
 }) {
     return (
         <Card className={cn(highlight && "border-emerald-500/40 bg-emerald-50/50 dark:bg-emerald-950/20")}>
@@ -631,6 +834,7 @@ function SummaryCard({
                     {label}
                 </div>
                 <p className="mt-1 text-xl font-semibold tabular-nums">{value}</p>
+                {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
             </CardContent>
         </Card>
     )

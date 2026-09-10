@@ -78,7 +78,7 @@ const allSidebarItems: SidebarItem[] = [
         name: "Time & Pay",
         icon: Timer,
         href: "/time-tracking",
-        roles: ["bdc", "super_admin"],
+        roles: ["bdc", "super_admin", "dealership_admin", "dealership_owner"],
     },
     {
         name: "Leads", 

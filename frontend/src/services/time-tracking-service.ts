@@ -7,10 +7,33 @@ import apiClient from "@/lib/api-client"
 export interface HoursBreakdown {
     regular_hours: number | string
     overtime_hours: number | string
+    unpaid_hours?: number | string
+    payable_hours?: number | string
     total_hours: number | string
     regular_pay: number | string
     overtime_pay: number | string
     estimated_pay: number | string
+}
+
+export interface HourCaps {
+    max_hours_week?: number | string | null
+    monday?: number | string | null
+    tuesday?: number | string | null
+    wednesday?: number | string | null
+    thursday?: number | string | null
+    friday?: number | string | null
+    saturday?: number | string | null
+    sunday?: number | string | null
+}
+
+export interface CallWorkStats {
+    talk_seconds: number
+    talk_hours: number | string
+    call_count: number
+    inbound_count: number
+    outbound_count: number
+    avg_call_seconds: number
+    utilization_pct?: number | string | null
 }
 
 export interface TimeEntryUserBrief {
@@ -34,6 +57,8 @@ export interface TimeEntry {
     duration_seconds: number
     edited_at?: string | null
     edit_reason?: string | null
+    over_cap_approved?: boolean
+    over_cap_approved_at?: string | null
     user?: TimeEntryUserBrief | null
 }
 
@@ -56,6 +81,13 @@ export interface ClockStatus {
     today: HoursBreakdown
     this_week: HoursBreakdown
     this_month: HoursBreakdown
+    today_calls?: CallWorkStats
+    this_week_calls?: CallWorkStats
+    this_month_calls?: CallWorkStats
+    on_call?: boolean
+    current_call_seconds?: number
+    hour_caps?: HourCaps
+    over_cap_warning?: boolean
 }
 
 export interface DailyPayoutRow {
@@ -66,6 +98,11 @@ export interface DailyPayoutRow {
     total_hours: number | string
     estimated_pay: number | string
     entry_count: number
+    unpaid_hours?: number | string
+    payable_hours?: number | string
+    daily_cap?: number | string | null
+    over_cap_approved?: boolean
+    call_work?: CallWorkStats
 }
 
 export interface PayoutSummary {
@@ -77,6 +114,8 @@ export interface PayoutSummary {
     overtime_multiplier: number | string
     overtime_threshold_hours: number | string
     totals: HoursBreakdown
+    hour_caps?: HourCaps
+    call_work?: CallWorkStats
     days: DailyPayoutRow[]
     entries: TimeEntry[]
 }
@@ -88,19 +127,25 @@ export interface AgentRosterItem {
     email: string
     is_active: boolean
     hourly_rate: number | string | null
+    hour_caps?: HourCaps
     is_clocked_in: boolean
     clock_in_at?: string | null
     elapsed_seconds: number
+    on_call?: boolean
     this_week: HoursBreakdown
     this_month: HoursBreakdown
     today: HoursBreakdown
+    today_calls?: CallWorkStats
+    this_week_calls?: CallWorkStats
 }
 
 export interface AgentRoster {
     items: AgentRosterItem[]
     clocked_in_count: number
+    on_call_count?: number
     team_week: HoursBreakdown
     team_month: HoursBreakdown
+    team_week_calls?: CallWorkStats
 }
 
 export type PayoutPeriod = "today" | "this_week" | "last_week" | "this_month" | "last_month" | "this_year"
@@ -153,6 +198,36 @@ export const TimeTrackingService = {
             { hourly_rate: hourlyRate },
             { params: timezone ? { timezone } : undefined }
         )
+        return response.data
+    },
+
+    async setHourCaps(userId: string, caps: HourCaps, timezone?: string): Promise<AgentRosterItem> {
+        const response = await apiClient.patch(
+            `/time-tracking/admin/agents/${userId}/caps`,
+            caps,
+            { params: timezone ? { timezone } : undefined }
+        )
+        return response.data
+    },
+
+    async setOverCapApproved(entryId: string, approved: boolean): Promise<TimeEntry> {
+        const response = await apiClient.patch(`/time-tracking/admin/entries/${entryId}/over-cap`, {
+            approved,
+        })
+        return response.data
+    },
+
+    async approveOverCapDay(
+        userId: string,
+        date: string,
+        approved: boolean,
+        timezone?: string
+    ): Promise<{ updated: number; date: string; approved: boolean }> {
+        const response = await apiClient.post(`/time-tracking/admin/agents/${userId}/approve-day`, {
+            date,
+            approved,
+            timezone: timezone || null,
+        })
         return response.data
     },
 

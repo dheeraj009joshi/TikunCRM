@@ -1,4 +1,4 @@
-import { HoursBreakdown } from "@/services/time-tracking-service"
+import { HoursBreakdown, CallWorkStats } from "@/services/time-tracking-service"
 
 export function num(value: number | string | null | undefined): number {
     if (value == null || value === "") return 0
@@ -29,13 +29,32 @@ export function formatElapsed(totalSeconds: number): string {
     return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":")
 }
 
+export function formatPercent(value: number | string | null | undefined): string {
+    if (value == null || value === "") return "—"
+    return `${Math.round(num(value))}%`
+}
+
 export function emptyBreakdown(): HoursBreakdown {
     return {
         regular_hours: 0,
         overtime_hours: 0,
+        unpaid_hours: 0,
+        payable_hours: 0,
         total_hours: 0,
         regular_pay: 0,
         overtime_pay: 0,
         estimated_pay: 0,
+    }
+}
+
+export function emptyCallWork(): CallWorkStats {
+    return {
+        talk_seconds: 0,
+        talk_hours: 0,
+        call_count: 0,
+        inbound_count: 0,
+        outbound_count: 0,
+        avg_call_seconds: 0,
+        utilization_pct: null,
     }
 }
