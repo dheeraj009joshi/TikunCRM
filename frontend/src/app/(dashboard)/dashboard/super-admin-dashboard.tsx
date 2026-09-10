@@ -13,7 +13,8 @@ import {
     Loader2,
     InboxIcon,
     Eye,
-    CalendarClock
+    CalendarClock,
+    Timer,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, MetricCard } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -39,6 +40,8 @@ import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { DonutChart, BarChart } from "@tremor/react"
 import { useStatsRefresh } from "@/hooks/use-websocket"
+import { TimeTrackingService } from "@/services/time-tracking-service"
+import { formatMoney } from "@/lib/time-tracking"
 
 export function SuperAdminDashboard() {
     const [stats, setStats] = React.useState<SuperAdminStats | null>(null)
@@ -46,6 +49,8 @@ export function SuperAdminDashboard() {
     const [leadsBySource, setLeadsBySource] = React.useState<LeadsBySource[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
+    const [bdcClockedIn, setBdcClockedIn] = React.useState<number | null>(null)
+    const [bdcWeekPay, setBdcWeekPay] = React.useState<number | null>(null)
     const { timezone } = useBrowserTimezone()
 
     const fetchStats = React.useCallback(async () => {
@@ -88,6 +93,15 @@ export function SuperAdminDashboard() {
             }
         }
         fetchData()
+        TimeTrackingService.getRoster()
+            .then((roster) => {
+                setBdcClockedIn(roster.clocked_in_count)
+                setBdcWeekPay(Number(roster.team_week.estimated_pay) || 0)
+            })
+            .catch(() => {
+                setBdcClockedIn(null)
+                setBdcWeekPay(null)
+            })
     }, [])
 
     const statCards = stats ? [
@@ -169,6 +183,29 @@ export function SuperAdminDashboard() {
                     </Link>
                 </div>
             </div>
+
+            {bdcClockedIn != null && (
+                <Link href="/time-tracking">
+                    <Card className="border-emerald-200 transition-colors hover:bg-emerald-50/80 dark:border-emerald-900 dark:hover:bg-emerald-950/40">
+                        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+                            <div className="flex items-center gap-3">
+                                <div className="rounded-full bg-emerald-100 p-2 dark:bg-emerald-900">
+                                    <Timer className="h-5 w-5 text-emerald-600" />
+                                </div>
+                                <div>
+                                    <p className="font-medium">
+                                        {bdcClockedIn} BDC agent{bdcClockedIn === 1 ? "" : "s"} on the clock
+                                    </p>
+                                    <p className="text-sm text-muted-foreground">
+                                        Estimated team week pay {formatMoney(bdcWeekPay ?? 0)} · Open Time &amp; Pay
+                                    </p>
+                                </div>
+                            </div>
+                            <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
+                        </CardContent>
+                    </Card>
+                </Link>
+            )}
 
             {/* Today's Appointments Widget */}
             {todayAppointments.length > 0 && (

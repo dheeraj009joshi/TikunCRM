@@ -23,6 +23,7 @@ import {
     ClipboardList,
     Target,
     Percent,
+    Pencil,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -86,6 +87,9 @@ import { NotifySalespersonDialog } from "@/components/team/notify-salesperson-di
 import { CreateUserModal } from "@/components/team/create-user-modal"
 import { EditBdcDealershipsModal } from "@/components/team/edit-bdc-dealerships-modal"
 import { UserBrief } from "@/services/team-service"
+import { TimeTrackingService } from "@/services/time-tracking-service"
+import { formatMoney, num } from "@/lib/time-tracking"
+import { Label } from "@/components/ui/label"
 
 export default function TeamPage() {
     const { toast } = useToast()
@@ -123,6 +127,9 @@ export default function TeamPage() {
     const [bdcAgents, setBdcAgents] = React.useState<UserBrief[]>([])
     const [createUserOpen, setCreateUserOpen] = React.useState(false)
     const [editBdcUser, setEditBdcUser] = React.useState<UserBrief | null>(null)
+    const [rateAgent, setRateAgent] = React.useState<UserBrief | null>(null)
+    const [rateValue, setRateValue] = React.useState("")
+    const [savingRate, setSavingRate] = React.useState(false)
 
     const fetchTeam = React.useCallback(async () => {
         try {
@@ -315,8 +322,16 @@ export default function TeamPage() {
 
             {isSuperAdmin && bdcAgents.length > 0 && (
                 <Card>
-                    <CardHeader>
-                        <CardTitle className="text-lg">BDC Agents</CardTitle>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                        <div>
+                            <CardTitle className="text-lg">BDC Agents</CardTitle>
+                            <p className="text-sm text-muted-foreground">
+                                Hourly rate is used for time-clock payouts.{" "}
+                                <Link href="/time-tracking" className="text-primary hover:underline">
+                                    Open Time &amp; Pay
+                                </Link>
+                            </p>
+                        </div>
                     </CardHeader>
                     <CardContent>
                         <Table>
@@ -325,7 +340,8 @@ export default function TeamPage() {
                                     <TableHead>Name</TableHead>
                                     <TableHead>Email</TableHead>
                                     <TableHead>Status</TableHead>
-                                    <TableHead className="w-32">Actions</TableHead>
+                                    <TableHead className="text-right">Hourly rate</TableHead>
+                                    <TableHead className="w-48">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -338,14 +354,36 @@ export default function TeamPage() {
                                                 {agent.is_active ? "Active" : "Inactive"}
                                             </Badge>
                                         </TableCell>
+                                        <TableCell className="text-right tabular-nums">
+                                            {agent.hourly_rate == null || agent.hourly_rate === ""
+                                                ? <span className="text-amber-600">Not set</span>
+                                                : `${formatMoney(agent.hourly_rate)}/hr`}
+                                        </TableCell>
                                         <TableCell>
-                                            <Button
-                                                size="sm"
-                                                variant="outline"
-                                                onClick={() => setEditBdcUser(agent)}
-                                            >
-                                                Dealerships
-                                            </Button>
+                                            <div className="flex gap-2">
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => {
+                                                        setRateAgent(agent)
+                                                        setRateValue(
+                                                            agent.hourly_rate != null && agent.hourly_rate !== ""
+                                                                ? String(num(agent.hourly_rate))
+                                                                : ""
+                                                        )
+                                                    }}
+                                                >
+                                                    <Pencil className="h-3.5 w-3.5" />
+                                                    Rate
+                                                </Button>
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => setEditBdcUser(agent)}
+                                                >
+                                                    Dealerships
+                                                </Button>
+                                            </div>
                                         </TableCell>
                                     </TableRow>
                                 ))}
@@ -865,6 +903,65 @@ export default function TeamPage() {
                     TeamService.listBdcAgents().then(setBdcAgents).catch(() => {})
                 }}
             />
+            <Dialog open={!!rateAgent} onOpenChange={(open) => !open && setRateAgent(null)}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>
+                            Hourly rate{rateAgent ? ` — ${rateAgent.first_name} ${rateAgent.last_name}` : ""}
+                        </DialogTitle>
+                    </DialogHeader>
+                    <p className="text-sm text-muted-foreground">
+                        Used for Time &amp; Pay. Future clock-ins snapshot this rate so past payouts stay accurate.
+                    </p>
+                    <div className="space-y-2">
+                        <Label htmlFor="bdc-hourly-rate">USD per hour</Label>
+                        <Input
+                            id="bdc-hourly-rate"
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            placeholder="20.00"
+                            value={rateValue}
+                            onChange={(e) => setRateValue(e.target.value)}
+                        />
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setRateAgent(null)}>Cancel</Button>
+                        <Button
+                            disabled={savingRate}
+                            onClick={async () => {
+                                if (!rateAgent) return
+                                const parsed = Number(rateValue)
+                                if (!Number.isFinite(parsed) || parsed < 0) {
+                                    toast({ title: "Enter a valid hourly rate", variant: "destructive" })
+                                    return
+                                }
+                                setSavingRate(true)
+                                try {
+                                    await TimeTrackingService.setHourlyRate(rateAgent.id, parsed)
+                                    toast({
+                                        title: "Hourly rate updated",
+                                        description: `${rateAgent.first_name}'s rate is now ${formatMoney(parsed)}/hr.`,
+                                    })
+                                    setRateAgent(null)
+                                    TeamService.listBdcAgents().then(setBdcAgents).catch(() => {})
+                                } catch (err) {
+                                    toast({
+                                        title: "Could not save rate",
+                                        description: getApiErrorMessage(err),
+                                        variant: "destructive",
+                                    })
+                                } finally {
+                                    setSavingRate(false)
+                                }
+                            }}
+                        >
+                            {savingRate && <Loader2 className="h-4 w-4 animate-spin" />}
+                            Save rate
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

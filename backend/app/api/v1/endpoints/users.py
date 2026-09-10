@@ -479,7 +479,8 @@ async def create_user(
         role=user_in.role,
         dealership_id=user_in.dealership_id,
         is_active=True,
-        must_change_password=True  # Force password change on first login
+        must_change_password=True,  # Force password change on first login
+        hourly_rate=user_in.hourly_rate if user_in.role == UserRole.BDC else None,
     )
     
     db.add(user)

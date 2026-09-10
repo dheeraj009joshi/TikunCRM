@@ -2,6 +2,7 @@
 Pydantic Schemas for User
 """
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
@@ -24,6 +25,7 @@ class UserCreate(UserBase):
     password: str = Field(..., min_length=6)
     role: UserRole = UserRole.SALESPERSON
     dealership_id: Optional[UUID] = None
+    hourly_rate: Optional[Decimal] = Field(None, ge=0, le=10000)
 
 
 class UserUpdate(BaseModel):
@@ -101,6 +103,7 @@ class UserResponse(UserBase):
     email_config_verified: bool = False
     must_change_password: bool = False
     last_login_at: Optional[datetime] = None
+    hourly_rate: Optional[Decimal] = None
     created_at: datetime
     updated_at: datetime
     config_access_password_set: bool = False
@@ -121,6 +124,7 @@ class UserBrief(BaseModel):
     dealership_id: Optional[UUID] = None
     smtp_email: Optional[str] = None
     email_config_verified: bool = False
+    hourly_rate: Optional[Decimal] = None
     
     class Config:
         from_attributes = True

@@ -62,6 +62,7 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
         phone: "",
         role: "salesperson",
         dealership_id: resolvedDefaultDealershipId,
+        hourly_rate: "",
     })
 
     React.useEffect(() => {
@@ -94,6 +95,7 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
             phone: "",
             role: "salesperson",
             dealership_id: resolvedDefaultDealershipId,
+            hourly_rate: "",
         })
         setBdcDealershipIds([])
         setError("")
@@ -141,12 +143,18 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
         setError("")
 
         try {
-            const payload = {
+            const payload: Record<string, unknown> = {
                 ...formData,
                 dealership_id:
                     formData.role === "super_admin" || formData.role === "bdc"
                         ? null
                         : formData.dealership_id,
+            }
+            if (formData.role === "bdc") {
+                const rate = Number(formData.hourly_rate)
+                payload.hourly_rate = Number.isFinite(rate) && rate > 0 ? rate : null
+            } else {
+                delete payload.hourly_rate
             }
             const created = await UserService.createUser(payload)
             if (formData.role === "bdc") {
@@ -279,6 +287,24 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
                             </Select>
                         </div>
                     </div>
+
+                    {formData.role === "bdc" && isSuperAdmin && (
+                        <div className="space-y-2">
+                            <Label htmlFor="hourly_rate">Hourly rate (USD)</Label>
+                            <Input
+                                id="hourly_rate"
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                placeholder="20.00"
+                                value={formData.hourly_rate}
+                                onChange={(e) => setFormData((prev) => ({ ...prev, hourly_rate: e.target.value }))}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Used for Time &amp; Pay. You can also set this later from Team or Time &amp; Pay.
+                            </p>
+                        </div>
+                    )}
 
                     {formData.role === "bdc" && isSuperAdmin && (
                         <div className="space-y-2">

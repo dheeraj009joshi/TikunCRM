@@ -9,6 +9,7 @@ export interface UserBrief {
     role: UserRole;
     is_active: boolean;
     dealership_id?: string;
+    hourly_rate?: number | string | null;
 }
 
 export interface UserWithStats extends UserBrief {
@@ -33,6 +34,7 @@ export interface CreateUserData {
     phone?: string;
     role: UserRole;
     dealership_id?: string;
+    hourly_rate?: number;
 }
 
 export interface UpdateUserData {

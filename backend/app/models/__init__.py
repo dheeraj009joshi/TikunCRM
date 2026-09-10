@@ -59,6 +59,7 @@ from app.models.lead_credit_application import (
     CreditApplicationType,
 )
 from app.models.partner_store import PartnerStore
+from app.models.time_entry import TimeEntry
 
 __all__ = [
     "Customer",
@@ -139,4 +140,5 @@ __all__ = [
     "CreditApplicationTransactionType",
     "CreditApplicationType",
     "PartnerStore",
+    "TimeEntry",
 ]

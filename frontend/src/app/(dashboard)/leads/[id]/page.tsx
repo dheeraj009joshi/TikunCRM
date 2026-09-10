@@ -2178,15 +2178,15 @@ export default function LeadDetailsPage() {
         .filter((c) => c.message && c.message !== primaryTargeting)
 
     return (
-        <div className="h-[calc(100vh-120px)] flex flex-col max-w-7xl mx-auto overflow-hidden">
+        <div className="flex flex-col max-w-7xl mx-auto lg:h-[calc(100dvh-11rem)] lg:overflow-hidden">
             {/* Navigation */}
-            <div className="flex items-start justify-between shrink-0 mb-4 gap-3">
+            <div className="flex items-start justify-between shrink-0 mb-3 lg:mb-4 gap-3">
                 <Link href={backToLeadsHref} className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors duration-200 rounded-md hover:bg-muted/50 px-2 py-1 -mx-2 -my-1">
                     <ChevronLeft className="h-4 w-4 shrink-0" />
                     Back to Leads
                 </Link>
                 <div className="flex items-start gap-2 min-w-0 flex-wrap justify-end">
-                    <div className="inline-flex flex-col items-start min-w-0 max-w-[min(100%,28rem)]">
+                    <div className="inline-flex flex-col items-start min-w-0 max-w-[min(100%,18rem)] sm:max-w-[min(100%,28rem)]">
                         <Badge
                             variant={getSourceVariant(lead.source)}
                             className="max-w-full truncate"
@@ -2194,7 +2194,7 @@ export default function LeadDetailsPage() {
                         >
                             {campaignDisplay || sourceLabel || "—"}
                         </Badge>
-                        <p className="mt-1 text-sm text-foreground/80 whitespace-pre-wrap leading-snug">
+                        <p className="mt-1 text-xs sm:text-sm text-foreground/80 whitespace-pre-wrap leading-snug line-clamp-3 sm:line-clamp-none">
                             {primaryTargeting || "no special targeting available"}
                         </p>
                         {extraTargeting.map((item) => (
@@ -2206,7 +2206,7 @@ export default function LeadDetailsPage() {
                             </p>
                         ))}
                     </div>
-                    <span className="text-xs text-muted-foreground whitespace-nowrap pt-0.5">
+                    <span className="hidden sm:inline text-xs text-muted-foreground whitespace-nowrap pt-0.5">
                         Created <LocalTime date={lead.created_at} />
                     </span>
                     {isSuperAdmin && !isMentionOnly && (
@@ -2246,7 +2246,7 @@ export default function LeadDetailsPage() {
 
             {/* In Dealership Banner */}
             {currentVisit && (
-                <div className="shrink-0 rounded-lg border border-teal-300 bg-teal-50 dark:border-teal-800 dark:bg-teal-950/30 px-4 py-3 flex items-center justify-between">
+                <div className="shrink-0 mb-3 rounded-lg border border-teal-300 bg-teal-50 dark:border-teal-800 dark:bg-teal-950/30 px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-3">
                         <div className="rounded-full bg-teal-100 dark:bg-teal-900 p-2">
                             <Store className="h-5 w-5 text-teal-600" />
@@ -2269,9 +2269,9 @@ export default function LeadDetailsPage() {
                 </div>
             )}
 
-            <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0 overflow-hidden">
-                {/* Left Column: Profile & Info */}
-                <div className="lg:col-span-1 space-y-6 overflow-y-auto">
+            <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6 min-h-0 lg:overflow-hidden">
+                {/* Left Column: Profile & Info — own scroller only on desktop split pane */}
+                <div className="lg:col-span-1 space-y-4 lg:space-y-6 lg:min-h-0 lg:overflow-y-auto">
                     {/* Next best action */}
                     {!isMentionOnly && (
                         <NextBestAction
@@ -3393,10 +3393,10 @@ export default function LeadDetailsPage() {
                     )}
                 </div>
 
-                {/* Right Column: Activity & Interaction */}
-                <div className="lg:col-span-2 flex flex-col min-h-0 overflow-hidden">
-                    <Card className="flex-1 flex flex-col min-h-0 overflow-hidden border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md">
-                        <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as LeadActivityTab)} className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                {/* Right Column: Activity & Interaction — nested scroll only on lg+ */}
+                <div className="lg:col-span-2 flex flex-col min-h-[70vh] lg:min-h-0 lg:overflow-hidden">
+                    <Card className="flex flex-col min-h-0 border-border/80 shadow-sm transition-shadow duration-200 hover:shadow-md lg:flex-1 lg:overflow-hidden">
+                        <Tabs value={activeActivityTab} onValueChange={(v) => setActiveActivityTab(v as LeadActivityTab)} className="flex flex-col min-h-0 lg:flex-1 lg:overflow-hidden">
                             <div className="border-b border-border/60">
                                 {nextScheduledAppointment && (
                                     <div className="px-6 pt-3 pb-1">
@@ -3594,7 +3594,7 @@ export default function LeadDetailsPage() {
                             </div>
                             </div>
 
-                            <TabsContent value="timeline" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                            <TabsContent value="timeline" className="p-4 sm:p-6 m-0 lg:flex-1 lg:overflow-y-auto lg:min-h-0">
                                 {/* Timeline lenses */}
                                 <div className="mb-4 flex flex-wrap items-center gap-1.5">
                                     {(
@@ -3801,7 +3801,7 @@ export default function LeadDetailsPage() {
                                 )}
                             </TabsContent>
 
-                            <TabsContent value="notes" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                            <TabsContent value="notes" className="p-4 sm:p-6 m-0 lg:flex-1 lg:overflow-y-auto lg:min-h-0">
                                 {(() => {
                                     const allNotes = activities.filter(a => a.type === "note_added")
                                     // Separate parent notes and replies (threaded)
@@ -4010,7 +4010,7 @@ export default function LeadDetailsPage() {
                                 })()}
                             </TabsContent>
 
-                            <TabsContent value="appointments" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                            <TabsContent value="appointments" className="p-4 sm:p-6 m-0 lg:flex-1 lg:overflow-y-auto lg:min-h-0">
                                 <div className="flex items-center justify-end gap-2 mb-4">
                                     <Button variant="outline" size="sm" onClick={() => fetchLeadAppointmentsAndFollowUps()} disabled={loadingAppointmentsFollowUps}>
                                         {loadingAppointmentsFollowUps ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -4446,7 +4446,7 @@ export default function LeadDetailsPage() {
                                 )}
                             </TabsContent>
 
-                            <TabsContent value="followups" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                            <TabsContent value="followups" className="p-4 sm:p-6 m-0 lg:flex-1 lg:overflow-y-auto lg:min-h-0">
                                 <div className="flex items-center justify-end gap-2 mb-4">
                                     <Button variant="outline" size="sm" onClick={() => fetchLeadAppointmentsAndFollowUps()} disabled={loadingAppointmentsFollowUps}>
                                         {loadingAppointmentsFollowUps ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -4745,7 +4745,7 @@ export default function LeadDetailsPage() {
                                 )}
                             </TabsContent>
 
-                            <TabsContent value="stips" className="flex-1 p-6 m-0 overflow-y-auto min-h-0 flex flex-col">
+                            <TabsContent value="stips" className="p-4 sm:p-6 m-0 flex flex-col lg:flex-1 lg:overflow-y-auto lg:min-h-0">
                                 {!stipsConfigured && (
                                     <p className="text-sm text-muted-foreground mb-4">Stips storage is not configured. Upload is disabled. Configure Azure storage to enable document uploads.</p>
                                 )}
@@ -4968,7 +4968,7 @@ export default function LeadDetailsPage() {
                                 )}
                             </TabsContent>
 
-                            <TabsContent value="credit-app" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                            <TabsContent value="credit-app" className="p-4 sm:p-6 m-0 lg:flex-1 lg:overflow-y-auto lg:min-h-0">
                                 {leadId && (
                                     <LeadCreditAppForm
                                         leadId={leadId}
@@ -4986,7 +4986,7 @@ export default function LeadDetailsPage() {
                                 )}
                             </TabsContent>
 
-                            <TabsContent value="eligibility" className="flex-1 p-6 m-0 overflow-y-auto min-h-0">
+                            <TabsContent value="eligibility" className="p-4 sm:p-6 m-0 lg:flex-1 lg:overflow-y-auto lg:min-h-0">
                                 <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border bg-muted/30 p-4">
                                     <div className="min-w-0">
                                         <p className="text-sm font-medium">Guest Profile &amp; QR</p>

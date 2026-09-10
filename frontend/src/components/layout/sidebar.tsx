@@ -35,6 +35,7 @@ import {
     Target,
     Send,
     QrCode,
+    Timer,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -72,6 +73,12 @@ const allSidebarItems: SidebarItem[] = [
         name: "Dashboard", 
         icon: LayoutDashboard, 
         href: "/dashboard" 
+    },
+    {
+        name: "Time & Pay",
+        icon: Timer,
+        href: "/time-tracking",
+        roles: ["bdc", "super_admin"],
     },
     {
         name: "Leads", 

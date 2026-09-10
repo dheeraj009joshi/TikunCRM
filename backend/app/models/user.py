@@ -3,9 +3,10 @@ User Model
 """
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -162,6 +163,12 @@ class User(Base):
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         nullable=True
+    )
+
+    hourly_rate: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(10, 2),
+        nullable=True,
+        comment="Current hourly rate for BDC time tracking; snapshotted onto each punch",
     )
     
     created_at: Mapped[datetime] = mapped_column(

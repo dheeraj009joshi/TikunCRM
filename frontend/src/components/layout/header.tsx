@@ -7,6 +7,7 @@ import { Command, Menu, Sparkles } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { NotificationBell } from "@/components/layout/notification-bell"
 import { MissedCallsBell } from "@/components/layout/missed-calls-bell"
+import { HeaderClock } from "@/components/time-tracking/header-clock"
 import { useSidebarOptional } from "@/contexts/sidebar-context"
 import { useAiCopilotOptional } from "@/contexts/ai-copilot-context"
 import { Button } from "@/components/ui/button"
@@ -53,6 +54,7 @@ const SEGMENT_LABELS: Record<string, string> = {
     security: "Security",
     pipeline: "Pipeline",
     tasks: "Tasks",
+    "time-tracking": "Time & Pay",
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -135,6 +137,7 @@ export function Header() {
                     <span>K</span>
                 </div>
 
+                <HeaderClock />
                 <MissedCallsBell />
                 <NotificationBell />
 
