@@ -43,7 +43,6 @@ import { formatDateInTimezone, formatRelativeTimeInTimezone } from "@/utils/time
 import { cn } from "@/lib/utils"
 import { useBdcDealership } from "@/contexts/bdc-dealership-context"
 import { BdcDealershipSwitcher } from "@/components/layout/bdc-dealership-switcher"
-import { ClockWidget } from "@/components/time-tracking/clock-widget"
 
 function getScopedMetrics(stats: BdcStats, selectedDealershipId: string | null) {
     if (!selectedDealershipId) {
@@ -291,22 +290,16 @@ export function BdcDashboard() {
 
     if (isLoading) {
         return (
-            <div className="space-y-6 p-6">
-                <ClockWidget />
-                <div className="flex h-[40vh] items-center justify-center">
-                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                </div>
+            <div className="flex h-[50vh] items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
         )
     }
 
     if (!stats) {
         return (
-            <div className="space-y-6 p-6">
-                <ClockWidget />
-                <div className="p-6 text-center text-muted-foreground">
-                    Unable to load dashboard. Ensure your Super Admin has assigned dealerships to your account.
-                </div>
+            <div className="p-6 text-center text-muted-foreground">
+                Unable to load dashboard. Ensure your Super Admin has assigned dealerships to your account.
             </div>
         )
     }
@@ -319,7 +312,6 @@ export function BdcDashboard() {
 
     return (
         <div className="space-y-8 p-6 pb-10">
-            <ClockWidget />
             {/* Header — aligned with dealership admin dashboard */}
             <div className="flex flex-wrap items-end justify-between gap-4">
                 <div>

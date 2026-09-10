@@ -3,7 +3,7 @@ import sys
 from logging.config import fileConfig
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from sqlalchemy import create_engine, pool
+from sqlalchemy import create_engine, pool, text
 
 from alembic import context
 
@@ -65,12 +65,12 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        connection.execute(
-            __import__("sqlalchemy").text("SET statement_timeout TO 0")
-        )
-        connection.execute(
-            __import__("sqlalchemy").text("SET lock_timeout TO 0")
-        )
+        # SET starts a SQLAlchemy 2 transaction. Commit it first so Alembic's
+        # migration transaction is not a nested savepoint that gets rolled back
+        # when this connection closes.
+        connection.execute(text("SET statement_timeout TO 0"))
+        connection.execute(text("SET lock_timeout TO 0"))
+        connection.commit()
         do_run_migrations(connection)
 
 
