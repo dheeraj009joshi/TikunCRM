@@ -97,7 +97,7 @@ export default function SoldCarsPage() {
     const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
     const user = useAuthStore((state) => state.user)
     
-    const [isLoading, setIsLoading] = React.useState(true)
+    const [isLoading, setIsLoading] = React.useState(false)
     const [data, setData] = React.useState<SoldCarsResponse | null>(null)
     const [error, setError] = React.useState<string | null>(null)
     
@@ -203,7 +203,10 @@ export default function SoldCarsPage() {
     // Fetch data
     const fetchData = React.useCallback(async () => {
         const dealershipId = (isSuperAdmin || isBdc) ? selectedDealershipId : user?.dealership_id
-        if ((isSuperAdmin || isBdc) && !dealershipId) return
+        if ((isSuperAdmin || isBdc) && !dealershipId) {
+            setIsLoading(false)
+            return
+        }
         
         setIsLoading(true)
         setError(null)
@@ -232,17 +235,23 @@ export default function SoldCarsPage() {
             setData(response)
         } catch (err: any) {
             console.error("Failed to fetch sold cars:", err)
-            setError(err.response?.data?.detail || "Failed to load sold cars report")
+            setError(err.response?.data?.detail || err.message || "Failed to load sold cars report")
         } finally {
             setIsLoading(false)
         }
     }, [isSuperAdmin, isBdc, selectedDealershipId, user?.dealership_id, getDateRange, selectedSalesperson, selectedBdcAgent])
     
     React.useEffect(() => {
-        if (canView) {
-            fetchData()
+        if (!canView) {
+            setIsLoading(false)
+            return
         }
-    }, [fetchData, canView])
+        if ((isSuperAdmin || isBdc) && !selectedDealershipId) {
+            setIsLoading(false)
+            return
+        }
+        void fetchData()
+    }, [fetchData, canView, isSuperAdmin, isBdc, selectedDealershipId])
     
     // Export to PDF
     const downloadPdf = () => {
@@ -520,7 +529,7 @@ export default function SoldCarsPage() {
                         
                         {/* Actions */}
                         <div className="flex items-center gap-2 ml-auto">
-                            <Button onClick={fetchData} disabled={isLoading}>
+                            <Button onClick={() => void fetchData()} disabled={isLoading}>
                                 {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                                 <span className="ml-2">Refresh</span>
                             </Button>

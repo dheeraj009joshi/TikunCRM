@@ -44,6 +44,7 @@ npm-debug.log*
 # Misc
 *.bak
 *.tmp
+backend/backups/
 .coverage
 htmlcov/
 
