@@ -118,6 +118,18 @@ export interface PayoutSummary {
     call_work?: CallWorkStats
     days: DailyPayoutRow[]
     entries: TimeEntry[]
+    activities?: ShiftActivity[]
+}
+
+export interface ShiftActivity {
+    id: string
+    type: string
+    description: string
+    created_at: string
+    lead_id?: string | null
+    lead_name?: string | null
+    time_entry_id?: string | null
+    meta_data?: Record<string, unknown>
 }
 
 export interface AgentRosterItem {

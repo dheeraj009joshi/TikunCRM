@@ -21,7 +21,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.timezone import utc_now
+from app.models.activity import Activity, ActivityType
 from app.models.call_log import CallDirection, CallLog, CallStatus
+from app.models.customer import Customer
+from app.models.lead import Lead
 from app.models.time_entry import TimeEntry
 from app.models.user import User
 from app.schemas.time_tracking import (
@@ -33,6 +36,7 @@ from app.schemas.time_tracking import (
     HourCaps,
     HoursBreakdown,
     PayoutSummaryResponse,
+    ShiftActivityItem,
     TimeEntryListResponse,
     TimeEntryResponse,
     TimeEntryUserBrief,
@@ -50,6 +54,13 @@ WEEKDAY_KEYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturda
 WEEKDAY_USER_ATTRS = {key: f"max_hours_{key}" for key in WEEKDAY_KEYS}
 
 PERIODS = ("today", "this_week", "last_week", "this_month", "last_month", "this_year")
+SHIFT_ACTIVITY_SKIP = frozenset({
+    ActivityType.USER_LOGIN,
+    ActivityType.USER_LOGOUT,
+    ActivityType.IMPORT_COMPLETED,
+    ActivityType.SYNC_COMPLETED,
+})
+MAX_SHIFT_ACTIVITIES = 500
 
 
 def q2(value: Decimal) -> Decimal:
@@ -421,6 +432,7 @@ def classify_entries(
     now: datetime,
     daily: bool = False,
     caps: Optional[HourCaps] = None,
+    fallback_rate: Optional[Decimal] = None,
 ) -> tuple[HoursBreakdown, dict[date, _Acc]]:
     """
     Classify hours as regular vs overtime using a running weekly total.
@@ -429,6 +441,10 @@ def classify_entries(
     are still tracked as attendance but excluded from estimated pay unless the
     punch is marked over_cap_approved. Hours before period_start still consume
     the week's 40h OT bucket and hour caps so month/week boundaries stay correct.
+
+    Punches snapshot the rate at clock-in. If that snapshot is missing, pay
+    uses ``fallback_rate`` (the agent's current hourly rate) so hours are not
+    silently valued at $0.
     """
     period_start = as_utc(period_start)
     period_end = as_utc(period_end)
@@ -437,7 +453,12 @@ def classify_entries(
     by_week: dict[datetime, list[tuple[datetime, datetime, Decimal, Decimal, bool]]] = defaultdict(list)
     for entry in entries:
         end = entry.clock_out_at or now
-        rate = entry.hourly_rate if entry.hourly_rate is not None else ZERO
+        if entry.hourly_rate is not None:
+            rate = entry.hourly_rate
+        elif fallback_rate is not None:
+            rate = fallback_rate
+        else:
+            rate = ZERO
         multiplier = entry.overtime_multiplier or OT_MULTIPLIER
         approved = bool(getattr(entry, "over_cap_approved", False))
         for seg_start, seg_end, ws in _split_week_segments(entry.clock_in_at, end, tz):
@@ -532,10 +553,19 @@ async def compute_breakdown(
     tz: pytz.BaseTzInfo,
     now: datetime,
     caps: Optional[HourCaps] = None,
+    fallback_rate: Optional[Decimal] = None,
 ) -> HoursBreakdown:
     week_origin = week_start_utc(period_start, tz)
     entries = await fetch_entries_overlapping(db, user_id, week_origin, period_end)
-    breakdown, _ = classify_entries(entries, period_start, period_end, tz, now, caps=caps)
+    breakdown, _ = classify_entries(
+        entries,
+        period_start,
+        period_end,
+        tz,
+        now,
+        caps=caps,
+        fallback_rate=fallback_rate,
+    )
     return breakdown
 
 
@@ -592,9 +622,15 @@ async def get_status(
     week_start, week_end = period_bounds("this_week", now, tz)
     month_start, month_end = period_bounds("this_month", now, tz)
 
-    today = await compute_breakdown(db, user.id, today_start, today_end, tz, now, caps)
-    this_week = await compute_breakdown(db, user.id, week_start, week_end, tz, now, caps)
-    this_month = await compute_breakdown(db, user.id, month_start, month_end, tz, now, caps)
+    today = await compute_breakdown(
+        db, user.id, today_start, today_end, tz, now, caps, user.hourly_rate
+    )
+    this_week = await compute_breakdown(
+        db, user.id, week_start, week_end, tz, now, caps, user.hourly_rate
+    )
+    this_month = await compute_breakdown(
+        db, user.id, month_start, month_end, tz, now, caps, user.hourly_rate
+    )
     today_calls, _ = await compute_call_work(
         db, user.id, today_start, today_end, now, today.total_hours, tz
     )
@@ -714,6 +750,69 @@ async def list_all_entries(
     )
 
 
+def _lead_display_name(first_name: Optional[str], last_name: Optional[str]) -> Optional[str]:
+    name = f"{first_name or ''} {last_name or ''}".strip()
+    return name or None
+
+
+async def fetch_shift_activities(
+    db: AsyncSession,
+    user_id: UUID,
+    entries: list[TimeEntry],
+    period_start: datetime,
+    period_end: datetime,
+    now: datetime,
+) -> list[ShiftActivityItem]:
+    """CRM work that happened while the agent was clocked in during the period."""
+    period_start = as_utc(period_start)
+    period_end = as_utc(period_end)
+    now = as_utc(now)
+    windows: list[tuple[datetime, datetime, UUID]] = []
+    for entry in entries:
+        start = max(as_utc(entry.clock_in_at), period_start)
+        end = min(as_utc(entry.clock_out_at or now), period_end)
+        if end > start:
+            windows.append((start, end, entry.id))
+    if not windows:
+        return []
+
+    window_filters = [and_(Activity.created_at >= start, Activity.created_at < end) for start, end, _ in windows]
+    result = await db.execute(
+        select(Activity, Customer.first_name, Customer.last_name)
+        .outerjoin(Lead, Activity.lead_id == Lead.id)
+        .outerjoin(Customer, Lead.customer_id == Customer.id)
+        .where(
+            Activity.user_id == user_id,
+            Activity.type.notin_(SHIFT_ACTIVITY_SKIP),
+            or_(*window_filters),
+        )
+        .order_by(Activity.created_at.desc())
+        .limit(MAX_SHIFT_ACTIVITIES)
+    )
+
+    items: list[ShiftActivityItem] = []
+    for activity, first_name, last_name in result.all():
+        created = as_utc(activity.created_at)
+        entry_id = None
+        for start, end, eid in windows:
+            if start <= created < end:
+                entry_id = eid
+                break
+        items.append(
+            ShiftActivityItem(
+                id=activity.id,
+                type=activity.type.value if hasattr(activity.type, "value") else str(activity.type),
+                description=activity.description,
+                created_at=activity.created_at,
+                lead_id=activity.lead_id,
+                lead_name=_lead_display_name(first_name, last_name),
+                time_entry_id=entry_id,
+                meta_data=activity.meta_data or {},
+            )
+        )
+    return items
+
+
 async def get_payouts(
     db: AsyncSession,
     user: User,
@@ -729,7 +828,7 @@ async def get_payouts(
     entries = await fetch_entries_overlapping(db, user.id, week_origin, period_end)
     caps = caps_from_user(user)
     totals, by_day = classify_entries(
-        entries, period_start, period_end, tz, now, daily=True, caps=caps
+        entries, period_start, period_end, tz, now, daily=True, caps=caps, fallback_rate=user.hourly_rate
     )
     call_work, call_by_day = await compute_call_work(
         db, user.id, period_start, period_end, now, totals.total_hours, tz
@@ -790,6 +889,8 @@ async def get_payouts(
     ]
     period_entries.sort(key=lambda e: e.clock_in_at, reverse=True)
 
+    activities = await fetch_shift_activities(db, user.id, period_entries, period_start, period_end, now)
+
     return PayoutSummaryResponse(
         period=period,
         timezone=str(tz),
@@ -803,6 +904,7 @@ async def get_payouts(
         call_work=call_work,
         days=days,
         entries=[to_entry_response(e, now) for e in period_entries],
+        activities=activities,
     )
 
 
@@ -951,9 +1053,15 @@ async def get_roster(
         open_entry = await get_open_entry(db, agent.id)
         elapsed = duration_seconds(open_entry.clock_in_at, now) if open_entry else 0
         caps = caps_from_user(agent)
-        today = await compute_breakdown(db, agent.id, today_start, today_end, tz, now, caps)
-        this_week = await compute_breakdown(db, agent.id, week_start, week_end, tz, now, caps)
-        this_month = await compute_breakdown(db, agent.id, month_start, month_end, tz, now, caps)
+        today = await compute_breakdown(
+            db, agent.id, today_start, today_end, tz, now, caps, agent.hourly_rate
+        )
+        this_week = await compute_breakdown(
+            db, agent.id, week_start, week_end, tz, now, caps, agent.hourly_rate
+        )
+        this_month = await compute_breakdown(
+            db, agent.id, month_start, month_end, tz, now, caps, agent.hourly_rate
+        )
         today_calls, _ = await compute_call_work(
             db, agent.id, today_start, today_end, now, today.total_hours, tz
         )

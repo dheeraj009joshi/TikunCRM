@@ -1,14 +1,23 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import { format } from "date-fns"
 import {
+    AlertCircle,
     AlertTriangle,
+    CalendarDays,
+    CheckCircle,
     Clock,
     DollarSign,
+    FileText,
     Loader2,
+    Mail,
+    MessageSquare,
     Pencil,
     Phone,
+    PhoneCall,
+    Send,
     Timer,
     Users,
 } from "lucide-react"
@@ -48,15 +57,17 @@ import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useToast } from "@/hooks/use-toast"
 import { getApiErrorMessage } from "@/lib/api-errors"
 import { formatDateInLocal } from "@/utils/timezone"
-import { formatElapsed, formatHours, formatMoney, formatPercent, num } from "@/lib/time-tracking"
+import { formatElapsed, formatHours, formatMoney, formatPayHint, formatPercent, num } from "@/lib/time-tracking"
 import {
     AgentRosterItem,
     HourCaps,
     PayoutPeriod,
     PayoutSummary,
+    ShiftActivity,
     TimeEntry,
     TimeTrackingService,
 } from "@/services/time-tracking-service"
+import { ACTIVITY_TYPE_INFO, type ActivityType } from "@/services/activity-service"
 import { cn } from "@/lib/utils"
 
 const PERIODS: { id: PayoutPeriod; label: string }[] = [
@@ -88,6 +99,82 @@ function parseCap(raw: string): number | null {
     if (!t) return null
     const n = Number(t)
     return Number.isFinite(n) && n >= 0 ? n : null
+}
+
+function activityLabel(type: string): string {
+    const info = ACTIVITY_TYPE_INFO[type as ActivityType]
+    return info?.label || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function ActivityTypeIcon({ type }: { type: string }) {
+    switch (type) {
+        case "note_added":
+            return <MessageSquare className="h-4 w-4 text-muted-foreground" />
+        case "call_logged":
+            return <PhoneCall className="h-4 w-4 text-emerald-600" />
+        case "email_sent":
+        case "email_received":
+            return <Mail className="h-4 w-4 text-indigo-600" />
+        case "sms_sent":
+        case "whatsapp_sent":
+            return <Send className="h-4 w-4 text-sky-600" />
+        case "follow_up_scheduled":
+        case "appointment_scheduled":
+            return <CalendarDays className="h-4 w-4 text-amber-600" />
+        case "follow_up_completed":
+        case "appointment_completed":
+            return <CheckCircle className="h-4 w-4 text-emerald-600" />
+        case "follow_up_missed":
+        case "appointment_cancelled":
+            return <AlertCircle className="h-4 w-4 text-rose-600" />
+        default:
+            return <FileText className="h-4 w-4 text-muted-foreground" />
+    }
+}
+
+function activityCounts(items: ShiftActivity[]): { type: string; label: string; count: number }[] {
+    const map = new Map<string, number>()
+    for (const item of items) {
+        map.set(item.type, (map.get(item.type) || 0) + 1)
+    }
+    return [...map.entries()]
+        .map(([type, count]) => ({ type, label: activityLabel(type), count }))
+        .sort((a, b) => b.count - a.count)
+}
+
+function ShiftActivityRow({ item }: { item: ShiftActivity }) {
+    const meta = item.meta_data || {}
+    const duration = typeof meta.duration_seconds === "number" ? meta.duration_seconds : null
+    return (
+        <div className="flex gap-3 border-b py-3 last:border-0">
+            <div className="mt-0.5 shrink-0">
+                <ActivityTypeIcon type={item.type} />
+            </div>
+            <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className="font-normal">
+                        {activityLabel(item.type)}
+                    </Badge>
+                    {item.lead_id ? (
+                        <Link href={`/leads/${item.lead_id}`} className="text-sm font-medium text-primary hover:underline">
+                            {item.lead_name || "Lead"}
+                        </Link>
+                    ) : item.lead_name ? (
+                        <span className="text-sm font-medium">{item.lead_name}</span>
+                    ) : null}
+                    {duration != null && duration > 0 && (
+                        <span className="text-xs text-muted-foreground">{formatElapsed(duration)}</span>
+                    )}
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground whitespace-pre-wrap break-words">
+                    {item.description}
+                </p>
+            </div>
+            <div className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                {format(new Date(item.created_at), "MMM d, h:mm a")}
+            </div>
+        </div>
+    )
 }
 
 function toDatetimeLocal(iso?: string | null): string {
@@ -125,6 +212,7 @@ export default function TimeTrackingPage() {
     const [editNotes, setEditNotes] = React.useState("")
     const [savingEdit, setSavingEdit] = React.useState(false)
     const [nowMs, setNowMs] = React.useState(() => Date.now())
+    const [expandedEntryId, setExpandedEntryId] = React.useState<string | null>(null)
 
     const viewingOther = isTimeAdmin && selectedAgentId !== "me"
 
@@ -502,6 +590,14 @@ export default function TimeTrackingPage() {
                                     const callWork = payouts?.call_work
                     const clockedHours = num(totals?.total_hours)
                     const talkHours = num(callWork?.talk_hours)
+                    const shiftActivities = payouts?.activities ?? []
+                    const activitiesByEntry = new Map<string, ShiftActivity[]>()
+                    for (const item of shiftActivities) {
+                        if (!item.time_entry_id) continue
+                        const list = activitiesByEntry.get(item.time_entry_id) || []
+                        list.push(item)
+                        activitiesByEntry.set(item.time_entry_id, list)
+                    }
                     return (
                 <>
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
@@ -530,10 +626,16 @@ export default function TimeTrackingPage() {
                             label="Estimated payout"
                             value={formatMoney(totals?.estimated_pay)}
                             highlight
+                            hint={formatPayHint(
+                                totals?.payable_hours ?? clockedHours,
+                                payouts?.hourly_rate,
+                                totals?.overtime_hours,
+                                payouts?.overtime_multiplier
+                            )}
                         />
                     </div>
                     <p className="text-xs text-muted-foreground">
-                        Clocked hours are attendance. Pay uses payable hours (regular + OT after 40h/week). Hours over the daily or weekly cap stay unpaid until a manager approves them. Call time is the work check.
+                        Estimated pay is payable hours × the hourly rate on each punch (or the current rate if a punch has no rate saved). Overtime after 40h/week is 1.5×. Hours over the daily or weekly cap stay unpaid until a manager approves them.
                     </p>
 
                     {payouts?.hourly_rate == null && (
@@ -624,6 +726,37 @@ export default function TimeTrackingPage() {
 
                     <Card>
                         <CardHeader className="pb-3">
+                            <CardTitle className="text-base">Work during clocked time</CardTitle>
+                            <p className="text-sm font-normal text-muted-foreground">
+                                Notes, calls, follow-ups, and other CRM activity logged while this person was clocked in.
+                            </p>
+                        </CardHeader>
+                        <CardContent>
+                            {shiftActivities.length === 0 ? (
+                                <p className="py-8 text-center text-sm text-muted-foreground">
+                                    No notes, calls, or other CRM activity during these clocked hours.
+                                </p>
+                            ) : (
+                                <>
+                                    <div className="mb-4 flex flex-wrap gap-2">
+                                        {activityCounts(shiftActivities).map((row) => (
+                                            <Badge key={row.type} variant="secondary" className="font-normal">
+                                                {row.label}: {row.count}
+                                            </Badge>
+                                        ))}
+                                    </div>
+                                    <div className="max-h-[480px] overflow-y-auto pr-1">
+                                        {shiftActivities.map((item) => (
+                                            <ShiftActivityRow key={item.id} item={item} />
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    <Card>
+                        <CardHeader className="pb-3">
                             <CardTitle className="text-base">Punch log</CardTitle>
                         </CardHeader>
                         <CardContent className="overflow-x-auto">
@@ -637,13 +770,21 @@ export default function TimeTrackingPage() {
                                             <TableHead>Clock out</TableHead>
                                             <TableHead className="text-right">Duration</TableHead>
                                             <TableHead className="text-right">Rate</TableHead>
+                                            <TableHead className="text-right">Activity</TableHead>
                                             <TableHead>Notes</TableHead>
                                             {isTimeAdmin && <TableHead />}
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {payouts.entries.map((entry) => (
-                                            <TableRow key={entry.id}>
+                                        {payouts.entries.map((entry) => {
+                                            const shiftItems = activitiesByEntry.get(entry.id) || []
+                                            const expanded = expandedEntryId === entry.id
+                                            return (
+                                                <React.Fragment key={entry.id}>
+                                            <TableRow
+                                                className="cursor-pointer"
+                                                onClick={() => setExpandedEntryId(expanded ? null : entry.id)}
+                                            >
                                                 <TableCell className="whitespace-nowrap">{formatDateInLocal(entry.clock_in_at)}</TableCell>
                                                 <TableCell className="whitespace-nowrap">
                                                     {entry.is_open ? (
@@ -656,7 +797,17 @@ export default function TimeTrackingPage() {
                                                     {formatElapsed(entry.duration_seconds)}
                                                 </TableCell>
                                                 <TableCell className="text-right tabular-nums">
-                                                    {entry.hourly_rate == null ? "—" : `${formatMoney(entry.hourly_rate)}/hr`}
+                                                    {entry.hourly_rate == null
+                                                        ? (payouts.hourly_rate == null
+                                                            ? "—"
+                                                            : `${formatMoney(payouts.hourly_rate)}/hr`)
+                                                        : `${formatMoney(entry.hourly_rate)}/hr`}
+                                                    {entry.hourly_rate == null && payouts.hourly_rate != null && (
+                                                        <div className="text-[10px] font-normal text-muted-foreground">current rate</div>
+                                                    )}
+                                                </TableCell>
+                                                <TableCell className="text-right tabular-nums">
+                                                    {shiftItems.length}
                                                 </TableCell>
                                                 <TableCell className="max-w-[220px] truncate text-sm text-muted-foreground">
                                                     {entry.over_cap_approved && (
@@ -667,7 +818,7 @@ export default function TimeTrackingPage() {
                                                     {entry.notes || entry.clock_in_note || entry.edit_reason || "—"}
                                                 </TableCell>
                                                 {isTimeAdmin && (
-                                                    <TableCell className="text-right">
+                                                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                                                         <div className="flex justify-end gap-1">
                                                             {entry.is_open && (
                                                                 <Button size="sm" variant="outline" onClick={() => forceOut(entry)}>
@@ -691,7 +842,24 @@ export default function TimeTrackingPage() {
                                                     </TableCell>
                                                 )}
                                             </TableRow>
-                                        ))}
+                                            {expanded && (
+                                                <TableRow>
+                                                    <TableCell colSpan={isTimeAdmin ? 7 : 6} className="bg-muted/30">
+                                                        {shiftItems.length === 0 ? (
+                                                            <p className="py-2 text-sm text-muted-foreground">
+                                                                No CRM activity during this punch.
+                                                            </p>
+                                                        ) : (
+                                                            shiftItems.map((item) => (
+                                                                <ShiftActivityRow key={item.id} item={item} />
+                                                            ))
+                                                        )}
+                                                    </TableCell>
+                                                </TableRow>
+                                            )}
+                                                </React.Fragment>
+                                            )
+                                        })}
                                     </TableBody>
                                 </Table>
                             )}
@@ -710,7 +878,7 @@ export default function TimeTrackingPage() {
                         </DialogTitle>
                     </DialogHeader>
                     <p className="text-sm text-muted-foreground">
-                        Hourly rate applies to new punches. Daily and weekly caps are payable limits — they can still clock extra hours, but that time is unpaid until you approve it.
+                        Hourly rate is saved on each new punch. Older punches with no rate saved use this current rate for estimated pay. Daily and weekly caps are payable limits — they can still clock extra hours, but that time is unpaid until you approve it.
                     </p>
                     <div className="space-y-2">
                         <Label htmlFor="hourly-rate">USD per hour</Label>

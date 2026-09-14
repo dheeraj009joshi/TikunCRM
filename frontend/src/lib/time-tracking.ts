@@ -34,6 +34,26 @@ export function formatPercent(value: number | string | null | undefined): string
     return `${Math.round(num(value))}%`
 }
 
+export function formatPayHint(
+    payableHours: number | string | null | undefined,
+    hourlyRate: number | string | null | undefined,
+    overtimeHours: number | string | null | undefined = 0,
+    multiplier: number | string | null | undefined = 1.5
+): string {
+    if (hourlyRate == null || hourlyRate === "") {
+        return "Set an hourly rate to estimate pay"
+    }
+    const payable = num(payableHours)
+    const ot = num(overtimeHours)
+    const rate = num(hourlyRate)
+    const otMult = num(multiplier) || 1.5
+    if (ot > 0) {
+        const regular = Math.max(payable - ot, 0)
+        return `${formatHours(regular)} × ${formatMoney(rate)} + ${formatHours(ot)} OT at ${otMult}×`
+    }
+    return `${formatHours(payable)} × ${formatMoney(rate)}/hr`
+}
+
 export function emptyBreakdown(): HoursBreakdown {
     return {
         regular_hours: 0,

@@ -78,6 +78,29 @@ class TestOvertimeClassification:
         totals, _ = classify_entries(entries, start, end, TZ, end)
         assert totals.estimated_pay == Decimal("360.00")  # 8*20 + 8*25
 
+    def test_missing_punch_rate_uses_current_hourly_rate(self):
+        start = TZ.localize(datetime(2026, 9, 7, 0, 0)).astimezone(pytz.UTC)
+        end = TZ.localize(datetime(2026, 9, 14, 0, 0)).astimezone(pytz.UTC)
+        punch_start = TZ.localize(datetime(2026, 9, 7, 9, 0))
+        punch_end = punch_start + timedelta(hours=12)
+        entries = [
+            SimpleNamespace(
+                clock_in_at=punch_start.astimezone(pytz.UTC),
+                clock_out_at=punch_end.astimezone(pytz.UTC),
+                hourly_rate=None,
+                overtime_multiplier=OT_MULTIPLIER,
+                over_cap_approved=False,
+            )
+        ]
+        totals, _ = classify_entries(
+            entries, start, end, TZ, end, fallback_rate=Decimal("5.00")
+        )
+        assert totals.payable_hours == Decimal("12.00")
+        assert totals.estimated_pay == Decimal("60.00")
+
+        unpaid_missing = classify_entries(entries, start, end, TZ, end)[0]
+        assert unpaid_missing.estimated_pay == Decimal("0.00")
+
 
 class TestPeriodBounds:
     def test_this_week_starts_monday(self):

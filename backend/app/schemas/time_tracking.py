@@ -3,7 +3,7 @@ Pydantic schemas for BDC time tracking and payouts.
 """
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -115,6 +115,18 @@ class CallWorkStats(BaseModel):
     utilization_pct: Optional[Decimal] = None
 
 
+class ShiftActivityItem(BaseModel):
+    """A CRM action that happened while the agent was clocked in."""
+    id: UUID
+    type: str
+    description: str
+    created_at: datetime
+    lead_id: Optional[UUID] = None
+    lead_name: Optional[str] = None
+    time_entry_id: Optional[UUID] = None
+    meta_data: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ClockStatusResponse(BaseModel):
     is_clocked_in: bool
     current_entry: Optional[TimeEntryResponse] = None
@@ -164,6 +176,7 @@ class PayoutSummaryResponse(BaseModel):
     call_work: CallWorkStats = Field(default_factory=CallWorkStats)
     days: List[DailyPayoutRow]
     entries: List[TimeEntryResponse]
+    activities: List[ShiftActivityItem] = Field(default_factory=list)
 
 
 class AgentRosterItem(BaseModel):
