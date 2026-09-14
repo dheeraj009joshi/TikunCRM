@@ -26,6 +26,7 @@ from app.schemas.time_tracking import (
     PayoutSummaryResponse,
     SetHourCapsRequest,
     SetHourlyRateRequest,
+    ShiftActivityListResponse,
     TimeEntryEditRequest,
     TimeEntryListResponse,
     TimeEntryResponse,
@@ -109,6 +110,29 @@ async def list_my_entries(
 ) -> Any:
     """Paginated punch history for the current BDC agent."""
     return await svc.list_entries(db, current_user.id, date_from, date_to, page, page_size)
+
+
+@router.get("/entries/{entry_id}/activities", response_model=ShiftActivityListResponse)
+async def get_entry_activities(
+    entry_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Notes, calls, and other CRM work logged during one punch."""
+    result = await db.execute(select(TimeEntry).where(TimeEntry.id == entry_id))
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Time entry not found")
+    if current_user.role == UserRole.BDC:
+        if entry.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+    elif current_user.role not in (
+        UserRole.SUPER_ADMIN,
+        UserRole.DEALERSHIP_ADMIN,
+        UserRole.DEALERSHIP_OWNER,
+    ):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return await svc.get_entry_shift_activities(db, entry)
 
 
 @router.get("/payouts", response_model=PayoutSummaryResponse)

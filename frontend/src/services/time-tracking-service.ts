@@ -60,6 +60,7 @@ export interface TimeEntry {
     over_cap_approved?: boolean
     over_cap_approved_at?: string | null
     user?: TimeEntryUserBrief | null
+    activity_count?: number
 }
 
 export interface TimeEntryListResponse {
@@ -194,6 +195,11 @@ export const TimeTrackingService = {
         const response = await apiClient.get("/time-tracking/payouts", {
             params: { period, ...(timezone ? { timezone } : {}) },
         })
+        return response.data
+    },
+
+    async getEntryActivities(entryId: string): Promise<{ items: ShiftActivity[]; total: number; truncated: boolean }> {
+        const response = await apiClient.get(`/time-tracking/entries/${entryId}/activities`)
         return response.data
     },
 

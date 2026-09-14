@@ -37,6 +37,7 @@ from app.schemas.time_tracking import (
     HoursBreakdown,
     PayoutSummaryResponse,
     ShiftActivityItem,
+    ShiftActivityListResponse,
     TimeEntryListResponse,
     TimeEntryResponse,
     TimeEntryUserBrief,
@@ -60,7 +61,8 @@ SHIFT_ACTIVITY_SKIP = frozenset({
     ActivityType.IMPORT_COMPLETED,
     ActivityType.SYNC_COMPLETED,
 })
-MAX_SHIFT_ACTIVITIES = 500
+MAX_SHIFT_ACTIVITIES = 400
+DESCRIPTION_MAX = 280
 
 
 def q2(value: Decimal) -> Decimal:
@@ -309,6 +311,7 @@ def to_entry_response(
     entry: TimeEntry,
     now: Optional[datetime] = None,
     include_user: bool = False,
+    activity_count: int = 0,
 ) -> TimeEntryResponse:
     now = now or utc_now()
     end = entry.clock_out_at or now
@@ -332,6 +335,7 @@ def to_entry_response(
         over_cap_approved=bool(getattr(entry, "over_cap_approved", False)),
         over_cap_approved_at=getattr(entry, "over_cap_approved_at", None),
         user=user_brief,
+        activity_count=activity_count,
     )
 
 
@@ -755,6 +759,50 @@ def _lead_display_name(first_name: Optional[str], last_name: Optional[str]) -> O
     return name or None
 
 
+def _clip_description(text: Optional[str]) -> str:
+    raw = (text or "").strip()
+    if len(raw) <= DESCRIPTION_MAX:
+        return raw
+    return raw[: DESCRIPTION_MAX - 1].rstrip() + "…"
+
+
+async def count_activities_by_entry(
+    db: AsyncSession,
+    user_id: UUID,
+    entries: list[TimeEntry],
+    now: datetime,
+) -> dict[UUID, int]:
+    """Lightweight per-punch counts (timestamps only, no joins or note text)."""
+    if not entries:
+        return {}
+    now = as_utc(now)
+    windows = [
+        (as_utc(entry.clock_in_at), as_utc(entry.clock_out_at or now), entry.id)
+        for entry in entries
+        if as_utc(entry.clock_out_at or now) > as_utc(entry.clock_in_at)
+    ]
+    if not windows:
+        return {}
+    range_start = min(start for start, _, _ in windows)
+    range_end = max(end for _, end, _ in windows)
+    result = await db.execute(
+        select(Activity.created_at).where(
+            Activity.user_id == user_id,
+            Activity.created_at >= range_start,
+            Activity.created_at < range_end,
+            Activity.type.notin_(SHIFT_ACTIVITY_SKIP),
+        )
+    )
+    counts: dict[UUID, int] = defaultdict(int)
+    for (created_at,) in result:
+        created = as_utc(created_at)
+        for start, end, entry_id in windows:
+            if start <= created < end:
+                counts[entry_id] += 1
+                break
+    return counts
+
+
 async def fetch_shift_activities(
     db: AsyncSession,
     user_id: UUID,
@@ -763,7 +811,7 @@ async def fetch_shift_activities(
     period_end: datetime,
     now: datetime,
 ) -> list[ShiftActivityItem]:
-    """CRM work that happened while the agent was clocked in during the period."""
+    """CRM work that happened while the agent was clocked in."""
     period_start = as_utc(period_start)
     period_end = as_utc(period_end)
     now = as_utc(now)
@@ -776,41 +824,75 @@ async def fetch_shift_activities(
     if not windows:
         return []
 
-    window_filters = [and_(Activity.created_at >= start, Activity.created_at < end) for start, end, _ in windows]
+    range_start = min(start for start, _, _ in windows)
+    range_end = max(end for _, end, _ in windows)
     result = await db.execute(
-        select(Activity, Customer.first_name, Customer.last_name)
-        .outerjoin(Lead, Activity.lead_id == Lead.id)
-        .outerjoin(Customer, Lead.customer_id == Customer.id)
-        .where(
+        select(
+            Activity.id,
+            Activity.type,
+            Activity.description,
+            Activity.created_at,
+            Activity.lead_id,
+        ).where(
             Activity.user_id == user_id,
+            Activity.created_at >= range_start,
+            Activity.created_at < range_end,
             Activity.type.notin_(SHIFT_ACTIVITY_SKIP),
-            or_(*window_filters),
         )
         .order_by(Activity.created_at.desc())
         .limit(MAX_SHIFT_ACTIVITIES)
     )
+    matched: list[tuple] = []
+    lead_ids: set[UUID] = set()
+    for activity_id, activity_type, description, created_at, lead_id in result.all():
+        created = as_utc(created_at)
+        entry_id = next((eid for start, end, eid in windows if start <= created < end), None)
+        if entry_id is None:
+            continue
+        if lead_id:
+            lead_ids.add(lead_id)
+        matched.append((activity_id, activity_type, description, created_at, lead_id, entry_id))
 
-    items: list[ShiftActivityItem] = []
-    for activity, first_name, last_name in result.all():
-        created = as_utc(activity.created_at)
-        entry_id = None
-        for start, end, eid in windows:
-            if start <= created < end:
-                entry_id = eid
-                break
-        items.append(
-            ShiftActivityItem(
-                id=activity.id,
-                type=activity.type.value if hasattr(activity.type, "value") else str(activity.type),
-                description=activity.description,
-                created_at=activity.created_at,
-                lead_id=activity.lead_id,
-                lead_name=_lead_display_name(first_name, last_name),
-                time_entry_id=entry_id,
-                meta_data=activity.meta_data or {},
-            )
+    names: dict[UUID, str] = {}
+    if lead_ids:
+        name_rows = await db.execute(
+            select(Lead.id, Customer.first_name, Customer.last_name)
+            .join(Customer, Lead.customer_id == Customer.id)
+            .where(Lead.id.in_(lead_ids))
         )
-    return items
+        for lead_id, first_name, last_name in name_rows:
+            label = _lead_display_name(first_name, last_name)
+            if label:
+                names[lead_id] = label
+
+    return [
+        ShiftActivityItem(
+            id=activity_id,
+            type=activity_type.value if hasattr(activity_type, "value") else str(activity_type),
+            description=_clip_description(description),
+            created_at=created_at,
+            lead_id=lead_id,
+            lead_name=names.get(lead_id) if lead_id else None,
+            time_entry_id=entry_id,
+            meta_data={},
+        )
+        for activity_id, activity_type, description, created_at, lead_id, entry_id in matched
+    ]
+
+
+async def get_entry_shift_activities(
+    db: AsyncSession,
+    entry: TimeEntry,
+) -> ShiftActivityListResponse:
+    now = utc_now()
+    end = as_utc(entry.clock_out_at or now)
+    start = as_utc(entry.clock_in_at)
+    items = await fetch_shift_activities(db, entry.user_id, [entry], start, end, now)
+    return ShiftActivityListResponse(
+        items=items,
+        total=len(items),
+        truncated=len(items) >= MAX_SHIFT_ACTIVITIES,
+    )
 
 
 async def get_payouts(
@@ -889,7 +971,7 @@ async def get_payouts(
     ]
     period_entries.sort(key=lambda e: e.clock_in_at, reverse=True)
 
-    activities = await fetch_shift_activities(db, user.id, period_entries, period_start, period_end, now)
+    activity_counts = await count_activities_by_entry(db, user.id, period_entries, now)
 
     return PayoutSummaryResponse(
         period=period,
@@ -903,8 +985,11 @@ async def get_payouts(
         hour_caps=caps,
         call_work=call_work,
         days=days,
-        entries=[to_entry_response(e, now) for e in period_entries],
-        activities=activities,
+        entries=[
+            to_entry_response(e, now, activity_count=activity_counts.get(e.id, 0))
+            for e in period_entries
+        ],
+        activities=[],
     )
 
 

@@ -81,6 +81,7 @@ class TimeEntryResponse(BaseModel):
     over_cap_approved: bool = False
     over_cap_approved_at: Optional[datetime] = None
     user: Optional[TimeEntryUserBrief] = None
+    activity_count: int = 0
 
     class Config:
         from_attributes = True
@@ -125,6 +126,12 @@ class ShiftActivityItem(BaseModel):
     lead_name: Optional[str] = None
     time_entry_id: Optional[UUID] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ShiftActivityListResponse(BaseModel):
+    items: List[ShiftActivityItem]
+    total: int = 0
+    truncated: bool = False
 
 
 class ClockStatusResponse(BaseModel):

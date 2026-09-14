@@ -213,6 +213,8 @@ export default function TimeTrackingPage() {
     const [savingEdit, setSavingEdit] = React.useState(false)
     const [nowMs, setNowMs] = React.useState(() => Date.now())
     const [expandedEntryId, setExpandedEntryId] = React.useState<string | null>(null)
+    const [entryActivities, setEntryActivities] = React.useState<Record<string, ShiftActivity[]>>({})
+    const [entryActivitiesLoading, setEntryActivitiesLoading] = React.useState<string | null>(null)
 
     const viewingOther = isTimeAdmin && selectedAgentId !== "me"
 
@@ -226,6 +228,8 @@ export default function TimeTrackingPage() {
                 ? await TimeTrackingService.adminPayouts(selectedAgentId, period, timezone)
                 : await TimeTrackingService.getPayouts(period, timezone)
             setPayouts(data)
+            setEntryActivities({})
+            setExpandedEntryId(null)
         } catch (err) {
             toast({
                 title: "Could not load payouts",
@@ -253,17 +257,43 @@ export default function TimeTrackingPage() {
         }
     }, [isTimeAdmin, timezone, toast])
 
+    const togglePunch = async (entryId: string) => {
+        if (expandedEntryId === entryId) {
+            setExpandedEntryId(null)
+            return
+        }
+        setExpandedEntryId(entryId)
+        if (entryActivities[entryId]) return
+        setEntryActivitiesLoading(entryId)
+        try {
+            const data = await TimeTrackingService.getEntryActivities(entryId)
+            setEntryActivities((prev) => ({ ...prev, [entryId]: data.items }))
+        } catch (err) {
+            toast({
+                title: "Could not load activity",
+                description: getApiErrorMessage(err),
+                variant: "destructive",
+            })
+        } finally {
+            setEntryActivitiesLoading(null)
+        }
+    }
+
+    React.useEffect(() => {
+        void loadRoster()
+    }, [loadRoster])
+
     React.useEffect(() => {
         let cancelled = false
         ;(async () => {
             setLoading(true)
-            await Promise.all([loadPayouts(), loadRoster()])
+            await loadPayouts()
             if (!cancelled) setLoading(false)
         })()
         return () => {
             cancelled = true
         }
-    }, [loadPayouts, loadRoster])
+    }, [loadPayouts])
 
     React.useEffect(() => {
         if (!roster.some((a) => a.is_clocked_in)) return
@@ -590,14 +620,6 @@ export default function TimeTrackingPage() {
                                     const callWork = payouts?.call_work
                     const clockedHours = num(totals?.total_hours)
                     const talkHours = num(callWork?.talk_hours)
-                    const shiftActivities = payouts?.activities ?? []
-                    const activitiesByEntry = new Map<string, ShiftActivity[]>()
-                    for (const item of shiftActivities) {
-                        if (!item.time_entry_id) continue
-                        const list = activitiesByEntry.get(item.time_entry_id) || []
-                        list.push(item)
-                        activitiesByEntry.set(item.time_entry_id, list)
-                    }
                     return (
                 <>
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
@@ -726,37 +748,6 @@ export default function TimeTrackingPage() {
 
                     <Card>
                         <CardHeader className="pb-3">
-                            <CardTitle className="text-base">Work during clocked time</CardTitle>
-                            <p className="text-sm font-normal text-muted-foreground">
-                                Notes, calls, follow-ups, and other CRM activity logged while this person was clocked in.
-                            </p>
-                        </CardHeader>
-                        <CardContent>
-                            {shiftActivities.length === 0 ? (
-                                <p className="py-8 text-center text-sm text-muted-foreground">
-                                    No notes, calls, or other CRM activity during these clocked hours.
-                                </p>
-                            ) : (
-                                <>
-                                    <div className="mb-4 flex flex-wrap gap-2">
-                                        {activityCounts(shiftActivities).map((row) => (
-                                            <Badge key={row.type} variant="secondary" className="font-normal">
-                                                {row.label}: {row.count}
-                                            </Badge>
-                                        ))}
-                                    </div>
-                                    <div className="max-h-[480px] overflow-y-auto pr-1">
-                                        {shiftActivities.map((item) => (
-                                            <ShiftActivityRow key={item.id} item={item} />
-                                        ))}
-                                    </div>
-                                </>
-                            )}
-                        </CardContent>
-                    </Card>
-
-                    <Card>
-                        <CardHeader className="pb-3">
                             <CardTitle className="text-base">Punch log</CardTitle>
                         </CardHeader>
                         <CardContent className="overflow-x-auto">
@@ -777,13 +768,14 @@ export default function TimeTrackingPage() {
                                     </TableHeader>
                                     <TableBody>
                                         {payouts.entries.map((entry) => {
-                                            const shiftItems = activitiesByEntry.get(entry.id) || []
+                                            const shiftItems = entryActivities[entry.id] || []
                                             const expanded = expandedEntryId === entry.id
+                                            const loadingThis = entryActivitiesLoading === entry.id
                                             return (
                                                 <React.Fragment key={entry.id}>
                                             <TableRow
                                                 className="cursor-pointer"
-                                                onClick={() => setExpandedEntryId(expanded ? null : entry.id)}
+                                                onClick={() => void togglePunch(entry.id)}
                                             >
                                                 <TableCell className="whitespace-nowrap">{formatDateInLocal(entry.clock_in_at)}</TableCell>
                                                 <TableCell className="whitespace-nowrap">
@@ -807,7 +799,7 @@ export default function TimeTrackingPage() {
                                                     )}
                                                 </TableCell>
                                                 <TableCell className="text-right tabular-nums">
-                                                    {shiftItems.length}
+                                                    {entry.activity_count ?? shiftItems.length}
                                                 </TableCell>
                                                 <TableCell className="max-w-[220px] truncate text-sm text-muted-foreground">
                                                     {entry.over_cap_approved && (
@@ -845,14 +837,30 @@ export default function TimeTrackingPage() {
                                             {expanded && (
                                                 <TableRow>
                                                     <TableCell colSpan={isTimeAdmin ? 7 : 6} className="bg-muted/30">
-                                                        {shiftItems.length === 0 ? (
+                                                        {loadingThis ? (
+                                                            <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                                Loading activity for this punch…
+                                                            </div>
+                                                        ) : shiftItems.length === 0 ? (
                                                             <p className="py-2 text-sm text-muted-foreground">
                                                                 No CRM activity during this punch.
                                                             </p>
                                                         ) : (
-                                                            shiftItems.map((item) => (
-                                                                <ShiftActivityRow key={item.id} item={item} />
-                                                            ))
+                                                            <>
+                                                                <div className="mb-3 flex flex-wrap gap-2">
+                                                                    {activityCounts(shiftItems).map((row) => (
+                                                                        <Badge key={row.type} variant="secondary" className="font-normal">
+                                                                            {row.label}: {row.count}
+                                                                        </Badge>
+                                                                    ))}
+                                                                </div>
+                                                                <div className="max-h-[420px] overflow-y-auto">
+                                                                    {shiftItems.map((item) => (
+                                                                        <ShiftActivityRow key={item.id} item={item} />
+                                                                    ))}
+                                                                </div>
+                                                            </>
                                                         )}
                                                     </TableCell>
                                                 </TableRow>
