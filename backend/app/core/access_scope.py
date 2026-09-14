@@ -63,6 +63,38 @@ async def build_ws_token_claims(db: AsyncSession, user: User) -> Dict[str, Any]:
     return claims
 
 
+async def resolve_report_dealership_id(
+    db: AsyncSession,
+    user: User,
+    dealership_id: Optional[UUID] = None,
+    *,
+    required: bool = False,
+) -> Optional[UUID]:
+    """Dealership to scope a report or analysis query.
+
+    Super admin: optional ``dealership_id`` (None = all).
+    Other org-wide roles (admin/owner/BDC): requested id if they can access it,
+    otherwise their org dealership. ``get_accessible_dealership_ids`` returns
+    None for these roles — that means *unrestricted*, not “no access”.
+    Salesperson: their org dealership.
+    """
+    if user.role == UserRole.SUPER_ADMIN:
+        resolved = dealership_id
+    elif is_org_wide_role(user):
+        if dealership_id is not None:
+            if not await user_can_access_dealership(db, user, dealership_id):
+                raise PermissionError("You do not have access to this dealership")
+            resolved = dealership_id
+        else:
+            resolved = await resolve_user_dealership_id(db, user)
+    else:
+        resolved = user.dealership_id
+
+    if required and resolved is None:
+        raise ValueError("Dealership context required. Please select a dealership.")
+    return resolved
+
+
 async def get_accessible_dealership_ids(
     db: AsyncSession,
     user: User,

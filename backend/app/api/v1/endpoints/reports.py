@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.timezone import utc_now
-from app.core.access_scope import get_accessible_dealership_ids
+from app.core.access_scope import is_org_wide_role, resolve_report_dealership_id
 from app.db.database import get_db
 from app.models.user import User, UserRole
 from app.models.appointment import Appointment, AppointmentStatus
@@ -433,8 +433,7 @@ async def get_salesperson_pending_tasks(
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Permission check: non-super-admins can only view users in their dealership
-    if current_user.role != UserRole.SUPER_ADMIN:
+    if not is_org_wide_role(current_user):
         if target_user.dealership_id != current_user.dealership_id:
             raise HTTPException(status_code=403, detail="Cannot view users from other dealerships")
     
@@ -546,8 +545,7 @@ async def notify_salesperson_about_tasks(
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Permission check
-    if current_user.role != UserRole.SUPER_ADMIN:
+    if not is_org_wide_role(current_user):
         if target_user.dealership_id != current_user.dealership_id:
             raise HTTPException(status_code=403, detail="Cannot notify users from other dealerships")
     
@@ -642,7 +640,7 @@ async def get_communication_overview(
     now = utc_now()
     period_start = now - timedelta(days=days)
     
-    dealership_id = current_user.dealership_id if current_user.role != UserRole.SUPER_ADMIN else None
+    dealership_id = await _http_resolve_dealership(db, current_user, None, required=False)
     
     # Build base filters
     call_filter = [CallLog.created_at >= period_start]
@@ -752,7 +750,7 @@ async def get_team_activity(
     Get recent team communication activity feed.
     Shows calls and SMS in chronological order.
     """
-    dealership_id = current_user.dealership_id if current_user.role != UserRole.SUPER_ADMIN else None
+    dealership_id = await _http_resolve_dealership(db, current_user, None, required=False)
     
     items = []
     
@@ -829,6 +827,23 @@ async def get_team_activity(
     )
 
 
+async def _http_resolve_dealership(
+    db: AsyncSession,
+    current_user: User,
+    dealership_id: Optional[UUID],
+    *,
+    required: bool = False,
+) -> Optional[UUID]:
+    try:
+        return await resolve_report_dealership_id(
+            db, current_user, dealership_id, required=required
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+
 async def _resolve_dealership_and_lead_filters(
     db: AsyncSession,
     current_user: User,
@@ -838,35 +853,8 @@ async def _resolve_dealership_and_lead_filters(
     stage_id: Optional[UUID],
     bdc_agent_id: Optional[UUID] = None,
 ):
-    """Returns (resolved_dealership_id, list of Lead filter conditions).
-    
-    For BDC users, validates dealership_id is in their accessible list.
-    """
-    resolved = None
-    
-    if current_user.role == UserRole.SUPER_ADMIN:
-        resolved = dealership_id  # Super admin can view any dealership
-    elif current_user.role == UserRole.BDC:
-        # BDC users can access multiple dealerships via user_dealership_access
-        accessible_ids = await get_accessible_dealership_ids(db, current_user)
-        if dealership_id is not None:
-            # Validate the requested dealership is in their access list
-            if accessible_ids and dealership_id in accessible_ids:
-                resolved = dealership_id
-            elif not accessible_ids:
-                resolved = None  # No access
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You do not have access to this dealership"
-                )
-        elif accessible_ids and len(accessible_ids) == 1:
-            # If BDC has only one dealership, use it by default
-            resolved = accessible_ids[0]
-        # If BDC has multiple dealerships and none specified, resolved stays None
-    else:
-        # Dealership admin/owner - use their dealership
-        resolved = current_user.dealership_id
+    """Returns (resolved_dealership_id, list of Lead filter conditions)."""
+    resolved = await _http_resolve_dealership(db, current_user, dealership_id, required=False)
     
     lead_filters = [Lead.dealership_id == resolved] if resolved else []
     has_lead_specific_filters = False
@@ -1771,30 +1759,9 @@ async def get_daily_activities(
     Admins can see what each salesperson did on any given day.
     """
     # Resolve dealership
-    resolved_dealership_id = None
-    if current_user.role == UserRole.SUPER_ADMIN:
-        resolved_dealership_id = dealership_id
-    elif current_user.role == UserRole.BDC:
-        # BDC can access multiple dealerships
-        accessible_ids = await get_accessible_dealership_ids(db, current_user)
-        if dealership_id is not None:
-            if accessible_ids and dealership_id in accessible_ids:
-                resolved_dealership_id = dealership_id
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You do not have access to this dealership"
-                )
-        elif accessible_ids and len(accessible_ids) == 1:
-            resolved_dealership_id = accessible_ids[0]
-    else:
-        resolved_dealership_id = current_user.dealership_id
-    
-    if not resolved_dealership_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Dealership context required. Please select a dealership."
-        )
+    resolved_dealership_id = await _http_resolve_dealership(
+        db, current_user, dealership_id, required=True
+    )
     
     # Parse dates
     try:
@@ -2041,31 +2008,9 @@ async def get_team_touch_sales_metrics(
       (Sold Cars rules). Per-salesperson **leads_touched** is also distinct leads (once per lead per rep).
       When no dates are passed: all-time touches vs any historical sold date among touched leads.
     """
-    # Resolve dealership
-    resolved_dealership_id = None
-    if current_user.role == UserRole.SUPER_ADMIN:
-        resolved_dealership_id = dealership_id
-    elif current_user.role == UserRole.BDC:
-        # BDC can access multiple dealerships
-        accessible_ids = await get_accessible_dealership_ids(db, current_user)
-        if dealership_id is not None:
-            if accessible_ids and dealership_id in accessible_ids:
-                resolved_dealership_id = dealership_id
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You do not have access to this dealership"
-                )
-        elif accessible_ids and len(accessible_ids) == 1:
-            resolved_dealership_id = accessible_ids[0]
-    else:
-        resolved_dealership_id = current_user.dealership_id
-
-    if not resolved_dealership_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Dealership context required. Please select a dealership.",
-        )
+    resolved_dealership_id = await _http_resolve_dealership(
+        db, current_user, dealership_id, required=True
+    )
 
     date_from_dt: Optional[datetime] = None
     date_to_dt: Optional[datetime] = None
@@ -2239,25 +2184,9 @@ async def get_sold_cars_report(
     Get sold cars (converted leads) report with activity counts.
     Returns leads that have been marked as converted/sold within the date range.
     """
-    # Resolve dealership
-    resolved_dealership_id = None
-    if current_user.role == UserRole.SUPER_ADMIN:
-        resolved_dealership_id = dealership_id
-    elif current_user.role == UserRole.BDC:
-        # BDC can access multiple dealerships
-        accessible_ids = await get_accessible_dealership_ids(db, current_user)
-        if dealership_id is not None:
-            if accessible_ids and dealership_id in accessible_ids:
-                resolved_dealership_id = dealership_id
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You do not have access to this dealership"
-                )
-        elif accessible_ids and len(accessible_ids) == 1:
-            resolved_dealership_id = accessible_ids[0]
-    else:
-        resolved_dealership_id = current_user.dealership_id
+    resolved_dealership_id = await _http_resolve_dealership(
+        db, current_user, dealership_id, required=False
+    )
 
     # Parse dates
     date_from_dt = None

@@ -36,6 +36,7 @@ import {
 import { PageHeader } from "@/components/ui/page-header"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { useBdcDealership } from "@/contexts/bdc-dealership-context"
 import { DealershipService } from "@/services/dealership-service"
 import { TeamService } from "@/services/team-service"
@@ -232,6 +233,7 @@ function hasDealershipScope(allDealerships: boolean, dealershipId: string | null
 export default function BdcExportReportPage() {
     const { isDealershipAdmin, isDealershipOwner, isSuperAdmin, isBdc } = useRole()
     const { user } = useAuthStore()
+    const orgDealershipId = useOrgDealershipId()
     const bdcCtx = useBdcDealership()
     const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
 
@@ -301,25 +303,33 @@ export default function BdcExportReportPage() {
             DealershipService.getDealershipsForSelect().then(setDealerships).catch(() => setDealerships([]))
         } else if (isBdc && user?.id) {
             TeamService.getUserDealershipAccess(user.id)
-                .then((res) => setDealerships(res.dealerships))
-                .catch(() => setDealerships([]))
+                .then((res) => {
+                    const list = res.dealerships
+                    setDealerships(list)
+                    const fallback = list[0]?.id || orgDealershipId
+                    if (fallback) setDealershipId((prev) => prev ?? fallback)
+                })
+                .catch(() => {
+                    setDealerships(orgDealershipId ? [{ id: orgDealershipId, name: "Organization" }] : [])
+                    if (orgDealershipId) setDealershipId((prev) => prev ?? orgDealershipId)
+                })
         } else if (user?.dealership_id) {
             DealershipService.getDealership(user.dealership_id)
                 .then((d) => setDealerships([{ id: d.id, name: d.name }]))
                 .catch(() => setDealerships([]))
         }
-    }, [canView, isSuperAdmin, isBdc, user?.id, user?.dealership_id])
+    }, [canView, isSuperAdmin, isBdc, user?.id, user?.dealership_id, orgDealershipId])
 
     React.useEffect(() => {
         if (!filtersRestored) return
         if (allDealerships) return
         if (dealershipId) return
-        if (isBdc && bdcCtx?.selectedDealershipId) {
-            setDealershipId(bdcCtx.selectedDealershipId)
+        if (isBdc && (bdcCtx?.selectedDealershipId || orgDealershipId)) {
+            setDealershipId(bdcCtx?.selectedDealershipId || orgDealershipId)
         } else if (dealerships.length === 1) {
             setDealershipId(dealerships[0].id)
         }
-    }, [filtersRestored, isBdc, bdcCtx?.selectedDealershipId, dealerships, allDealerships, dealershipId])
+    }, [filtersRestored, isBdc, bdcCtx?.selectedDealershipId, orgDealershipId, dealerships, allDealerships, dealershipId])
 
     React.useEffect(() => {
         const scopeId = allDealerships ? undefined : dealershipId ?? undefined

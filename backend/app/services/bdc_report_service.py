@@ -20,7 +20,11 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.access_scope import get_accessible_dealership_ids, user_can_access_dealership
+from app.core.access_scope import (
+    get_accessible_dealership_ids,
+    resolve_user_dealership_id,
+    user_can_access_dealership,
+)
 from app.core.config import settings
 from app.core.timezone import utc_now
 from app.models.appointment import Appointment, AppointmentStatus
@@ -180,8 +184,10 @@ class BdcReportService:
         accessible = await get_accessible_dealership_ids(db, current_user)
 
         if all_dealerships:
-            if current_user.role == UserRole.SUPER_ADMIN:
-                res = await db.execute(select(Dealership.id))
+            if current_user.role == UserRole.SUPER_ADMIN or (
+                current_user.role == UserRole.BDC and accessible is None
+            ):
+                res = await db.execute(select(Dealership.id).where(Dealership.is_active == True))
                 ids = [r[0] for r in res.all()]
                 if not ids:
                     raise ValueError("No dealerships found")
@@ -193,19 +199,15 @@ class BdcReportService:
             raise ValueError("No dealerships in scope")
 
         if dealership_id:
-            if current_user.role == UserRole.SUPER_ADMIN:
-                return [dealership_id]
-            if accessible and dealership_id not in accessible:
-                if current_user.dealership_id != dealership_id:
-                    raise PermissionError("Not authorized for this dealership")
-            elif (
-                current_user.role != UserRole.SUPER_ADMIN
-                and current_user.dealership_id
-                and current_user.dealership_id != dealership_id
-                and current_user.role != UserRole.BDC
-            ):
+            if not await user_can_access_dealership(db, current_user, dealership_id):
                 raise PermissionError("Not authorized for this dealership")
             return [dealership_id]
+
+        if current_user.role == UserRole.BDC and accessible is None:
+            org_id = await resolve_user_dealership_id(db, current_user)
+            if org_id:
+                return [org_id]
+            raise ValueError("Dealership context required")
 
         if current_user.role == UserRole.BDC and accessible:
             if len(accessible) == 1:
@@ -214,6 +216,10 @@ class BdcReportService:
 
         if current_user.dealership_id:
             return [current_user.dealership_id]
+
+        org_id = await resolve_user_dealership_id(db, current_user)
+        if org_id:
+            return [org_id]
 
         raise ValueError("Dealership context required")
 

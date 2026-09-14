@@ -49,6 +49,7 @@ import {
 } from "lucide-react"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import {
     ReportsService,
     type TeamTouchSalesMetricsResponse,
@@ -116,6 +117,7 @@ export default function TeamSalesTouchReportPage() {
     const { isSuperAdmin, isDealershipAdmin, isDealershipOwner, isBdc } = useRole()
     const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
     const user = useAuthStore((state) => state.user)
+    const orgDealershipId = useOrgDealershipId()
 
     const [isLoading, setIsLoading] = React.useState(true)
     const [data, setData] = React.useState<TeamTouchSalesMetricsResponse | null>(null)
@@ -184,10 +186,11 @@ export default function TeamSalesTouchReportPage() {
                     setDealerships(ds)
                     setSelectedDealershipId((prev) => (prev || (ds[0]?.id ?? "")))
                 } else if (isBdc && user?.id) {
-                    // BDC users - load their accessible dealerships
                     const access = await TeamService.getUserDealershipAccess(user.id)
-                    setDealerships(access.dealerships as Dealership[])
-                    setSelectedDealershipId((prev) => (prev || (access.dealerships[0]?.id ?? "")))
+                    const list = access.dealerships as Dealership[]
+                    setDealerships(list)
+                    const fallback = list[0]?.id || orgDealershipId || ""
+                    setSelectedDealershipId((prev) => prev || fallback)
                 }
             } catch (err) {
                 console.error("Failed to load dealerships:", err)
@@ -196,11 +199,15 @@ export default function TeamSalesTouchReportPage() {
             }
         }
         if (canView) loadDealerships()
-    }, [isSuperAdmin, isBdc, user?.id, canView])
+    }, [isSuperAdmin, isBdc, user?.id, orgDealershipId, canView])
 
     const fetchData = React.useCallback(async () => {
-        const dealershipId = (isSuperAdmin || isBdc) ? selectedDealershipId : user?.dealership_id
-        if ((isSuperAdmin || isBdc) && !dealershipId) return
+        const dealershipId = isSuperAdmin
+            ? selectedDealershipId
+            : isBdc
+                ? (selectedDealershipId || orgDealershipId)
+                : (user?.dealership_id || orgDealershipId)
+        if (isSuperAdmin && !dealershipId) return
 
         setIsLoading(true)
         setError(null)
@@ -225,7 +232,7 @@ export default function TeamSalesTouchReportPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [isSuperAdmin, isBdc, selectedDealershipId, user?.dealership_id, getDateRange])
+    }, [isSuperAdmin, isBdc, selectedDealershipId, orgDealershipId, user?.dealership_id, getDateRange])
 
     React.useEffect(() => {
         if (canView) {

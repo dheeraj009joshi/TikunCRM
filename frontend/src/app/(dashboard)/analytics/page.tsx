@@ -61,6 +61,7 @@ import { DealershipService } from "@/services/dealership-service"
 import { TeamService } from "@/services/team-service"
 import { LeadStageService, type LeadStage } from "@/services/lead-stage-service"
 import { useAuthStore } from "@/stores/auth-store"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
 
@@ -358,6 +359,7 @@ function downloadAnalysisPdf(
 export default function AnalyticsPage() {
     const { isDealershipAdmin, isDealershipOwner, isSuperAdmin, isBdc } = useRole()
     const { user } = useAuthStore()
+    const orgDealershipId = useOrgDealershipId()
     const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
 
     const [analysis, setAnalysis] = React.useState<DealershipAnalysisResponse | null>(null)
@@ -399,10 +401,18 @@ export default function AnalyticsPage() {
             DealershipService.getDealershipsForSelect().then(setDealerships).catch(() => setDealerships([]))
         } else if (isBdc && user?.id) {
             TeamService.getUserDealershipAccess(user.id)
-                .then((res) => setDealerships(res.dealerships))
-                .catch(() => setDealerships([]))
+                .then((res) => {
+                    const list = res.dealerships
+                    setDealerships(list)
+                    const fallback = list[0]?.id || orgDealershipId
+                    if (fallback) setDealershipId((prev) => prev ?? fallback)
+                })
+                .catch(() => {
+                    setDealerships(orgDealershipId ? [{ id: orgDealershipId, name: "Organization" }] : [])
+                    if (orgDealershipId) setDealershipId((prev) => prev ?? orgDealershipId)
+                })
         }
-    }, [canView, isSuperAdmin, isBdc, user?.id])
+    }, [canView, isSuperAdmin, isBdc, user?.id, orgDealershipId])
     
     // Auto-select first dealership for BDC users
     React.useEffect(() => {
@@ -413,15 +423,15 @@ export default function AnalyticsPage() {
     
     React.useEffect(() => {
         if (!canView) return
-        const did = dealershipId || (user?.dealership_id ?? undefined)
+        const did = dealershipId || orgDealershipId || (user?.dealership_id ?? undefined)
         TeamService.getSalespersons(did).then(setSalespersons).catch(() => setSalespersons([]))
-    }, [canView, dealershipId, user?.dealership_id])
+    }, [canView, dealershipId, orgDealershipId, user?.dealership_id])
     
     React.useEffect(() => {
         if (!canView) return
-        const did = dealershipId || (user?.dealership_id ?? undefined)
+        const did = dealershipId || orgDealershipId || (user?.dealership_id ?? undefined)
         TeamService.listBdcAgents(did).then(setBdcAgents).catch(() => setBdcAgents([]))
-    }, [canView, dealershipId, user?.dealership_id])
+    }, [canView, dealershipId, orgDealershipId, user?.dealership_id])
     
     React.useEffect(() => {
         LeadStageService.list().then(setStages).catch(() => setStages([]))
@@ -429,11 +439,10 @@ export default function AnalyticsPage() {
 
     const fetchAll = React.useCallback(async () => {
         if (!canView) return
-        // BDC users must have a dealership selected before fetching
-        if (isBdc && !dealershipId) return
+        const effectiveDealershipId = dealershipId || (isBdc ? orgDealershipId : null)
         setLoading(true)
         setError(null)
-        const filters = buildFilters(dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, bdcAgentId, source, stageId)
+        const filters = buildFilters(dateFrom, dateTo, singleDate, dateMode, effectiveDealershipId, assignedTo, bdcAgentId, source, stageId)
         try {
             const [analysisRes, overTimeRes, byStageRes, bySourceRes, activitiesRes] = await Promise.all([
                 ReportsService.getDealershipAnalysis(filters),
@@ -456,7 +465,7 @@ export default function AnalyticsPage() {
         } finally {
             setLoading(false)
         }
-    }, [canView, isBdc, dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, bdcAgentId, source, stageId])
+    }, [canView, isBdc, orgDealershipId, dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, bdcAgentId, source, stageId])
 
     React.useEffect(() => {
         fetchAll()

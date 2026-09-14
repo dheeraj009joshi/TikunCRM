@@ -142,10 +142,10 @@ async def get_dealership(
     """
     Get dealership by ID.
     """
-    # Permission checks
-    if current_user.role != UserRole.SUPER_ADMIN:
-        if current_user.dealership_id != dealership_id:
-             raise HTTPException(status_code=403, detail="Not authorized to view another dealership")
+    from app.core.access_scope import user_can_access_dealership
+
+    if not await user_can_access_dealership(db, current_user, dealership_id):
+        raise HTTPException(status_code=403, detail="Not authorized to view another dealership")
 
     result = await db.execute(select(Dealership).where(Dealership.id == dealership_id))
     dealership = result.scalar_one_or_none()

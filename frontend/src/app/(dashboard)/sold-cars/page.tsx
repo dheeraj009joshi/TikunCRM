@@ -42,6 +42,7 @@ import {
 } from "lucide-react"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import {
     ReportsService,
     type SoldCarsResponse,
@@ -96,6 +97,7 @@ export default function SoldCarsPage() {
     const { isSuperAdmin, isDealershipAdmin, isDealershipOwner, isBdc } = useRole()
     const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
     const user = useAuthStore((state) => state.user)
+    const orgDealershipId = useOrgDealershipId()
     
     const [isLoading, setIsLoading] = React.useState(false)
     const [data, setData] = React.useState<SoldCarsResponse | null>(null)
@@ -174,15 +176,18 @@ export default function SoldCarsPage() {
                         setSelectedDealershipId(ds[0].id)
                     }
                 } else if (isBdc && user?.id) {
-                    // BDC users - load their accessible dealerships
                     const access = await TeamService.getUserDealershipAccess(user.id)
-                    setDealerships(access.dealerships as Dealership[])
-                    if (access.dealerships.length > 0 && !selectedDealershipId) {
-                        setSelectedDealershipId(access.dealerships[0].id)
+                    const list = access.dealerships as Dealership[]
+                    setDealerships(list)
+                    const fallback = list[0]?.id || orgDealershipId || ""
+                    if (fallback) {
+                        setSelectedDealershipId((prev) => prev || fallback)
                     }
                 }
                 
-                const dealershipId = (isSuperAdmin || isBdc) ? selectedDealershipId : user?.dealership_id
+                const dealershipId = (isSuperAdmin || isBdc)
+                    ? (selectedDealershipId || orgDealershipId)
+                    : user?.dealership_id
                 if (dealershipId) {
                     const [sp, bdc] = await Promise.all([
                         TeamService.getSalespersons(dealershipId),
@@ -198,12 +203,16 @@ export default function SoldCarsPage() {
             }
         }
         loadDropdowns()
-    }, [isSuperAdmin, isBdc, user?.id, user?.dealership_id, selectedDealershipId])
+    }, [isSuperAdmin, isBdc, user?.id, user?.dealership_id, selectedDealershipId, orgDealershipId])
     
     // Fetch data
     const fetchData = React.useCallback(async () => {
-        const dealershipId = (isSuperAdmin || isBdc) ? selectedDealershipId : user?.dealership_id
-        if ((isSuperAdmin || isBdc) && !dealershipId) {
+        const dealershipId = isSuperAdmin
+            ? selectedDealershipId
+            : isBdc
+                ? (selectedDealershipId || orgDealershipId)
+                : (user?.dealership_id || orgDealershipId)
+        if (isSuperAdmin && !dealershipId) {
             setIsLoading(false)
             return
         }
@@ -221,8 +230,8 @@ export default function SoldCarsPage() {
                 filters.date_to = endOfDay(to).toISOString()
             }
             
-            if ((isSuperAdmin || isBdc) && selectedDealershipId) {
-                filters.dealership_id = selectedDealershipId
+            if ((isSuperAdmin || isBdc) && dealershipId) {
+                filters.dealership_id = dealershipId
             }
             if (selectedSalesperson && selectedSalesperson !== "all") {
                 filters.assigned_to = selectedSalesperson
@@ -239,14 +248,14 @@ export default function SoldCarsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [isSuperAdmin, isBdc, selectedDealershipId, user?.dealership_id, getDateRange, selectedSalesperson, selectedBdcAgent])
+    }, [isSuperAdmin, isBdc, selectedDealershipId, orgDealershipId, user?.dealership_id, getDateRange, selectedSalesperson, selectedBdcAgent])
     
     React.useEffect(() => {
         if (!canView) {
             setIsLoading(false)
             return
         }
-        if ((isSuperAdmin || isBdc) && !selectedDealershipId) {
+        if (isSuperAdmin && !selectedDealershipId) {
             setIsLoading(false)
             return
         }

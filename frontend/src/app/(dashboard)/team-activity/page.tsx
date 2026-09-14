@@ -52,6 +52,7 @@ import {
 } from "lucide-react"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import {
     ReportsService,
     type DailyActivityResponse,
@@ -686,6 +687,7 @@ function SalespersonActivityCard({
 export default function TeamActivityPage() {
     const { isSuperAdmin, isDealershipLevel, isBdc } = useRole()
     const user = useAuthStore((state) => state.user)
+    const orgDealershipId = useOrgDealershipId()
     
     const [isLoading, setIsLoading] = React.useState(true)
     const [data, setData] = React.useState<DailyActivityResponse | null>(null)
@@ -760,15 +762,18 @@ export default function TeamActivityPage() {
                         setSelectedDealershipId(ds[0].id)
                     }
                 } else if (isBdc && user?.id) {
-                    // BDC users - load their accessible dealerships
                     const access = await TeamService.getUserDealershipAccess(user.id)
-                    setDealerships(access.dealerships as Dealership[])
-                    if (access.dealerships.length > 0 && !selectedDealershipId) {
-                        setSelectedDealershipId(access.dealerships[0].id)
+                    const list = access.dealerships as Dealership[]
+                    setDealerships(list)
+                    const fallback = list[0]?.id || orgDealershipId || ""
+                    if (fallback) {
+                        setSelectedDealershipId((prev) => prev || fallback)
                     }
                 }
                 
-                const dealershipId = (isSuperAdmin || isBdc) ? selectedDealershipId : user?.dealership_id
+                const dealershipId = (isSuperAdmin || isBdc)
+                    ? (selectedDealershipId || orgDealershipId)
+                    : user?.dealership_id
                 if (dealershipId) {
                     const sp = await TeamService.getSalespersons(dealershipId)
                     setSalespersons(sp)
@@ -780,12 +785,16 @@ export default function TeamActivityPage() {
             }
         }
         loadDropdowns()
-    }, [isSuperAdmin, isBdc, user?.id, user?.dealership_id, selectedDealershipId])
+    }, [isSuperAdmin, isBdc, user?.id, user?.dealership_id, selectedDealershipId, orgDealershipId])
     
     // Fetch data
     const fetchData = React.useCallback(async () => {
-        const dealershipId = (isSuperAdmin || isBdc) ? selectedDealershipId : user?.dealership_id
-        if (!dealershipId) return
+        const dealershipId = isSuperAdmin
+            ? selectedDealershipId
+            : isBdc
+                ? (selectedDealershipId || orgDealershipId)
+                : (user?.dealership_id || orgDealershipId)
+        if (!isBdc && !dealershipId) return
         
         setIsLoading(true)
         setError(null)
@@ -802,8 +811,8 @@ export default function TeamActivityPage() {
                 date_from: fromDate.toISOString(),
                 date_to: toDate.toISOString(),
             }
-            if ((isSuperAdmin || isBdc) && selectedDealershipId) {
-                filters.dealership_id = selectedDealershipId
+            if ((isSuperAdmin || isBdc) && dealershipId) {
+                filters.dealership_id = dealershipId
             }
             if (selectedUserId && selectedUserId !== "all") {
                 filters.user_id = selectedUserId
@@ -820,7 +829,7 @@ export default function TeamActivityPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [isSuperAdmin, isBdc, selectedDealershipId, user?.dealership_id, getDateRange, selectedUserId, selectedActivityTypes])
+    }, [isSuperAdmin, isBdc, selectedDealershipId, orgDealershipId, user?.dealership_id, getDateRange, selectedUserId, selectedActivityTypes])
     
     React.useEffect(() => {
         fetchData()
