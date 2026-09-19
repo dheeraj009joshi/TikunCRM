@@ -30,6 +30,7 @@ from app.models.call_log import CallLog, CallDirection, CallStatus
 from app.models.sms_log import SMSLog, MessageDirection
 from app.models.showroom_visit import ShowroomVisit, ShowroomOutcome
 from app.models.customer import Customer
+from app.models.partner_store import PartnerStore
 from app.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
@@ -308,6 +309,12 @@ class SoldCarItem(BaseModel):
     salesperson_name: Optional[str]
     source: Optional[str]
     campaign_display: Optional[str]
+    sent_to_partner_store_id: Optional[str] = None
+    sent_to_partner_store_name: Optional[str] = None
+    sent_to_partner_store_brand: Optional[str] = None
+    sold_to_partner_store_id: Optional[str] = None
+    sold_to_partner_store_name: Optional[str] = None
+    sold_to_partner_store_brand: Optional[str] = None
     notes_count: int
     follow_ups_count: int
     appointments_count: int
@@ -2282,6 +2289,20 @@ async def get_sold_cars_report(
         for u in users_result.scalars().all():
             user_lookup[u.id] = u
 
+    partner_ids = {
+        pid
+        for lead in leads
+        for pid in (getattr(lead, "partner_store_id", None), getattr(lead, "sold_partner_store_id", None))
+        if pid
+    }
+    partner_lookup = {}
+    if partner_ids:
+        partners_result = await db.execute(
+            select(PartnerStore).where(PartnerStore.id.in_(partner_ids))
+        )
+        for store in partners_result.scalars().all():
+            partner_lookup[store.id] = store
+
     # Get status change activities to "converted" for sold date fallback
     # This captures the date when the lead was marked as converted
     status_change_result = await db.execute(
@@ -2349,6 +2370,9 @@ async def get_sold_cars_report(
         # Sold date priority: converted_at > closed_at > status change activity date
         sold_date = lead.converted_at or lead.closed_at or status_change_dates.get(lead.id)
 
+        sent_store = partner_lookup.get(lead.partner_store_id) if getattr(lead, "partner_store_id", None) else None
+        sold_store = partner_lookup.get(lead.sold_partner_store_id) if getattr(lead, "sold_partner_store_id", None) else None
+
         items.append(SoldCarItem(
             lead_id=str(lead.id),
             lead_name=lead_name,
@@ -2359,6 +2383,12 @@ async def get_sold_cars_report(
             salesperson_name=salesperson.full_name if salesperson else None,
             source=lead.source.value if lead.source else None,
             campaign_display=campaign_display,
+            sent_to_partner_store_id=str(lead.partner_store_id) if getattr(lead, "partner_store_id", None) else None,
+            sent_to_partner_store_name=sent_store.name if sent_store else None,
+            sent_to_partner_store_brand=sent_store.brand if sent_store else None,
+            sold_to_partner_store_id=str(lead.sold_partner_store_id) if getattr(lead, "sold_partner_store_id", None) else None,
+            sold_to_partner_store_name=sold_store.name if sold_store else None,
+            sold_to_partner_store_brand=sold_store.brand if sold_store else None,
             notes_count=notes_count,
             follow_ups_count=follow_ups_count,
             appointments_count=appointments_count,

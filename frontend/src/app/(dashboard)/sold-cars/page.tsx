@@ -37,6 +37,7 @@ import {
     Loader2,
     Phone,
     RefreshCw,
+    Store,
     Trophy,
     User,
 } from "lucide-react"
@@ -67,6 +68,30 @@ const DATE_PRESETS: { value: DatePreset; label: string }[] = [
     { value: "all_time", label: "All Time" },
     { value: "custom", label: "Custom Range" },
 ]
+
+function PartnerStoreCell({
+    name,
+    brand,
+}: {
+    name?: string | null
+    brand?: string | null
+}) {
+    if (!name) {
+        return <span className="text-muted-foreground">—</span>
+    }
+    const label = brand ? `${name} (${brand})` : name
+    return (
+        <div className="flex items-center gap-1.5 min-w-0 max-w-[220px]">
+            <Store className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="text-sm font-medium truncate" title={label}>
+                {name}
+                {brand ? (
+                    <span className="text-muted-foreground font-normal"> · {brand}</span>
+                ) : null}
+            </span>
+        </div>
+    )
+}
 
 function SummaryCard({
     title,
@@ -311,12 +336,22 @@ export default function SoldCarsPage() {
         // Main table
         autoTable(doc, {
             startY: y,
-            head: [["Lead Name", "Phone", "Sold Date", "Salesperson", "Notes", "Follow-ups", "Appts", "Total"]],
+            head: [["Lead Name", "Phone", "Sold Date", "Salesperson", "Sent To", "Sold To", "Notes", "Follow-ups", "Appts", "Total"]],
             body: data.items.map((item) => [
                 item.lead_name,
                 item.phone || "-",
                 item.sold_date ? format(new Date(item.sold_date), "MMM d, yyyy") : "-",
                 item.salesperson_name || "Unassigned",
+                item.sent_to_partner_store_name
+                    ? (item.sent_to_partner_store_brand
+                        ? `${item.sent_to_partner_store_name} (${item.sent_to_partner_store_brand})`
+                        : item.sent_to_partner_store_name)
+                    : "-",
+                item.sold_to_partner_store_name
+                    ? (item.sold_to_partner_store_brand
+                        ? `${item.sold_to_partner_store_name} (${item.sold_to_partner_store_brand})`
+                        : item.sold_to_partner_store_name)
+                    : "-",
                 item.notes_count,
                 item.follow_ups_count,
                 item.appointments_count,
@@ -613,6 +648,8 @@ export default function SoldCarsPage() {
                                     <TableHead>Phone</TableHead>
                                     <TableHead>Sold Date</TableHead>
                                     <TableHead>Salesperson</TableHead>
+                                    <TableHead>Sent To</TableHead>
+                                    <TableHead>Sold To</TableHead>
                                     <TableHead className="text-center">Notes</TableHead>
                                     <TableHead className="text-center">Follow-ups</TableHead>
                                     <TableHead className="text-center">Appointments</TableHead>
@@ -623,13 +660,13 @@ export default function SoldCarsPage() {
                             <TableBody>
                                 {isLoading ? (
                                     <TableRow>
-                                        <TableCell colSpan={9}>
+                                        <TableCell colSpan={11}>
                                             <TableLoading />
                                         </TableCell>
                                     </TableRow>
                                 ) : !data || data.items.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={9}>
+                                        <TableCell colSpan={11}>
                                             <TableEmpty
                                                 icon={<Car className="h-10 w-10" />}
                                                 title="No sold cars found"
@@ -668,6 +705,18 @@ export default function SoldCarsPage() {
                                                 {item.salesperson_name || (
                                                     <span className="text-muted-foreground">Unassigned</span>
                                                 )}
+                                            </TableCell>
+                                            <TableCell>
+                                                <PartnerStoreCell
+                                                    name={item.sent_to_partner_store_name}
+                                                    brand={item.sent_to_partner_store_brand}
+                                                />
+                                            </TableCell>
+                                            <TableCell>
+                                                <PartnerStoreCell
+                                                    name={item.sold_to_partner_store_name}
+                                                    brand={item.sold_to_partner_store_brand}
+                                                />
                                             </TableCell>
                                             <TableCell className="text-center">
                                                 <Badge variant={item.notes_count > 0 ? "secondary" : "outline"}>

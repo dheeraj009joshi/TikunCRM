@@ -252,6 +252,12 @@ export interface SoldCarItem {
     salesperson_name?: string;
     source?: string;
     campaign_display?: string;
+    sent_to_partner_store_id?: string | null;
+    sent_to_partner_store_name?: string | null;
+    sent_to_partner_store_brand?: string | null;
+    sold_to_partner_store_id?: string | null;
+    sold_to_partner_store_name?: string | null;
+    sold_to_partner_store_brand?: string | null;
     notes_count: number;
     follow_ups_count: number;
     appointments_count: number;

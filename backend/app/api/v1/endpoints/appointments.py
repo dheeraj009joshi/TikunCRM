@@ -193,6 +193,7 @@ async def create_appointment(
         if lead_row:
             lead_row.partner_store_id = partner_store_id
             lead_row.partner_connected_at = utc_now()
+            lead_row.fill_sold_partner_if_converted()
     
     # Log activity if associated with a lead
     if appointment.lead_id:
@@ -604,6 +605,7 @@ async def update_appointment(
         if lead_row:
             lead_row.partner_store_id = update_data["partner_store_id"]
             lead_row.partner_connected_at = utc_now()
+            lead_row.fill_sold_partner_if_converted()
     
     await db.commit()
 

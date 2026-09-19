@@ -60,6 +60,13 @@ def ensure_partner_schema(conn) -> None:
         "CREATE INDEX IF NOT EXISTS ix_leads_partner_store_id ON leads (partner_store_id)"
     ))
 
+    conn.execute(text("""
+        ALTER TABLE leads ADD COLUMN IF NOT EXISTS sold_partner_store_id UUID
+    """))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_leads_sold_partner_store_id ON leads (sold_partner_store_id)"
+    ))
+
     fk_exists = conn.execute(text("""
         SELECT 1 FROM pg_constraint WHERE conname = 'fk_leads_partner_store_id'
     """)).fetchone()
@@ -70,6 +77,25 @@ def ensure_partner_schema(conn) -> None:
             FOREIGN KEY (partner_store_id) REFERENCES partner_stores (id)
             ON DELETE SET NULL
         """))
+
+    sold_fk_exists = conn.execute(text("""
+        SELECT 1 FROM pg_constraint WHERE conname = 'fk_leads_sold_partner_store_id'
+    """)).fetchone()
+    if not sold_fk_exists:
+        conn.execute(text("""
+            ALTER TABLE leads
+            ADD CONSTRAINT fk_leads_sold_partner_store_id
+            FOREIGN KEY (sold_partner_store_id) REFERENCES partner_stores (id)
+            ON DELETE SET NULL
+        """))
+
+    conn.execute(text("""
+        UPDATE leads
+        SET sold_partner_store_id = partner_store_id
+        WHERE sold_partner_store_id IS NULL
+          AND partner_store_id IS NOT NULL
+          AND (outcome = 'converted' OR converted_at IS NOT NULL)
+    """))
 
 
 def main() -> int:

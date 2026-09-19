@@ -1867,6 +1867,7 @@ async def update_lead_stage(
         if new_stage.name == "converted":
             lead.outcome = "converted"
             lead.converted_at = utc_now()
+            lead.snapshot_sold_partner()
             # Update customer lifetime value
             cust = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
             customer = cust.scalar_one_or_none()
@@ -2658,6 +2659,7 @@ async def connect_lead_to_partner(
 
     lead.partner_store_id = body.partner_store_id
     lead.partner_connected_at = utc_now()
+    lead.fill_sold_partner_if_converted()
 
     _c_obj = (await db.execute(
         select(Customer).where(Customer.id == lead.customer_id)

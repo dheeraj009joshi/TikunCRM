@@ -406,6 +406,7 @@ async def execute_update_stages(
             lead.is_active = False
             if stage.name == "converted":
                 lead.converted_at = utc_now()
+                lead.snapshot_sold_partner()
             lead.closed_at = utc_now()
         await ActivityService.log_activity(
             db,

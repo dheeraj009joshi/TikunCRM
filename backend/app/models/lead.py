@@ -175,11 +175,18 @@ class Lead(Base):
         ForeignKey("partner_stores.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
-        comment="Partner dealership where approved customer will purchase",
+        comment="Partner dealership the lead was sent / currently connected to",
     )
     partner_connected_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True,
         comment="When the lead was connected to a partner store",
+    )
+    sold_partner_store_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("partner_stores.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Partner dealership snapshotted when the lead was marked converted/sold",
     )
 
     # Typed down payment for the eligibility engine (legacy meta_data["downpayment"] is fallback)
@@ -302,6 +309,9 @@ class Lead(Base):
     partner_store: Mapped[Optional["PartnerStore"]] = relationship(
         "PartnerStore", foreign_keys=[partner_store_id], lazy="noload"
     )
+    sold_partner_store: Mapped[Optional["PartnerStore"]] = relationship(
+        "PartnerStore", foreign_keys=[sold_partner_store_id], lazy="noload"
+    )
 
     # ── Backward-compat proxy properties (contact info lives on Customer) ──
     @property
@@ -374,6 +384,19 @@ class Lead(Base):
         """Clear pool-entry tracking after a successful assignment."""
         self.returned_to_pool_at = None
         self.previous_assigned_to_id = None
+
+    def snapshot_sold_partner(self, *, only_if_empty: bool = False) -> None:
+        """Record the currently connected partner as the sold-to dealership."""
+        if only_if_empty and self.sold_partner_store_id is not None:
+            return
+        self.sold_partner_store_id = self.partner_store_id
+
+    def fill_sold_partner_if_converted(self) -> None:
+        """If this lead is already sold and has no sold-to partner, use sent-to."""
+        if self.sold_partner_store_id is not None:
+            return
+        if self.outcome == "converted" or self.converted_at is not None:
+            self.sold_partner_store_id = self.partner_store_id
 
     def __repr__(self) -> str:
         stage_name = self.stage.display_name if self.stage else "?"

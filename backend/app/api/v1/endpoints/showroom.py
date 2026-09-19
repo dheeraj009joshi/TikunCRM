@@ -388,6 +388,7 @@ async def check_out(
             lead.outcome = target_stage.name
             if target_stage.name == "converted":
                 lead.converted_at = utc_now()
+                lead.snapshot_sold_partner()
 
         # Log activity
         _co = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
