@@ -1039,8 +1039,8 @@ export default function LeadDetailsPage() {
                 StipsService.listCategories(lead?.dealership_id),
             ])
             setStipsConfigured(statusRes.configured)
-            const uniqueCats = []
-            const seenNames = new Set()
+            const uniqueCats: StipsCategory[] = []
+            const seenNames = new Set<string>()
             for (const cat of categoriesRes) {
                 const key = (cat.name || "").trim().toLowerCase()
                 if (seenNames.has(key)) continue

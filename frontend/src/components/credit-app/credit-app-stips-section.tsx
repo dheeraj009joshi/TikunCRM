@@ -65,8 +65,8 @@ export function CreditAppStipsSection({
         StipsService.listCategories(dealershipId ?? undefined),
       ])
       setConfigured(status.configured)
-      const uniqueCats = []
-      const seen = new Set()
+      const uniqueCats: StipsCategory[] = []
+      const seen = new Set<string>()
       for (const cat of cats) {
         const key = (cat.name || "").trim().toLowerCase()
         if (seen.has(key)) continue
