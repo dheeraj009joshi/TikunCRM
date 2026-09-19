@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -57,16 +58,23 @@ async def create_category(
     """Create a Stips category (admin only)."""
     if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]:
         raise HTTPException(status_code=403, detail="Only admins can manage Stips categories")
-    category = await StipsCategoryService.create_category(
-        db,
-        name=body.name,
-        display_order=body.display_order,
-        scope=body.scope,
-        dealership_id=body.dealership_id or current_user.dealership_id,
-        filter_key=body.filter_key,
-    )
-    await db.commit()
-    await db.refresh(category)
+    try:
+        category = await StipsCategoryService.create_category(
+            db,
+            name=body.name,
+            display_order=body.display_order,
+            scope=body.scope,
+            dealership_id=body.dealership_id or current_user.dealership_id,
+            filter_key=body.filter_key,
+        )
+        await db.commit()
+        await db.refresh(category)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="A category with this name already exists. Duplicate tabs are not allowed.",
+        )
     return category
 
 
@@ -83,9 +91,16 @@ async def update_category(
     category = await StipsCategoryService.get_category(db, category_id)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
-    await StipsCategoryService.update_category(db, category, body.model_dump(exclude_unset=True))
-    await db.commit()
-    await db.refresh(category)
+    try:
+        await StipsCategoryService.update_category(db, category, body.model_dump(exclude_unset=True))
+        await db.commit()
+        await db.refresh(category)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="A category with this name already exists. Duplicate tabs are not allowed.",
+        )
     return category
 
 

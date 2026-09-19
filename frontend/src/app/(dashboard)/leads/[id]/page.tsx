@@ -1036,7 +1036,7 @@ export default function LeadDetailsPage() {
         try {
             const [statusRes, categoriesRes] = await Promise.all([
                 StipsService.getStatus(),
-                StipsService.listCategories(),
+                StipsService.listCategories(lead?.dealership_id),
             ])
             setStipsConfigured(statusRes.configured)
             setStipsCategories(categoriesRes)
@@ -1047,7 +1047,7 @@ export default function LeadDetailsPage() {
             setStipsCategories([])
             setStipsConfigured(false)
         }
-    }, [leadId])
+    }, [leadId, lead?.dealership_id])
 
     const fetchStipsDocuments = React.useCallback(async () => {
         if (!leadId || !lead) return
@@ -2643,23 +2643,26 @@ export default function LeadDetailsPage() {
                                 )}
                             </div>
 
-                            {/* Partner Store */}
+                            {/* Partner destinations */}
                             <div>
                                 <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
-                                    Partner Store
+                                    Sent To
                                 </p>
                                 {!isMentionOnly && canConnectToPartner ? (
                                     <AssignPartnerStore
                                         leadId={lead.id}
+                                        kind="sent"
                                         currentPartnerStoreId={lead.partner_store_id}
                                         currentPartnerStoreName={lead.partner_store?.name}
-                                        onAssigned={(partner) => {
+                                        onAssigned={(dest) => {
                                             setLead((prev) =>
                                                 prev
                                                     ? {
                                                           ...prev,
-                                                          partner_store_id: partner?.id ?? null,
-                                                          partner_store: partner,
+                                                          partner_store_id: dest.sent_to_partner_store_id ?? null,
+                                                          partner_store: dest.sent_to_partner_store ?? null,
+                                                          sold_partner_store_id: dest.sold_to_partner_store_id ?? null,
+                                                          sold_partner_store: dest.sold_to_partner_store ?? null,
                                                       }
                                                     : prev
                                             )
@@ -2669,6 +2672,39 @@ export default function LeadDetailsPage() {
                                     <p className="font-medium flex items-center gap-2 text-sm">
                                         <Store className="h-4 w-4 text-primary" />
                                         {lead.partner_store.name}
+                                    </p>
+                                ) : (
+                                    <p className="text-sm text-muted-foreground">Not assigned</p>
+                                )}
+                            </div>
+                            <div>
+                                <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
+                                    Sold To
+                                </p>
+                                {!isMentionOnly && canConnectToPartner ? (
+                                    <AssignPartnerStore
+                                        leadId={lead.id}
+                                        kind="sold"
+                                        currentPartnerStoreId={lead.sold_partner_store_id}
+                                        currentPartnerStoreName={lead.sold_partner_store?.name}
+                                        onAssigned={(dest) => {
+                                            setLead((prev) =>
+                                                prev
+                                                    ? {
+                                                          ...prev,
+                                                          partner_store_id: dest.sent_to_partner_store_id ?? null,
+                                                          partner_store: dest.sent_to_partner_store ?? null,
+                                                          sold_partner_store_id: dest.sold_to_partner_store_id ?? null,
+                                                          sold_partner_store: dest.sold_to_partner_store ?? null,
+                                                      }
+                                                    : prev
+                                            )
+                                        }}
+                                    />
+                                ) : lead.sold_partner_store?.name ? (
+                                    <p className="font-medium flex items-center gap-2 text-sm">
+                                        <Store className="h-4 w-4 text-primary" />
+                                        {lead.sold_partner_store.name}
                                     </p>
                                 ) : (
                                     <p className="text-sm text-muted-foreground">Not assigned</p>

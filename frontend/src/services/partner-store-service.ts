@@ -56,6 +56,20 @@ export interface PartnerStoreUpdate {
     is_active?: boolean;
 }
 
+export interface PartnerStoreBrief {
+    id: string
+    name: string
+    brand?: string | null
+}
+
+export interface LeadPartnerDestinations {
+    lead_id: string
+    sent_to_partner_store_id?: string | null
+    sent_to_partner_store?: PartnerStoreBrief | null
+    sold_to_partner_store_id?: string | null
+    sold_to_partner_store?: PartnerStoreBrief | null
+}
+
 export interface PartnerStoreListResponse {
     items: PartnerStore[];
     total: number;
@@ -145,4 +159,15 @@ export const PartnerStoreService = {
         const response = await apiClient.delete(`/leads/${leadId}/connect-partner`);
         return response.data;
     },
-};
+
+    async setLeadPartnerDestinations(
+        leadId: string,
+        data: {
+            sent_to_partner_store_id?: string | null
+            sold_to_partner_store_id?: string | null
+        },
+    ): Promise<LeadPartnerDestinations> {
+        const response = await apiClient.patch(`/leads/${leadId}/partner-destinations`, data)
+        return response.data
+    },
+}

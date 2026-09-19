@@ -41,6 +41,8 @@ from app.schemas.lead import (
     CampaignFilterOption,
     LeadSecondaryAssignment, LeadSwapSalespersons, LeadBdcAssignment,
     ConnectToPartnerRequest,
+    LeadPartnerDestinationsUpdate,
+    LeadPartnerDestinationsResponse,
 )
 from app.schemas.activity import NoteCreate
 from app.schemas.stips import StipDocumentResponse, StipDocumentViewUrl
@@ -1603,6 +1605,8 @@ async def get_lead(
         "partner_store_id": lead.partner_store_id if getattr(lead, "partner_store_id", None) else None,
         "partner_connected_at": getattr(lead, "partner_connected_at", None),
         "partner_store": None,
+        "sold_partner_store_id": lead.sold_partner_store_id if getattr(lead, "sold_partner_store_id", None) else None,
+        "sold_partner_store": None,
         "campaign_mapping_id": lead.campaign_mapping_id if getattr(lead, "campaign_mapping_id", None) else None,
         "campaign_mapping": None,
         "is_starred": lead.is_starred,
@@ -1707,17 +1711,31 @@ async def get_lead(
                 "name": dealership.name
             }
 
-    # Partner store (included in lead detail — no extra client fan-out)
-    if getattr(lead, "partner_store_id", None):
+    # Partner stores (included in lead detail — no extra client fan-out)
+    partner_ids = [
+        pid for pid in (
+            getattr(lead, "partner_store_id", None),
+            getattr(lead, "sold_partner_store_id", None),
+        ) if pid
+    ]
+    if partner_ids:
         partner_result = await db.execute(
-            select(PartnerStore).where(PartnerStore.id == lead.partner_store_id)
+            select(PartnerStore).where(PartnerStore.id.in_(partner_ids))
         )
-        partner = partner_result.scalar_one_or_none()
-        if partner:
+        partners = {p.id: p for p in partner_result.scalars().all()}
+        sent = partners.get(lead.partner_store_id) if getattr(lead, "partner_store_id", None) else None
+        if sent:
             response_data["partner_store"] = {
-                "id": partner.id,
-                "name": partner.name,
-                "brand": partner.brand,
+                "id": sent.id,
+                "name": sent.name,
+                "brand": sent.brand,
+            }
+        sold = partners.get(lead.sold_partner_store_id) if getattr(lead, "sold_partner_store_id", None) else None
+        if sold:
+            response_data["sold_partner_store"] = {
+                "id": sold.id,
+                "name": sold.name,
+                "brand": sold.brand,
             }
 
     # Primary campaign mapping (targeting message shown near source on lead detail)
@@ -2728,6 +2746,106 @@ async def disconnect_lead_from_partner(
 
     enriched = await enrich_leads_with_relations(db, [lead])
     return enriched[0] if enriched else lead
+
+
+async def _require_active_partner_store(db: AsyncSession, store_id: UUID) -> PartnerStore:
+    store_result = await db.execute(select(PartnerStore).where(PartnerStore.id == store_id))
+    store = store_result.scalar_one_or_none()
+    if not store:
+        raise HTTPException(status_code=404, detail="Partner store not found")
+    if not store.is_active:
+        raise HTTPException(status_code=400, detail="Partner store is not active")
+    return store
+
+
+async def _partner_destination_response(db: AsyncSession, lead: Lead) -> LeadPartnerDestinationsResponse:
+    ids = [pid for pid in (lead.partner_store_id, lead.sold_partner_store_id) if pid]
+    stores = {}
+    if ids:
+        result = await db.execute(select(PartnerStore).where(PartnerStore.id.in_(ids)))
+        stores = {s.id: s for s in result.scalars().all()}
+    sent = stores.get(lead.partner_store_id) if lead.partner_store_id else None
+    sold = stores.get(lead.sold_partner_store_id) if lead.sold_partner_store_id else None
+    return LeadPartnerDestinationsResponse(
+        lead_id=lead.id,
+        sent_to_partner_store_id=lead.partner_store_id,
+        sent_to_partner_store=(
+            {"id": sent.id, "name": sent.name, "brand": sent.brand} if sent else None
+        ),
+        sold_to_partner_store_id=lead.sold_partner_store_id,
+        sold_to_partner_store=(
+            {"id": sold.id, "name": sold.name, "brand": sold.brand} if sold else None
+        ),
+    )
+
+
+@router.patch("/{lead_id}/partner-destinations", response_model=LeadPartnerDestinationsResponse)
+async def update_lead_partner_destinations(
+    lead_id: UUID,
+    body: LeadPartnerDestinationsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.CONNECT_LEAD_TO_PARTNER)),
+) -> Any:
+    """Set sent-to and/or sold-to partner dealerships on a lead (including already-sold leads)."""
+    payload = body.model_dump(exclude_unset=True)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Provide sent_to_partner_store_id and/or sold_to_partner_store_id")
+
+    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    can_access = await user_can_access_lead(
+        db, current_user, lead.dealership_id, lead.assigned_to
+    )
+    if not can_access:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    changed_sent = "sent_to_partner_store_id" in payload
+    changed_sold = "sold_to_partner_store_id" in payload
+
+    if changed_sent:
+        sent_id = payload["sent_to_partner_store_id"]
+        if sent_id is not None:
+            await _require_active_partner_store(db, sent_id)
+        lead.partner_store_id = sent_id
+        lead.partner_connected_at = utc_now() if sent_id else None
+
+    if changed_sold:
+        sold_id = payload["sold_to_partner_store_id"]
+        if sold_id is not None:
+            await _require_active_partner_store(db, sold_id)
+        lead.sold_partner_store_id = sold_id
+
+    if changed_sent and not changed_sold:
+        lead.fill_sold_partner_if_converted()
+    if changed_sold and not changed_sent and lead.partner_store_id is None and lead.sold_partner_store_id:
+        lead.partner_store_id = lead.sold_partner_store_id
+        lead.partner_connected_at = utc_now()
+
+    performer_name = f"{current_user.first_name} {current_user.last_name}"
+    bits = []
+    if changed_sent:
+        bits.append("sent-to updated")
+    if changed_sold:
+        bits.append("sold-to updated")
+    await ActivityService.log_activity(
+        db,
+        activity_type=ActivityType.LEAD_UPDATED,
+        description=f"Partner destinations ({', '.join(bits)}) by {performer_name}",
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=lead.dealership_id,
+        meta_data={
+            "sent_to_partner_store_id": str(lead.partner_store_id) if lead.partner_store_id else None,
+            "sold_to_partner_store_id": str(lead.sold_partner_store_id) if lead.sold_partner_store_id else None,
+            "performer_name": performer_name,
+        },
+    )
+
+    await db.commit()
+    return await _partner_destination_response(db, lead)
 
 
 @router.post("/{lead_id}/notes", response_model=LeadResponse)

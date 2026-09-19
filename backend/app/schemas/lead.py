@@ -184,6 +184,20 @@ class ConnectToPartnerRequest(BaseModel):
     notes: Optional[str] = None
 
 
+class LeadPartnerDestinationsUpdate(BaseModel):
+    """Set sent-to and/or sold-to partner dealerships. Omitted fields are left unchanged."""
+    sent_to_partner_store_id: Optional[UUID] = None
+    sold_to_partner_store_id: Optional[UUID] = None
+
+
+class LeadPartnerDestinationsResponse(BaseModel):
+    lead_id: UUID
+    sent_to_partner_store_id: Optional[UUID] = None
+    sent_to_partner_store: Optional[PartnerStoreBrief] = None
+    sold_to_partner_store_id: Optional[UUID] = None
+    sold_to_partner_store: Optional[PartnerStoreBrief] = None
+
+
 class LeadCampaignResponse(BaseModel):
     """Response schema for a campaign association on a lead."""
     id: UUID
@@ -250,6 +264,8 @@ class LeadResponse(BaseModel):
     partner_store_id: Optional[UUID] = None
     partner_connected_at: Optional[datetime] = None
     partner_store: Optional[PartnerStoreBrief] = None
+    sold_partner_store_id: Optional[UUID] = None
+    sold_partner_store: Optional[PartnerStoreBrief] = None
     campaign_mapping_id: Optional[UUID] = None
     campaign_mapping: Optional[CampaignMappingBriefOnLead] = None
     has_ssn_stip: bool = False

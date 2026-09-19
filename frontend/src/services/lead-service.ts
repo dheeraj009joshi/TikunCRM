@@ -88,6 +88,8 @@ export interface Lead {
     partner_store_id?: string | null;
     partner_connected_at?: string | null;
     partner_store?: { id: string; name: string; brand?: string | null } | null;
+    sold_partner_store_id?: string | null;
+    sold_partner_store?: { id: string; name: string; brand?: string | null } | null;
     campaign_mapping_id?: string | null;
     campaign_mapping?: LeadCampaignMappingBrief | null;
     has_ssn_stip?: boolean;

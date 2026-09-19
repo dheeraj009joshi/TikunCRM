@@ -10,34 +10,44 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
-import { PartnerStoreService, PartnerStore } from "@/services/partner-store-service"
+import {
+    PartnerStoreService,
+    PartnerStore,
+    type LeadPartnerDestinations,
+} from "@/services/partner-store-service"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 
 interface AssignPartnerStoreProps {
     leadId: string
+    kind?: "sent" | "sold"
     currentPartnerStoreId?: string | null
     currentPartnerStoreName?: string | null
+    stores?: PartnerStore[]
     disabled?: boolean
+    compact?: boolean
     className?: string
-    onAssigned?: (partner: { id: string; name: string; brand?: string | null } | null) => void
+    onAssigned?: (destinations: LeadPartnerDestinations) => void
 }
 
 /**
- * Assign / change / clear partner store on the lead detail page only.
- * Partner list is cached in PartnerStoreService (single request).
+ * Assign sent-to or sold-to partner store.
+ * Partner list is cached in PartnerStoreService unless `stores` is passed.
  */
 export function AssignPartnerStore({
     leadId,
+    kind = "sent",
     currentPartnerStoreId,
     currentPartnerStoreName,
+    stores: storesProp,
     disabled = false,
+    compact = false,
     className,
     onAssigned,
 }: AssignPartnerStoreProps) {
     const { toast } = useToast()
-    const [stores, setStores] = React.useState<PartnerStore[]>([])
-    const [loadingList, setLoadingList] = React.useState(true)
+    const [fetchedStores, setFetchedStores] = React.useState<PartnerStore[]>([])
+    const [loadingList, setLoadingList] = React.useState(!storesProp)
     const [saving, setSaving] = React.useState(false)
     const [value, setValue] = React.useState(currentPartnerStoreId || "")
 
@@ -46,11 +56,15 @@ export function AssignPartnerStore({
     }, [currentPartnerStoreId])
 
     React.useEffect(() => {
+        if (storesProp) {
+            setLoadingList(false)
+            return
+        }
         let cancelled = false
         setLoadingList(true)
         PartnerStoreService.list({ active_only: true })
             .then((res) => {
-                if (!cancelled) setStores(res.items || [])
+                if (!cancelled) setFetchedStores(res.items || [])
             })
             .catch(console.error)
             .finally(() => {
@@ -59,31 +73,33 @@ export function AssignPartnerStore({
         return () => {
             cancelled = true
         }
-    }, [])
+    }, [storesProp])
+
+    const stores = storesProp ?? fetchedStores
+    const label = kind === "sold" ? "Sold To" : "Sent To"
+    const currentMissing = Boolean(value && !stores.some((s) => s.id === value))
 
     const handleChange = async (nextId: string) => {
         if (disabled || saving) return
         const previous = value
-        setValue(nextId === "none" ? "" : nextId)
+        const nextValue = nextId === "none" ? "" : nextId
+        setValue(nextValue)
         setSaving(true)
         try {
-            if (nextId === "none") {
-                await PartnerStoreService.disconnectLeadFromPartner(leadId)
-                onAssigned?.(null)
-                toast({ title: "Partner cleared", description: "Partner store removed from this lead." })
-            } else {
-                await PartnerStoreService.connectLeadToPartner(leadId, nextId)
-                const store = stores.find((s) => s.id === nextId)
-                onAssigned?.(
-                    store
-                        ? { id: store.id, name: store.name, brand: store.brand }
-                        : { id: nextId, name: currentPartnerStoreName || "Partner" }
-                )
-                toast({
-                    title: "Partner assigned",
-                    description: store ? `Linked to ${store.name}` : "Partner store updated.",
-                })
-            }
+            const payload =
+                kind === "sold"
+                    ? { sold_to_partner_store_id: nextValue || null }
+                    : { sent_to_partner_store_id: nextValue || null }
+            const result = await PartnerStoreService.setLeadPartnerDestinations(leadId, payload)
+            onAssigned?.(result)
+            const assigned =
+                kind === "sold" ? result.sold_to_partner_store : result.sent_to_partner_store
+            toast({
+                title: assigned ? `${label} updated` : `${label} cleared`,
+                description: assigned
+                    ? `Linked to ${assigned.name}`
+                    : `${label} partner removed from this lead.`,
+            })
         } catch (err: unknown) {
             setValue(previous)
             const detail =
@@ -91,7 +107,7 @@ export function AssignPartnerStore({
                     ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
                     : undefined
             toast({
-                title: "Could not update partner",
+                title: `Could not update ${label.toLowerCase()}`,
                 description: typeof detail === "string" ? detail : "Please try again.",
                 variant: "destructive",
             })
@@ -110,26 +126,31 @@ export function AssignPartnerStore({
     }
 
     return (
-        <div className={cn("flex items-center gap-2 min-w-0", className)}>
+        <div className={cn("flex items-center gap-1.5 min-w-0", className)}>
             <Select
                 value={value || "none"}
                 onValueChange={handleChange}
                 disabled={disabled || saving || stores.length === 0}
             >
-                <SelectTrigger className="h-9 min-w-0">
+                <SelectTrigger className={cn("min-w-0", compact ? "h-8 w-[190px]" : "h-9")}>
                     <div className="flex items-center gap-1.5 min-w-0">
                         {saving ? (
                             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
                         ) : (
                             <Store className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         )}
-                        <SelectValue placeholder="Select partner" />
+                        <SelectValue placeholder={`Select ${label.toLowerCase()}`} />
                     </div>
                 </SelectTrigger>
                 <SelectContent>
                     <SelectItem value="none">
                         <span className="text-muted-foreground">No partner</span>
                     </SelectItem>
+                    {currentMissing && value ? (
+                        <SelectItem value={value}>
+                            {currentPartnerStoreName || "Current partner"}
+                        </SelectItem>
+                    ) : null}
                     {stores.map((store) => (
                         <SelectItem key={store.id} value={store.id}>
                             {store.name}
@@ -138,7 +159,7 @@ export function AssignPartnerStore({
                     ))}
                 </SelectContent>
             </Select>
-            {value && !disabled && (
+            {value && !disabled && !compact && (
                 <Button
                     type="button"
                     size="sm"
@@ -146,7 +167,7 @@ export function AssignPartnerStore({
                     className="h-8 px-2 text-muted-foreground hover:text-destructive"
                     disabled={saving}
                     onClick={() => handleChange("none")}
-                    title="Clear partner"
+                    title={`Clear ${label.toLowerCase()}`}
                 >
                     <X className="h-3.5 w-3.5" />
                 </Button>

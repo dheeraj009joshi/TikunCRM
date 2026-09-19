@@ -52,6 +52,8 @@ import {
 } from "@/services/reports-service"
 import { TeamService, type UserBrief } from "@/services/team-service"
 import { DealershipService, type Dealership } from "@/services/dealership-service"
+import { PartnerStoreService, type PartnerStore, type LeadPartnerDestinations } from "@/services/partner-store-service"
+import { AssignPartnerStore } from "@/components/leads/assign-partner-store"
 import { cn } from "@/lib/utils"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -93,6 +95,18 @@ function PartnerStoreCell({
     )
 }
 
+function applyPartnerDestinations(item: SoldCarItem, dest: LeadPartnerDestinations): SoldCarItem {
+    return {
+        ...item,
+        sent_to_partner_store_id: dest.sent_to_partner_store_id ?? null,
+        sent_to_partner_store_name: dest.sent_to_partner_store?.name ?? null,
+        sent_to_partner_store_brand: dest.sent_to_partner_store?.brand ?? null,
+        sold_to_partner_store_id: dest.sold_to_partner_store_id ?? null,
+        sold_to_partner_store_name: dest.sold_to_partner_store?.name ?? null,
+        sold_to_partner_store_brand: dest.sold_to_partner_store?.brand ?? null,
+    }
+}
+
 function SummaryCard({
     title,
     value,
@@ -119,7 +133,7 @@ function SummaryCard({
 }
 
 export default function SoldCarsPage() {
-    const { isSuperAdmin, isDealershipAdmin, isDealershipOwner, isBdc } = useRole()
+    const { isSuperAdmin, isDealershipAdmin, isDealershipOwner, isBdc, canConnectToPartner } = useRole()
     const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
     const user = useAuthStore((state) => state.user)
     const orgDealershipId = useOrgDealershipId()
@@ -140,6 +154,7 @@ export default function SoldCarsPage() {
     const [dealerships, setDealerships] = React.useState<Dealership[]>([])
     const [salespersons, setSalespersons] = React.useState<UserBrief[]>([])
     const [bdcAgents, setBdcAgents] = React.useState<UserBrief[]>([])
+    const [partnerStores, setPartnerStores] = React.useState<PartnerStore[]>([])
     const [loadingDropdowns, setLoadingDropdowns] = React.useState(true)
     
     // Calculate date range from preset
@@ -229,6 +244,13 @@ export default function SoldCarsPage() {
         }
         loadDropdowns()
     }, [isSuperAdmin, isBdc, user?.id, user?.dealership_id, selectedDealershipId, orgDealershipId])
+
+    React.useEffect(() => {
+        if (!canConnectToPartner) return
+        PartnerStoreService.list({ active_only: true })
+            .then((res) => setPartnerStores(res.items || []))
+            .catch(console.error)
+    }, [canConnectToPartner])
     
     // Fetch data
     const fetchData = React.useCallback(async () => {
@@ -707,16 +729,66 @@ export default function SoldCarsPage() {
                                                 )}
                                             </TableCell>
                                             <TableCell>
-                                                <PartnerStoreCell
-                                                    name={item.sent_to_partner_store_name}
-                                                    brand={item.sent_to_partner_store_brand}
-                                                />
+                                                {canConnectToPartner ? (
+                                                    <AssignPartnerStore
+                                                        leadId={item.lead_id}
+                                                        kind="sent"
+                                                        compact
+                                                        stores={partnerStores}
+                                                        currentPartnerStoreId={item.sent_to_partner_store_id}
+                                                        currentPartnerStoreName={item.sent_to_partner_store_name}
+                                                        onAssigned={(dest) => {
+                                                            setData((prev) =>
+                                                                prev
+                                                                    ? {
+                                                                          ...prev,
+                                                                          items: prev.items.map((row) =>
+                                                                              row.lead_id === item.lead_id
+                                                                                  ? applyPartnerDestinations(row, dest)
+                                                                                  : row
+                                                                          ),
+                                                                      }
+                                                                    : prev
+                                                            )
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <PartnerStoreCell
+                                                        name={item.sent_to_partner_store_name}
+                                                        brand={item.sent_to_partner_store_brand}
+                                                    />
+                                                )}
                                             </TableCell>
                                             <TableCell>
-                                                <PartnerStoreCell
-                                                    name={item.sold_to_partner_store_name}
-                                                    brand={item.sold_to_partner_store_brand}
-                                                />
+                                                {canConnectToPartner ? (
+                                                    <AssignPartnerStore
+                                                        leadId={item.lead_id}
+                                                        kind="sold"
+                                                        compact
+                                                        stores={partnerStores}
+                                                        currentPartnerStoreId={item.sold_to_partner_store_id}
+                                                        currentPartnerStoreName={item.sold_to_partner_store_name}
+                                                        onAssigned={(dest) => {
+                                                            setData((prev) =>
+                                                                prev
+                                                                    ? {
+                                                                          ...prev,
+                                                                          items: prev.items.map((row) =>
+                                                                              row.lead_id === item.lead_id
+                                                                                  ? applyPartnerDestinations(row, dest)
+                                                                                  : row
+                                                                          ),
+                                                                      }
+                                                                    : prev
+                                                            )
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <PartnerStoreCell
+                                                        name={item.sold_to_partner_store_name}
+                                                        brand={item.sold_to_partner_store_brand}
+                                                    />
+                                                )}
                                             </TableCell>
                                             <TableCell className="text-center">
                                                 <Badge variant={item.notes_count > 0 ? "secondary" : "outline"}>

@@ -41,6 +41,7 @@ export default function StipsCategoriesSettingsPage() {
     const [formOrder, setFormOrder] = React.useState(0)
     const [isSaving, setIsSaving] = React.useState(false)
     const [deleteError, setDeleteError] = React.useState<string | null>(null)
+    const [saveError, setSaveError] = React.useState<string | null>(null)
     const { isSuperAdmin, isDealershipAdmin, isDealershipOwner } = useRole()
     const canManage = isSuperAdmin || isDealershipAdmin || isDealershipOwner
 
@@ -61,8 +62,19 @@ export default function StipsCategoriesSettingsPage() {
 
     const handleSave = async () => {
         if (!formName.trim()) return
+        const nameKey = formName.trim().toLowerCase()
+        const duplicate = categories.find((c) =>
+            c.id !== editCategory?.id
+            && c.name.trim().toLowerCase() === nameKey
+            && c.scope === formScope
+        )
+        if (duplicate) {
+            setSaveError(`A "${duplicate.name}" tab already exists. Duplicate categories are not allowed.`)
+            return
+        }
         setIsSaving(true)
         setDeleteError(null)
+        setSaveError(null)
         try {
             if (editCategory) {
                 await StipsService.updateCategory(editCategory.id, {
@@ -87,7 +99,10 @@ export default function StipsCategoriesSettingsPage() {
             setFormFilterKey("none")
             await loadCategories()
         } catch (error) {
-            console.error("Failed to save category:", error)
+            const message = error && typeof error === "object" && "response" in error
+                ? (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                : "Failed to save category."
+            setSaveError(typeof message === "string" ? message : "Failed to save category.")
         } finally {
             setIsSaving(false)
         }
@@ -113,6 +128,7 @@ export default function StipsCategoriesSettingsPage() {
         setFormOrder(category.display_order)
         setFormScope(category.scope as "customer" | "lead")
         setFormFilterKey(category.filter_key === "ssn" || category.filter_key === "dl" ? category.filter_key : "none")
+        setSaveError(null)
         setShowCreate(true)
     }
 
@@ -122,6 +138,7 @@ export default function StipsCategoriesSettingsPage() {
         setFormOrder(categories.length)
         setFormScope("lead")
         setFormFilterKey("none")
+        setSaveError(null)
         setShowCreate(true)
     }
 
@@ -152,6 +169,12 @@ export default function StipsCategoriesSettingsPage() {
             {deleteError && (
                 <div className="rounded-md bg-destructive/10 border border-destructive/20 px-4 py-2 text-sm text-destructive">
                     {deleteError}
+                </div>
+            )}
+
+            {saveError && !showCreate && (
+                <div className="rounded-md bg-destructive/10 border border-destructive/20 px-4 py-2 text-sm text-destructive">
+                    {saveError}
                 </div>
             )}
 
@@ -212,6 +235,9 @@ export default function StipsCategoriesSettingsPage() {
                                 placeholder="e.g. Personal, Finance"
                             />
                         </div>
+                        {saveError && (
+                            <p className="text-sm text-destructive">{saveError}</p>
+                        )}
                         <div className="space-y-2">
                             <Label>Scope</Label>
                             <Select value={formScope} onValueChange={(v) => setFormScope(v as "customer" | "lead")}>

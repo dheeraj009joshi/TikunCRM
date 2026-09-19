@@ -5,7 +5,7 @@ import re
 import uuid
 from typing import Any, List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.lead import Lead
@@ -18,6 +18,11 @@ from app.services.azure_storage_service import azure_storage_service
 
 # Max file size (15 MB). Any document type is allowed.
 MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024
+
+
+def category_name_key(name: str) -> str:
+    """Normalized tab identity: case-insensitive, trimmed."""
+    return (name or "").strip().lower()
 
 
 def _sanitize_filename(name: str) -> str:
@@ -48,6 +53,28 @@ class StipsCategoryService:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def find_duplicate_category(
+        db: AsyncSession,
+        name: str,
+        scope: str,
+        dealership_id: Optional[uuid.UUID],
+        exclude_id: Optional[uuid.UUID] = None,
+    ) -> Optional[StipsCategory]:
+        """Return an existing category with the same dealership, scope, and name."""
+        q = select(StipsCategory).where(
+            func.lower(func.btrim(StipsCategory.name)) == category_name_key(name),
+            StipsCategory.scope == scope,
+        )
+        if dealership_id is None:
+            q = q.where(StipsCategory.dealership_id.is_(None))
+        else:
+            q = q.where(StipsCategory.dealership_id == dealership_id)
+        if exclude_id is not None:
+            q = q.where(StipsCategory.id != exclude_id)
+        result = await db.execute(q.limit(1))
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def create_category(
         db: AsyncSession,
         name: str,
@@ -56,6 +83,19 @@ class StipsCategoryService:
         dealership_id: Optional[uuid.UUID] = None,
         filter_key: Optional[str] = None,
     ) -> StipsCategory:
+        from fastapi import HTTPException
+
+        name = (name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Category name is required")
+        existing = await StipsCategoryService.find_duplicate_category(
+            db, name=name, scope=scope, dealership_id=dealership_id
+        )
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f'A "{existing.name}" tab already exists. Use that category instead of creating a duplicate.',
+            )
         cat = StipsCategory(
             name=name,
             display_order=display_order,
@@ -73,6 +113,28 @@ class StipsCategoryService:
         category: StipsCategory,
         data: dict,
     ) -> StipsCategory:
+        from fastapi import HTTPException
+
+        next_name = (data.get("name") if "name" in data else category.name) or ""
+        next_name = next_name.strip()
+        next_scope = data.get("scope", category.scope)
+        if "name" in data or "scope" in data:
+            if not next_name:
+                raise HTTPException(status_code=400, detail="Category name is required")
+            existing = await StipsCategoryService.find_duplicate_category(
+                db,
+                name=next_name,
+                scope=next_scope,
+                dealership_id=category.dealership_id,
+                exclude_id=category.id,
+            )
+            if existing:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f'A "{existing.name}" tab already exists. Rename this category instead of duplicating it.',
+                )
+        if "name" in data:
+            data = {**data, "name": next_name}
         for k, v in data.items():
             if hasattr(category, k):
                 setattr(category, k, v)
