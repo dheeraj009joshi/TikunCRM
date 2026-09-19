@@ -1039,9 +1039,17 @@ export default function LeadDetailsPage() {
                 StipsService.listCategories(lead?.dealership_id),
             ])
             setStipsConfigured(statusRes.configured)
-            setStipsCategories(categoriesRes)
+            const uniqueCats = []
+            const seenNames = new Set()
+            for (const cat of categoriesRes) {
+                const key = (cat.name || "").trim().toLowerCase()
+                if (seenNames.has(key)) continue
+                seenNames.add(key)
+                uniqueCats.push(cat)
+            }
+            setStipsCategories(uniqueCats)
             setActiveStipsCategoryId((prev) =>
-                categoriesRes.length === 0 ? null : (prev && categoriesRes.some((c) => c.id === prev) ? prev : categoriesRes[0].id)
+                uniqueCats.length === 0 ? null : (prev && uniqueCats.some((c) => c.id === prev) ? prev : uniqueCats[0].id)
             )
         } catch {
             setStipsCategories([])

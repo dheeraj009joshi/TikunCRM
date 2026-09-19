@@ -65,9 +65,17 @@ export function CreditAppStipsSection({
         StipsService.listCategories(dealershipId ?? undefined),
       ])
       setConfigured(status.configured)
-      setCategories(cats)
+      const uniqueCats = []
+      const seen = new Set()
+      for (const cat of cats) {
+        const key = (cat.name || "").trim().toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        uniqueCats.push(cat)
+      }
+      setCategories(uniqueCats)
       setActiveCategoryId((prev) =>
-        prev && cats.some((c) => c.id === prev) ? prev : cats[0]?.id ?? null
+        prev && uniqueCats.some((c) => c.id === prev) ? prev : uniqueCats[0]?.id ?? null
       )
     } catch {
       setCategories([])

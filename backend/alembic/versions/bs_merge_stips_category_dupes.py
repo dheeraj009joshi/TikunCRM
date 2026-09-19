@@ -1,4 +1,4 @@
-"""Merge duplicate Stips categories and enforce unique tabs per dealership.
+"""Merge duplicate Stips category tabs (same name) and enforce uniqueness.
 
 Revision ID: bs_merge_stips_category_dupes
 Revises: br_lead_sold_partner_store
@@ -21,6 +21,7 @@ def upgrade() -> None:
     conn = op.get_bind()
 
     conn.execute(text("DROP TABLE IF EXISTS stip_cat_dupes"))
+    # Same visible tab name = duplicate, even if scope differs (lead vs customer).
     conn.execute(text(f"""
         CREATE TEMP TABLE stip_cat_dupes AS
         WITH scored AS (
@@ -45,9 +46,12 @@ def upgrade() -> None:
                 ROW_NUMBER() OVER (
                     PARTITION BY
                         COALESCE(dealership_id, '{_NULL_DEALER}'::uuid),
-                        name_key,
-                        scope
-                    ORDER BY doc_count DESC, created_at ASC, id ASC
+                        name_key
+                    ORDER BY
+                        CASE WHEN scope = 'customer' THEN 0 ELSE 1 END,
+                        doc_count DESC,
+                        created_at ASC,
+                        id ASC
                 ) AS rn
             FROM scored
         )
@@ -56,10 +60,21 @@ def upgrade() -> None:
         JOIN ranked k
           ON k.rn = 1
          AND k.name_key = r.name_key
-         AND k.scope = r.scope
          AND COALESCE(k.dealership_id, '{_NULL_DEALER}'::uuid)
            = COALESCE(r.dealership_id, '{_NULL_DEALER}'::uuid)
         WHERE r.rn > 1
+    """))
+
+    # If any duplicate in the group is customer-scoped, keeper should be too
+    # so combined documents stay visible on the same tab.
+    conn.execute(text("""
+        UPDATE stips_categories AS keeper
+        SET scope = 'customer'
+        FROM stip_cat_dupes map
+        JOIN stips_categories AS dupe ON dupe.id = map.dupe_id
+        WHERE keeper.id = map.keeper_id
+          AND dupe.scope = 'customer'
+          AND keeper.scope IS DISTINCT FROM 'customer'
     """))
 
     conn.execute(text("""
@@ -83,6 +98,38 @@ def upgrade() -> None:
         SET stips_category_id = map.keeper_id
         FROM stip_cat_dupes map
         WHERE docs.stips_category_id = map.dupe_id
+    """))
+
+    # Lead-scoped files on a customer-scoped tab would be hidden. Move them.
+    conn.execute(text("""
+        INSERT INTO customer_stip_documents (
+            id, customer_id, stips_category_id, file_name, blob_path,
+            content_type, file_size, uploaded_by, uploaded_at
+        )
+        SELECT
+            d.id,
+            l.customer_id,
+            d.stips_category_id,
+            d.file_name,
+            d.blob_path,
+            d.content_type,
+            d.file_size,
+            d.uploaded_by,
+            d.uploaded_at
+        FROM lead_stip_documents d
+        JOIN leads l ON l.id = d.lead_id
+        JOIN stips_categories c ON c.id = d.stips_category_id
+        WHERE c.scope = 'customer'
+          AND l.customer_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM customer_stip_documents existing WHERE existing.id = d.id
+          )
+    """))
+    conn.execute(text("""
+        DELETE FROM lead_stip_documents d
+        USING stips_categories c
+        WHERE d.stips_category_id = c.id
+          AND c.scope = 'customer'
     """))
 
     conn.execute(text("""
@@ -112,26 +159,22 @@ def upgrade() -> None:
     """))
     conn.execute(text("DROP TABLE IF EXISTS stip_cat_dupes"))
 
+    conn.execute(text("DROP INDEX IF EXISTS uq_stips_categories_dealer_name_scope"))
     idx = conn.execute(text("""
         SELECT 1 FROM pg_indexes
-        WHERE indexname = 'uq_stips_categories_dealer_name_scope'
+        WHERE indexname = 'uq_stips_categories_dealer_name'
     """)).fetchone()
     if not idx:
         conn.execute(text(f"""
-            CREATE UNIQUE INDEX uq_stips_categories_dealer_name_scope
+            CREATE UNIQUE INDEX uq_stips_categories_dealer_name
             ON stips_categories (
                 COALESCE(dealership_id, '{_NULL_DEALER}'::uuid),
-                lower(btrim(name)),
-                scope
+                lower(btrim(name))
             )
         """))
 
 
 def downgrade() -> None:
     conn = op.get_bind()
-    idx = conn.execute(text("""
-        SELECT 1 FROM pg_indexes
-        WHERE indexname = 'uq_stips_categories_dealer_name_scope'
-    """)).fetchone()
-    if idx:
-        conn.execute(text("DROP INDEX IF EXISTS uq_stips_categories_dealer_name_scope"))
+    conn.execute(text("DROP INDEX IF EXISTS uq_stips_categories_dealer_name"))
+    conn.execute(text("DROP INDEX IF EXISTS uq_stips_categories_dealer_name_scope"))

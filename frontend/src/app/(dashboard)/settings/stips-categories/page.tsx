@@ -66,7 +66,6 @@ export default function StipsCategoriesSettingsPage() {
         const duplicate = categories.find((c) =>
             c.id !== editCategory?.id
             && c.name.trim().toLowerCase() === nameKey
-            && c.scope === formScope
         )
         if (duplicate) {
             setSaveError(`A "${duplicate.name}" tab already exists. Duplicate categories are not allowed.`)

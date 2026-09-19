@@ -45,7 +45,17 @@ class StipsCategoryService:
             q = q.where(StipsCategory.dealership_id == dealership_id)
         q = q.order_by(StipsCategory.display_order, StipsCategory.name)
         result = await db.execute(q)
-        return list(result.scalars().all())
+        categories = list(result.scalars().all())
+        # One tab per name — leftover same-name rows must not render twice.
+        unique: List[StipsCategory] = []
+        seen: set[str] = set()
+        for cat in categories:
+            key = category_name_key(cat.name)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(cat)
+        return unique
 
     @staticmethod
     async def get_category(db: AsyncSession, category_id: uuid.UUID) -> Optional[StipsCategory]:
@@ -60,10 +70,9 @@ class StipsCategoryService:
         dealership_id: Optional[uuid.UUID],
         exclude_id: Optional[uuid.UUID] = None,
     ) -> Optional[StipsCategory]:
-        """Return an existing category with the same dealership, scope, and name."""
+        """Return an existing category with the same dealership and name (any scope)."""
         q = select(StipsCategory).where(
             func.lower(func.btrim(StipsCategory.name)) == category_name_key(name),
-            StipsCategory.scope == scope,
         )
         if dealership_id is None:
             q = q.where(StipsCategory.dealership_id.is_(None))
