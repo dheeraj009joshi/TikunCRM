@@ -191,7 +191,20 @@ class Settings(BaseSettings):
     # Tikun AI (ChatGPT-style CRM assistant)
     ai_assistant_enabled: bool = True
     ai_assistant_model: str = "gpt-4o"
-    
+    # Auto-retrieve notes/activities into Tikun AI chat (RAG) when the question needs timeline context
+    crm_search_auto_retrieve: bool = True
+    # Default page size for timeline search UI / API (use Load more for additional pages)
+    crm_search_page_size: int = 25
+    # Hard cap per request (raise for large dealerships; Azure supports up to 1000)
+    crm_search_max_results: int = 500
+    # Snippets injected into Tikun AI prompt (keep moderate for token cost)
+    crm_search_rag_snippets: int = 12
+
+    # Azure AI Search (CRM notes, calls, SMS, WhatsApp — powers Tikun AI knowledge search)
+    azure_search_endpoint: str = ""
+    azure_search_api_key: str = ""
+    azure_search_index: str = "tikuncrm-activities"
+
     # Azure Blob Storage (for call recordings)
     azure_storage_connection_string: str = ""
     azure_storage_container: str = "call-recordings"
@@ -239,6 +252,11 @@ class Settings(BaseSettings):
     def is_azure_storage_configured(self) -> bool:
         """Check if Azure Blob Storage is configured"""
         return bool(self.azure_storage_connection_string)
+
+    @property
+    def is_azure_search_configured(self) -> bool:
+        """Check if Azure AI Search is configured for CRM content indexing."""
+        return bool(self.azure_search_endpoint and self.azure_search_api_key)
 
     @property
     def is_azure_stips_configured(self) -> bool:

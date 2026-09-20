@@ -29,9 +29,15 @@ router = APIRouter()
 async def ai_status(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
+    from app.services.crm_content_search_service import CrmContentSearchService
+
     return {
         "enabled": bool(settings.ai_assistant_enabled and settings.openai_api_key),
         "model": settings.ai_assistant_model,
+        "crm_search": {
+            "azure_configured": CrmContentSearchService.is_azure_configured(),
+            "auto_retrieve": settings.crm_search_auto_retrieve,
+        },
     }
 
 

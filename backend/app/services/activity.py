@@ -59,6 +59,13 @@ class ActivityService:
                 lead.last_activity_at = utc_now()
         
         await db.flush()
+
+        if lead_id:
+            from app.services.crm_content_search_service import is_indexable_activity
+            from app.services.crm_index_hooks import mark_activity_for_index
+
+            if is_indexable_activity(activity_type):
+                mark_activity_for_index(db.sync_session, activity.id)
         
         # Emit WebSocket event for real-time updates
         if lead_id:

@@ -147,6 +147,16 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "System SMTP not configured (SMTP_USER/SMTP_PASSWORD) — notification emails will be skipped"
         )
+
+    from app.services.crm_content_search_service import CrmContentSearchService
+    if CrmContentSearchService.is_azure_configured():
+        ok = await CrmContentSearchService.ensure_index()
+        if ok:
+            logger.info("Azure AI Search index ready for CRM content")
+        else:
+            logger.warning("Azure AI Search configured but index setup failed — using Postgres fallback")
+    else:
+        logger.info("Azure AI Search not configured — Tikun AI will use PostgreSQL for note/activity search")
     
     # Only one worker should run the scheduler (optional in development — see settings.run_background_scheduler)
     if not settings.run_background_scheduler:

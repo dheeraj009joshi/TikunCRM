@@ -3,7 +3,7 @@ API v1 Router - combines all route modules
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, bdc_reports, voice, sms, whatsapp, showroom, customers, lead_stages, stips, admin_sync_sources, campaign_mappings, auto_whatsapp, eligibility, guests, public, saved_views, tasks, ai_assistant, credit_application, partner_stores, time_tracking
+from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, bdc_reports, voice, sms, whatsapp, showroom, customers, lead_stages, stips, admin_sync_sources, campaign_mappings, auto_whatsapp, eligibility, guests, public, saved_views, tasks, ai_assistant, crm_search, credit_application, partner_stores, time_tracking
 from app.api.v1.endpoints.webhooks import sendgrid as sendgrid_webhook
 from app.api.v1.endpoints.webhooks import twilio as twilio_webhook
 from app.api.v1.endpoints.webhooks import twilio_ai_voice as twilio_ai_voice_webhook
@@ -45,6 +45,7 @@ api_router.include_router(public.router, prefix="/public", tags=["Public"])
 api_router.include_router(saved_views.router, prefix="/saved-views", tags=["Saved Views"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["Tasks"])
 api_router.include_router(ai_assistant.router, prefix="/ai", tags=["Tikun AI"])
+api_router.include_router(crm_search.router, prefix="/crm-search", tags=["CRM Search"])
 api_router.include_router(partner_stores.router, prefix="/partner-stores", tags=["Partner Stores"])
 api_router.include_router(time_tracking.router, prefix="/time-tracking", tags=["Time Tracking"])
 

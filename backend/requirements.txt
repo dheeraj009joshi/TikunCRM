@@ -12,6 +12,7 @@ asyncpg==0.30.0
 attrs==25.4.0
 audioop-lts==0.2.2; python_version >= "3.13"
 azure-core==1.38.0
+azure-search-documents==11.6.0
 azure-storage-blob==12.19.0
 bcrypt==4.1.2
 CacheControl==0.14.4

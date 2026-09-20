@@ -119,6 +119,19 @@ def setup_scheduler():
         max_instances=1,
     )
 
+    # CRM Azure Search backfill — daily when Azure AI Search is configured
+    from app.tasks.crm_search_index import run_crm_search_backfill
+    scheduler.add_job(
+        run_crm_search_backfill,
+        trigger=IntervalTrigger(hours=24, start_date=datetime.now() + timedelta(hours=1)),
+        id="crm_search_backfill",
+        name="Backfill CRM content into Azure AI Search",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
     logger.info("Background scheduler configured (lead sync + appointments only):")
     logger.info("  - Google Sheets lead sync (every 2 minutes)")
     logger.info("  - Lead auto-assignment (every 2 minutes)")
@@ -126,6 +139,7 @@ def setup_scheduler():
     logger.info("  - Appointment reminders (every 5 minutes)")
     logger.info("  - Follow-up reminders (every 15 minutes)")
     logger.info("  - Missed appointment detection (every 30 minutes)")
+    logger.info("  - CRM search backfill (every 24 hours, Azure only)")
     logger.info("  - DISABLED: IMAP email sync, WhatsApp bulk, Auto WhatsApp worker")
 
 

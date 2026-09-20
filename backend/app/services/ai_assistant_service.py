@@ -171,6 +171,54 @@ CREATE_FOLLOW_UPS_TOOL = {
     },
 }
 
+SEARCH_CRM_CONTENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_crm_content",
+        "description": (
+            "Search lead notes, calls, SMS, WhatsApp, and emails the current user can access. "
+            "Use for questions about what was said, mentioned, discussed, promised, or communicated — "
+            "NOT for SSN/DL/stip/down-payment filters (use search_leads for those)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural language or keywords to find in timeline content",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Only activities within the last N days (optional)",
+                },
+                "activity_types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional filter: note_added, call_logged, sms_sent, whatsapp_sent, etc.",
+                },
+                "pool": {
+                    "type": "string",
+                    "enum": ["mine", "unassigned"],
+                    "description": "mine = my assigned leads; omit for all leads the role can see",
+                },
+                "dealership_id": {
+                    "type": "string",
+                    "description": "Filter to one dealership (BDC multi-store)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Page size (default from CRM_SEARCH_PAGE_SIZE env)",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Skip N matches for pagination / load more",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
 RANK_LEADS_TOOL = {
     "type": "function",
     "function": {
@@ -196,6 +244,7 @@ RANK_LEADS_TOOL = {
 
 ALL_TOOLS = [
     SEARCH_LEADS_TOOL,
+    SEARCH_CRM_CONTENT_TOOL,
     LIST_STAGES_TOOL,
     LIST_SALESPERSONS_TOOL,
     ASSIGN_LEADS_TOOL,
@@ -213,9 +262,12 @@ Role / access (always honor — tools already enforce this):
 - super_admin: all dealerships.
 
 Rules:
-- Use tools to fetch real data. Never invent leads, names, or counts.
+- Use tools to fetch real data. Never invent leads, names, counts, or quotes from notes.
 - "SSN" / "DL" / "driver license" means stip documents on file (has_ssn_stip / has_dl_stip), not storing ID numbers.
 - "Business" / "business customer" maps to is_business (trust-score Business Yes/No).
+- For anything in notes, calls, texts, emails, or "what did they say/mention/want" → use search_crm_content.
+- For pipeline filters (stips, down payment, stage, source) → use search_leads.
+- When search_crm_content returns snippets, cite the lead name and quote or paraphrase the snippet. If nothing matched, say so clearly.
 - After search_leads or rank_leads_to_call, summarize and highlight a few leads.
 - For assign / stage change / follow-ups: call write tools with lead_ids from a prior search. Those only PROPOSE — user must Confirm in the UI.
 - Resolve people with list_salespersons before assign when the name is ambiguous (BDC: use dealership_id when multi-store).
@@ -272,6 +324,17 @@ def build_thinking_plan(user_text: str, role: str) -> str:
         bits.append("May need create_follow_ups after resolving datetime.")
     if any(x in t for x in ("who should i call", "call first", "priority", "rank")):
         bits.append("Use rank_leads_to_call for a prioritized queue.")
+    if any(
+        x in t
+        for x in (
+            "said", "mention", "note", "talked", "discussed", "trade", "financ",
+            "credit", "vehicle", "appointment", "callback", "message", "whatsapp",
+            "email", "timeline", "activity",
+        )
+    ):
+        bits.append(
+            "Search notes & activities (search_crm_content) — timeline language, not stip filters."
+        )
     if role == UserRole.BDC.value:
         bits.append("BDC access: search all leads in accessible dealerships (do not force pool=mine).")
     elif role == UserRole.SALESPERSON.value or "mine" in t or "my lead" in t:
@@ -469,6 +532,40 @@ class AiAssistantService:
         }
 
     @staticmethod
+    async def _tool_search_crm_content(
+        db: AsyncSession, user: User, args: dict
+    ) -> Dict[str, Any]:
+        from app.services.crm_content_search_service import CrmContentSearchService
+
+        query = (args.get("query") or "").strip()
+        if not query:
+            return {"error": "query is required", "total": 0, "hits": [], "grouped_leads": []}
+
+        dealership_id = None
+        if args.get("dealership_id"):
+            try:
+                dealership_id = UUID(str(args["dealership_id"]))
+            except ValueError:
+                dealership_id = None
+
+        page_limit = args.get("limit")
+        if page_limit is not None:
+            page_limit = min(int(page_limit), settings.crm_search_max_results)
+        offset = max(int(args.get("offset") or 0), 0)
+        result = await CrmContentSearchService.search(
+            db,
+            user,
+            query=query,
+            days=args.get("days"),
+            activity_types=args.get("activity_types"),
+            pool=args.get("pool"),
+            dealership_id=dealership_id,
+            limit=page_limit,
+            offset=offset,
+        )
+        return result
+
+    @staticmethod
     async def _tool_list_stages(db: AsyncSession, user: User) -> Dict[str, Any]:
         from app.core.access_scope import get_accessible_dealership_ids
         from app.models.lead_stage import LeadStage
@@ -505,6 +602,8 @@ class AiAssistantService:
 
         if name == "search_leads":
             return await AiAssistantService._tool_search_leads(db, user, args)
+        if name == "search_crm_content":
+            return await AiAssistantService._tool_search_crm_content(db, user, args)
         if name == "list_stages":
             return await AiAssistantService._tool_list_stages(db, user)
         if name == "list_salespersons":
@@ -573,6 +672,77 @@ class AiAssistantService:
         duration_ms = int((time.monotonic() - t0) * 1000)
         yield _sse("thinking_done", {"duration_ms": max(duration_ms, 400), "text": thinking})
 
+        tool_traces: List[dict] = []
+        ui_blocks: List[dict] = []
+        rag_context = ""
+
+        # Proactive RAG: search notes/activities before the LLM when the question needs timeline context
+        if settings.crm_search_auto_retrieve:
+            from app.services.crm_content_search_service import (
+                CrmContentSearchService,
+                should_auto_retrieve_crm_content,
+            )
+
+            if should_auto_retrieve_crm_content(message):
+                retrieve_args = {
+                    "query": message.strip(),
+                    "limit": settings.crm_search_page_size,
+                    "offset": 0,
+                }
+                yield _sse(
+                    "tool_start",
+                    {
+                        "name": "search_crm_content",
+                        "args": retrieve_args,
+                        "label": _tool_label("search_crm_content"),
+                    },
+                )
+                retrieve_result = await AiAssistantService._tool_search_crm_content(
+                    db, user, retrieve_args
+                )
+                summary = _summarize_tool("search_crm_content", retrieve_result)
+                tool_traces.append(
+                    {
+                        "name": "search_crm_content",
+                        "args": retrieve_args,
+                        "result_summary": summary,
+                    }
+                )
+                sse_result = {
+                    "total": retrieve_result.get("total"),
+                    "total_count": retrieve_result.get("total_count"),
+                    "has_more": retrieve_result.get("has_more"),
+                    "offset": retrieve_result.get("offset"),
+                    "limit": retrieve_result.get("limit"),
+                    "backend": retrieve_result.get("backend"),
+                    "grouped_leads": retrieve_result.get("grouped_leads") or [],
+                }
+                yield _sse(
+                    "tool_result",
+                    {
+                        "name": "search_crm_content",
+                        "summary": summary,
+                        "result": sse_result,
+                    },
+                )
+                grouped = retrieve_result.get("grouped_leads") or []
+                if grouped:
+                    note_block = {
+                        "type": "note_hits",
+                        "total": retrieve_result.get("total"),
+                        "total_count": retrieve_result.get("total_count"),
+                        "has_more": retrieve_result.get("has_more"),
+                        "offset": retrieve_result.get("offset"),
+                        "limit": retrieve_result.get("limit"),
+                        "query": message.strip(),
+                        "backend": retrieve_result.get("backend"),
+                        "leads": grouped,
+                        "filter_params": retrieve_result.get("filter_params") or {},
+                    }
+                    ui_blocks.append(note_block)
+                    yield _sse("ui_block", note_block)
+                rag_context = CrmContentSearchService.format_rag_context(retrieve_result)
+
         # Build chat history for OpenAI
         hist_res = await db.execute(
             select(AiMessage)
@@ -581,8 +751,14 @@ class AiAssistantService:
             .limit(40)
         )
         history = list(hist_res.scalars().all())
+        system_content = _system_prompt_for_user(user)
+        if rag_context:
+            system_content += (
+                "\n\n--- Retrieved CRM timeline context (use ONLY this for note/call/message claims) ---\n"
+                + rag_context
+            )
         oai_messages: List[dict] = [
-            {"role": "system", "content": _system_prompt_for_user(user)}
+            {"role": "system", "content": system_content}
         ]
         for m in history:
             if m.role in ("user", "assistant") and m.content:
@@ -590,8 +766,6 @@ class AiAssistantService:
 
         client = AiAssistantService._client()
         tools = ALL_TOOLS
-        tool_traces: List[dict] = []
-        ui_blocks: List[dict] = []
         pending_confirm: List[dict] = []
         assistant_text = ""
 
@@ -664,6 +838,17 @@ class AiAssistantService:
                             "ranked": result.get("ranked", [])[:10],
                             "filter_params": result.get("filter_params"),
                         }
+                    elif name == "search_crm_content":
+                        sse_result = {
+                            "total": result.get("total"),
+                            "total_count": result.get("total_count"),
+                            "has_more": result.get("has_more"),
+                            "offset": result.get("offset"),
+                            "limit": result.get("limit"),
+                            "backend": result.get("backend"),
+                            "grouped_leads": result.get("grouped_leads") or [],
+                            "filter_params": result.get("filter_params"),
+                        }
 
                     yield _sse(
                         "tool_result",
@@ -689,6 +874,22 @@ class AiAssistantService:
                             "type": "ranked_leads",
                             "total": result.get("total_considered"),
                             "leads": result.get("ranked", [])[:10],
+                            "filter_params": result.get("filter_params") or {},
+                        }
+                        ui_blocks.append(block)
+                        yield _sse("ui_block", block)
+
+                    if name == "search_crm_content" and result.get("grouped_leads") is not None:
+                        block = {
+                            "type": "note_hits",
+                            "total": result.get("total"),
+                            "total_count": result.get("total_count"),
+                            "has_more": result.get("has_more"),
+                            "offset": result.get("offset"),
+                            "limit": result.get("limit"),
+                            "query": args.get("query"),
+                            "backend": result.get("backend"),
+                            "leads": result.get("grouped_leads") or [],
                             "filter_params": result.get("filter_params") or {},
                         }
                         ui_blocks.append(block)
@@ -785,6 +986,7 @@ class AiAssistantService:
 def _tool_label(name: str) -> str:
     return {
         "search_leads": "Searching leads…",
+        "search_crm_content": "Searching notes & activities…",
         "list_stages": "Checking stages…",
         "list_salespersons": "Looking up team…",
         "assign_leads": "Preparing assignment…",
@@ -801,6 +1003,12 @@ def _summarize_tool(name: str, result: dict) -> str:
         return result.get("summary") or "needs confirmation"
     if name == "search_leads":
         return f"{result.get('total', 0)} leads matched"
+    if name == "search_crm_content":
+        total_count = result.get("total_count", result.get("total", 0))
+        returned = result.get("total", 0)
+        backend = result.get("backend") or "search"
+        more = " · load more available" if result.get("has_more") else ""
+        return f"{returned} of {total_count} timeline match{'es' if total_count != 1 else ''} ({backend}){more}"
     if name == "list_stages":
         return f"{len(result.get('stages') or [])} stages"
     if name == "list_salespersons":

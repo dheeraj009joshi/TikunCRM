@@ -21,10 +21,43 @@ export interface AiMessage {
   created_at: string;
 }
 
+export interface AiNoteSnippet {
+  activity_id?: string;
+  activity_type?: string;
+  activity_label?: string;
+  created_at?: string;
+  snippet?: string;
+}
+
+export interface AiNoteHitLead {
+  lead_id: string;
+  lead_name?: string;
+  stage?: string;
+  phone?: string | null;
+  snippets?: AiNoteSnippet[];
+}
+
+export interface CrmSearchResult {
+  total: number;
+  total_count: number;
+  has_more: boolean;
+  offset: number;
+  limit: number;
+  backend: string;
+  grouped_leads: AiNoteHitLead[];
+  filter_params?: Record<string, string | number | boolean>;
+}
+
 export interface AiUiBlock {
   type: string;
   title?: string;
   total?: number;
+  total_count?: number;
+  has_more?: boolean;
+  offset?: number;
+  limit?: number;
+  query?: string;
+  backend?: string;
   leads?: Array<{
     id: string;
     name: string;
@@ -37,7 +70,7 @@ export interface AiUiBlock {
     priority_score?: number;
     reasons?: string[];
     rank?: number;
-  }>;
+  } | AiNoteHitLead>;
   filter_params?: Record<string, string | number | boolean>;
   actions?: Array<{
     tool: string;
@@ -81,7 +114,11 @@ function parseSseChunk(buffer: string): { events: Array<{ event: string; data: s
 }
 
 export const AiAssistantService = {
-  async status(): Promise<{ enabled: boolean; model: string }> {
+  async status(): Promise<{
+    enabled: boolean;
+    model: string;
+    crm_search?: { azure_configured: boolean; auto_retrieve: boolean };
+  }> {
     const token = localStorage.getItem("auth_token");
     const res = await fetch(`${API_BASE_URL}/ai/status`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -140,6 +177,31 @@ export const AiAssistantService = {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(text || "Confirm failed");
+    }
+    return res.json();
+  },
+
+  async searchCrmContent(params: {
+    q: string;
+    offset?: number;
+    limit?: number;
+    pool?: string;
+    days?: number;
+  }): Promise<CrmSearchResult> {
+    const token = localStorage.getItem("auth_token");
+    const qs = new URLSearchParams();
+    qs.set("q", params.q);
+    if (params.offset != null) qs.set("offset", String(params.offset));
+    if (params.limit != null) qs.set("limit", String(params.limit));
+    if (params.pool) qs.set("pool", params.pool);
+    if (params.days != null) qs.set("days", String(params.days));
+
+    const res = await fetch(`${API_BASE_URL}/crm-search/?${qs.toString()}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(text || "CRM search failed");
     }
     return res.json();
   },

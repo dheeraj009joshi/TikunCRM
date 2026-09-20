@@ -16,6 +16,9 @@ from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 
+# Register post-commit CRM search index hooks (no-op when Azure Search is not configured).
+import app.services.crm_index_hooks  # noqa: F401
+
 
 def get_engine_url_and_connect_args():
     """

@@ -23,6 +23,7 @@ import {
   AiAssistantService,
   AiConversationBrief,
   AiMessage,
+  AiNoteHitLead,
   AiUiBlock,
   buildLeadsUrlFromFilters,
 } from "@/services/ai-assistant-service"
@@ -47,7 +48,8 @@ type LiveAssistant = {
 const SUGGESTIONS = [
   "Leads with SSN, DL, and about 2000–3000 down",
   "Who should I call first this morning?",
-  "Which of my leads have a driver license stip?",
+  "Which of my leads mentioned a trade-in this week?",
+  "Find notes about Camry or financing in my leads",
 ]
 
 function ThinkingBlock({
@@ -119,6 +121,159 @@ function ToolChips({ tools }: { tools: LiveTool[] }) {
           </span>
         ))}
       </div>
+    </div>
+  )
+}
+
+function mergeNoteHitLeads(
+  existing: AiNoteHitLead[],
+  incoming: AiNoteHitLead[]
+): AiNoteHitLead[] {
+  const map = new Map(existing.map((l) => [l.lead_id, l]))
+  for (const lead of incoming) {
+    const prev = map.get(lead.lead_id)
+    if (prev) {
+      map.set(lead.lead_id, {
+        ...prev,
+        snippets: [...(prev.snippets || []), ...(lead.snippets || [])],
+      })
+    } else {
+      map.set(lead.lead_id, lead)
+    }
+  }
+  return Array.from(map.values())
+}
+
+function NoteHitsBlock({ block }: { block: AiUiBlock }) {
+  const initialLeads = (block.leads || []) as AiNoteHitLead[]
+  const [leads, setLeads] = React.useState<AiNoteHitLead[]>(initialLeads)
+  const [offset, setOffset] = React.useState(block.offset ?? 0)
+  const [hasMore, setHasMore] = React.useState(Boolean(block.has_more))
+  const [totalCount, setTotalCount] = React.useState(
+    block.total_count ?? block.total ?? initialLeads.length
+  )
+  const [loading, setLoading] = React.useState(false)
+  const pageSize = block.limit ?? 25
+
+  React.useEffect(() => {
+    setLeads(initialLeads)
+    setOffset(block.offset ?? 0)
+    setHasMore(Boolean(block.has_more))
+    setTotalCount(block.total_count ?? block.total ?? initialLeads.length)
+  }, [block])
+
+  if (!leads.length) return null
+
+  const shownActivities = leads.reduce(
+    (n, l) => n + (l.snippets?.length || 0),
+    0
+  )
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-sky-500/20">
+      <div className="flex items-center justify-between border-b bg-sky-500/5 px-3 py-2 text-xs">
+        <span className="font-medium text-sky-900 dark:text-sky-100">
+          Timeline matches
+          {totalCount != null ? (
+            <>
+              {" "}
+              · {shownActivities} shown
+              {totalCount > shownActivities ? ` of ${totalCount} total hits` : ""}
+            </>
+          ) : null}
+          {block.backend ? (
+            <span className="ml-1 font-normal text-muted-foreground">
+              ({block.backend})
+            </span>
+          ) : null}
+        </span>
+        <span className="text-muted-foreground">
+          {leads.length} lead{leads.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <ul className="divide-y">
+        {leads.map((lead) => (
+          <li key={lead.lead_id} className="px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <Link
+                href={`/leads/${lead.lead_id}`}
+                className="text-sm font-semibold text-primary hover:underline"
+              >
+                {lead.lead_name || "Lead"}
+              </Link>
+              {lead.stage ? (
+                <span className="text-xs text-muted-foreground">{lead.stage}</span>
+              ) : null}
+            </div>
+            <ul className="mt-1.5 space-y-1.5">
+              {(lead.snippets || []).map((s, i) => (
+                <li
+                  key={`${s.activity_id || i}`}
+                  className="rounded-md bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground"
+                >
+                  <span className="font-medium text-foreground/80">
+                    {s.activity_label || "Activity"}
+                    {s.created_at
+                      ? ` · ${new Date(s.created_at).toLocaleDateString()}`
+                      : ""}
+                  </span>
+                  <p className="mt-0.5 leading-relaxed">{s.snippet || "—"}</p>
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+      {hasMore && block.query ? (
+        <div className="border-t bg-muted/20 px-3 py-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full text-xs"
+            disabled={loading}
+            onClick={async () => {
+              if (!block.query) return
+              setLoading(true)
+              try {
+                const nextOffset = offset + pageSize
+                const result = await AiAssistantService.searchCrmContent({
+                  q: block.query,
+                  offset: nextOffset,
+                  limit: pageSize,
+                  pool:
+                    typeof block.filter_params?.pool === "string"
+                      ? block.filter_params.pool
+                      : undefined,
+                  days:
+                    typeof block.filter_params?.days === "number"
+                      ? block.filter_params.days
+                      : undefined,
+                })
+                setLeads((prev) =>
+                  mergeNoteHitLeads(prev, result.grouped_leads || [])
+                )
+                setOffset(result.offset)
+                setHasMore(result.has_more)
+                setTotalCount(result.total_count)
+              } catch (e) {
+                console.error("Load more CRM search failed:", e)
+              } finally {
+                setLoading(false)
+              }
+            }}
+          >
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                Loading…
+              </>
+            ) : (
+              `Load more (${Math.max(0, totalCount - shownActivities)} remaining hits)`
+            )}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -329,6 +484,9 @@ function UiBlocks({
         }
         if (b.type === "ranked_leads") {
           return <LeadTableBlock key={i} block={b} ranked />
+        }
+        if (b.type === "note_hits") {
+          return <NoteHitsBlock key={i} block={b} />
         }
         if (b.type === "confirm_actions") {
           return (

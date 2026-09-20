@@ -3072,6 +3072,9 @@ async def add_lead_note(
     )
     
     await db.flush()
+    from app.services.crm_index_hooks import mark_activity_for_index
+
+    mark_activity_for_index(db.sync_session, note_activity.id)
     return lead
 
 
