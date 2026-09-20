@@ -23,6 +23,7 @@ import {
   AiAssistantService,
   AiConversationBrief,
   AiMessage,
+  AiLeadTableRow,
   AiNoteHitLead,
   AiUiBlock,
   buildLeadsUrlFromFilters,
@@ -285,7 +286,7 @@ function LeadTableBlock({
   block: AiUiBlock
   ranked?: boolean
 }) {
-  const leads = block.leads || []
+  const leads = (block.leads || []) as AiLeadTableRow[]
   const href = buildLeadsUrlFromFilters(block.filter_params)
   return (
     <div className="mt-3 overflow-hidden rounded-lg border">

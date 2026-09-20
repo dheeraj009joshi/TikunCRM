@@ -37,6 +37,21 @@ export interface AiNoteHitLead {
   snippets?: AiNoteSnippet[];
 }
 
+/** Rows in lead_table / ranked_leads UI blocks from search_leads & rank tools */
+export interface AiLeadTableRow {
+  id: string;
+  name: string;
+  down_payment?: number | null;
+  has_ssn_stip?: boolean;
+  has_dl_stip?: boolean;
+  is_business?: boolean | null;
+  stage?: string | null;
+  phone?: string | null;
+  priority_score?: number;
+  reasons?: string[];
+  rank?: number;
+}
+
 export interface CrmSearchResult {
   total: number;
   total_count: number;
@@ -58,19 +73,8 @@ export interface AiUiBlock {
   limit?: number;
   query?: string;
   backend?: string;
-  leads?: Array<{
-    id: string;
-    name: string;
-    down_payment?: number | null;
-    has_ssn_stip?: boolean;
-    has_dl_stip?: boolean;
-    is_business?: boolean | null;
-    stage?: string | null;
-    phone?: string | null;
-    priority_score?: number;
-    reasons?: string[];
-    rank?: number;
-  } | AiNoteHitLead>;
+  /** lead_table / ranked_leads → AiLeadTableRow[]; note_hits → AiNoteHitLead[] */
+  leads?: AiLeadTableRow[] | AiNoteHitLead[];
   filter_params?: Record<string, string | number | boolean>;
   actions?: Array<{
     tool: string;
