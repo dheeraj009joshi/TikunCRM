@@ -2057,22 +2057,23 @@ export default function LeadDetailsPage() {
     const handleEditStart = () => {
         if (!lead) return
         const meta = (lead as Lead).meta_data as Record<string, unknown> | undefined
+        const c = lead.customer
         setEditForm({
-            first_name: lead.customer?.first_name || "",
-            last_name: lead.customer?.last_name || "",
-            email: lead.customer?.email || "",
-            phone: lead.customer?.phone || "",
-            alternate_phone: (lead as any).customer?.alternate_phone || "",
-            address: (lead as any).customer?.address || "",
-            city: (lead as any).customer?.city || "",
-            state: (lead as any).customer?.state || "",
-            postal_code: (lead as any).customer?.postal_code || "",
-            country: (lead as any).customer?.country || "",
-            company: (lead as any).customer?.company || "",
-            job_title: (lead as any).customer?.job_title || "",
-            date_of_birth: (lead as any).customer?.date_of_birth ? String((lead as any).customer.date_of_birth).split("T")[0] : "",
-            preferred_contact_method: (lead as any).customer?.preferred_contact_method || "",
-            preferred_contact_time: (lead as any).customer?.preferred_contact_time || "",
+            first_name: c?.first_name || "",
+            last_name: c?.last_name || "",
+            email: c?.email || "",
+            phone: c?.phone || "",
+            alternate_phone: c?.alternate_phone || "",
+            address: c?.address || "",
+            city: c?.city || "",
+            state: c?.state || "",
+            postal_code: c?.postal_code || "",
+            country: c?.country || "",
+            company: c?.company || "",
+            job_title: c?.job_title || "",
+            date_of_birth: c?.date_of_birth ? String(c.date_of_birth).split("T")[0] : "",
+            preferred_contact_method: c?.preferred_contact_method || "",
+            preferred_contact_time: c?.preferred_contact_time || "",
             interested_in: lead.interested_in || "",
             budget_range: lead.budget_range || "",
             notes: lead.notes || "",
@@ -2087,28 +2088,38 @@ export default function LeadDetailsPage() {
     
     const handleSaveDetails = async () => {
         if (!lead) return
+        if (!editForm.first_name.trim()) {
+            toast({ title: "First name required", description: "Please enter a first name.", variant: "destructive" })
+            return
+        }
         setIsSavingDetails(true)
         try {
             const updateData: Record<string, unknown> = {}
-            // Only include fields that changed
-            if (editForm.first_name !== (lead.customer?.first_name || "")) updateData.first_name = editForm.first_name
-            if (editForm.last_name !== (lead.customer?.last_name || "")) updateData.last_name = editForm.last_name || undefined
-            if (editForm.email !== (lead.customer?.email || "")) updateData.email = editForm.email || undefined
-            if (editForm.phone !== (lead.customer?.phone || "")) updateData.phone = editForm.phone || undefined
-            const _c = lead.customer as any || {}
-            if (editForm.alternate_phone !== (_c.alternate_phone || "")) updateData.alternate_phone = editForm.alternate_phone || undefined
-            if (editForm.address !== (_c.address || "")) updateData.address = editForm.address || undefined
-            if (editForm.city !== (_c.city || "")) updateData.city = editForm.city || undefined
-            if (editForm.state !== (_c.state || "")) updateData.state = editForm.state || undefined
-            if (editForm.postal_code !== (_c.postal_code || "")) updateData.postal_code = editForm.postal_code || undefined
-            if (editForm.country !== (_c.country || "")) updateData.country = editForm.country || undefined
-            if (editForm.company !== (_c.company || "")) updateData.company = editForm.company || undefined
-            if (editForm.job_title !== (_c.job_title || "")) updateData.job_title = editForm.job_title || undefined
-            if (editForm.preferred_contact_method !== (_c.preferred_contact_method || "")) updateData.preferred_contact_method = editForm.preferred_contact_method || undefined
-            if (editForm.preferred_contact_time !== (_c.preferred_contact_time || "")) updateData.preferred_contact_time = editForm.preferred_contact_time || undefined
-            if (editForm.interested_in !== (lead.interested_in || "")) updateData.interested_in = editForm.interested_in || undefined
-            if (editForm.budget_range !== (lead.budget_range || "")) updateData.budget_range = editForm.budget_range || undefined
-            if (editForm.notes !== (lead.notes || "")) updateData.notes = editForm.notes || undefined
+            const c = lead.customer
+            const changed = (next: string, current?: string | null) => next !== (current || "")
+            const orNull = (value: string) => value.trim() || null
+
+            if (changed(editForm.first_name, c?.first_name)) updateData.first_name = editForm.first_name.trim()
+            if (changed(editForm.last_name, c?.last_name)) updateData.last_name = orNull(editForm.last_name)
+            if (changed(editForm.email, c?.email)) updateData.email = orNull(editForm.email)
+            if (changed(editForm.phone, c?.phone)) updateData.phone = orNull(editForm.phone)
+            if (changed(editForm.alternate_phone, c?.alternate_phone)) updateData.alternate_phone = orNull(editForm.alternate_phone)
+            if (changed(editForm.address, c?.address)) updateData.address = orNull(editForm.address)
+            if (changed(editForm.city, c?.city)) updateData.city = orNull(editForm.city)
+            if (changed(editForm.state, c?.state)) updateData.state = orNull(editForm.state)
+            if (changed(editForm.postal_code, c?.postal_code)) updateData.postal_code = orNull(editForm.postal_code)
+            if (changed(editForm.country, c?.country)) updateData.country = orNull(editForm.country)
+            if (changed(editForm.company, c?.company)) updateData.company = orNull(editForm.company)
+            if (changed(editForm.job_title, c?.job_title)) updateData.job_title = orNull(editForm.job_title)
+            if (changed(editForm.preferred_contact_method, c?.preferred_contact_method)) {
+                updateData.preferred_contact_method = orNull(editForm.preferred_contact_method)
+            }
+            if (changed(editForm.preferred_contact_time, c?.preferred_contact_time)) {
+                updateData.preferred_contact_time = orNull(editForm.preferred_contact_time)
+            }
+            if (changed(editForm.interested_in, lead.interested_in)) updateData.interested_in = orNull(editForm.interested_in)
+            if (changed(editForm.budget_range, lead.budget_range)) updateData.budget_range = orNull(editForm.budget_range)
+            if (changed(editForm.notes, lead.notes)) updateData.notes = orNull(editForm.notes)
             
             // Handle downpayment in meta_data
             const currentMeta = (lead as Lead).meta_data as Record<string, unknown> || {}
@@ -2116,12 +2127,12 @@ export default function LeadDetailsPage() {
             if (editForm.downpayment !== currentDownpayment) {
                 updateData.meta_data = {
                     ...currentMeta,
-                    downpayment: editForm.downpayment || undefined,
+                    downpayment: editForm.downpayment.trim() || undefined,
                 }
             }
 
             if (Object.keys(updateData).length > 0) {
-                await LeadService.updateLead(lead.id, updateData as any)
+                await LeadService.updateLead(lead.id, updateData)
                 await fetchLead()
                 fetchActivities()
                 toast({ title: "Lead updated", description: "Contact information has been saved." })
@@ -2131,7 +2142,12 @@ export default function LeadDetailsPage() {
             setIsEditingDetails(false)
         } catch (error) {
             console.error("Failed to update lead:", error)
-            const errorMsg = error instanceof Error ? error.message : "Could not save changes"
+            const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+            const errorMsg = typeof detail === "string"
+                ? detail
+                : Array.isArray(detail)
+                    ? detail.map((d: { msg?: string }) => d?.msg ?? String(d)).join(" ")
+                    : error instanceof Error ? error.message : "Could not save changes"
             toast({ title: "Update failed", description: errorMsg, variant: "destructive" })
         } finally {
             setIsSavingDetails(false)
@@ -2501,12 +2517,12 @@ export default function LeadDetailsPage() {
                                         <span className="font-medium">{getLeadPhone(lead)}</span>
                             </div>
                                 )}
-                                {(lead as any).customer?.alternate_phone && (
+                                {lead.customer?.alternate_phone && (
                             <div className="flex justify-between items-center text-sm">
                                         <span className="text-muted-foreground flex items-center gap-2">
                                             <Phone className="h-4 w-4" /> Alt. Phone
                                         </span>
-                                        <span className="font-medium">{(lead as any).customer?.alternate_phone}</span>
+                                        <span className="font-medium">{lead.customer.alternate_phone}</span>
                             </div>
                                 )}
                             <div className="flex justify-between items-center text-sm">
@@ -3115,7 +3131,7 @@ export default function LeadDetailsPage() {
                                             <div>
                                                 <Label className="text-xs">Preferred Method</Label>
                                                 <Select 
-                                                    value={editForm.preferred_contact_method}
+                                                    value={editForm.preferred_contact_method || undefined}
                                                     onValueChange={(value) => setEditForm(prev => ({ ...prev, preferred_contact_method: value }))}
                                                 >
                                                     <SelectTrigger className="h-8 text-sm">
@@ -3132,7 +3148,7 @@ export default function LeadDetailsPage() {
                                             <div>
                                                 <Label className="text-xs">Preferred Time</Label>
                                                 <Select 
-                                                    value={editForm.preferred_contact_time}
+                                                    value={editForm.preferred_contact_time || undefined}
                                                     onValueChange={(value) => setEditForm(prev => ({ ...prev, preferred_contact_time: value }))}
                                                 >
                                                     <SelectTrigger className="h-8 text-sm">
@@ -3201,7 +3217,7 @@ export default function LeadDetailsPage() {
                                 </div>
                             ) : (
                                 <div className="space-y-4">
-                                    {(() => { const _cu = (lead as any).customer || {}; return (<>
+                                    {(() => { const _cu = lead.customer || {}; return (<>)
                                     {/* Display Mode - Address */}
                                     {(_cu.address || _cu.city || _cu.state || _cu.country) && (
                                         <div>

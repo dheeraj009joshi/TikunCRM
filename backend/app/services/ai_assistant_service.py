@@ -268,7 +268,8 @@ Rules:
 - For anything in notes, calls, texts, emails, or "what did they say/mention/want" → use search_crm_content.
 - For pipeline filters (stips, down payment, stage, source) → use search_leads.
 - When search_crm_content returns snippets, cite the lead name and quote or paraphrase the snippet. If nothing matched, say so clearly.
-- After search_leads or rank_leads_to_call, summarize and highlight a few leads.
+- After search_leads or rank_leads_to_call, give a SHORT summary only (1–3 sentences). Do NOT paste a numbered lead list — the UI renders an interactive table/cards with all leads.
+- When timeline/note search runs, do NOT repeat every snippet — summarize patterns and call out 1–2 notable leads by name.
 - For assign / stage change / follow-ups: call write tools with lead_ids from a prior search. Those only PROPOSE — user must Confirm in the UI.
 - Resolve people with list_salespersons before assign when the name is ambiguous (BDC: use dealership_id when multi-store).
 - Resolve stages with list_stages when needed.
@@ -863,7 +864,8 @@ class AiAssistantService:
                         block = {
                             "type": "lead_table",
                             "total": result.get("total"),
-                            "leads": result.get("leads", [])[:10],
+                            "returned": result.get("returned"),
+                            "leads": result.get("leads", []),
                             "filter_params": result.get("filter_params") or {},
                         }
                         ui_blocks.append(block)
@@ -873,7 +875,8 @@ class AiAssistantService:
                         block = {
                             "type": "ranked_leads",
                             "total": result.get("total_considered"),
-                            "leads": result.get("ranked", [])[:10],
+                            "returned": len(result.get("ranked") or []),
+                            "leads": result.get("ranked", []),
                             "filter_params": result.get("filter_params") or {},
                         }
                         ui_blocks.append(block)

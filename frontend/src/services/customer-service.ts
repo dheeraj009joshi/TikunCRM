@@ -39,6 +39,17 @@ export interface CustomerBrief {
     full_name?: string;
     phone?: string;
     email?: string;
+    alternate_phone?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    postal_code?: string;
+    country?: string;
+    date_of_birth?: string;
+    company?: string;
+    job_title?: string;
+    preferred_contact_method?: string;
+    preferred_contact_time?: string;
 }
 
 export interface CustomerListResponse {

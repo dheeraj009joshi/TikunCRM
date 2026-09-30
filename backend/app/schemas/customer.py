@@ -88,13 +88,24 @@ class CustomerUpdate(BaseModel):
 
 
 class CustomerBrief(BaseModel):
-    """Brief customer info embedded in lead responses."""
+    """Customer info embedded in lead responses (contact, address, work)."""
     id: UUID
     first_name: str
     last_name: Optional[str] = None
     full_name: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    alternate_phone: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    date_of_birth: Optional[datetime] = None
+    company: Optional[str] = None
+    job_title: Optional[str] = None
+    preferred_contact_method: Optional[str] = None
+    preferred_contact_time: Optional[str] = None
 
     class Config:
         from_attributes = True

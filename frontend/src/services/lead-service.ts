@@ -211,28 +211,28 @@ export interface CampaignFilterOption {
 /** Data for updating a lead - customer fields are at top level (not nested) */
 export interface LeadUpdateData {
     // Lead-specific fields
-    notes?: string;
+    notes?: string | null;
     meta_data?: Record<string, unknown>;
-    interested_in?: string;
-    interested_brand?: string;
-    budget_range?: string;
+    interested_in?: string | null;
+    interested_brand?: string | null;
+    budget_range?: string | null;
     secondary_customer_id?: string | null;
-    // Customer contact fields (updates associated customer)
+    // Customer contact fields (updates associated customer). null clears the field.
     first_name?: string;
-    last_name?: string;
-    email?: string;
-    phone?: string;
-    alternate_phone?: string;
-    address?: string;
-    city?: string;
-    state?: string;
-    postal_code?: string;
-    country?: string;
-    company?: string;
-    job_title?: string;
-    date_of_birth?: string;
-    preferred_contact_method?: string;
-    preferred_contact_time?: string;
+    last_name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    alternate_phone?: string | null;
+    address?: string | null;
+    city?: string | null;
+    state?: string | null;
+    postal_code?: string | null;
+    country?: string | null;
+    company?: string | null;
+    job_title?: string | null;
+    date_of_birth?: string | null;
+    preferred_contact_method?: string | null;
+    preferred_contact_time?: string | null;
 }
 
 export const LeadService = {

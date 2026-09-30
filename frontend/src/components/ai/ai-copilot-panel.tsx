@@ -6,8 +6,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Bot,
   ChevronDown,
+  ExternalLink,
   History,
   Loader2,
+  Phone,
   Plus,
   Send,
   Sparkles,
@@ -27,7 +29,18 @@ import {
   AiNoteHitLead,
   AiUiBlock,
   buildLeadsUrlFromFilters,
+  filterParamsToLeadListParams,
 } from "@/services/ai-assistant-service"
+import {
+  AiMessageContent,
+  compactAssistantText,
+} from "@/components/ai/ai-message-content"
+import {
+  getLeadFullName,
+  getLeadPhone,
+  LeadService,
+} from "@/services/lead-service"
+import { getStageLabel } from "@/services/lead-stage-service"
 
 type LiveTool = {
   name: string
@@ -52,6 +65,47 @@ const SUGGESTIONS = [
   "Which of my leads mentioned a trade-in this week?",
   "Find notes about Camry or financing in my leads",
 ]
+
+const TOOL_DISPLAY: Record<string, string> = {
+  search_leads: "Search leads",
+  search_crm_content: "Search notes & activities",
+  rank_leads_to_call: "Rank call priority",
+  list_stages: "Pipeline stages",
+  list_salespersons: "Team lookup",
+  assign_leads: "Prepare assignment",
+  update_lead_stages: "Prepare stage change",
+  create_follow_ups: "Prepare follow-ups",
+}
+
+function toolDisplayName(name: string) {
+  return TOOL_DISPLAY[name] || name.replace(/_/g, " ")
+}
+
+function StipBadges({ lead }: { lead: AiLeadTableRow }) {
+  const tags = [
+    lead.has_ssn_stip ? "SSN" : null,
+    lead.has_dl_stip ? "DL" : null,
+    lead.is_business === true
+      ? "Business"
+      : lead.is_business === false
+        ? "Personal"
+        : null,
+  ].filter(Boolean)
+
+  if (!tags.length) return null
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {tags.map((t) => (
+        <span
+          key={t}
+          className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+        >
+          {t}
+        </span>
+      ))}
+    </div>
+  )
+}
 
 function ThinkingBlock({
   text,
@@ -87,7 +141,7 @@ function ThinkingBlock({
         />
       </button>
       {open && text && (
-        <div className="border-t px-3 py-2 text-muted-foreground whitespace-pre-wrap">
+        <div className="border-t px-3 py-2 text-xs text-muted-foreground whitespace-pre-wrap">
           {text}
         </div>
       )}
@@ -98,27 +152,31 @@ function ThinkingBlock({
 function ToolChips({ tools }: { tools: LiveTool[] }) {
   if (!tools.length) return null
   return (
-    <div className="mb-3 space-y-2">
-      <p className="text-xs font-medium text-muted-foreground">Working</p>
-      <div className="flex flex-wrap gap-2">
+    <div className="mb-3 space-y-1.5">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Working
+      </p>
+      <div className="flex flex-wrap gap-1.5">
         {tools.map((t, i) => (
           <span
             key={`${t.name}-${i}`}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
+              "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]",
               t.status === "done"
-                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                : "border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200"
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"
+                : "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-100"
             )}
           >
             {t.status === "running" ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
             ) : (
-              <Wrench className="h-3 w-3" />
+              <Wrench className="h-3 w-3 shrink-0" />
             )}
-            {t.status === "done"
-              ? `${t.name} · ${t.summary || "done"}`
-              : t.label || t.name}
+            <span className="truncate">
+              {t.status === "done"
+                ? `${toolDisplayName(t.name)} · ${t.summary || "done"}`
+                : t.label || toolDisplayName(t.name)}
+            </span>
           </span>
         ))}
       </div>
@@ -163,7 +221,13 @@ function NoteHitsBlock({ block }: { block: AiUiBlock }) {
     setTotalCount(block.total_count ?? block.total ?? initialLeads.length)
   }, [block])
 
-  if (!leads.length) return null
+  if (!leads.length) {
+    return (
+      <div className="mt-3 rounded-lg border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+        No timeline matches for this query.
+      </div>
+    )
+  }
 
   const shownActivities = leads.reduce(
     (n, l) => n + (l.snippets?.length || 0),
@@ -171,54 +235,57 @@ function NoteHitsBlock({ block }: { block: AiUiBlock }) {
   )
 
   return (
-    <div className="mt-3 overflow-hidden rounded-lg border border-sky-500/20">
-      <div className="flex items-center justify-between border-b bg-sky-500/5 px-3 py-2 text-xs">
-        <span className="font-medium text-sky-900 dark:text-sky-100">
+    <div className="overflow-hidden rounded-xl border border-sky-500/25 bg-sky-500/[0.03]">
+      <div className="flex items-center justify-between border-b border-sky-500/15 px-3 py-2 text-xs">
+        <span className="font-semibold text-sky-950 dark:text-sky-100">
           Timeline matches
-          {totalCount != null ? (
-            <>
-              {" "}
-              · {shownActivities} shown
-              {totalCount > shownActivities ? ` of ${totalCount} total hits` : ""}
-            </>
-          ) : null}
-          {block.backend ? (
-            <span className="ml-1 font-normal text-muted-foreground">
-              ({block.backend})
-            </span>
-          ) : null}
         </span>
         <span className="text-muted-foreground">
-          {leads.length} lead{leads.length === 1 ? "" : "s"}
+          {shownActivities}
+          {totalCount > shownActivities ? ` / ${totalCount}` : ""} hits ·{" "}
+          {leads.length} leads
         </span>
       </div>
-      <ul className="divide-y">
+      <ul className="max-h-[320px] divide-y overflow-y-auto">
         {leads.map((lead) => (
           <li key={lead.lead_id} className="px-3 py-2.5">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <Link
-                href={`/leads/${lead.lead_id}`}
-                className="text-sm font-semibold text-primary hover:underline"
-              >
-                {lead.lead_name || "Lead"}
-              </Link>
-              {lead.stage ? (
-                <span className="text-xs text-muted-foreground">{lead.stage}</span>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <Link
+                  href={`/leads/${lead.lead_id}`}
+                  className="text-sm font-semibold text-primary hover:underline"
+                >
+                  {lead.lead_name || "Lead"}
+                </Link>
+                {lead.stage ? (
+                  <p className="text-[11px] text-muted-foreground">{lead.stage}</p>
+                ) : null}
+              </div>
+              {lead.phone ? (
+                <a
+                  href={`tel:${lead.phone.replace(/\s/g, "")}`}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium hover:bg-muted"
+                >
+                  <Phone className="h-3 w-3" />
+                  Call
+                </a>
               ) : null}
             </div>
-            <ul className="mt-1.5 space-y-1.5">
+            <ul className="mt-2 space-y-1.5">
               {(lead.snippets || []).map((s, i) => (
                 <li
                   key={`${s.activity_id || i}`}
-                  className="rounded-md bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground"
+                  className="rounded-md border bg-background/80 px-2 py-1.5 text-xs"
                 >
-                  <span className="font-medium text-foreground/80">
+                  <p className="font-medium text-foreground/90">
                     {s.activity_label || "Activity"}
                     {s.created_at
                       ? ` · ${new Date(s.created_at).toLocaleDateString()}`
                       : ""}
-                  </span>
-                  <p className="mt-0.5 leading-relaxed">{s.snippet || "—"}</p>
+                  </p>
+                  <p className="mt-0.5 text-muted-foreground leading-relaxed">
+                    {s.snippet || "—"}
+                  </p>
                 </li>
               ))}
             </ul>
@@ -226,7 +293,7 @@ function NoteHitsBlock({ block }: { block: AiUiBlock }) {
         ))}
       </ul>
       {hasMore && block.query ? (
-        <div className="border-t bg-muted/20 px-3 py-2">
+        <div className="border-t px-3 py-2">
           <Button
             type="button"
             variant="outline"
@@ -270,7 +337,7 @@ function NoteHitsBlock({ block }: { block: AiUiBlock }) {
                 Loading…
               </>
             ) : (
-              `Load more (${Math.max(0, totalCount - shownActivities)} remaining hits)`
+              `Load more (${Math.max(0, totalCount - shownActivities)} remaining)`
             )}
           </Button>
         </div>
@@ -279,94 +346,165 @@ function NoteHitsBlock({ block }: { block: AiUiBlock }) {
   )
 }
 
-function LeadTableBlock({
+function leadRowFromApi(lead: {
+  id: string
+  customer?: { first_name?: string; last_name?: string; phone?: string }
+  down_payment?: number | null
+  has_ssn_stip?: boolean
+  has_dl_stip?: boolean
+  is_business?: boolean | null
+  stage?: { name?: string; display_name?: string }
+}): AiLeadTableRow {
+  return {
+    id: lead.id,
+    name: getLeadFullName(lead as Parameters<typeof getLeadFullName>[0]),
+    down_payment: lead.down_payment,
+    has_ssn_stip: lead.has_ssn_stip,
+    has_dl_stip: lead.has_dl_stip,
+    is_business: lead.is_business,
+    stage: lead.stage
+      ? getStageLabel(lead.stage as Parameters<typeof getStageLabel>[0])
+      : null,
+    phone: getLeadPhone(lead as Parameters<typeof getLeadPhone>[0]),
+  }
+}
+
+function LeadResultsBlock({
   block,
   ranked,
 }: {
   block: AiUiBlock
   ranked?: boolean
 }) {
-  const leads = (block.leads || []) as AiLeadTableRow[]
+  const initialLeads = (block.leads || []) as AiLeadTableRow[]
+  const [leads, setLeads] = React.useState<AiLeadTableRow[]>(initialLeads)
+  const [page, setPage] = React.useState(1)
+  const [loading, setLoading] = React.useState(false)
+  const pageSize = 25
+  const total = block.total ?? initialLeads.length
+  const hasMore = !ranked && leads.length < total
+
+  React.useEffect(() => {
+    setLeads(initialLeads)
+    setPage(1)
+  }, [block])
+
   const href = buildLeadsUrlFromFilters(block.filter_params)
+
   return (
-    <div className="mt-3 overflow-hidden rounded-lg border">
-      <div className="flex items-center justify-between border-b bg-muted/30 px-3 py-2 text-xs">
-        <span className="font-medium">
-          {ranked ? "Call priority" : null}
-          {!ranked && (
-            <>
-              {block.total ?? leads.length} lead
-              {(block.total ?? leads.length) === 1 ? "" : "s"} matched
-            </>
-          )}
-          {ranked && (
-            <>
-              {" "}
-              · top {leads.length}
-            </>
-          )}
-        </span>
-        <Button asChild variant="link" size="sm" className="h-auto p-0 text-xs">
-          <Link href={href}>Open in Leads</Link>
+    <div className="overflow-hidden rounded-xl border bg-muted/20">
+      <div className="flex items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
+        <div>
+          <p className="text-xs font-semibold">
+            {ranked ? "Call priority" : "Matching leads"}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            {ranked
+              ? `Top ${leads.length} of ${total} considered`
+              : `Showing ${leads.length} of ${total}`}
+          </p>
+        </div>
+        <Button asChild variant="outline" size="sm" className="h-7 text-[11px]">
+          <Link href={href} className="inline-flex items-center gap-1">
+            Open in Leads
+            <ExternalLink className="h-3 w-3" />
+          </Link>
         </Button>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b text-left text-muted-foreground">
-              {ranked && <th className="px-3 py-2 font-medium">#</th>}
-              <th className="px-3 py-2 font-medium">Lead</th>
-              <th className="px-3 py-2 font-medium">Down</th>
-              <th className="px-3 py-2 font-medium">Stips</th>
-              <th className="px-3 py-2 font-medium">
-                {ranked ? "Why" : "Stage"}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {leads.map((l) => (
-              <tr key={l.id} className="border-b last:border-0">
-                {ranked && (
-                  <td className="px-3 py-2 tabular-nums text-muted-foreground">
-                    {l.rank ?? "—"}
-                  </td>
-                )}
-                <td className="px-3 py-2">
-                  <Link
-                    href={`/leads/${l.id}`}
-                    className="font-medium text-primary hover:underline"
-                  >
-                    {l.name}
-                  </Link>
-                </td>
-                <td className="px-3 py-2 tabular-nums">
-                  {l.down_payment != null
-                    ? `$${Number(l.down_payment).toLocaleString()}`
-                    : "—"}
-                </td>
-                <td className="px-3 py-2 text-muted-foreground">
-                  {[
-                    l.has_ssn_stip ? "SSN" : null,
-                    l.has_dl_stip ? "DL" : null,
-                    l.is_business === true
-                      ? "Biz"
-                      : l.is_business === false
-                        ? "Personal"
-                        : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || "—"}
-                </td>
-                <td className="px-3 py-2 text-muted-foreground">
-                  {ranked
-                    ? (l.reasons || []).slice(0, 2).join("; ") || "—"
-                    : l.stage || "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+
+      <ul className="max-h-[360px] divide-y overflow-y-auto">
+        {leads.map((l, idx) => (
+          <li
+            key={l.id}
+            className="flex items-start gap-3 px-3 py-2.5 hover:bg-muted/30"
+          >
+            {ranked ? (
+              <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
+                {l.rank ?? idx + 1}
+              </span>
+            ) : null}
+            <div className="min-w-0 flex-1">
+              <Link
+                href={`/leads/${l.id}`}
+                className="text-sm font-semibold text-primary hover:underline"
+              >
+                {l.name}
+              </Link>
+              <StipBadges lead={l} />
+              {ranked && l.reasons?.length ? (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {l.reasons.slice(0, 2).join(" · ")}
+                </p>
+              ) : (
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {l.stage || "No stage"}
+                </p>
+              )}
+            </div>
+            <div className="shrink-0 text-right">
+              <p className="text-xs font-medium tabular-nums">
+                {l.down_payment != null
+                  ? `$${Number(l.down_payment).toLocaleString()}`
+                  : "—"}
+              </p>
+              <p className="text-[10px] text-muted-foreground">down</p>
+              {l.phone ? (
+                <a
+                  href={`tel:${l.phone.replace(/\s/g, "")}`}
+                  className="mt-1 inline-flex items-center gap-0.5 text-[10px] font-medium text-primary hover:underline"
+                >
+                  <Phone className="h-3 w-3" />
+                  {l.phone}
+                </a>
+              ) : null}
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      {hasMore && block.filter_params ? (
+        <div className="border-t px-3 py-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full text-xs"
+            disabled={loading}
+            onClick={async () => {
+              setLoading(true)
+              try {
+                const nextPage = page + 1
+                const data = await LeadService.listLeads(
+                  filterParamsToLeadListParams(
+                    block.filter_params,
+                    nextPage,
+                    pageSize
+                  )
+                )
+                const rows = (data.items || []).map(leadRowFromApi)
+                setLeads((prev) => {
+                  const seen = new Set(prev.map((p) => p.id))
+                  return [...prev, ...rows.filter((r) => !seen.has(r.id))]
+                })
+                setPage(nextPage)
+              } catch (e) {
+                console.error("Load more leads failed:", e)
+              } finally {
+                setLoading(false)
+              }
+            }}
+          >
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                Loading…
+              </>
+            ) : (
+              `Load more (${total - leads.length} remaining)`
+            )}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -390,14 +528,14 @@ function ConfirmActionsBlock({
 
   if (dismissed || status === "cancelled") {
     return (
-      <div className="mt-3 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+      <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
         Actions cancelled
       </div>
     )
   }
   if (status === "done") {
     return (
-      <div className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-200">
+      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-200">
         Actions confirmed and applied
       </div>
     )
@@ -406,9 +544,9 @@ function ConfirmActionsBlock({
   const actions = block.actions || []
 
   return (
-    <div className="mt-3 space-y-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
+    <div className="space-y-3 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3">
       <div className="flex items-center gap-2">
-        <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-900 dark:text-amber-100">
+        <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium">
           Needs confirmation
         </span>
         <span className="text-sm font-semibold">
@@ -478,21 +616,21 @@ function UiBlocks({
 }) {
   if (!blocks?.length) return null
   return (
-    <>
+    <div className="space-y-3">
       {blocks.map((b, i) => {
         if (b.type === "lead_table") {
-          return <LeadTableBlock key={i} block={b} />
+          return <LeadResultsBlock key={`${b.type}-${i}`} block={b} />
         }
         if (b.type === "ranked_leads") {
-          return <LeadTableBlock key={i} block={b} ranked />
+          return <LeadResultsBlock key={`${b.type}-${i}`} block={b} ranked />
         }
         if (b.type === "note_hits") {
-          return <NoteHitsBlock key={i} block={b} />
+          return <NoteHitsBlock key={`${b.type}-${i}`} block={b} />
         }
         if (b.type === "confirm_actions") {
           return (
             <ConfirmActionsBlock
-              key={i}
+              key={`${b.type}-${i}`}
               block={b}
               conversationId={conversationId}
               disabled={streaming}
@@ -502,7 +640,7 @@ function UiBlocks({
         }
         return null
       })}
-    </>
+    </div>
   )
 }
 
@@ -527,12 +665,15 @@ function AssistantBubble({
   conversationId: string | null
   onConfirmDone?: (note: string) => void
 }) {
+  const displayContent = compactAssistantText(content, uiBlocks)
+  const hasBlocks = Boolean(uiBlocks?.length)
+
   return (
-    <div className="flex gap-3">
-      <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+    <div className="flex gap-2.5">
+      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-primary/15">
         <Bot className="h-4 w-4" />
       </div>
-      <div className="min-w-0 flex-1 rounded-2xl border bg-card px-4 py-3 shadow-sm">
+      <div className="min-w-0 flex-1 space-y-3">
         {(thinking || streaming) && (
           <ThinkingBlock
             text={thinking || ""}
@@ -542,27 +683,45 @@ function AssistantBubble({
           />
         )}
         {tools && tools.length > 0 && <ToolChips tools={tools} />}
-        {content ? (
-          <div className="whitespace-pre-wrap text-sm leading-relaxed">
-            {content}
+
+        {hasBlocks && (
+          <UiBlocks
+            blocks={uiBlocks}
+            conversationId={conversationId}
+            streaming={streaming}
+            onConfirmDone={onConfirmDone}
+          />
+        )}
+
+        {displayContent ? (
+          <div className="rounded-2xl border bg-card px-3.5 py-3 shadow-sm">
+            <AiMessageContent content={displayContent} />
             {streaming && (
               <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-foreground/70 align-middle" />
             )}
           </div>
-        ) : (
-          streaming && (
-            <p className="text-sm text-muted-foreground">Working…</p>
-          )
+        ) : streaming && !hasBlocks ? (
+          <p className="text-sm text-muted-foreground">Working…</p>
+        ) : null}
+
+        {!displayContent && hasBlocks && !streaming && (
+          <p className="text-xs text-muted-foreground">
+            Results are shown above — open a lead or use Load more.
+          </p>
         )}
-        <UiBlocks
-          blocks={uiBlocks}
-          conversationId={conversationId}
-          streaming={streaming}
-          onConfirmDone={onConfirmDone}
-        />
       </div>
     </div>
   )
+}
+
+function mergeUiBlock(blocks: AiUiBlock[], incoming: AiUiBlock): AiUiBlock[] {
+  const idx = blocks.findIndex((b) => b.type === incoming.type)
+  if (idx >= 0) {
+    const next = [...blocks]
+    next[idx] = incoming
+    return next
+  }
+  return [...blocks, incoming]
 }
 
 export function AiCopilotPanel() {
@@ -663,9 +822,7 @@ export function AiCopilotPanel() {
           },
           onThinkingStart: () => {
             setLive((prev) =>
-              prev
-                ? { ...prev, thinking: "", thinkingDone: false }
-                : prev
+              prev ? { ...prev, thinking: "", thinkingDone: false } : prev
             )
           },
           onThinkingDelta: (t) => {
@@ -727,7 +884,9 @@ export function AiCopilotPanel() {
           },
           onUiBlock: (block) => {
             setLive((prev) =>
-              prev ? { ...prev, uiBlocks: [...prev.uiBlocks, block] } : prev
+              prev
+                ? { ...prev, uiBlocks: mergeUiBlock(prev.uiBlocks, block) }
+                : prev
             )
           },
           onDone: (data) => {
@@ -776,7 +935,6 @@ export function AiCopilotPanel() {
 
   return (
     <>
-      {/* Floating Copilot launcher */}
       {!open && (
         <button
           type="button"
@@ -789,7 +947,6 @@ export function AiCopilotPanel() {
         </button>
       )}
 
-      {/* Backdrop */}
       <div
         className={cn(
           "fixed inset-0 z-40 bg-black/30 transition-opacity",
@@ -799,10 +956,9 @@ export function AiCopilotPanel() {
         aria-hidden={!open}
       />
 
-      {/* Copilot side panel */}
       <aside
         className={cn(
-          "fixed inset-y-0 right-0 z-50 flex w-full max-w-[420px] flex-col border-l bg-background shadow-2xl transition-transform duration-200 ease-out sm:max-w-[440px]",
+          "fixed inset-y-0 right-0 z-50 flex w-full max-w-[460px] flex-col border-l bg-background shadow-2xl transition-transform duration-200 ease-out",
           open ? "translate-x-0" : "translate-x-full"
         )}
         aria-hidden={!open}
@@ -815,6 +971,9 @@ export function AiCopilotPanel() {
             <h2 className="text-sm font-semibold leading-tight">Tikun Copilot</h2>
             <p className="truncate text-[11px] text-muted-foreground">
               Uses your CRM permissions · ⌘⇧J
+              {statusQuery.data?.crm_search?.azure_configured
+                ? " · Azure search"
+                : " · DB search"}
             </p>
           </div>
           <Button
@@ -883,7 +1042,8 @@ export function AiCopilotPanel() {
                 </div>
                 <h3 className="text-sm font-semibold">How can I help?</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Ask in plain English — I&apos;ll search leads and show my thinking.
+                  Search leads, notes, and priorities — results appear as cards you
+                  can click or call.
                 </p>
                 <div className="mt-4 flex flex-col gap-1.5">
                   {SUGGESTIONS.map((s) => (
@@ -903,7 +1063,7 @@ export function AiCopilotPanel() {
             {messages.map((m) =>
               m.role === "user" ? (
                 <div key={m.id} className="flex justify-end">
-                  <div className="max-w-[90%] rounded-2xl bg-primary px-3 py-2 text-sm text-primary-foreground">
+                  <div className="max-w-[90%] rounded-2xl bg-primary px-3 py-2 text-sm text-primary-foreground shadow-sm">
                     {m.content}
                   </div>
                 </div>
@@ -916,7 +1076,7 @@ export function AiCopilotPanel() {
                   thinkingMs={4000}
                   tools={(m.tool_traces || []).map((t) => ({
                     name: t.name,
-                    label: t.name,
+                    label: toolDisplayName(t.name),
                     args: t.args,
                     summary: t.result_summary,
                     status: "done" as const,

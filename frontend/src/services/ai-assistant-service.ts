@@ -1,4 +1,5 @@
 import { API_BASE_URL } from "@/lib/api-client";
+import type { LeadListParams } from "@/services/lead-service";
 
 export interface AiConversationBrief {
   id: string;
@@ -67,6 +68,7 @@ export interface AiUiBlock {
   type: string;
   title?: string;
   total?: number;
+  returned?: number;
   total_count?: number;
   has_more?: boolean;
   offset?: number;
@@ -301,6 +303,25 @@ export const AiAssistantService = {
     }
   },
 };
+
+export function filterParamsToLeadListParams(
+  filterParams?: Record<string, string | number | boolean>,
+  page = 1,
+  pageSize = 25
+): LeadListParams {
+  if (!filterParams) return { page, page_size: pageSize };
+  const params: LeadListParams = { page, page_size: pageSize };
+  for (const [k, v] of Object.entries(filterParams)) {
+    if (v === undefined || v === null) continue;
+    if (k === "stage_id") {
+      params.stage_id = String(v);
+      continue;
+    }
+    if (k in params || k === "query") continue;
+    (params as Record<string, unknown>)[k] = v;
+  }
+  return params;
+}
 
 export function buildLeadsUrlFromFilters(
   filterParams?: Record<string, string | number | boolean>

@@ -110,6 +110,29 @@ class CreditAppAbandon(BaseModel):
 
 router = APIRouter()
 
+
+def _customer_brief_dict(customer: Customer) -> dict:
+    """Serialize customer fields shown/edited on the lead details page."""
+    return {
+        "id": customer.id,
+        "first_name": customer.first_name,
+        "last_name": customer.last_name,
+        "full_name": customer.full_name,
+        "phone": customer.phone,
+        "email": customer.email,
+        "alternate_phone": customer.alternate_phone,
+        "address": customer.address,
+        "city": customer.city,
+        "state": customer.state,
+        "postal_code": customer.postal_code,
+        "country": customer.country,
+        "date_of_birth": customer.date_of_birth,
+        "company": customer.company,
+        "job_title": customer.job_title,
+        "preferred_contact_method": customer.preferred_contact_method,
+        "preferred_contact_time": customer.preferred_contact_time,
+    }
+
 # Roles that must NEVER receive auto-assignment (only salespersons can)
 _AUTO_ASSIGN_BLOCKED_ROLES = frozenset({
     UserRole.SUPER_ADMIN.value,
@@ -1254,6 +1277,7 @@ async def update_lead(
             for field, value in customer_update_data.items():
                 setattr(customer, field, value)
             customer.updated_at = utc_now()
+            lead.customer = customer
 
     # Build human-readable description (added/removed for secondary customer, "updated" for others)
     field_labels = {
@@ -1526,16 +1550,7 @@ async def get_lead(
     # Fetch customer info
     cust_result = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
     customer = cust_result.scalar_one_or_none()
-    customer_brief = None
-    if customer:
-        customer_brief = {
-            "id": customer.id,
-            "first_name": customer.first_name,
-            "last_name": customer.last_name,
-            "full_name": customer.full_name,
-            "phone": customer.phone,
-            "email": customer.email,
-        }
+    customer_brief = _customer_brief_dict(customer) if customer else None
 
     # Fetch stage info
     stage_result = await db.execute(select(LeadStage).where(LeadStage.id == lead.stage_id))
@@ -1560,14 +1575,7 @@ async def get_lead(
         sec_result = await db.execute(select(Customer).where(Customer.id == lead.secondary_customer_id))
         sec_cust = sec_result.scalar_one_or_none()
         if sec_cust:
-            secondary_customer_brief = {
-                "id": sec_cust.id,
-                "first_name": sec_cust.first_name,
-                "last_name": sec_cust.last_name,
-                "full_name": sec_cust.full_name,
-                "phone": sec_cust.phone,
-                "email": sec_cust.email,
-            }
+            secondary_customer_brief = _customer_brief_dict(sec_cust)
 
     # Source: use source_display when present, else enum value (schema accepts str for display)
     _meta = lead.meta_data or {}
