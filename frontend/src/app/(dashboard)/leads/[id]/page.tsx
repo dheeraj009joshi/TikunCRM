@@ -3217,7 +3217,7 @@ export default function LeadDetailsPage() {
                                 </div>
                             ) : (
                                 <div className="space-y-4">
-                                    {(() => { const _cu = lead.customer || {}; return (<>)
+                                    {(() => { const _cu = lead.customer ?? ({} as NonNullable<Lead["customer"]>); return (<>)
                                     {/* Display Mode - Address */}
                                     {(_cu.address || _cu.city || _cu.state || _cu.country) && (
                                         <div>
