@@ -15,7 +15,7 @@ import {
     ChevronRight,
     ChevronLeft,
     ChevronDown,
-    Search,
+    Sparkles,
     LayoutDashboard,
     Share2,
     UserPlus,
@@ -581,12 +581,12 @@ export function Sidebar() {
                         "relative shrink-0 flex items-center rounded-md border border-input bg-muted/50 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors",
                         collapsed ? "mb-6 w-10 justify-center px-0" : "mb-6 w-full gap-2 px-3"
                     )}
-                    title="Quick search (⌘K)"
+                    title="AI search (⌘K)"
                 >
-                    <Search className="h-4 w-4 shrink-0" />
+                    <Sparkles className="h-4 w-4 shrink-0 text-violet-500" />
                     {!collapsed && (
                         <>
-                            <span className="flex-1 text-left">Quick search...</span>
+                            <span className="flex-1 text-left">Ask Tikun…</span>
                             <kbd className="hidden sm:inline-flex h-5 items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium">
                                 <span className="text-xs">⌘</span>K
                             </kbd>

@@ -6,6 +6,7 @@ from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -14,9 +15,24 @@ from app.core.permissions import UserRole
 from app.db.database import get_db
 from app.models.user import User
 from app.services.crm_content_search_service import CrmContentSearchService
+from app.services.ai_search_service import AiSearchService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class AiSearchRequest(BaseModel):
+    query: str = Field(..., min_length=2, max_length=500)
+
+
+@router.post("/ai")
+async def ai_search_leads(
+    body: AiSearchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Natural-language search across leads, notes, and activities."""
+    return await AiSearchService.search(db, current_user, body.query)
 
 
 @router.get("/status")
