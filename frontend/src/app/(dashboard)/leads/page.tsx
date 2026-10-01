@@ -86,6 +86,7 @@ import { LeadService, Lead, LeadListResponse, type LeadListParams, type LeadExpo
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
+import { LeadNotesModal } from "@/components/leads/lead-notes-modal"
 import { useRole } from "@/hooks/use-role"
 import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { useAuthStore } from "@/stores/auth-store"
@@ -453,6 +454,12 @@ export default function LeadsPage() {
         [performOpenLead]
     )
 
+    const openLeadNotes = React.useCallback((lead: Lead, e?: React.MouseEvent) => {
+        e?.preventDefault()
+        e?.stopPropagation()
+        setNotesModalLead(lead)
+    }, [])
+
     const confirmOpenLeadDialog = (mode: "same" | "new") => {
         if (!openLeadDialog) return
         if (rememberOpenChoice) {
@@ -506,6 +513,7 @@ export default function LeadsPage() {
     
     // Create lead modal state
     const [createModalOpen, setCreateModalOpen] = React.useState(false)
+    const [notesModalLead, setNotesModalLead] = React.useState<Lead | null>(null)
     
     // Delete confirmation state
     const [deleteModalOpen, setDeleteModalOpen] = React.useState(false)
@@ -1794,21 +1802,56 @@ export default function LeadsPage() {
                                     </TableCell>
                                     )}
                                     {showCol("notes") && (
-                                    <TableCell className="max-w-[140px]">
+                                    <TableCell
+                                        className="max-w-[140px]"
+                                        onClick={(e) => e.stopPropagation()}
+                                    >
                                         {(() => {
                                             const noteText = lead.notes?.trim() || lead.last_note_content?.trim() || null;
                                             const displayText = noteText ? (noteText.length > 45 ? `${noteText.slice(0, 45)}…` : noteText) : "—";
+                                            if (!noteText) {
+                                                return <span className="text-xs text-muted-foreground">—</span>
+                                            }
                                             return (
-                                                <span className="text-xs text-muted-foreground truncate block" title={noteText ?? undefined}>
+                                                <button
+                                                    type="button"
+                                                    className="block w-full truncate text-left text-xs text-muted-foreground hover:text-foreground hover:underline underline-offset-2"
+                                                    title={noteText}
+                                                    onClick={(e) => openLeadNotes(lead, e)}
+                                                >
                                                     {displayText}
-                                                </span>
+                                                </button>
                                             );
                                         })()}
                                     </TableCell>
                                     )}
                                     {showCol("last_action") && (
-                                    <TableCell className="max-w-[180px]">
+                                    <TableCell
+                                        className="max-w-[180px]"
+                                        onClick={(e) => {
+                                            if (/\bnote added\b/i.test(lead.last_activity_description || "")) {
+                                                e.stopPropagation()
+                                            }
+                                        }}
+                                    >
                                         {lead.last_activity_description ? (
+                                            /\bnote added\b/i.test(lead.last_activity_description) ? (
+                                                <button
+                                                    type="button"
+                                                    className="block w-full space-y-0.5 text-left"
+                                                    title={lead.last_activity_description}
+                                                    onClick={(e) => openLeadNotes(lead, e)}
+                                                >
+                                                    <span className="block truncate text-xs hover:underline underline-offset-2">
+                                                        {lead.last_activity_description.length > 38 ? `${lead.last_activity_description.slice(0, 38)}…` : lead.last_activity_description}
+                                                    </span>
+                                                    {lead.last_activity_at && (
+                                                        <span className="block text-xs text-muted-foreground">
+                                                            {formatDateInTimezone(lead.last_activity_at, timezone, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                                                        </span>
+                                                    )}
+                                                </button>
+                                            ) : (
                                             <div className="space-y-0.5">
                                                 <span className="text-xs block truncate" title={lead.last_activity_description}>
                                                     {lead.last_activity_description.length > 38 ? `${lead.last_activity_description.slice(0, 38)}…` : lead.last_activity_description}
@@ -1819,6 +1862,7 @@ export default function LeadsPage() {
                                                     </span>
                                                 )}
                                             </div>
+                                            )
                                         ) : (
                                             <span className="text-xs text-muted-foreground">—</span>
                                         )}
@@ -1970,6 +2014,16 @@ export default function LeadsPage() {
                 isOpen={createModalOpen}
                 onClose={() => setCreateModalOpen(false)}
                 onSuccess={fetchLeads}
+            />
+
+            <LeadNotesModal
+                open={!!notesModalLead}
+                onOpenChange={(open) => {
+                    if (!open) setNotesModalLead(null)
+                }}
+                leadId={notesModalLead?.id ?? null}
+                leadName={notesModalLead ? getLeadFullName(notesModalLead) : ""}
+                leadNotes={notesModalLead?.notes}
             />
 
             <Dialog
