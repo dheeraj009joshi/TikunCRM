@@ -245,13 +245,15 @@ class Lead(Base):
     )
 
     # ── Relationships ──────────────────────────────────────────────
+    # joined (not selectin): one SQL round trip. selectin fired 3 extra queries per
+    # lead load, which is several seconds from a laptop talking to remote Azure.
     customer: Mapped["Customer"] = relationship(
-        "Customer", back_populates="leads", foreign_keys=[customer_id], lazy="selectin"
+        "Customer", back_populates="leads", foreign_keys=[customer_id], lazy="joined"
     )
     secondary_customer: Mapped[Optional["Customer"]] = relationship(
-        "Customer", foreign_keys=[secondary_customer_id], lazy="selectin"
+        "Customer", foreign_keys=[secondary_customer_id], lazy="joined"
     )
-    stage: Mapped["LeadStage"] = relationship("LeadStage", lazy="selectin")
+    stage: Mapped["LeadStage"] = relationship("LeadStage", lazy="joined")
 
     dealership: Mapped[Optional["Dealership"]] = relationship(
         "Dealership", back_populates="leads", foreign_keys=[dealership_id], lazy="noload"

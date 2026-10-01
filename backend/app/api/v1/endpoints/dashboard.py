@@ -572,53 +572,10 @@ async def get_bdc_stats(
         .group_by(Activity.lead_id)
         .having(func.count(Activity.id) == 1)
     )
-    total_result = await db.execute(
-        select(func.count()).select_from(Lead).where(_with_lead_scope())
-    )
-    total_leads = total_result.scalar() or 0
-
-    active_result = await db.execute(
-        select(func.count()).select_from(Lead).where(_with_lead_scope(Lead.is_active == True))
-    )
-    active_leads = active_result.scalar() or 0
-
-    unassigned_result = await db.execute(
-        select(func.count()).select_from(Lead).where(
-            _with_lead_scope(Lead.assigned_to.is_(None))
-        )
-    )
-    unassigned_leads = unassigned_result.scalar() or 0
-
-    converted_result = await db.execute(
-        select(func.count()).select_from(Lead).where(
-            _with_lead_scope(Lead.outcome == "converted")
-        )
-    )
-    converted_leads = converted_result.scalar() or 0
-    conversion_rate = (converted_leads / total_leads * 100) if total_leads > 0 else 0
-
     lead_ids_subq = select(Lead.id)
     if lead_scope is not None:
         lead_ids_subq = lead_ids_subq.where(lead_scope)
     today = utc_now().date()
-    todays_fu = await db.execute(
-        select(func.count()).select_from(FollowUp).where(
-            and_(
-                FollowUp.lead_id.in_(lead_ids_subq),
-                FollowUp.status == FollowUpStatus.PENDING,
-                func.date(FollowUp.scheduled_at) == today,
-            )
-        )
-    )
-    overdue_fu = await db.execute(
-        select(func.count()).select_from(FollowUp).where(
-            and_(
-                FollowUp.lead_id.in_(lead_ids_subq),
-                FollowUp.status == FollowUpStatus.PENDING,
-                FollowUp.scheduled_at < utc_now(),
-            )
-        )
-    )
     now = utc_now()
     appt_clauses = [
         appt_scope,
@@ -628,19 +585,57 @@ async def get_bdc_stats(
         ),
     ]
     appt_clauses = [c for c in appt_clauses if c is not None]
-    upcoming_appt = await db.execute(
-        select(func.count()).select_from(Appointment).where(and_(*appt_clauses))
-    )
 
-    fresh_leads_result = await db.execute(
-        select(func.count()).select_from(Lead).where(
-            _with_lead_scope(
-                Lead.assigned_to.is_(None),
-                Lead.id.in_(fresh_subq),
+    # One round trip. Each of these used to be its own query, and from a laptop
+    # that is about half a second of latency apiece.
+    counts = (
+        await db.execute(
+            select(
+                select(func.count()).select_from(Lead).where(_with_lead_scope()).scalar_subquery(),
+                select(func.count()).select_from(Lead).where(
+                    _with_lead_scope(Lead.is_active == True)  # noqa: E712
+                ).scalar_subquery(),
+                select(func.count()).select_from(Lead).where(
+                    _with_lead_scope(Lead.assigned_to.is_(None))
+                ).scalar_subquery(),
+                select(func.count()).select_from(Lead).where(
+                    _with_lead_scope(Lead.outcome == "converted")
+                ).scalar_subquery(),
+                select(func.count()).select_from(FollowUp).where(
+                    and_(
+                        FollowUp.lead_id.in_(lead_ids_subq),
+                        FollowUp.status == FollowUpStatus.PENDING,
+                        func.date(FollowUp.scheduled_at) == today,
+                    )
+                ).scalar_subquery(),
+                select(func.count()).select_from(FollowUp).where(
+                    and_(
+                        FollowUp.lead_id.in_(lead_ids_subq),
+                        FollowUp.status == FollowUpStatus.PENDING,
+                        FollowUp.scheduled_at < now,
+                    )
+                ).scalar_subquery(),
+                select(func.count()).select_from(Appointment).where(and_(*appt_clauses)).scalar_subquery(),
+                select(func.count()).select_from(Lead).where(
+                    _with_lead_scope(
+                        Lead.assigned_to.is_(None),
+                        Lead.id.in_(fresh_subq),
+                    )
+                ).scalar_subquery(),
             )
         )
-    )
-    fresh_leads_total = fresh_leads_result.scalar() or 0
+    ).one()
+    (
+        total_leads,
+        active_leads,
+        unassigned_leads,
+        converted_leads,
+        todays_follow_ups,
+        overdue_follow_ups,
+        upcoming_appointments,
+        fresh_leads_total,
+    ) = [n or 0 for n in counts]
+    conversion_rate = (converted_leads / total_leads * 100) if total_leads > 0 else 0
 
     if accessible_ids is None:
         dealer_rows = await db.execute(
@@ -726,9 +721,9 @@ async def get_bdc_stats(
         unassigned_to_salesperson=unassigned_leads,
         converted_leads=converted_leads,
         conversion_rate=f"{conversion_rate:.1f}%",
-        todays_follow_ups=todays_fu.scalar() or 0,
-        overdue_follow_ups=overdue_fu.scalar() or 0,
-        upcoming_appointments=upcoming_appt.scalar() or 0,
+        todays_follow_ups=todays_follow_ups,
+        overdue_follow_ups=overdue_follow_ups,
+        upcoming_appointments=upcoming_appointments,
         fresh_leads=fresh_leads_total,
         dealership_count=len(breakdown),
         dealerships=breakdown,

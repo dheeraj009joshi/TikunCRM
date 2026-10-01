@@ -8,6 +8,7 @@ second background pool) caused intermittent 500s on simple endpoints like
 Default: NullPool (open per checkout, close when done).
 Set DB_USE_NULL_POOL=false only when using PgBouncer / high connection limits.
 """
+import logging
 from typing import AsyncGenerator, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -15,6 +16,8 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Register post-commit CRM search index hooks (no-op when Azure Search is not configured).
 import app.services.crm_index_hooks  # noqa: F401
@@ -58,12 +61,17 @@ def create_app_engine(*, command_timeout: Optional[int] = None, force_null_pool:
     }
     if force_null_pool or settings.db_use_null_pool:
         return create_async_engine(url, poolclass=NullPool, **common)
+    # pool_pre_ping runs SELECT 1 on every checkout. Against remote Azure that is
+    # an extra ~0.5s on every API call. Skip it in local development; recycle
+    # still drops idle connections.
+    pre_ping = settings.app_env != "development"
+    recycle = 300 if settings.app_env == "development" else 1800
     return create_async_engine(
         url,
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
-        pool_pre_ping=True,
-        pool_recycle=1800,
+        pool_pre_ping=pre_ping,
+        pool_recycle=recycle,
         **common,
     )
 
@@ -93,6 +101,28 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+async def warm_connection_pool() -> None:
+    """Open the pool before the first page load.
+
+    A new TLS connection to Azure Postgres takes several seconds from a laptop.
+    Doing that during startup keeps the first dashboard click off that wait.
+    """
+    if settings.db_use_null_pool:
+        return
+    from sqlalchemy import text
+
+    target = max(1, settings.db_pool_size)
+
+    async def _ping() -> None:
+        async with async_session_maker() as session:
+            await session.execute(text("SELECT 1"))
+
+    import asyncio
+
+    await asyncio.gather(*[_ping() for _ in range(target)])
+    logger.info("Warmed %s database connections", target)
 
 
 async def create_tables():

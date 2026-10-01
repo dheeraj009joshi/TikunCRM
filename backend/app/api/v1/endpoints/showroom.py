@@ -149,9 +149,8 @@ async def _finalize_appointment_on_check_out(
         )
 
 
-async def enrich_visit(db: AsyncSession, visit: ShowroomVisit) -> dict:
-    """Add lead and user info to visit response"""
-    response = {
+def _visit_response(visit: ShowroomVisit) -> dict:
+    return {
         "id": visit.id,
         "lead_id": visit.lead_id,
         "appointment_id": visit.appointment_id,
@@ -169,47 +168,73 @@ async def enrich_visit(db: AsyncSession, visit: ShowroomVisit) -> dict:
         "created_at": visit.created_at,
         "updated_at": visit.updated_at,
     }
-    
-    # Fetch lead + customer
-    lead_result = await db.execute(select(Lead).where(Lead.id == visit.lead_id))
-    lead = lead_result.scalar_one_or_none()
-    if lead:
-        cust = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
-        customer = cust.scalar_one_or_none()
-        response["lead"] = {
-            "id": lead.id,
-            "customer": {
-                "first_name": customer.first_name if customer else "",
-                "last_name": customer.last_name if customer else None,
-                "full_name": customer.full_name if customer else "",
-                "phone": customer.phone if customer else None,
-                "email": customer.email if customer else None,
-            } if customer else None,
-        }
-    
-    # Fetch checked_in_by user
-    if visit.checked_in_by:
-        user_result = await db.execute(select(User).where(User.id == visit.checked_in_by))
-        user = user_result.scalar_one_or_none()
-        if user:
-            response["checked_in_by_user"] = {
-                "id": user.id,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
+
+
+def _user_brief(user: User) -> dict:
+    return {
+        "id": user.id,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+    }
+
+
+async def enrich_visits(db: AsyncSession, visits: list) -> list:
+    """Add lead and user info in two queries, not one query per visit."""
+    if not visits:
+        return []
+
+    lead_ids = list({v.lead_id for v in visits if v.lead_id})
+    user_ids = list({
+        uid
+        for v in visits
+        for uid in (v.checked_in_by, v.checked_out_by)
+        if uid
+    })
+
+    leads_by_id = {}
+    if lead_ids:
+        lead_rows = (
+            await db.execute(select(Lead).where(Lead.id.in_(lead_ids)))
+        ).unique().scalars().all()
+        leads_by_id = {lead.id: lead for lead in lead_rows}
+
+    users_by_id = {}
+    if user_ids:
+        user_rows = (
+            await db.execute(select(User).where(User.id.in_(user_ids)))
+        ).scalars().all()
+        users_by_id = {user.id: user for user in user_rows}
+
+    out = []
+    for visit in visits:
+        response = _visit_response(visit)
+        lead = leads_by_id.get(visit.lead_id)
+        if lead:
+            customer = lead.customer
+            response["lead"] = {
+                "id": lead.id,
+                "customer": {
+                    "first_name": customer.first_name if customer else "",
+                    "last_name": customer.last_name if customer else None,
+                    "full_name": customer.full_name if customer else "",
+                    "phone": customer.phone if customer else None,
+                    "email": customer.email if customer else None,
+                } if customer else None,
             }
-    
-    # Fetch checked_out_by user
-    if visit.checked_out_by:
-        user_result = await db.execute(select(User).where(User.id == visit.checked_out_by))
-        user = user_result.scalar_one_or_none()
-        if user:
-            response["checked_out_by_user"] = {
-                "id": user.id,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-            }
-    
-    return response
+        checked_in = users_by_id.get(visit.checked_in_by) if visit.checked_in_by else None
+        if checked_in:
+            response["checked_in_by_user"] = _user_brief(checked_in)
+        checked_out = users_by_id.get(visit.checked_out_by) if visit.checked_out_by else None
+        if checked_out:
+            response["checked_out_by_user"] = _user_brief(checked_out)
+        out.append(response)
+    return out
+
+
+async def enrich_visit(db: AsyncSession, visit: ShowroomVisit) -> dict:
+    """Add lead and user info to visit response"""
+    rows = await enrich_visits(db, [visit])
+    return rows[0]
 
 
 @router.post("/check-in", response_model=ShowroomVisitResponse, status_code=status.HTTP_201_CREATED)
@@ -505,7 +530,7 @@ async def get_current_visitors(
     result = await db.execute(query)
     visits = result.unique().scalars().all() if current_user.role == UserRole.SALESPERSON else result.scalars().all()
 
-    enriched_visits = [await enrich_visit(db, v) for v in visits]
+    enriched_visits = await enrich_visits(db, visits)
     return {"count": len(enriched_visits), "visits": enriched_visits}
 
 
@@ -560,7 +585,7 @@ async def get_visit_history(
     result = await db.execute(query)
     visits = result.unique().scalars().all() if current_user.role == UserRole.SALESPERSON else result.scalars().all()
 
-    enriched_visits = [await enrich_visit(db, v) for v in visits]
+    enriched_visits = await enrich_visits(db, visits)
     return {"items": enriched_visits, "total": total, "page": page, "page_size": page_size}
 
 

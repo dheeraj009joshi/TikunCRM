@@ -59,6 +59,6 @@ async def run_crm_search_backfill() -> None:
     logger.info("Starting CRM search backfill job")
     session_maker = get_background_session_maker()
     async with session_maker() as db:
-        stats = await CrmContentSearchService.backfill_index(db, batch_size=150, max_batches=20)
+        stats = await CrmContentSearchService.backfill_index(db, batch_size=200, max_batches=400)
         await db.commit()
     logger.info("CRM search backfill complete: %s", stats)

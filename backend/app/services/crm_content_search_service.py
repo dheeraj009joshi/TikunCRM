@@ -121,6 +121,35 @@ def extract_activity_content(activity: Activity) -> str:
     return " ".join(p.strip() for p in parts if p and str(p).strip())
 
 
+_CREDIT_WORD_RE = re.compile(r"credit|fico|score", re.I)
+_CREDIT_RANGE_RE = re.compile(
+    r"(?<![\d,])([3-8]\d{2})\s*[-–/to]+\s*([3-8]\d{2}|850)(?!\d)",
+    re.I,
+)
+_CREDIT_SCORE_RE = re.compile(r"(?<![\d,])([3-8]\d{2}|850)(?!\d)")
+_CREDIT_BUCKET_RE = re.compile(r"(?<![\d,])([3-8]\d{2})s\b", re.I)
+
+
+def extract_mentioned_credit(text: str) -> Optional[int]:
+    """Best credit/FICO number mentioned near the word credit (300–850)."""
+    if not text or not _CREDIT_WORD_RE.search(text):
+        return None
+    scores: List[int] = []
+    for left, right in _CREDIT_RANGE_RE.findall(text):
+        scores.extend((int(left), int(right)))
+    for match in _CREDIT_SCORE_RE.finditer(text):
+        window = text[max(0, match.start() - 48) : match.end() + 48]
+        if _CREDIT_WORD_RE.search(window):
+            n = int(match.group(1))
+            if 300 <= n <= 850:
+                scores.append(n)
+    for match in _CREDIT_BUCKET_RE.finditer(text):
+        window = text[max(0, match.start() - 48) : match.end() + 48]
+        if _CREDIT_WORD_RE.search(window):
+            scores.append(int(match.group(1)))
+    return max(scores) if scores else None
+
+
 def extract_keywords(text: str, limit: int = 12) -> List[str]:
     words = re.findall(r"[a-zA-Z0-9]{3,}", (text or "").lower())
     seen: Set[str] = set()
@@ -141,6 +170,8 @@ def _activity_type_label(activity_type: str) -> str:
 
 class CrmContentSearchService:
     """Search CRM timeline content with RBAC-aware filters."""
+
+    _semantic_enabled = False
 
     @staticmethod
     def is_azure_configured() -> bool:
@@ -174,7 +205,7 @@ class CrmContentSearchService:
 
     @classmethod
     async def ensure_index(cls) -> bool:
-        """Create or update the Azure Search index schema."""
+        """Create or update the Azure Search index with filters + semantic ranker."""
         if not cls.is_azure_configured():
             return False
         try:
@@ -183,6 +214,10 @@ class CrmContentSearchService:
                 SearchField,
                 SearchFieldDataType,
                 SearchIndex,
+                SemanticConfiguration,
+                SemanticField,
+                SemanticPrioritizedFields,
+                SemanticSearch,
                 SimpleField,
             )
 
@@ -198,9 +233,17 @@ class CrmContentSearchService:
                 SearchableField(name="interested_in", type=SearchFieldDataType.String),
                 SearchableField(name="interested_brand", type=SearchFieldDataType.String),
                 SearchableField(name="lead_notes", type=SearchFieldDataType.String),
+                SearchableField(name="phone", type=SearchFieldDataType.String),
+                SearchableField(name="email", type=SearchFieldDataType.String),
                 SearchableField(
                     name="keywords",
                     type=SearchFieldDataType.Collection(SearchFieldDataType.String),
+                ),
+                SimpleField(
+                    name="doc_type",
+                    type=SearchFieldDataType.String,
+                    filterable=True,
+                    facetable=True,
                 ),
                 SimpleField(
                     name="activity_type",
@@ -217,6 +260,26 @@ class CrmContentSearchService:
                 ),
                 SimpleField(name="assigned_to", type=SearchFieldDataType.String, filterable=True),
                 SimpleField(name="stage_name", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="stage_display", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(name="outcome", type=SearchFieldDataType.String, filterable=True),
+                SimpleField(
+                    name="credit_score",
+                    type=SearchFieldDataType.Int32,
+                    filterable=True,
+                    sortable=True,
+                ),
+                SimpleField(
+                    name="mentioned_credit_score",
+                    type=SearchFieldDataType.Int32,
+                    filterable=True,
+                    sortable=True,
+                ),
+                SimpleField(
+                    name="is_active",
+                    type=SearchFieldDataType.Boolean,
+                    filterable=True,
+                ),
+                SimpleField(name="phone_digits", type=SearchFieldDataType.String, filterable=True),
                 SearchField(
                     name="created_at",
                     type=SearchFieldDataType.DateTimeOffset,
@@ -224,9 +287,49 @@ class CrmContentSearchService:
                     sortable=True,
                 ),
             ]
-            index = SearchIndex(name=settings.azure_search_index, fields=fields)
+            semantic = SemanticSearch(
+                configurations=[
+                    SemanticConfiguration(
+                        name="crm-semantic",
+                        prioritized_fields=SemanticPrioritizedFields(
+                            title_field=SemanticField(field_name="customer_name"),
+                            content_fields=[
+                                SemanticField(field_name="content"),
+                                SemanticField(field_name="lead_notes"),
+                                SemanticField(field_name="description"),
+                            ],
+                            keywords_fields=[SemanticField(field_name="keywords")],
+                        ),
+                    )
+                ]
+            )
             client = cls._azure_index_client()
-            client.create_or_update_index(index)
+            desired = {f.name: f for f in fields}
+            try:
+                current = client.get_index(settings.azure_search_index)
+                existing_names = {f.name for f in current.fields}
+                merged = list(current.fields)
+                for name, field in desired.items():
+                    if name not in existing_names:
+                        merged.append(field)
+                fields = merged
+            except Exception:
+                logger.info("Azure index %s does not exist yet; creating", settings.azure_search_index)
+            try:
+                client.create_or_update_index(
+                    SearchIndex(
+                        name=settings.azure_search_index,
+                        fields=fields,
+                        semantic_search=semantic,
+                    )
+                )
+                cls._semantic_enabled = True
+            except Exception as sem_err:
+                logger.warning("Semantic ranker unavailable (%s); updating fields only", sem_err)
+                client.create_or_update_index(
+                    SearchIndex(name=settings.azure_search_index, fields=fields)
+                )
+                cls._semantic_enabled = False
             logger.info("Azure Search index ready: %s", settings.azure_search_index)
             return True
         except Exception:
@@ -240,7 +343,12 @@ class CrmContentSearchService:
         row = await cls._load_activity_context(db, activity_id)
         if not row:
             return None
-        activity, lead, customer, stage = row
+        return cls.document_from_activity(*row)
+
+    @classmethod
+    def document_from_activity(
+        cls, activity: Activity, lead: Lead, customer: Customer, stage: Optional[LeadStage]
+    ) -> Optional[Dict[str, Any]]:
         if not is_indexable_activity(activity.type) or not activity.lead_id:
             return None
 
@@ -253,24 +361,96 @@ class CrmContentSearchService:
         if created_at and created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
 
-        doc = {
+        blob = " ".join(
+            p for p in (content, lead.notes or "", lead.interested_in or "") if p
+        )
+        return cls._base_lead_fields(lead, customer, stage) | {
             "id": str(activity.id),
+            "doc_type": "activity",
             "activity_id": str(activity.id),
-            "lead_id": str(lead.id),
             "activity_type": activity.type.value,
             "content": content,
             "description": activity.description or "",
             "customer_name": customer_name,
+            "mentioned_credit_score": extract_mentioned_credit(blob) or 0,
+            "created_at": created_at.isoformat() if created_at else None,
+            "keywords": " ".join(extract_keywords(content)),
+        }
+
+    @classmethod
+    def _base_lead_fields(cls, lead: Lead, customer: Optional[Customer], stage: Optional[LeadStage]) -> Dict[str, Any]:
+        phone = (customer.phone if customer else None) or ""
+        email = (customer.email if customer else None) or ""
+        return {
+            "lead_id": str(lead.id),
             "interested_in": lead.interested_in or "",
             "interested_brand": lead.interested_brand or "",
             "lead_notes": lead.notes or "",
+            "phone": phone,
+            "email": email,
+            "phone_digits": re.sub(r"\D", "", phone),
             "dealership_id": str(lead.dealership_id) if lead.dealership_id else "",
             "assigned_to": str(lead.assigned_to) if lead.assigned_to else "",
-            "stage_name": stage.name if stage else "",
-            "created_at": created_at.isoformat() if created_at else None,
-            "keywords": extract_keywords(content),
+            "stage_name": (stage.name if stage else "") or "",
+            "stage_display": (stage.display_name if stage else "") or "",
+            "outcome": lead.outcome or "",
+            "credit_score": int(customer.credit_score) if customer and customer.credit_score else 0,
+            "is_active": bool(lead.is_active),
         }
-        return doc
+
+    @classmethod
+    async def build_document_for_lead(
+        cls, db: AsyncSession, lead_id: UUID
+    ) -> Optional[Dict[str, Any]]:
+        row = (
+            await db.execute(
+                select(Lead, Customer, LeadStage)
+                .join(Customer, Lead.customer_id == Customer.id)
+                .outerjoin(LeadStage, Lead.stage_id == LeadStage.id)
+                .where(Lead.id == lead_id)
+            )
+        ).first()
+        if not row:
+            return None
+        return cls.document_from_lead(*row)
+
+    @classmethod
+    def document_from_lead(
+        cls, lead: Lead, customer: Customer, stage: Optional[LeadStage]
+    ) -> Dict[str, Any]:
+        name = customer.full_name if customer else ""
+        notes = lead.notes or ""
+        mentioned = extract_mentioned_credit(
+            " ".join(p for p in (notes, lead.interested_in or "", name) if p)
+        )
+        created_at = lead.updated_at or lead.created_at
+        if created_at and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        credit = int(customer.credit_score) if customer and customer.credit_score else 0
+        content = " ".join(
+            p
+            for p in (
+                name,
+                notes,
+                lead.interested_in or "",
+                lead.interested_brand or "",
+                f"credit score {credit}" if credit else "",
+                stage.display_name if stage else "",
+            )
+            if p
+        )
+        return cls._base_lead_fields(lead, customer, stage) | {
+            "id": f"lead_{lead.id}",
+            "doc_type": "lead",
+            "activity_id": "",
+            "activity_type": "lead",
+            "content": content,
+            "description": notes,
+            "customer_name": name,
+            "mentioned_credit_score": mentioned or 0,
+            "created_at": created_at.isoformat() if created_at else None,
+            "keywords": " ".join(extract_keywords(content)),
+        }
 
     @classmethod
     async def index_activity(cls, db: AsyncSession, activity_id: UUID) -> bool:
@@ -313,6 +493,10 @@ class CrmContentSearchService:
         dealership_id: Optional[UUID] = None,
         limit: Optional[int] = None,
         offset: int = 0,
+        credit_min: Optional[int] = None,
+        credit_max: Optional[int] = None,
+        exclude_stages: Optional[List[str]] = None,
+        include_stages: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         q = (query or "").strip()
         if not q:
@@ -347,6 +531,14 @@ class CrmContentSearchService:
             filter_params["activity_types"] = activity_types
         if dealership_id:
             filter_params["dealership_id"] = str(dealership_id)
+        if credit_min is not None:
+            filter_params["credit_min"] = credit_min
+        if credit_max is not None:
+            filter_params["credit_max"] = credit_max
+        if exclude_stages:
+            filter_params["exclude_stages"] = exclude_stages
+        if include_stages:
+            filter_params["include_stages"] = include_stages
 
         if cls.is_azure_configured():
             try:
@@ -361,6 +553,10 @@ class CrmContentSearchService:
                     dealership_id=dealership_id,
                     limit=page_size,
                     offset=page_offset,
+                    credit_min=credit_min,
+                    credit_max=credit_max,
+                    exclude_stages=exclude_stages,
+                    include_stages=include_stages,
                 )
                 grouped = cls._group_hits_by_lead(hits)
                 has_more = (page_offset + len(hits)) < total_count
@@ -588,28 +784,49 @@ class CrmContentSearchService:
         dealership_id: Optional[UUID],
         limit: int,
         offset: int = 0,
+        credit_min: Optional[int] = None,
+        credit_max: Optional[int] = None,
+        exclude_stages: Optional[List[str]] = None,
+        include_stages: Optional[List[str]] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         odata = await cls._build_azure_filter(
             db, user, accessible, pool=pool, days=days,
             activity_types=activity_types, dealership_id=dealership_id,
+            credit_min=credit_min, credit_max=credit_max,
+            exclude_stages=exclude_stages, include_stages=include_stages,
         )
 
         client = cls._azure_search_client()
+        search_text = query_text if query_text and query_text != "*" else "*"
         search_kwargs: Dict[str, Any] = {
-            "search_text": query_text,
+            "search_text": search_text,
             "top": limit,
             "skip": offset,
             "include_total_count": True,
             "select": [
                 "activity_id", "lead_id", "activity_type", "content", "description",
-                "customer_name", "stage_name", "created_at",
+                "customer_name", "stage_name", "stage_display", "created_at",
+                "credit_score", "mentioned_credit_score", "doc_type",
             ],
             "highlight_fields": "content,description,customer_name,lead_notes",
         }
         if odata:
             search_kwargs["filter"] = odata
+        if cls._semantic_enabled and search_text != "*":
+            search_kwargs["query_type"] = "semantic"
+            search_kwargs["semantic_configuration_name"] = "crm-semantic"
+            search_kwargs["query_caption"] = "extractive"
 
-        results = client.search(**search_kwargs)
+        try:
+            results = client.search(**search_kwargs)
+        except Exception:
+            if search_kwargs.pop("query_type", None):
+                search_kwargs.pop("semantic_configuration_name", None)
+                search_kwargs.pop("query_caption", None)
+                logger.warning("Semantic query failed; retrying simple Azure search")
+                results = client.search(**search_kwargs)
+            else:
+                raise
         total_count = getattr(results, "get_count", lambda: None)()
         if total_count is None:
             total_count = offset + limit
@@ -624,7 +841,10 @@ class CrmContentSearchService:
 
             snippet = doc.get("content") or doc.get("description") or ""
             highlights = doc.get("@search.highlights") or {}
-            if highlights.get("content"):
+            captions = doc.get("@search.captions") or []
+            if captions and getattr(captions[0], "text", None):
+                snippet = captions[0].text
+            elif highlights.get("content"):
                 snippet = highlights["content"][0]
             elif highlights.get("description"):
                 snippet = highlights["description"][0]
@@ -671,6 +891,10 @@ class CrmContentSearchService:
         days: Optional[int],
         activity_types: Optional[List[str]],
         dealership_id: Optional[UUID],
+        credit_min: Optional[int] = None,
+        credit_max: Optional[int] = None,
+        exclude_stages: Optional[List[str]] = None,
+        include_stages: Optional[List[str]] = None,
     ) -> Optional[str]:
         clauses: List[str] = []
 
@@ -698,6 +922,41 @@ class CrmContentSearchService:
         if parsed_types:
             type_clause = " or ".join(f"activity_type eq '{t.value}'" for t in parsed_types)
             clauses.append(f"({type_clause})")
+
+        if credit_min is not None or credit_max is not None:
+            credit_parts = []
+            if credit_min is not None:
+                credit_parts.append(
+                    f"(credit_score ge {int(credit_min)} or mentioned_credit_score ge {int(credit_min)})"
+                )
+            if credit_max is not None:
+                credit_parts.append(
+                    f"((credit_score gt 0 and credit_score le {int(credit_max)}) "
+                    f"or (mentioned_credit_score gt 0 and mentioned_credit_score le {int(credit_max)}))"
+                )
+            clauses.append("(" + " and ".join(credit_parts) + ")")
+
+        if include_stages:
+            inc = []
+            for raw in include_stages:
+                token = raw.replace("'", "")
+                inc.append(f"stage_name eq '{token}'")
+                inc.append(f"stage_display eq '{token}'")
+            if inc:
+                clauses.append(f"({' or '.join(inc)})")
+
+        if exclude_stages:
+            exc = []
+            for raw in exclude_stages:
+                token = raw.replace("'", "").lower()
+                exc.append(f"stage_name eq '{token}'")
+                exc.append(f"stage_display eq '{token}'")
+                if token in ("sold", "converted"):
+                    exc.append("outcome eq 'converted'")
+                    exc.append("stage_name eq 'converted'")
+                    exc.append("stage_name eq 'sold'")
+            if exc:
+                clauses.append(f"not ({' or '.join(dict.fromkeys(exc))})")
 
         if not clauses:
             return None
@@ -742,32 +1001,65 @@ class CrmContentSearchService:
     async def backfill_index(
         cls, db: AsyncSession, *, batch_size: int = 200, max_batches: int = 500
     ) -> Dict[str, int]:
-        """Index historical activities into Azure Search."""
+        """Index leads and historical activities into Azure Search."""
         if not cls.is_azure_configured():
-            return {"indexed": 0, "skipped": 0, "batches": 0}
+            return {"indexed": 0, "skipped": 0, "batches": 0, "leads": 0}
 
         await cls.ensure_index()
         indexed = 0
         skipped = 0
         batches = 0
-        offset = 0
+        leads_indexed = 0
 
+        lead_offset = 0
         while batches < max_batches:
-            result = await db.execute(
-                select(Activity.id)
-                .where(Activity.lead_id.isnot(None))
-                .where(Activity.type.in_(tuple(INDEXABLE_ACTIVITY_TYPES)))
-                .order_by(Activity.created_at.desc())
-                .offset(offset)
-                .limit(batch_size)
-            )
-            ids = [row[0] for row in result.all()]
-            if not ids:
+            rows = (
+                await db.execute(
+                    select(Lead, Customer, LeadStage)
+                    .join(Customer, Lead.customer_id == Customer.id)
+                    .outerjoin(LeadStage, Lead.stage_id == LeadStage.id)
+                    .order_by(Lead.updated_at.desc())
+                    .offset(lead_offset)
+                    .limit(batch_size)
+                )
+            ).all()
+            if not rows:
+                break
+            docs = [cls.document_from_lead(lead, customer, stage) for lead, customer, stage in rows]
+            try:
+                results = cls._azure_search_client().upload_documents(docs)
+                ok = sum(1 for r in results if getattr(r, "succeeded", False))
+                leads_indexed += ok
+                indexed += ok
+                skipped += len(docs) - ok
+            except Exception:
+                logger.exception("Lead backfill failed at offset %s", lead_offset)
+                skipped += len(docs)
+            lead_offset += batch_size
+            batches += 1
+            if len(rows) < batch_size:
+                break
+
+        offset = 0
+        while batches < max_batches:
+            rows = (
+                await db.execute(
+                    select(Activity, Lead, Customer, LeadStage)
+                    .join(Lead, Activity.lead_id == Lead.id)
+                    .join(Customer, Lead.customer_id == Customer.id)
+                    .outerjoin(LeadStage, Lead.stage_id == LeadStage.id)
+                    .where(Activity.lead_id.isnot(None))
+                    .order_by(Activity.created_at.desc())
+                    .offset(offset)
+                    .limit(batch_size)
+                )
+            ).all()
+            if not rows:
                 break
 
             docs: List[Dict[str, Any]] = []
-            for aid in ids:
-                doc = await cls.build_document_for_activity(db, aid)
+            for activity, lead, customer, stage in rows:
+                doc = cls.document_from_activity(activity, lead, customer, stage)
                 if doc:
                     docs.append(doc)
                 else:
@@ -775,13 +1067,20 @@ class CrmContentSearchService:
 
             if docs:
                 try:
-                    client = cls._azure_search_client()
-                    client.upload_documents(docs)
-                    indexed += len(docs)
+                    results = cls._azure_search_client().upload_documents(docs)
+                    ok = sum(1 for r in results if getattr(r, "succeeded", False))
+                    indexed += ok
+                    skipped += len(docs) - ok
                 except Exception:
-                    logger.exception("Backfill batch upload failed at offset %s", offset)
+                    logger.exception("Activity backfill failed at offset %s", offset)
+                    skipped += len(docs)
 
             offset += batch_size
             batches += 1
 
-        return {"indexed": indexed, "skipped": skipped, "batches": batches}
+        return {
+            "indexed": indexed,
+            "skipped": skipped,
+            "batches": batches,
+            "leads": leads_indexed,
+        }

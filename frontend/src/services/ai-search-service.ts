@@ -22,7 +22,8 @@ export interface AiSearchLead {
 
 export interface AiSearchResponse {
     interpretation: string
-    parsed_by: "ai" | "heuristic" | "none"
+    parsed_by: "ai" | "heuristic" | "azure" | "none"
+    backend?: "azure" | "postgres" | "structured" | string
     total: number
     returned: number
     leads: AiSearchLead[]

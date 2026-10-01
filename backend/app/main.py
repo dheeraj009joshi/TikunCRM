@@ -129,6 +129,33 @@ async def _scheduler_failover_loop():
             logger.error(f"Scheduler failover loop error: {e}")
 
 
+async def _backfill_azure_search_if_empty() -> None:
+    """Populate Azure AI Search when the index was created but never filled."""
+    try:
+        from app.core.config import settings as _settings
+        from app.services.crm_content_search_service import CrmContentSearchService
+        from app.tasks.crm_search_index import run_crm_search_backfill
+
+        if not CrmContentSearchService.is_azure_configured():
+            return
+        from azure.core.credentials import AzureKeyCredential
+        from azure.search.documents.indexes import SearchIndexClient
+
+        client = SearchIndexClient(
+            _settings.azure_search_endpoint,
+            AzureKeyCredential(_settings.azure_search_api_key),
+        )
+        stats = client.get_index_statistics(_settings.azure_search_index)
+        count = int(stats.get("document_count") or 0) if isinstance(stats, dict) else int(getattr(stats, "document_count", 0) or 0)
+        if count > 0:
+            logger.info("Azure AI Search already has %s documents; skip startup backfill", count)
+            return
+        logger.info("Azure AI Search index is empty — starting full backfill")
+        await run_crm_search_backfill()
+    except Exception:
+        logger.exception("Azure AI Search startup backfill failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
@@ -153,6 +180,7 @@ async def lifespan(app: FastAPI):
         ok = await CrmContentSearchService.ensure_index()
         if ok:
             logger.info("Azure AI Search index ready for CRM content")
+            asyncio.create_task(_backfill_azure_search_if_empty(), name="azure-search-backfill")
         else:
             logger.warning("Azure AI Search configured but index setup failed — using Postgres fallback")
     else:
@@ -179,6 +207,12 @@ async def lifespan(app: FastAPI):
             await db.commit()
     except Exception as e:
         logger.warning("Startup seed of default lead stages failed (non-fatal): %s", e)
+
+    try:
+        from app.db.database import warm_connection_pool
+        await warm_connection_pool()
+    except Exception as e:
+        logger.warning("Database pool warmup failed (non-fatal): %s", e)
 
     yield
     

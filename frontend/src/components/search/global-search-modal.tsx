@@ -22,6 +22,7 @@ import {
 import { Badge, getSourceVariant, getStatusVariant } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { AiSearchService, type AiSearchLead, type AiSearchResponse } from "@/services/ai-search-service"
+import { useDebounce } from "@/hooks/use-debounce"
 
 const EXAMPLES = [
     { label: "Called 3× in 7 days", query: "leads I called 3 times in the last 7 days" },
@@ -47,6 +48,7 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
     const abortRef = React.useRef<AbortController | null>(null)
 
     const leads = result?.leads ?? []
+    const debouncedQuery = useDebounce(query, 180)
 
     React.useEffect(() => {
         if (open) {
@@ -64,7 +66,7 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
 
     const runSearch = React.useCallback(async (raw: string) => {
         const q = raw.trim()
-        if (q.length < 2) return
+        if (q.length < 3) return
         abortRef.current?.abort()
         const controller = new AbortController()
         abortRef.current = controller
@@ -84,6 +86,19 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
             if (!controller.signal.aborted) setIsSearching(false)
         }
     }, [])
+
+    React.useEffect(() => {
+        const q = debouncedQuery.trim()
+        if (!open) return
+        if (q.length < 3) {
+            setResult(null)
+            setError(null)
+            setLastSearched("")
+            return
+        }
+        if (q === lastSearched) return
+        void runSearch(q)
+    }, [debouncedQuery, open, lastSearched, runSearch])
 
     const navigateToLead = (leadId: string) => {
         onOpenChange(false)
@@ -132,7 +147,7 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
                             ref={inputRef}
                             type="text"
                             className="min-w-0 flex-1 bg-transparent py-4 text-[15px] outline-none placeholder:text-muted-foreground/80"
-                            placeholder="Ask in plain English — calls, notes, WhatsApp, names…"
+                            placeholder="Type 3+ letters or digits — name, phone, notes…"
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
                             onKeyDown={handleKeyDown}
@@ -145,6 +160,7 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
                                     setQuery("")
                                     setResult(null)
                                     setError(null)
+                                    setLastSearched("")
                                     inputRef.current?.focus()
                                 }}
                                 className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -156,7 +172,7 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
                         <button
                             type="button"
                             onClick={() => void runSearch(query)}
-                            disabled={isSearching || query.trim().length < 2}
+                            disabled={isSearching || query.trim().length < 3}
                             className="inline-flex h-8 items-center gap-1.5 rounded-md bg-violet-600 px-2.5 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-40"
                         >
                             <CornerDownLeft className="h-3.5 w-3.5" />
@@ -166,11 +182,20 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
                 </div>
 
                 <div className="max-h-[min(28rem,70vh)] overflow-y-auto">
-                    {!result && !isSearching && !error && (
+                    {!result && !isSearching && !error && query.trim().length > 0 && query.trim().length < 3 && (
+                        <div className="px-5 py-8 text-center">
+                            <p className="text-sm font-medium">Keep typing</p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                                Suggestions appear after 3 characters. Phone works with or without +91.
+                            </p>
+                        </div>
+                    )}
+
+                    {!result && !isSearching && !error && query.trim().length === 0 && (
                         <div className="px-5 py-6">
                             <p className="text-sm font-medium text-foreground">Try asking</p>
                             <p className="mt-1 text-xs text-muted-foreground">
-                                Tikun searches leads, notes, calls, texts, and WhatsApp — not just names.
+                                Suggestions appear after 3 characters. Phone matches with or without +91.
                             </p>
                             <div className="mt-4 flex flex-wrap gap-2">
                                 {EXAMPLES.map((ex) => (
@@ -190,12 +215,12 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
                         </div>
                     )}
 
-                    {isSearching && (
+                    {isSearching && !result && (
                         <div className="flex flex-col items-center justify-center gap-2 px-5 py-12 text-center">
                             <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
-                            <p className="text-sm font-medium">Understanding your question…</p>
+                            <p className="text-sm font-medium">Finding matches…</p>
                             <p className="text-xs text-muted-foreground">
-                                Checking leads, notes, and activity
+                                Names, phones, and notes — country code optional
                             </p>
                         </div>
                     )}
@@ -208,12 +233,13 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
                         </div>
                     )}
 
-                    {result && !isSearching && (
-                        <div className="py-2">
+                    {result && (
+                        <div className={cn("py-2", isSearching && "opacity-70")}>
                             <div className="flex items-start justify-between gap-3 px-5 py-2">
                                 <div>
                                     <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                                         {result.total} {result.total === 1 ? "lead" : "leads"}
+                                        {isSearching ? " · updating" : ""}
                                     </p>
                                     {result.interpretation && (
                                         <p className="mt-0.5 text-sm text-foreground/90">
@@ -222,7 +248,13 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
                                     )}
                                 </div>
                                 <Badge variant="outline" size="sm" className="shrink-0 capitalize">
-                                    {result.parsed_by === "ai" ? "AI" : "Quick match"}
+                                    {result.backend === "azure"
+                                        ? "Azure AI"
+                                        : /phone|contact|matching “/i.test(result.interpretation || "")
+                                          ? "Live match"
+                                          : result.backend === "structured"
+                                            ? "Filtered"
+                                            : "Meaning match"}
                                 </Badge>
                             </div>
 
@@ -236,6 +268,7 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
                                     <ResultRow
                                         key={lead.id}
                                         lead={lead}
+                                        query={query}
                                         selected={index === selectedIndex}
                                         onSelect={() => navigateToLead(lead.id)}
                                         onHover={() => setSelectedIndex(index)}
@@ -272,13 +305,62 @@ export function GlobalSearchModal({ open, onOpenChange }: GlobalSearchModalProps
     )
 }
 
+function HighlightMatch({ text, query }: { text: string; query: string }) {
+    const q = query.trim()
+    if (!text || q.length < 2) return <>{text}</>
+    const digits = q.replace(/\D/g, "")
+    const hayDigits = text.replace(/\D/g, "")
+    const digitNeedles = [digits]
+    if (digits.startsWith("91") && digits.length >= 5) digitNeedles.push(digits.slice(2))
+    if (digits.startsWith("1") && digits.length >= 4) digitNeedles.push(digits.slice(1))
+    const needle = digitNeedles.find((d) => d.length >= 3 && hayDigits.includes(d))
+    if (needle) {
+        const start = hayDigits.indexOf(needle)
+        let seen = 0
+        let from = -1
+        let to = -1
+        for (let i = 0; i < text.length; i++) {
+            if (/\d/.test(text[i])) {
+                if (seen === start) from = i
+                if (seen === start + needle.length - 1) {
+                    to = i + 1
+                    break
+                }
+                seen++
+            }
+        }
+        if (from >= 0 && to > from) {
+            return (
+                <>
+                    {text.slice(0, from)}
+                    <mark className="rounded-sm bg-violet-500/20 px-0.5 text-inherit">{text.slice(from, to)}</mark>
+                    {text.slice(to)}
+                </>
+            )
+        }
+    }
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const match = text.match(new RegExp(escaped, "i"))
+    if (!match || match.index == null) return <>{text}</>
+    const i = match.index
+    return (
+        <>
+            {text.slice(0, i)}
+            <mark className="rounded-sm bg-violet-500/20 px-0.5 text-inherit">{text.slice(i, i + q.length)}</mark>
+            {text.slice(i + q.length)}
+        </>
+    )
+}
+
 function ResultRow({
     lead,
+    query,
     selected,
     onSelect,
     onHover,
 }: {
     lead: AiSearchLead
+    query: string
     selected: boolean
     onSelect: () => void
     onHover: () => void
@@ -306,7 +388,9 @@ function ResultRow({
             </div>
             <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                    <span className="truncate font-medium">{lead.name}</span>
+                    <span className="truncate font-medium">
+                        <HighlightMatch text={lead.name} query={query} />
+                    </span>
                     {lead.stage && (
                         <Badge size="sm" variant={getStatusVariant(lead.stage)}>
                             {lead.stage}
@@ -322,7 +406,7 @@ function ResultRow({
                     {lead.phone && (
                         <span className="inline-flex items-center gap-1">
                             <Phone className="h-3 w-3" />
-                            {lead.phone}
+                            <HighlightMatch text={lead.phone} query={query} />
                         </span>
                     )}
                     {lead.email && (

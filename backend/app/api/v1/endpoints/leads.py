@@ -15,7 +15,8 @@ logger.info("=== LEADS.PY LOADED: VERSION 2024-01-28-v2 (admin auto-assign block
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, and_, or_, desc
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import select, func, and_, or_, desc, false
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -434,36 +435,55 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
         if getattr(lead, "partner_store_id", None):
             partner_store_ids.add(lead.partner_store_id)
 
-    # Fetch customers
-    customers_map = {}
-    if customer_ids:
-        cust_result = await db.execute(select(Customer).where(Customer.id.in_(customer_ids)))
-        for c in cust_result.scalars().all():
-            customers_map[c.id] = {
-                "id": str(c.id),
-                "first_name": c.first_name,
-                "last_name": c.last_name,
-                "full_name": c.full_name,
-                "phone": c.phone,
-                "email": c.email,
-            }
+    def _customer_brief(c: Customer) -> dict:
+        return {
+            "id": str(c.id),
+            "first_name": c.first_name,
+            "last_name": c.last_name,
+            "full_name": c.full_name,
+            "phone": c.phone,
+            "email": c.email,
+        }
 
-    # Fetch stages
+    def _stage_brief(s: LeadStage) -> dict:
+        return {
+            "id": str(s.id),
+            "name": s.name,
+            "display_name": s.display_name,
+            "order": s.order,
+            "color": s.color,
+            "dealership_id": str(s.dealership_id) if s.dealership_id else None,
+            "is_terminal": s.is_terminal,
+            "is_active": s.is_active,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        }
+
+    # Customer and stage are joined onto Lead, so reuse them instead of querying again.
+    customers_map = {}
     stages_map = {}
-    if stage_ids:
-        stage_result = await db.execute(select(LeadStage).where(LeadStage.id.in_(stage_ids)))
+    missing_customer_ids = set(customer_ids)
+    missing_stage_ids = set(stage_ids)
+    for lead in leads:
+        state = sa_inspect(lead)
+        if "customer" not in state.unloaded and lead.customer is not None:
+            customers_map[lead.customer.id] = _customer_brief(lead.customer)
+            missing_customer_ids.discard(lead.customer.id)
+        if "secondary_customer" not in state.unloaded and lead.secondary_customer is not None:
+            customers_map[lead.secondary_customer.id] = _customer_brief(lead.secondary_customer)
+            missing_customer_ids.discard(lead.secondary_customer.id)
+        if "stage" not in state.unloaded and lead.stage is not None:
+            stages_map[lead.stage.id] = _stage_brief(lead.stage)
+            missing_stage_ids.discard(lead.stage.id)
+
+    if missing_customer_ids:
+        cust_result = await db.execute(select(Customer).where(Customer.id.in_(missing_customer_ids)))
+        for c in cust_result.scalars().all():
+            customers_map[c.id] = _customer_brief(c)
+
+    if missing_stage_ids:
+        stage_result = await db.execute(select(LeadStage).where(LeadStage.id.in_(missing_stage_ids)))
         for s in stage_result.scalars().all():
-            stages_map[s.id] = {
-                "id": str(s.id),
-                "name": s.name,
-                "display_name": s.display_name,
-                "order": s.order,
-                "color": s.color,
-                "dealership_id": str(s.dealership_id) if s.dealership_id else None,
-                "is_terminal": s.is_terminal,
-                "is_active": s.is_active,
-                "created_at": s.created_at.isoformat() if s.created_at else None,
-            }
+            stages_map[s.id] = _stage_brief(s)
 
     # Fetch users
     users_map = {}
@@ -615,6 +635,55 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
     return enriched_items
 
 
+def _sanitize_like(value: str) -> str:
+    return (value or "").replace("\\", "").replace("%", "").replace("_", "")
+
+
+def _phone_digit_variants(digits: str) -> set:
+    """Match +91 / 91 / 0 / US 1 prefixes and 10-digit national numbers."""
+    variants = {digits}
+    if digits.startswith("91") and len(digits) >= 5:
+        variants.add(digits[2:])
+    if digits.startswith("1") and len(digits) >= 4:
+        variants.add(digits[1:])
+    if digits.startswith("0") and len(digits) >= 4:
+        stripped = digits.lstrip("0")
+        if len(stripped) >= 3:
+            variants.add(stripped)
+    if len(digits) >= 10:
+        variants.add(digits[-10:])
+    return {v for v in variants if len(v) >= 3}
+
+
+def _contact_match_filter(search: str):
+    """
+    Name/email/phone match that ignores +91, spaces, and dashes.
+    '787' or '7877424770' matches stored '+917877424770'.
+    """
+    import re as _re
+
+    raw = _sanitize_like((search or "").strip())
+    if not raw:
+        return false()
+    full_name = func.concat(Customer.first_name, " ", func.coalesce(Customer.last_name, ""))
+    parts = [
+        Customer.first_name.ilike(f"%{raw}%"),
+        Customer.last_name.ilike(f"%{raw}%"),
+        full_name.ilike(f"%{raw}%"),
+        Customer.email.ilike(f"%{raw}%"),
+        Customer.phone.ilike(f"%{raw}%"),
+        Customer.alternate_phone.ilike(f"%{raw}%"),
+    ]
+    digits = _re.sub(r"\D", "", raw)
+    if len(digits) >= 3:
+        phone_digits = func.regexp_replace(func.coalesce(Customer.phone, ""), r"[^0-9]", "", "g")
+        alt_digits = func.regexp_replace(func.coalesce(Customer.alternate_phone, ""), r"[^0-9]", "", "g")
+        for variant in _phone_digit_variants(digits):
+            parts.append(phone_digits.like(f"%{variant}%"))
+            parts.append(alt_digits.like(f"%{variant}%"))
+    return or_(*parts)
+
+
 def _build_leads_list_select(
     current_user: User,
     accessible_dealership_ids: Optional[List[UUID]] = None,
@@ -705,15 +774,7 @@ def _build_leads_list_select(
         query = query.where(Lead.is_active == is_active)
     if search:
         query = query.join(Customer, Lead.customer_id == Customer.id)
-        full_name = func.concat(Customer.first_name, " ", func.coalesce(Customer.last_name, ""))
-        search_filter = or_(
-            Customer.first_name.ilike(f"%{search}%"),
-            Customer.last_name.ilike(f"%{search}%"),
-            full_name.ilike(f"%{search}%"),
-            Customer.email.ilike(f"%{search}%"),
-            Customer.phone.ilike(f"%{search}%"),
-        )
-        query = query.where(search_filter)
+        query = query.where(_contact_match_filter(search))
 
     if date_from:
         query = query.where(Lead.created_at >= date_from)
@@ -844,7 +905,7 @@ async def list_leads(
     query = query.offset((page - 1) * page_size).limit(page_size)
 
     result = await db.execute(query)
-    items = result.scalars().all()
+    items = result.unique().scalars().all()
 
     enriched_items = await enrich_leads_with_relations(db, items)
 
@@ -876,15 +937,7 @@ async def list_unassigned_leads(
         query = query.where(Lead.source == source)
     if search:
         query = query.join(Customer, Lead.customer_id == Customer.id)
-        full_name = func.concat(Customer.first_name, ' ', func.coalesce(Customer.last_name, ''))
-        search_filter = or_(
-            Customer.first_name.ilike(f"%{search}%"),
-            Customer.last_name.ilike(f"%{search}%"),
-            full_name.ilike(f"%{search}%"),
-            Customer.email.ilike(f"%{search}%"),
-            Customer.phone.ilike(f"%{search}%"),
-        )
-        query = query.where(search_filter)
+        query = query.where(_contact_match_filter(search))
         
     # Pagination
     total_query = select(func.count()).select_from(query.subquery())
@@ -928,15 +981,7 @@ async def list_leads_unassigned_to_salesperson(
 
     if search:
         query = query.join(Customer, Lead.customer_id == Customer.id)
-        full_name = func.concat(Customer.first_name, ' ', func.coalesce(Customer.last_name, ''))
-        search_filter = or_(
-            Customer.first_name.ilike(f"%{search}%"),
-            Customer.last_name.ilike(f"%{search}%"),
-            full_name.ilike(f"%{search}%"),
-            Customer.email.ilike(f"%{search}%"),
-            Customer.phone.ilike(f"%{search}%"),
-        )
-        query = query.where(search_filter)
+        query = query.where(_contact_match_filter(search))
         
     # Pagination
     total_query = select(func.count()).select_from(query.subquery())
