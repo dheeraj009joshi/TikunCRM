@@ -7,8 +7,10 @@ contact info, notes, timeline content, and activity frequency
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence
 from uuid import UUID
@@ -17,6 +19,7 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access_scope import get_accessible_dealership_ids
+from app.core.config import settings
 from app.core.permissions import UserRole
 from app.models.activity import Activity, ActivityType
 from app.models.call_log import CallLog
@@ -27,6 +30,7 @@ from app.models.user import User
 from app.services.crm_content_search_service import (
     CrmContentSearchService,
     extract_mentioned_credit,
+    extract_mentioned_down,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,20 +88,33 @@ _NO_ACTIVITY_RE = re.compile(
     re.I,
 )
 _CREDIT_OVER_RE = re.compile(
-    r"(?:more\s+th[ae]n|over|above|greater\s+than|at\s+least|minimum|>=|>)\s*(\d{3,4})\s*(?:\+)?\s*(?:credit|fico|score)?",
+    r"(?:more\s+th[ae]n|over|above|greater\s+than|at\s+least|minimum|>=|>)\s*(\d{3,4})\s*(?:\+)?\s*(?:credit|fico|score)\b"
+    r"|(?:credit|fico|score)\s*(?:of\s+|is\s+|over\s+|above\s+|more\s+th[ae]n\s+|at\s+least\s+)?(\d{3,4})"
+    r"|(\d{3,4})\s*(?:\+)?\s*(?:credit|fico|score)\b",
     re.I,
 )
 _CREDIT_UNDER_RE = re.compile(
-    r"(?:less\s+th[ae]n|under|below|at\s+most|no\s+more\s+th[ae]n|<=|<)\s*(\d{3,4})\s*(?:\+)?\s*(?:credit|fico|score)?",
+    r"(?:less\s+th[ae]n|under|below|at\s+most|no\s+more\s+th[ae]n|<=|<)\s*(\d{3,4})\s*(?:\+)?\s*(?:credit|fico|score)\b",
     re.I,
 )
-_CREDIT_BARE_RE = re.compile(
-    r"(?:credit|fico|score)\s*(?:of\s+|is\s+|around\s+|about\s*)?(\d{3,4})"
-    r"|(\d{3,4})\s*(?:\+)?\s*(?:credit|fico|score)",
+_DOWN_OVER_RE = re.compile(
+    r"(?:down\s*payments?|cash\s*down|\bdown\b)\s*(?:of\s+|is\s+|at\s+)?"
+    r"(?:more\s+th[ae]n|over|above|greater\s+than|at\s+least|minimum|>=|>)?\s*"
+    r"\$?\s*(\d{1,3}(?:,\d{3})+|\d{3,7})"
+    r"|(?:more\s+th[ae]n|over|above|greater\s+than|at\s+least|minimum|>=|>)\s*"
+    r"\$?\s*(\d{1,3}(?:,\d{3})+|\d{3,7})\s*(?:\+)?\s*(?:down\s*payments?|cash\s*down|\bdown\b)",
+    re.I,
+)
+_DOWN_UNDER_RE = re.compile(
+    r"(?:down\s*payments?|cash\s*down|\bdown\b)\s*(?:of\s+|is\s+)?"
+    r"(?:less\s+th[ae]n|under|below|at\s+most|<=|<)\s*"
+    r"\$?\s*(\d{1,3}(?:,\d{3})+|\d{3,7})"
+    r"|(?:less\s+th[ae]n|under|below|at\s+most|<=|<)\s*"
+    r"\$?\s*(\d{1,3}(?:,\d{3})+|\d{3,7})\s*(?:\+)?\s*(?:down\s*payments?|cash\s*down|\bdown\b)",
     re.I,
 )
 _EXCLUDE_STATUS_RE = re.compile(
-    r"(?:status|stage)s?\s+(?:is\s+|are\s+)?not\s+(.+)$",
+    r"(?:status|stage)s?\s+(?:is\s+|are\s+)?not\s+(.+?)(?=\s+and\s+(?:has|have|with|credit|down|fico)|$)",
     re.I,
 )
 _STAGE_TOKEN_RE = re.compile(r"[a-z][a-z_ ]{1,30}")
@@ -138,68 +155,285 @@ def _normalize_stage_tokens(raw: str) -> List[str]:
     return list(dict.fromkeys(out))
 
 
-def parse_structured_filters(query: str) -> Dict[str, Any]:
-    """Pull credit/stage constraints out of a natural-language question."""
+FILTER_FIELDS = frozenset(
+    {
+        "credit_score",
+        "down_payment",
+        "stage",
+        "outcome",
+        "source",
+        "has_ssn_stip",
+        "has_dl_stip",
+        "has_license",
+        "is_active",
+        "pool",
+        "interested_in",
+        "interested_brand",
+        "created_days",
+        "is_business",
+    }
+)
+FILTER_OPS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte", "in", "not_in", "contains"})
+_FIELD_HINTS: List[tuple] = [
+    (re.compile(r"credit|fico|score", re.I), "credit_score"),
+    (re.compile(r"down\s*payments?|downpayment|cash\s*down|\bdown\b", re.I), "down_payment"),
+    (re.compile(r"status|stage", re.I), "stage"),
+    (re.compile(r"source|campaign", re.I), "source"),
+    (re.compile(r"ssn|social", re.I), "has_ssn_stip"),
+    (re.compile(r"\bdl\b|license|driver", re.I), "has_dl_stip"),
+    (re.compile(r"brand|toyota|ford|honda|chevrolet", re.I), "interested_brand"),
+    (re.compile(r"interest(?:ed)?\s+in|vehicle|car|truck|suv", re.I), "interested_in"),
+]
+_CMP_RE = re.compile(
+    r"(.{0,40}?)(?:more\s+th[ae]n|over|above|greater\s+than|at\s+least|minimum|less\s+th[ae]n|under|below|at\s+most)\s+\$?([\d,]+)\s*(.{0,40})",
+    re.I,
+)
+_INTENT_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_INTENT_CACHE_TTL = 120.0
+
+
+def _parse_number(raw: Any) -> Optional[float]:
+    if raw is None or raw is False:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    text = str(raw).replace(",", "").replace("$", "").strip()
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _field_from_text(text: str) -> Optional[str]:
+    for pattern, field in _FIELD_HINTS:
+        if pattern.search(text or ""):
+            return field
+    return None
+
+
+def extract_dynamic_filters(query: str) -> List[Dict[str, Any]]:
+    """Build filters from the words sitting next to comparisons in this question."""
     raw = query or ""
     lower = raw.lower()
-    filters: Dict[str, Any] = {}
+    filters: List[Dict[str, Any]] = []
 
-    over = _CREDIT_OVER_RE.search(raw)
-    under = _CREDIT_UNDER_RE.search(raw)
-    bare = _CREDIT_BARE_RE.search(raw)
-    if over:
-        filters["credit_min"] = int(over.group(1))
-    elif under:
-        filters["credit_max"] = int(under.group(1))
-    elif bare:
-        n = int(bare.group(1) or bare.group(2))
-        if 300 <= n <= 850:
-            filters["credit_min"] = n
+    for match in _CMP_RE.finditer(raw):
+        before, number, after = match.groups()
+        amount = _parse_number(number)
+        if amount is None:
+            continue
+        field = _field_from_text(f"{before} {after}")
+        if not field:
+            continue
+        cmp = match.group(0).lower()
+        if re.search(r"less\s+th[ae]n|under|below|at\s+most", cmp):
+            op = "lt"
+        elif re.search(r"at\s+least|minimum", cmp):
+            op = "gte"
+        else:
+            op = "gt"
+        filters.append({"field": field, "op": op, "value": amount})
 
-    exclude: List[str] = []
     status_not = _EXCLUDE_STATUS_RE.search(raw)
     if status_not:
-        exclude.extend(_normalize_stage_tokens(status_not.group(1)))
-    if re.search(r"\bnot\s+sold\b", lower) or re.search(r"\bexcluding\s+sold\b", lower):
-        exclude.extend(_STAGE_ALIASES["sold"])
-    if re.search(r"\bnot\s+converted\b", lower) or re.search(r"\bexcluding\s+converted\b", lower):
-        exclude.extend(_STAGE_ALIASES["converted"])
-    if exclude:
-        filters["exclude_stages"] = list(dict.fromkeys(exclude))
+        stages = _normalize_stage_tokens(status_not.group(1))
+        if stages:
+            filters.append({"field": "stage", "op": "not_in", "value": stages})
+    elif re.search(r"\bnot\s+sold\b|\bnot\s+converted\b|\bexcluding\s+(?:sold|converted)", lower):
+        filters.append({"field": "stage", "op": "not_in", "value": ["sold", "converted"]})
 
-    return filters
+    return _normalize_filters(filters)
 
 
-def _content_query_without_filters(query: str, filters: Dict[str, Any]) -> Optional[str]:
+def _normalize_filters(raw_filters: Any) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    if not isinstance(raw_filters, list):
+        return out
+    for item in raw_filters:
+        if not isinstance(item, dict):
+            continue
+        field = str(item.get("field") or "").strip().lower()
+        op = str(item.get("op") or "").strip().lower()
+        if field not in FILTER_FIELDS or op not in FILTER_OPS:
+            continue
+        value = item.get("value")
+        if field in {"credit_score", "down_payment", "created_days"}:
+            if op in {"in", "not_in"}:
+                value = [_parse_number(v) for v in (value if isinstance(value, list) else [value])]
+                value = [v for v in value if v is not None]
+            else:
+                value = _parse_number(value)
+            if value is None or value == []:
+                continue
+        elif field == "stage":
+            if not isinstance(value, list):
+                value = _normalize_stage_tokens(str(value))
+            else:
+                value = _normalize_stage_tokens(" or ".join(str(v) for v in value))
+            if not value:
+                continue
+        elif field in {"has_ssn_stip", "has_dl_stip", "has_license", "is_active", "is_business"}:
+            value = bool(value)
+        out.append({"field": field, "op": op, "value": value})
+    return out
+
+
+def _lead_from_filters(filters: List[Dict[str, Any]]) -> Dict[str, Any]:
+    lead: Dict[str, Any] = {}
+    for item in filters:
+        field, op, value = item["field"], item["op"], item["value"]
+        if field == "credit_score" and op in {"gt", "gte"}:
+            lead["credit_min"] = int(value)
+        elif field == "credit_score" and op in {"lt", "lte"}:
+            lead["credit_max"] = int(value)
+        elif field == "down_payment" and op in {"gt", "gte"}:
+            lead["down_min"] = float(value)
+        elif field == "down_payment" and op in {"lt", "lte"}:
+            lead["down_max"] = float(value)
+        elif field == "stage" and op == "not_in":
+            lead["exclude_stages"] = list(value)
+        elif field == "stage" and op in {"in", "eq"}:
+            lead["include_stages"] = value if isinstance(value, list) else [value]
+        elif field == "pool" and value in {"mine", "unassigned"}:
+            lead["pool"] = value
+        elif field in {"has_ssn_stip", "has_dl_stip", "fresh_only", "is_active"}:
+            lead[field] = bool(value)
+        elif field == "created_days":
+            lead["created_days"] = int(value)
+        elif field == "source":
+            lead["source"] = str(value)
+    return lead
+
+
+def _content_query_without_filters(query: str, filters: List[Dict[str, Any]]) -> Optional[str]:
+    used = {item["field"] for item in filters}
+    skip = set(_FILTER_STOPWORDS)
+    if "down_payment" in used:
+        skip.update({"down", "downpayment", "payment", "cash"})
+    if "credit_score" in used:
+        skip.update({"credit", "fico", "score"})
+    if "stage" in used:
+        skip.update({"status", "stage", "sold", "converted", "lost"})
     tokens = [
         t for t in extract_search_tokens(query)
-        if t not in _FILTER_STOPWORDS and not t.isdigit()
+        if t not in skip and not t.isdigit()
     ]
-    if filters.get("credit_min") or filters.get("credit_max") or filters.get("exclude_stages"):
-        leftover = [t for t in tokens if t not in {"status", "stage"}]
-        return " ".join(leftover) if leftover else None
     return " ".join(tokens) if tokens else None
 
 
-def _describe_filters(filters: Dict[str, Any]) -> str:
+def _describe_filters(filters: List[Dict[str, Any]]) -> str:
+    labels = {
+        "credit_score": "credit score",
+        "down_payment": "down payment",
+        "stage": "stage",
+        "outcome": "outcome",
+        "source": "source",
+        "interested_in": "interest",
+        "interested_brand": "brand",
+    }
+    symbols = {"gt": ">", "gte": "≥", "lt": "<", "lte": "≤", "eq": "=", "ne": "≠"}
     bits: List[str] = []
-    if filters.get("credit_min") is not None:
-        bits.append(f"credit score ≥ {filters['credit_min']}")
-    if filters.get("credit_max") is not None:
-        bits.append(f"credit score ≤ {filters['credit_max']}")
-    if filters.get("exclude_stages"):
-        shown = ", ".join(s.replace("_", " ").title() for s in filters["exclude_stages"] if s in ("sold", "converted", "lost") or " " not in s)
-        # unique display
-        labels = []
-        seen = set()
-        for s in filters["exclude_stages"]:
-            label = s.replace("_", " ").title()
-            if label.lower() in seen:
-                continue
-            seen.add(label.lower())
-            labels.append(label)
-        bits.append("excluding " + " and ".join(labels))
+    for item in filters:
+        name = labels.get(item["field"], item["field"].replace("_", " "))
+        op, value = item["op"], item["value"]
+        if op == "not_in":
+            shown = " and ".join(str(v).replace("_", " ").title() for v in value)
+            bits.append(f"excluding {shown}")
+        elif op == "in":
+            shown = " or ".join(str(v).replace("_", " ") for v in value)
+            bits.append(f"{name} is {shown}")
+        elif op == "contains":
+            bits.append(f"{name} contains {value}")
+        elif item["field"] == "down_payment":
+            bits.append(f"{name} {symbols.get(op, op)} ${int(float(value)):,}")
+        else:
+            bits.append(f"{name} {symbols.get(op, op)} {value}")
     return ", ".join(bits)
+
+
+def _lead_field_value(lead: Lead, customer: Customer, stage: Optional[LeadStage], field: str) -> Any:
+    if field == "credit_score":
+        if customer and customer.credit_score:
+            return float(customer.credit_score)
+        return extract_mentioned_credit(lead.notes or "")
+    if field == "down_payment":
+        if lead.down_payment is not None:
+            return float(lead.down_payment)
+        meta = lead.meta_data or {}
+        raw = meta.get("downpayment") or meta.get("down_payment")
+        parsed = _parse_number(raw)
+        if parsed is not None:
+            return parsed
+        return extract_mentioned_down(lead.notes or "")
+    if field == "stage":
+        return f"{getattr(stage, 'name', '') or ''} {getattr(stage, 'display_name', '') or ''} {lead.outcome or ''}".lower()
+    if field == "outcome":
+        return (lead.outcome or "").lower()
+    if field == "source":
+        meta = lead.meta_data or {}
+        return str(meta.get("source_display") or getattr(lead.source, "value", lead.source) or "").lower()
+    if field == "has_ssn_stip":
+        return bool(lead.has_ssn_stip)
+    if field == "has_dl_stip":
+        return bool(lead.has_dl_stip)
+    if field == "has_license":
+        return bool(getattr(customer, "has_license", None))
+    if field == "is_active":
+        return bool(lead.is_active)
+    if field == "is_business":
+        return lead.is_business
+    if field == "interested_in":
+        return (lead.interested_in or "").lower()
+    if field == "interested_brand":
+        return (lead.interested_brand or "").lower()
+    if field == "created_days":
+        created = lead.created_at
+        if not created:
+            return None
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - created).days
+    return None
+
+
+def _compare(actual: Any, op: str, expected: Any) -> bool:
+    if actual is None:
+        return False
+    if op in {"in", "not_in"}:
+        values = [str(v).lower() for v in (expected or [])]
+        hay = str(actual).lower()
+        hit = any(v in hay for v in values)
+        return (not hit) if op == "not_in" else hit
+    if op == "contains":
+        return str(expected).lower() in str(actual).lower()
+    if op in {"gt", "gte", "lt", "lte"}:
+        left = _parse_number(actual)
+        right = _parse_number(expected)
+        if left is None or right is None:
+            return False
+        if op == "gt":
+            return left > right
+        if op == "gte":
+            return left >= right
+        if op == "lt":
+            return left < right
+        return left <= right
+    if op == "ne":
+        return str(actual).lower() != str(expected).lower()
+    return str(actual).lower() == str(expected).lower()
+
+
+def lead_matches_filters(
+    lead: Lead,
+    customer: Customer,
+    stage: Optional[LeadStage],
+    filters: List[Dict[str, Any]],
+) -> bool:
+    return all(
+        _compare(_lead_field_value(lead, customer, stage, item["field"]), item["op"], item["value"])
+        for item in filters
+        if item["field"] != "pool"
+    )
 
 
 def _empty_intent(query: str) -> Dict[str, Any]:
@@ -209,6 +443,7 @@ def _empty_intent(query: str) -> Dict[str, Any]:
         "content_query": None,
         "activity": None,
         "lead": {},
+        "filters": [],
     }
 
 
@@ -397,24 +632,24 @@ def heuristic_intent(query: str) -> Dict[str, Any]:
             intent["interpretation"] = f"Leads matching “{raw}”"
         return intent
 
-    structured = parse_structured_filters(raw)
-    if structured:
-        intent["lead"].update(structured)
+    filters = extract_dynamic_filters(raw)
+    intent["filters"] = filters
+    if filters:
+        intent["lead"].update(_lead_from_filters(filters))
 
     find_someone = any(
         p in lower
         for p in (
             "who has", "who have", "customer who", "lead who", "someone",
             "find", "show me", "looking for", "want the", "wants the",
-            "mention", "notes", "said", "credit", "financ",
+            "mention", "notes", "said",
         )
     ) or "?" in raw
-    leftover = _content_query_without_filters(raw, structured)
-    if leftover and not intent["activity"]:
+    leftover = _content_query_without_filters(raw, filters)
+    if leftover and not intent["activity"] and not filters:
         intent["content_query"] = leftover
-    elif find_someone and not intent["activity"] and not structured:
-        tokens = extract_search_tokens(raw)
-        intent["content_query"] = " ".join(tokens) if tokens else raw
+    elif leftover and find_someone and not intent["activity"] and not filters:
+        intent["content_query"] = leftover
 
     if "unassigned" in lower:
         intent["lead"]["pool"] = "unassigned"
@@ -422,20 +657,18 @@ def heuristic_intent(query: str) -> Dict[str, Any]:
         intent["lead"]["pool"] = "mine"
     if "ssn" in lower:
         intent["lead"]["has_ssn_stip"] = True
-    if "dl stip" in lower or "license stip" in lower or "driver" in lower and "stip" in lower:
-        intent["lead"]["has_dl_stip"] = True
+        intent["filters"].append({"field": "has_ssn_stip", "op": "eq", "value": True})
     if "fresh" in lower:
         intent["lead"]["fresh_only"] = True
 
-    described = _describe_filters(structured)
-    if described and leftover:
-        intent["interpretation"] = f"{described.capitalize()}; notes about {leftover}"
-    elif described:
+    described = _describe_filters(intent["filters"])
+    if described:
         intent["interpretation"] = described[0].upper() + described[1:]
     elif leftover and find_someone and not intent["activity"]:
+        intent["content_query"] = leftover
         intent["interpretation"] = f"Notes or activity about {leftover}"
 
-    if not intent["contact_search"] and not intent["content_query"] and not intent["activity"] and not intent["lead"]:
+    if not intent["contact_search"] and not intent["content_query"] and not intent["activity"] and not intent["lead"] and not intent["filters"]:
         tokens = extract_search_tokens(raw)
         intent["contact_search"] = raw if _looks_like_contact(raw) else None
         intent["content_query"] = " ".join(tokens) if tokens else raw
@@ -444,10 +677,85 @@ def heuristic_intent(query: str) -> Dict[str, Any]:
     return intent
 
 
+_LLM_SYSTEM = """You convert a CRM search question into a JSON query plan.
+Available fields: credit_score, down_payment, stage, outcome, source, has_ssn_stip, has_dl_stip, has_license, is_active, pool, interested_in, interested_brand, created_days, is_business.
+Ops: eq, ne, gt, gte, lt, lte, in, not_in, contains.
+Rules:
+- Form filters from THIS question only. Do not assume extra constraints.
+- "more than 5000 down payment" → {field: down_payment, op: gt, value: 5000}
+- "more than 600 credit" → {field: credit_score, op: gte, value: 600}
+- "status not sold or converted" → {field: stage, op: not_in, value: ["sold","converted"]}
+- sold means converted/sold.
+- 5,000 means 5000.
+- content_query is ONLY leftover note-meaning that is not a structured field. Never put down payment or credit into content_query.
+- contact_search only for name/phone/email lookups.
+- activity only for frequency questions (called 3 times in 7 days).
+Return JSON: {interpretation, contact_search, content_query, activity, filters:[{field,op,value}]}"""
+
+
+async def llm_intent(query: str) -> Optional[Dict[str, Any]]:
+    if not settings.openai_api_key:
+        return None
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=6.0)
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": _LLM_SYSTEM},
+            {"role": "user", "content": query},
+        ],
+    )
+    text = (response.choices[0].message.content or "").strip()
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        return None
+    intent = _empty_intent(query)
+    intent["interpretation"] = str(data.get("interpretation") or "").strip() or query
+    intent["contact_search"] = (str(data["contact_search"]).strip() or None) if data.get("contact_search") else None
+    intent["content_query"] = (str(data["content_query"]).strip() or None) if data.get("content_query") else None
+    intent["filters"] = _normalize_filters(data.get("filters"))
+    if intent["filters"]:
+        intent["lead"].update(_lead_from_filters(intent["filters"]))
+        described = _describe_filters(intent["filters"])
+        if described:
+            intent["interpretation"] = described[0].upper() + described[1:]
+    activity = data.get("activity")
+    if isinstance(activity, dict) and any(activity.get(k) for k in ("types", "min_count", "days", "no_activity")):
+        intent["activity"] = {
+            "types": _normalize_activity_types(activity.get("types")),
+            "min_count": _as_int(activity.get("min_count")),
+            "days": _as_int(activity.get("days")) or 7,
+            "no_activity": bool(activity.get("no_activity")),
+        }
+    intent["parsed_by"] = "ai"
+    return intent
+
+
 async def interpret_query(query: str, user: User) -> Dict[str, Any]:
-    # Keep the modal instant — keyword/heuristic parse only (no LLM round-trip).
-    intent = heuristic_intent(query)
-    intent["parsed_by"] = "heuristic"
+    raw = (query or "").strip()
+    if _looks_like_contact(raw):
+        intent = heuristic_intent(raw)
+        intent["parsed_by"] = "heuristic"
+        return intent
+
+    cache_key = raw.lower()
+    cached = _INTENT_CACHE.get(cache_key)
+    if cached and (time.time() - cached[0]) < _INTENT_CACHE_TTL:
+        return cached[1]
+
+    intent = None
+    try:
+        intent = await llm_intent(raw)
+    except Exception:
+        logger.warning("Search query planner failed; using local parse", exc_info=True)
+    if not intent or (not intent.get("filters") and not intent.get("activity") and not intent.get("contact_search") and not intent.get("content_query")):
+        fallback = heuristic_intent(raw)
+        fallback["parsed_by"] = "heuristic"
+        intent = fallback
+    _INTENT_CACHE[cache_key] = (time.time(), intent)
     return intent
 
 
@@ -484,11 +792,17 @@ def _normalize_intent(data: Dict[str, Any], fallback: Dict[str, Any]) -> Dict[st
                 "is_active": lead.get("is_active"),
                 "credit_min": _as_int(lead.get("credit_min")),
                 "credit_max": _as_int(lead.get("credit_max")),
+                "down_min": lead.get("down_min"),
+                "down_max": lead.get("down_max"),
                 "exclude_stages": lead.get("exclude_stages") or None,
                 "include_stages": lead.get("include_stages") or None,
             }.items()
             if v is not None
         }
+    if data.get("filters"):
+        intent["filters"] = _normalize_filters(data.get("filters"))
+        if intent["filters"]:
+            intent["lead"].update(_lead_from_filters(intent["filters"]))
 
     if not intent["contact_search"] and not intent["content_query"] and not intent["activity"] and not intent["lead"]:
         return fallback
@@ -540,12 +854,14 @@ class AiSearchService:
 
         accessible = await get_accessible_dealership_ids(db, user)
         lead_filters = intent.get("lead") or {}
-        has_structured = bool(
-            lead_filters.get("credit_min") is not None
-            or lead_filters.get("credit_max") is not None
-            or lead_filters.get("exclude_stages")
-            or lead_filters.get("include_stages")
-        )
+        filters = intent.get("filters") or []
+        if not filters:
+            filters = extract_dynamic_filters(q)
+            if filters:
+                intent["filters"] = filters
+                lead_filters.update(_lead_from_filters(filters))
+                intent["lead"] = lead_filters
+        has_structured = bool(filters)
         needs_lead_scan = bool(
             intent.get("contact_search")
             or lead_filters.get("stage_name")
@@ -596,7 +912,7 @@ class AiSearchService:
 
         if has_structured:
             structured_ids, note_snips = await cls._structured_lead_ids(
-                db, user, accessible, lead_filters
+                db, user, accessible, lead_filters, filters
             )
             snippets_by_lead.update(note_snips)
             if base_ids:
@@ -606,9 +922,7 @@ class AiSearchService:
                 base_ids = structured_ids
             backend_used = "structured"
 
-        if content_query or (
-            has_structured and CrmContentSearchService.is_azure_configured()
-        ):
+        if content_query:
             azure_ids, azure_snips, azure_ok = await cls._search_azure_or_notes(
                 db,
                 user,
@@ -668,6 +982,7 @@ class AiSearchService:
                 "content_query": intent.get("content_query"),
                 "activity": intent.get("activity"),
                 "lead": intent.get("lead"),
+                "filters": intent.get("filters") or [],
             },
             "total": len(base_ids),
             "returned": len(leads),
@@ -681,11 +996,9 @@ class AiSearchService:
         user: User,
         accessible: Optional[List[UUID]],
         lead_filters: Dict[str, Any],
+        filters: Optional[List[Dict[str, Any]]] = None,
     ) -> tuple[List[UUID], Dict[str, List[Dict[str, Any]]]]:
-        credit_min = lead_filters.get("credit_min")
-        credit_max = lead_filters.get("credit_max")
-        exclude_stages = [s.lower() for s in (lead_filters.get("exclude_stages") or [])]
-        include_stages = [s.lower() for s in (lead_filters.get("include_stages") or [])]
+        filters = filters or []
         pool = lead_filters.get("pool")
 
         q = (
@@ -702,78 +1015,34 @@ class AiSearchService:
                 return [], {}
             q = q.where(or_(Lead.dealership_id.in_(accessible), Lead.dealership_id.is_(None)))
 
-        credit_clause = []
-        if credit_min is not None:
-            credit_clause.append(Customer.credit_score >= int(credit_min))
-        if credit_max is not None:
-            credit_clause.append(Customer.credit_score <= int(credit_max))
-        if credit_clause:
-            q = q.where(and_(*credit_clause))
-
-        rows = (await db.execute(q.order_by(Lead.updated_at.desc()).limit(MAX_CANDIDATES))).all()
-
-        snippets: Dict[str, List[Dict[str, Any]]] = {}
+        rows = (await db.execute(q.order_by(Lead.updated_at.desc()).limit(2000))).all()
         ids: List[UUID] = []
-        field_ids: set[UUID] = set()
+        snippets: Dict[str, List[Dict[str, Any]]] = {}
         for lead, customer, stage in rows:
-            if not cls._stage_allowed(stage, lead, exclude_stages, include_stages):
+            if filters and not lead_matches_filters(lead, customer, stage, filters):
                 continue
             ids.append(lead.id)
-            field_ids.add(lead.id)
-            if customer.credit_score:
-                snippets[str(lead.id)] = [
+            reasons: List[Dict[str, Any]] = []
+            credit = _lead_field_value(lead, customer, stage, "credit_score")
+            down = _lead_field_value(lead, customer, stage, "down_payment")
+            if any(f["field"] == "credit_score" for f in filters) and credit:
+                reasons.append(
                     {
                         "activity_type": "credit_score",
                         "activity_label": "Credit score",
-                        "snippet": f"On-file credit score {customer.credit_score}",
+                        "snippet": f"Credit score {int(credit)}",
                     }
-                ]
-
-        # Notes that mention a qualifying score but have no credit_score field
-        if credit_min is not None or credit_max is not None:
-            note_q = (
-                select(Lead, Customer, LeadStage)
-                .join(Customer, Lead.customer_id == Customer.id)
-                .outerjoin(LeadStage, Lead.stage_id == LeadStage.id)
-                .where(Lead.notes.isnot(None))
-                .where(
-                    or_(
-                        Lead.notes.ilike("%credit%"),
-                        Lead.notes.ilike("%fico%"),
-                        Lead.notes.ilike("%score%"),
-                    )
                 )
-            )
-            if pool == "mine":
-                note_q = note_q.where(Lead.assigned_to == user.id)
-            elif pool == "unassigned":
-                note_q = note_q.where(Lead.assigned_to.is_(None))
-            if pool != "mine" and accessible is not None and accessible:
-                note_q = note_q.where(
-                    or_(Lead.dealership_id.in_(accessible), Lead.dealership_id.is_(None))
-                )
-            for lead, customer, stage in (await db.execute(note_q)).all():
-                if lead.id in field_ids:
-                    continue
-                if not cls._stage_allowed(stage, lead, exclude_stages, include_stages):
-                    continue
-                mentioned = extract_mentioned_credit(lead.notes or "")
-                if mentioned is None:
-                    continue
-                if credit_min is not None and mentioned < int(credit_min):
-                    continue
-                if credit_max is not None and mentioned > int(credit_max):
-                    continue
-                ids.append(lead.id)
-                shown = (lead.notes or "").strip()
-                snippets[str(lead.id)] = [
+            if any(f["field"] == "down_payment" for f in filters) and down:
+                reasons.append(
                     {
-                        "activity_type": "lead_notes",
-                        "activity_label": "Lead notes",
-                        "snippet": (shown[:217] + "...") if len(shown) > 220 else shown,
+                        "activity_type": "down_payment",
+                        "activity_label": "Down payment",
+                        "snippet": f"Down payment ${int(down):,}",
                     }
-                ]
-
+                )
+            if reasons:
+                snippets[str(lead.id)] = reasons
         return ids, snippets
 
     @staticmethod
@@ -1210,8 +1479,15 @@ class AiSearchService:
             credit_min = (intent.get("lead") or {}).get("credit_min")
             if customer.credit_score and credit_min is not None:
                 reasons.append(f"Credit score {customer.credit_score}")
+            down_min = (intent.get("lead") or {}).get("down_min")
+            down_val = _lead_field_value(lead, customer, stage, "down_payment")
+            if down_min is not None and down_val is not None:
+                reasons.append(f"Down payment ${int(down_val):,}")
             snippets = snippets_by_lead.get(lid) or []
-            if snippets:
+            if snippets and any(
+                (s.get("activity_type") or "") not in {"credit_score", "down_payment"}
+                for s in snippets
+            ):
                 reasons.append("Mentioned in notes or activity")
 
             out.append(

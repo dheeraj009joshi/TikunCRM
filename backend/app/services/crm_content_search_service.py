@@ -130,6 +130,27 @@ _CREDIT_SCORE_RE = re.compile(r"(?<![\d,])([3-8]\d{2}|850)(?!\d)")
 _CREDIT_BUCKET_RE = re.compile(r"(?<![\d,])([3-8]\d{2})s\b", re.I)
 
 
+_DOWN_MENTION_RE = re.compile(
+    r"(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d{3,6})\s*(?:\+)?\s*(?:down\b|cash\s*down)"
+    r"|(?:down\s*payments?|cash\s*down)\s*(?:of\s+|is\s+|at\s+)?(?:\$\s*)?(\d{1,3}(?:,\d{3})+|\d{3,6})",
+    re.I,
+)
+
+
+def extract_mentioned_down(text: str) -> Optional[float]:
+    """Largest down-payment amount mentioned in notes (ignores credit scores)."""
+    if not text:
+        return None
+    amounts: List[float] = []
+    for left, right in _DOWN_MENTION_RE.findall(text):
+        raw = left or right
+        try:
+            amounts.append(float(raw.replace(",", "")))
+        except ValueError:
+            continue
+    return max(amounts) if amounts else None
+
+
 def extract_mentioned_credit(text: str) -> Optional[int]:
     """Best credit/FICO number mentioned near the word credit (300–850)."""
     if not text or not _CREDIT_WORD_RE.search(text):
