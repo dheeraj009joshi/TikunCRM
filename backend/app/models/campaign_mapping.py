@@ -163,6 +163,12 @@ class CampaignMapping(Base):
         foreign_keys=[whatsapp_template_id],
         lazy="selectin"
     )
+    versions: Mapped[list] = relationship(
+        "CampaignMappingVersion",
+        back_populates="campaign_mapping",
+        lazy="noload",
+        order_by="CampaignMappingVersion.created_at.desc()",
+    )
 
     def matches(self, campaign_name: str) -> bool:
         """Check if a campaign name matches this mapping's pattern"""

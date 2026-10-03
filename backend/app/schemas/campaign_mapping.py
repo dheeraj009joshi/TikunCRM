@@ -120,6 +120,21 @@ class WhatsAppTemplateBrief(BaseModel):
         from_attributes = True
 
 
+class CampaignMappingVersionBrief(BaseModel):
+    """One saved display name and targeting message."""
+    id: UUID
+    display_name: str
+    targeting_message: Optional[str] = None
+    created_at: datetime
+    is_current: bool = False
+
+
+class ApplyCampaignVersionResponse(BaseModel):
+    updated_leads: int
+    display_name: str
+    targeting_message: Optional[str] = None
+
+
 class CampaignMappingForDealership(BaseModel):
     """Campaign mapping view for Dealership Admin/Owner"""
     id: UUID
@@ -136,6 +151,7 @@ class CampaignMappingForDealership(BaseModel):
     whatsapp_template_id: Optional[UUID] = None
     whatsapp_template: Optional[WhatsAppTemplateBrief] = None
     whatsapp_auto_send: bool = False
+    versions: List[CampaignMappingVersionBrief] = Field(default_factory=list)
     
     class Config:
         from_attributes = True

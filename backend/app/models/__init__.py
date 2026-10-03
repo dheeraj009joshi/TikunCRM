@@ -29,6 +29,7 @@ from app.models.customer_stip_document import CustomerStipDocument
 from app.models.lead_stip_document import LeadStipDocument
 from app.models.lead_sync_source import LeadSyncSource, SyncSourceType
 from app.models.campaign_mapping import CampaignMapping, MatchType
+from app.models.campaign_mapping_version import CampaignMappingVersion
 from app.models.lead_campaign import LeadCampaign
 from app.models.whatsapp_message import WhatsAppMessage, WhatsAppBulkSend, WhatsAppConnection, WhatsAppChannel
 from app.models.ai_outbound_call import AiOutboundCall

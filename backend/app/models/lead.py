@@ -151,6 +151,13 @@ class Lead(Base):
         index=True,
         comment="Campaign mapping that matched this lead"
     )
+    campaign_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("campaign_mapping_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Name and targeting message this lead keeps, independent of later edits",
+    )
     source_campaign_raw: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True,
         comment="Original campaign name from the sync source"

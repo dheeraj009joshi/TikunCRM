@@ -38,6 +38,7 @@ import { useRole } from "@/hooks/use-role"
 import { useToast } from "@/hooks/use-toast"
 import {
     DealershipCampaignMappingResponse,
+    applyCampaignVersionToPastLeads,
     getDealershipCampaignMappings,
     updateCampaignMappingDisplayName,
     updateCampaignWhatsAppTemplate,
@@ -66,6 +67,8 @@ export default function CampaignMappingsPage() {
     const [autoSendEnabled, setAutoSendEnabled] = React.useState(false)
     const [isSavingWhatsApp, setIsSavingWhatsApp] = React.useState(false)
     const [templatesLoadError, setTemplatesLoadError] = React.useState<string | null>(null)
+    const [selectedVersionByMapping, setSelectedVersionByMapping] = React.useState<Record<string, string>>({})
+    const [applyingMappingId, setApplyingMappingId] = React.useState<string | null>(null)
 
     const { isSuperAdmin, isDealershipAdmin, isDealershipOwner, isBdc } = useRole()
     const canEdit = isSuperAdmin || isDealershipAdmin || isDealershipOwner || isBdc
@@ -137,8 +140,8 @@ export default function CampaignMappingsPage() {
                 editTargetingMessage.trim() || null
             )
             toast({
-                title: "Success",
-                description: "Display name and targeting message updated",
+                title: "Saved for new leads",
+                description: "Past leads keep their previous name and message.",
             })
             closeEditDialog()
             await loadMappings()
@@ -151,6 +154,33 @@ export default function CampaignMappingsPage() {
             })
         } finally {
             setIsSaving(false)
+        }
+    }
+
+    const applyVersion = async (mapping: DealershipCampaignMappingResponse) => {
+        const versionId = selectedVersionByMapping[mapping.id]
+        const version = mapping.versions?.find((item) => item.id === versionId)
+        if (!versionId || !version) return
+        const confirmed = window.confirm(
+            `Apply "${version.display_name}" to all ${mapping.leads_matched} past leads? Leads that arrive after today still use the current name.`
+        )
+        if (!confirmed) return
+
+        setApplyingMappingId(mapping.id)
+        try {
+            const result = await applyCampaignVersionToPastLeads(mapping.id, versionId)
+            toast({
+                title: "Applied to past leads",
+                description: `${result.display_name} is now on ${result.updated_leads} lead${result.updated_leads === 1 ? "" : "s"}.`,
+            })
+        } catch (error: any) {
+            toast({
+                title: "Error",
+                description: error.response?.data?.detail || "Could not update past leads",
+                variant: "destructive",
+            })
+        } finally {
+            setApplyingMappingId(null)
         }
     }
 
@@ -316,6 +346,69 @@ export default function CampaignMappingsPage() {
                                                     )}
                                                 </div>
 
+                                                {(mapping.versions?.length ?? 0) > 0 && (
+                                                    <div className="mt-3 rounded-md border border-border/60 bg-background/80 px-2.5 py-2">
+                                                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                                                            Name history
+                                                        </p>
+                                                        <p className="mt-1 text-xs text-muted-foreground">
+                                                            New leads use the current name. Past leads keep the name they arrived with until you apply one here.
+                                                        </p>
+                                                        <div className="mt-2 space-y-2">
+                                                            {mapping.versions!.map((version) => (
+                                                                <label
+                                                                    key={version.id}
+                                                                    className="flex items-start gap-2 cursor-pointer"
+                                                                >
+                                                                    <input
+                                                                        type="radio"
+                                                                        name={`version-${mapping.id}`}
+                                                                        className="mt-1"
+                                                                        checked={selectedVersionByMapping[mapping.id] === version.id}
+                                                                        onChange={() =>
+                                                                            setSelectedVersionByMapping((prev) => ({
+                                                                                ...prev,
+                                                                                [mapping.id]: version.id,
+                                                                            }))
+                                                                        }
+                                                                    />
+                                                                    <span className="min-w-0">
+                                                                        <span className="flex flex-wrap items-center gap-1.5">
+                                                                            <span className="text-sm font-medium">{version.display_name}</span>
+                                                                            {version.is_current && (
+                                                                                <Badge variant="secondary" className="text-[10px]">
+                                                                                    Current
+                                                                                </Badge>
+                                                                            )}
+                                                                            <span className="text-[10px] text-muted-foreground">
+                                                                                {new Date(version.created_at).toLocaleString()}
+                                                                            </span>
+                                                                        </span>
+                                                                        <span className="block text-xs text-muted-foreground line-clamp-2 whitespace-pre-wrap">
+                                                                            {version.targeting_message?.trim() || "No targeting message"}
+                                                                        </span>
+                                                                    </span>
+                                                                </label>
+                                                            ))}
+                                                        </div>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            className="mt-2"
+                                                            disabled={
+                                                                !selectedVersionByMapping[mapping.id] ||
+                                                                applyingMappingId === mapping.id
+                                                            }
+                                                            onClick={() => applyVersion(mapping)}
+                                                        >
+                                                            {applyingMappingId === mapping.id ? (
+                                                                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                                                            ) : null}
+                                                            Apply to past leads
+                                                        </Button>
+                                                    </div>
+                                                )}
+
                                                 <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
                                                     <span>
                                                         {mapping.leads_matched} leads matched
@@ -384,6 +477,8 @@ export default function CampaignMappingsPage() {
                     <p className="text-sm text-muted-foreground">
                         <strong>Note:</strong> The display name is the green source tag on leads.
                         The targeting message appears next to it so agents know the campaign audience / pitch.
+                        Editing the name or message only changes leads that come in after you save.
+                        Pick a previous name and use Apply to past leads when you want older leads updated too.
                         WhatsApp templates can auto-send when new leads match the campaign.
                         {isSuperAdmin && (
                             <span className="block mt-1">
@@ -416,7 +511,7 @@ export default function CampaignMappingsPage() {
                                 placeholder="e.g. Spanish Broad Targeting"
                             />
                             <p className="text-xs text-muted-foreground">
-                                Shown as the source badge on lead detail.
+                                Saved for leads that arrive after this. Past leads keep their previous name.
                             </p>
                         </div>
                         <div className="space-y-2">
@@ -430,7 +525,7 @@ export default function CampaignMappingsPage() {
                                 className="resize-y"
                             />
                             <p className="text-xs text-muted-foreground">
-                                Visible under the source badge on every matching lead.
+                                Shown under the source badge on new leads. Use name history to put an older message on past leads.
                             </p>
                         </div>
                     </div>

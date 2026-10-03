@@ -16,6 +16,7 @@ from app.core.timezone import utc_now
 if TYPE_CHECKING:
     from app.models.lead import Lead
     from app.models.campaign_mapping import CampaignMapping
+    from app.models.campaign_mapping_version import CampaignMappingVersion
     from app.models.lead_sync_source import LeadSyncSource
 
 
@@ -47,6 +48,13 @@ class LeadCampaign(Base):
         index=True,
         comment="Campaign mapping that matched this lead (if any)"
     )
+    campaign_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("campaign_mapping_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Display name and targeting message at the time this campaign was linked",
+    )
     campaign_name: Mapped[str] = mapped_column(
         String(255), nullable=False,
         comment="Raw campaign name from the sync source"
@@ -73,6 +81,9 @@ class LeadCampaign(Base):
     )
     campaign_mapping: Mapped[Optional["CampaignMapping"]] = relationship(
         "CampaignMapping", lazy="selectin"
+    )
+    campaign_version: Mapped[Optional["CampaignMappingVersion"]] = relationship(
+        "CampaignMappingVersion", lazy="noload"
     )
     sync_source: Mapped[Optional["LeadSyncSource"]] = relationship(
         "LeadSyncSource", lazy="selectin"

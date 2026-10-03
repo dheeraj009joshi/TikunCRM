@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select, func, and_, or_, desc, false
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -33,6 +34,7 @@ from app.models.activity import Activity, ActivityType
 from app.models.dealership import Dealership
 from app.models.lead_campaign import LeadCampaign
 from app.models.campaign_mapping import CampaignMapping
+from app.models.campaign_mapping_version import CampaignMappingVersion
 from app.models.lead_sync_source import LeadSyncSource
 from app.models.partner_store import PartnerStore
 from app.schemas.lead import (
@@ -56,7 +58,7 @@ from app.services.stips_service import (
     resolve_document_for_lead,
     get_document_info_for_lead,
 )
-from app.services.customer_service import CustomerService
+from app.services.customer_service import CustomerService, normalize_phone
 from app.services.lead_stage_service import LeadStageService
 from app.services.notification_service import (
     NotificationService,
@@ -1302,6 +1304,15 @@ async def update_lead(
     
     customer_update_data = {k: v for k, v in update_data.items() if k in customer_fields}
     lead_update_data = {k: v for k, v in update_data.items() if k in lead_fields}
+
+    if "phone" in customer_update_data:
+        customer_update_data["phone"] = normalize_phone(customer_update_data.get("phone"))
+        normalized_phone = customer_update_data["phone"]
+        if normalized_phone and len(normalized_phone) > 20:
+            raise HTTPException(status_code=400, detail="Phone number is too long.")
+
+    if customer_update_data.get("email"):
+        customer_update_data["email"] = customer_update_data["email"].strip().lower()
     
     new_secondary_id = lead_update_data.get("secondary_customer_id")
     new_secondary_customer = None  # reused for activity description
@@ -1313,16 +1324,51 @@ async def update_lead(
             if new_secondary_id == lead.customer_id:
                 raise HTTPException(status_code=400, detail="Secondary customer cannot be the same as primary")
 
-    # Update customer record if customer fields are provided
-    if customer_update_data and lead.customer_id:
-        from app.models.customer import Customer
+    # Phone and email are unique per customer. Editing a lead onto a number or
+    # email that already belongs to someone else must attach this lead to that
+    # customer; writing the value onto the current row rolls the whole save back.
+    customer = None
+    if lead.customer_id:
         customer_result = await db.execute(select(Customer).where(Customer.id == lead.customer_id))
         customer = customer_result.scalar_one_or_none()
-        if customer:
-            for field, value in customer_update_data.items():
-                setattr(customer, field, value)
-            customer.updated_at = utc_now()
-            lead.customer = customer
+
+    phone_match = None
+    email_match = None
+    if customer_update_data.get("phone"):
+        phone_match = (
+            await db.execute(select(Customer).where(Customer.phone == customer_update_data["phone"]))
+        ).scalar_one_or_none()
+    if customer_update_data.get("email"):
+        email_match = (
+            await db.execute(
+                select(Customer).where(func.lower(Customer.email) == customer_update_data["email"])
+            )
+        ).scalar_one_or_none()
+
+    if phone_match and email_match and phone_match.id != email_match.id:
+        raise HTTPException(
+            status_code=409,
+            detail="That phone and email belong to two different customers.",
+        )
+
+    relinked_customer_name = None
+    matched = phone_match or email_match
+    if matched and (customer is None or matched.id != customer.id):
+        customer = matched
+        lead.customer_id = matched.id
+        relinked_customer_name = f"{matched.first_name or ''} {matched.last_name or ''}".strip() or "existing customer"
+
+    if customer_update_data:
+        if customer is None:
+            raise HTTPException(status_code=400, detail="Lead has no customer to update")
+        for field, value in customer_update_data.items():
+            setattr(customer, field, value)
+        customer.updated_at = utc_now()
+        lead.customer = customer
+        if relinked_customer_name:
+            relinked_customer_name = (
+                f"{customer.first_name or ''} {customer.last_name or ''}".strip() or relinked_customer_name
+            )
 
     # Build human-readable description (added/removed for secondary customer, "updated" for others)
     field_labels = {
@@ -1375,10 +1421,16 @@ async def update_lead(
             description_parts.append(f"{', '.join(other_labels[:-1])}, and {other_labels[-1]} updated")
 
     description = ". ".join(description_parts) if description_parts else "Lead updated"
+    if relinked_customer_name:
+        description = f"{description}. Linked to existing customer {relinked_customer_name}"
 
     # Update lead fields
     for field, value in lead_update_data.items():
         setattr(lead, field, value)
+
+    if lead.secondary_customer_id and lead.customer_id and lead.secondary_customer_id == lead.customer_id:
+        lead.secondary_customer_id = None
+        lead.secondary_customer = None
     
     lead.updated_at = utc_now()
     
@@ -1399,7 +1451,13 @@ async def update_lead(
         }
     )
     
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail="That phone or email is already used by another customer.",
+        )
     return lead
 
 
@@ -1814,40 +1872,60 @@ async def get_lead(
             )
             mapping = fallback_result.scalar_one_or_none()
 
-    if mapping:
+    pinned_version = None
+    if getattr(lead, "campaign_version_id", None):
+        pinned_version = (
+            await db.execute(
+                select(CampaignMappingVersion).where(
+                    CampaignMappingVersion.id == lead.campaign_version_id
+                )
+            )
+        ).scalar_one_or_none()
+
+    if mapping or pinned_version:
         response_data["campaign_mapping"] = {
-            "id": mapping.id,
-            "display_name": mapping.display_name,
-            "targeting_message": mapping.targeting_message,
+            "id": mapping.id if mapping else pinned_version.campaign_mapping_id,
+            "display_name": pinned_version.display_name if pinned_version else mapping.display_name,
+            "targeting_message": (
+                pinned_version.targeting_message if pinned_version else mapping.targeting_message
+            ),
         }
-        if not response_data.get("campaign_mapping_id"):
+        if mapping and not response_data.get("campaign_mapping_id"):
             response_data["campaign_mapping_id"] = mapping.id
     
     # Fetch campaigns for multi-campaign tracking
     if lead.is_starred:
         campaigns_result = await db.execute(
             select(LeadCampaign)
-            .options(selectinload(LeadCampaign.campaign_mapping))
+            .options(
+                selectinload(LeadCampaign.campaign_mapping),
+                selectinload(LeadCampaign.campaign_version),
+            )
             .where(LeadCampaign.lead_id == lead.id)
             .order_by(LeadCampaign.added_at.desc())
         )
         campaigns = _dedupe_lead_campaign_rows(list(campaigns_result.scalars().all()))
-        response_data["campaigns"] = [
-            {
+        def _campaign_copy(campaign: LeadCampaign) -> dict:
+            if campaign.campaign_version is not None:
+                display_name = campaign.campaign_version.display_name
+                targeting_message = campaign.campaign_version.targeting_message
+            elif campaign.campaign_mapping is not None:
+                display_name = campaign.campaign_mapping.display_name
+                targeting_message = campaign.campaign_mapping.targeting_message
+            else:
+                display_name = None
+                targeting_message = None
+            return {
                 "id": campaign.id,
                 "campaign_name": campaign.campaign_name,
                 "campaign_mapping_id": campaign.campaign_mapping_id,
                 "sync_source_id": campaign.sync_source_id,
                 "added_at": campaign.added_at,
-                "display_name": campaign.campaign_mapping.display_name if campaign.campaign_mapping else None,
-                "targeting_message": (
-                    campaign.campaign_mapping.targeting_message
-                    if campaign.campaign_mapping
-                    else None
-                ),
+                "display_name": display_name,
+                "targeting_message": targeting_message,
             }
-            for campaign in campaigns
-        ]
+
+        response_data["campaigns"] = [_campaign_copy(campaign) for campaign in campaigns]
 
     from app.services.eligibility_service import EligibilityService
 

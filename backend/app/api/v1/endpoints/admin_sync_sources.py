@@ -308,6 +308,9 @@ async def create_sync_source_with_mappings(
                 created_by=current_user.id,
             )
             db.add(mapping)
+            await db.flush()
+            from app.services.campaign_version_service import ensure_current_version
+            await ensure_current_version(db, mapping, current_user.id)
         
         await db.commit()
         
@@ -703,6 +706,9 @@ async def create_campaign_mapping(
     )
     
     db.add(mapping)
+    await db.flush()
+    from app.services.campaign_version_service import ensure_current_version
+    await ensure_current_version(db, mapping, current_user.id)
     await db.commit()
     await db.refresh(mapping)
     
@@ -796,6 +802,9 @@ async def update_campaign_mapping(
         setattr(mapping, field, value)
     
     mapping.updated_by = current_user.id
+    if "display_name" in update_data or "targeting_message" in update_data:
+        from app.services.campaign_version_service import ensure_current_version
+        await ensure_current_version(db, mapping, current_user.id)
     
     await db.commit()
     await db.refresh(mapping)

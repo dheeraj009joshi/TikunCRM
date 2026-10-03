@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Set
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -22,13 +22,17 @@ from app.models.lead import Lead
 from app.models.lead_sync_source import LeadSyncSource
 from app.models.dealership import Dealership
 from app.models.user import User
+from app.models.campaign_mapping_version import CampaignMappingVersion
 from app.schemas.campaign_mapping import (
+    ApplyCampaignVersionResponse,
     CampaignMappingDisplayNameUpdate,
     CampaignMappingForDealership,
+    CampaignMappingVersionBrief,
     CampaignWhatsAppTemplateUpdate,
     DealershipCampaignMappingList,
     WhatsAppTemplateBrief,
 )
+from app.services.campaign_version_service import ensure_current_version
 from app.models.whatsapp_template import WhatsAppTemplate
 
 logger = logging.getLogger(__name__)
@@ -122,6 +126,12 @@ def _build_mapping_response(
             variable_names=m.whatsapp_template.variable_names or [],
         )
     
+    versions = sorted(
+        list(getattr(m, "versions", None) or []),
+        key=lambda version: version.created_at,
+        reverse=True,
+    )
+    current_id = versions[0].id if versions else None
     return CampaignMappingForDealership(
         id=m.id,
         sync_source_id=m.sync_source_id,
@@ -136,6 +146,16 @@ def _build_mapping_response(
         whatsapp_template_id=m.whatsapp_template_id,
         whatsapp_template=wa_template_brief,
         whatsapp_auto_send=m.whatsapp_auto_send,
+        versions=[
+            CampaignMappingVersionBrief(
+                id=version.id,
+                display_name=version.display_name,
+                targeting_message=version.targeting_message,
+                created_at=version.created_at,
+                is_current=version.id == current_id,
+            )
+            for version in versions
+        ],
     )
 
 
@@ -158,6 +178,7 @@ async def list_my_campaign_mappings(
             selectinload(CampaignMapping.sync_source),
             selectinload(CampaignMapping.dealership),
             selectinload(CampaignMapping.whatsapp_template),
+        selectinload(CampaignMapping.versions),
         ).order_by(CampaignMapping.sync_source_id, CampaignMapping.priority)
         
         result = await db.execute(query)
@@ -210,6 +231,7 @@ async def list_my_campaign_mappings(
     ).options(
         selectinload(CampaignMapping.sync_source),
         selectinload(CampaignMapping.whatsapp_template),
+        selectinload(CampaignMapping.versions),
     ).order_by(CampaignMapping.sync_source_id, CampaignMapping.priority)
     
     result = await db.execute(query)
@@ -249,6 +271,7 @@ async def update_campaign_display_name(
     ).options(
         selectinload(CampaignMapping.sync_source),
         selectinload(CampaignMapping.whatsapp_template),
+        selectinload(CampaignMapping.versions),
     )
     
     result = await db.execute(query)
@@ -269,9 +292,12 @@ async def update_campaign_display_name(
     if "targeting_message" in update_in.model_fields_set:
         mapping.targeting_message = (update_in.targeting_message or "").strip() or None
     mapping.updated_by = current_user.id
+    # New version is for leads that arrive after this save. Past leads keep theirs.
+    await ensure_current_version(db, mapping, current_user.id)
     
     await db.commit()
     await db.refresh(mapping)
+    await db.refresh(mapping, attribute_names=["versions"])
     
     logger.info(
         f"Campaign mapping updated: display '{old_display_name}' -> '{mapping.display_name}', "
@@ -283,6 +309,89 @@ async def update_campaign_display_name(
     lead_counts = await get_lead_counts_by_mapping(db, {mapping.id})
     
     return _build_mapping_response(mapping, lead_counts.get(mapping.id, 0))
+
+
+@router.post(
+    "/{mapping_id}/versions/{version_id}/apply",
+    response_model=ApplyCampaignVersionResponse,
+)
+async def apply_campaign_version_to_past_leads(
+    mapping_id: UUID,
+    version_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_campaign_mapping_editor()),
+) -> Any:
+    """
+    Point every lead already matched to this campaign at a saved name and message.
+    Leads that arrive later still use the current name.
+    """
+    mapping = (
+        await db.execute(
+            select(CampaignMapping)
+            .where(CampaignMapping.id == mapping_id)
+            .options(selectinload(CampaignMapping.sync_source))
+        )
+    ).scalar_one_or_none()
+    if not mapping:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign mapping not found")
+
+    await _assert_can_edit_mapping(db, current_user, mapping)
+
+    version = (
+        await db.execute(
+            select(CampaignMappingVersion).where(
+                CampaignMappingVersion.id == version_id,
+                CampaignMappingVersion.campaign_mapping_id == mapping_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Saved name not found")
+
+    lead_result = await db.execute(
+        text(
+            """
+            UPDATE leads
+            SET campaign_version_id = :version_id,
+                meta_data = jsonb_set(
+                    COALESCE(meta_data, '{}'::jsonb),
+                    '{source_display}',
+                    to_jsonb(CAST(:display_name AS text)),
+                    true
+                )
+            WHERE campaign_mapping_id = :mapping_id
+            """
+        ),
+        {
+            "version_id": version.id,
+            "display_name": version.display_name,
+            "mapping_id": mapping.id,
+        },
+    )
+    await db.execute(
+        text(
+            """
+            UPDATE lead_campaigns
+            SET campaign_version_id = :version_id
+            WHERE campaign_mapping_id = :mapping_id
+            """
+        ),
+        {"version_id": version.id, "mapping_id": mapping.id},
+    )
+    await db.commit()
+
+    logger.info(
+        "Applied campaign version %s (%s) to %s past leads by %s",
+        version.id,
+        version.display_name,
+        lead_result.rowcount,
+        current_user.email,
+    )
+    return ApplyCampaignVersionResponse(
+        updated_leads=lead_result.rowcount or 0,
+        display_name=version.display_name,
+        targeting_message=version.targeting_message,
+    )
 
 
 @router.get("/{mapping_id}", response_model=CampaignMappingForDealership)
@@ -299,6 +408,7 @@ async def get_campaign_mapping(
     ).options(
         selectinload(CampaignMapping.sync_source),
         selectinload(CampaignMapping.whatsapp_template),
+        selectinload(CampaignMapping.versions),
     )
     
     result = await db.execute(query)
@@ -341,6 +451,7 @@ async def update_campaign_whatsapp_template(
     ).options(
         selectinload(CampaignMapping.sync_source),
         selectinload(CampaignMapping.whatsapp_template),
+        selectinload(CampaignMapping.versions),
     )
     
     result = await db.execute(query)
@@ -396,6 +507,7 @@ async def update_campaign_whatsapp_template(
     ).options(
         selectinload(CampaignMapping.sync_source),
         selectinload(CampaignMapping.whatsapp_template),
+        selectinload(CampaignMapping.versions),
     )
     result = await db.execute(query)
     mapping = result.scalar_one()

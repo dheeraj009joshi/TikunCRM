@@ -280,6 +280,14 @@ export interface WhatsAppTemplateBrief {
 }
 
 // Response type for dealership campaign mappings endpoint
+export interface CampaignMappingVersion {
+    id: string;
+    display_name: string;
+    targeting_message?: string | null;
+    created_at: string;
+    is_current: boolean;
+}
+
 export interface DealershipCampaignMappingResponse {
     id: string;
     sync_source_id: string;
@@ -295,6 +303,7 @@ export interface DealershipCampaignMappingResponse {
     whatsapp_template_id?: string | null;
     whatsapp_template?: WhatsAppTemplateBrief | null;
     whatsapp_auto_send: boolean;
+    versions?: CampaignMappingVersion[];
 }
 
 // WhatsApp template update for campaign
@@ -333,6 +342,16 @@ export async function updateCampaignMappingDisplayName(
             display_name: displayName,
             targeting_message: targetingMessage ?? null,
         }
+    );
+    return response.data;
+}
+
+export async function applyCampaignVersionToPastLeads(
+    mappingId: string,
+    versionId: string
+): Promise<{ updated_leads: number; display_name: string; targeting_message?: string | null }> {
+    const response = await apiClient.post(
+        `${CAMPAIGN_MAPPINGS_PREFIX}/${mappingId}/versions/${versionId}/apply`
     );
     return response.data;
 }

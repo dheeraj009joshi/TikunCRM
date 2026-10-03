@@ -21,6 +21,7 @@ from sqlalchemy import select, text
 from app.models.lead import Lead, LeadSource
 from app.models.customer import Customer
 from app.models.lead_campaign import LeadCampaign
+from app.services.campaign_version_service import ensure_current_version
 from app.services.customer_service import CustomerService
 from app.services.lead_stage_service import LeadStageService
 from app.models.dealership import Dealership
@@ -564,6 +565,17 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                 updated_count = 0
                 duplicate_count = 0
                 multi_campaign_leads: List[Tuple[Lead, Dict[str, Any]]] = []  # Track leads for notification
+                version_ids: Dict[UUID, UUID] = {}
+
+                async def _version_id_for(mapping) -> Optional[UUID]:
+                    if mapping is None:
+                        return None
+                    cached = version_ids.get(mapping.id)
+                    if cached:
+                        return cached
+                    version = await ensure_current_version(session, mapping)
+                    version_ids[mapping.id] = version.id
+                    return version.id
                 
                 for lead_data in parsed_leads:
                     ext_id = lead_data["external_id"]
@@ -575,7 +587,11 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                         lead = existing_leads_map[ext_id]
                         if lead_data.get("created_at"):
                             lead.created_at = lead_data["created_at"]
-                        lead.meta_data = {**(lead.meta_data or {}), **lead_data["meta_data"]}
+                        existing_display = (lead.meta_data or {}).get("source_display")
+                        merged_meta = {**(lead.meta_data or {}), **lead_data["meta_data"]}
+                        if existing_display:
+                            merged_meta["source_display"] = existing_display
+                        lead.meta_data = merged_meta
                         # Update sync source reference if not set
                         if not lead.sync_source_id:
                             lead.sync_source_id = source.id
@@ -586,6 +602,7 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                         matched_mapping = lead_data.get("matched_mapping")
                         if matched_mapping and not lead.campaign_mapping_id:
                             lead.campaign_mapping_id = matched_mapping.id
+                            lead.campaign_version_id = await _version_id_for(matched_mapping)
                             matched_mapping.leads_matched += 1
                         updated_count += 1
                     elif ext_id in tracked_external_ids or (
@@ -616,6 +633,7 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                             lead_campaign = LeadCampaign(
                                 lead_id=existing_lead.id,
                                 campaign_mapping_id=matched_mapping.id if matched_mapping else None,
+                                campaign_version_id=await _version_id_for(matched_mapping),
                                 campaign_name=campaign_name,
                                 sync_source_id=source.id,
                             )
@@ -674,6 +692,7 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                             "created_by": None,
                             "sync_source_id": source.id,
                             "campaign_mapping_id": matched_mapping.id if matched_mapping else None,
+                            "campaign_version_id": await _version_id_for(matched_mapping),
                             "source_campaign_raw": lead_data.get("campaign_name_raw"),
                         }
                         
@@ -1046,7 +1065,11 @@ async def _legacy_sync_google_sheet_leads() -> Dict[str, Any]:
                         lead = existing_leads_map[ext_id]
                         if lead_data.get("created_at"):
                             lead.created_at = lead_data["created_at"]
-                        lead.meta_data = {**(lead.meta_data or {}), **lead_data["meta_data"]}
+                        existing_display = (lead.meta_data or {}).get("source_display")
+                        merged_meta = {**(lead.meta_data or {}), **lead_data["meta_data"]}
+                        if existing_display:
+                            merged_meta["source_display"] = existing_display
+                        lead.meta_data = merged_meta
                         updated_count += 1
                     elif ext_id in tracked_external_ids or (
                         phone and (phone, target_dealership_id) in tracked_phone_dealership_legacy
