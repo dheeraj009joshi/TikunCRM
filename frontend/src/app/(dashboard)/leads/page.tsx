@@ -1328,7 +1328,6 @@ export default function LeadsPage() {
                                     {campaignOptions.map((c) => (
                                         <SelectItem key={c.id} value={c.id} title={c.match_pattern}>
                                             {c.display_name}
-                                            {c.sync_source_name ? ` · ${c.sync_source_name}` : ""}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>

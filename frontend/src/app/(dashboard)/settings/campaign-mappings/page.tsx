@@ -162,11 +162,13 @@ export default function CampaignMappingsPage() {
         }
     }
 
-    const applyVersion = async (mapping: DealershipCampaignMappingResponse) => {
-        const versionId = selectedVersionByMapping[mapping.id]
+    const applyVersion = async (mapping: DealershipCampaignMappingResponse, versionIdOverride?: string) => {
+        const versionId = versionIdOverride
+            || selectedVersionByMapping[mapping.id]
             || mapping.versions?.find((item) => !item.is_current)?.id
         const version = mapping.versions?.find((item) => item.id === versionId)
         if (!versionId || !version) return
+        setSelectedVersionByMapping((prev) => ({ ...prev, [mapping.id]: versionId }))
         const confirmed = window.confirm(
             `Apply "${version.display_name}" to all ${mapping.leads_matched} past leads? Leads that arrive after today still use the current name.`
         )
@@ -323,11 +325,11 @@ export default function CampaignMappingsPage() {
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                                                     <span className="text-xs text-muted-foreground">
-                                                        Pattern:
+                                                        Campaign:
                                                     </span>
-                                                    <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
+                                                    <span className="text-sm font-medium">
                                                         {mapping.match_pattern}
-                                                    </code>
+                                                    </span>
                                                     <Badge variant="secondary" className="text-[10px]">
                                                         {mapping.match_type}
                                                     </Badge>
@@ -352,6 +354,75 @@ export default function CampaignMappingsPage() {
                                                         </p>
                                                     )}
                                                 </div>
+
+                                                {(mapping.versions?.length ?? 0) > 0 && (
+                                                    <div className="mt-3">
+                                                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                                                            Version history
+                                                        </p>
+                                                        <ol className="space-y-0">
+                                                            {mapping.versions!.map((version, index) => {
+                                                                const isLast = index === mapping.versions!.length - 1
+                                                                return (
+                                                                    <li key={version.id} className="relative flex gap-3 pb-3 last:pb-0">
+                                                                        {!isLast && (
+                                                                            <span className="absolute left-[5px] top-3 bottom-0 w-px bg-border" />
+                                                                        )}
+                                                                        <span
+                                                                            className={`relative z-10 mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-background ${
+                                                                                version.is_current ? "bg-primary" : "bg-muted-foreground/35"
+                                                                            }`}
+                                                                        />
+                                                                        <div className="min-w-0 flex-1">
+                                                                            <div className="flex items-center justify-between gap-2">
+                                                                                <div className="flex min-w-0 items-center gap-2">
+                                                                                    <span className="truncate text-sm font-medium">
+                                                                                        {version.display_name}
+                                                                                    </span>
+                                                                                    {version.is_current && (
+                                                                                        <Badge className="text-[10px] px-1.5 py-0">
+                                                                                            Current
+                                                                                        </Badge>
+                                                                                    )}
+                                                                                </div>
+                                                                                {!version.is_current && (
+                                                                                    <Button
+                                                                                        type="button"
+                                                                                        size="sm"
+                                                                                        variant="ghost"
+                                                                                        className="h-7 px-2 text-xs shrink-0"
+                                                                                        disabled={applyingMappingId === mapping.id}
+                                                                                        onClick={() => applyVersion(mapping, version.id)}
+                                                                                    >
+                                                                                        {applyingMappingId === mapping.id &&
+                                                                                        selectedVersionByMapping[mapping.id] === version.id ? (
+                                                                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                                                        ) : (
+                                                                                            "Apply"
+                                                                                        )}
+                                                                                    </Button>
+                                                                                )}
+                                                                            </div>
+                                                                            <p className="text-[11px] text-muted-foreground">
+                                                                                {new Date(version.created_at).toLocaleDateString(undefined, {
+                                                                                    month: "short",
+                                                                                    day: "numeric",
+                                                                                    year: "numeric",
+                                                                                })}
+                                                                                {version.is_current ? " · new leads" : " · past leads"}
+                                                                            </p>
+                                                                            {version.targeting_message?.trim() && (
+                                                                                <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2 whitespace-pre-wrap">
+                                                                                    {version.targeting_message.trim()}
+                                                                                </p>
+                                                                            )}
+                                                                        </div>
+                                                                    </li>
+                                                                )
+                                                            })}
+                                                        </ol>
+                                                    </div>
+                                                )}
 
                                                 <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
                                                     <span>

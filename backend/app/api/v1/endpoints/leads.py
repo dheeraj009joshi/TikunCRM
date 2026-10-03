@@ -1014,28 +1014,35 @@ async def list_campaign_filter_options(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
-    Campaign mappings available for the leads list filter (all users who can open Leads).
-    Scoped to the user's dealership; super admin sees all active mappings.
+    Active campaign mappings for the leads list filter.
+    Super admin sees every active campaign on an active sheet.
+    Everyone else sees active campaigns for their organization.
     """
     if current_user.role == UserRole.SUPER_ADMIN:
         cm_query = (
             select(CampaignMapping)
-            .where(CampaignMapping.is_active == True)
+            .join(LeadSyncSource, CampaignMapping.sync_source_id == LeadSyncSource.id)
+            .where(
+                CampaignMapping.is_active == True,
+                LeadSyncSource.is_active == True,
+            )
             .options(selectinload(CampaignMapping.sync_source))
             .order_by(CampaignMapping.sync_source_id, CampaignMapping.priority)
         )
     else:
-        if not current_user.dealership_id:
+        org_id = await resolve_user_dealership_id(db, current_user)
+        if not org_id:
             return []
         cm_query = (
             select(CampaignMapping)
             .join(LeadSyncSource, CampaignMapping.sync_source_id == LeadSyncSource.id)
             .where(
                 CampaignMapping.is_active == True,
+                LeadSyncSource.is_active == True,
                 or_(
-                    CampaignMapping.dealership_id == current_user.dealership_id,
+                    CampaignMapping.dealership_id == org_id,
                     (CampaignMapping.dealership_id.is_(None))
-                    & (LeadSyncSource.default_dealership_id == current_user.dealership_id),
+                    & (LeadSyncSource.default_dealership_id == org_id),
                 ),
             )
             .options(selectinload(CampaignMapping.sync_source))
@@ -1049,7 +1056,9 @@ async def list_campaign_filter_options(
             id=m.id,
             display_name=(m.display_name or m.match_pattern or "").strip() or "Campaign",
             match_pattern=m.match_pattern or "",
-            sync_source_name=m.sync_source.name if m.sync_source else None,
+            sync_source_name=(
+                (m.sync_source.display_name or m.sync_source.name) if m.sync_source else None
+            ),
         )
         for m in mappings
     ]

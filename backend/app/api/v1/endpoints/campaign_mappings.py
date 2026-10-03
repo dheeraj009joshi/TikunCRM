@@ -135,7 +135,10 @@ def _build_mapping_response(
     return CampaignMappingForDealership(
         id=m.id,
         sync_source_id=m.sync_source_id,
-        sync_source_name=m.sync_source.name if m.sync_source else "Unknown",
+        sync_source_name=(
+            (m.sync_source.display_name or m.sync_source.name)
+            if m.sync_source else "Unknown"
+        ),
         match_pattern=m.match_pattern,
         match_type=m.match_type,
         display_name=m.display_name,
