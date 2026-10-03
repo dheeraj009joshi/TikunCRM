@@ -172,14 +172,21 @@ async def list_my_campaign_mappings(
     """
     if current_user.role == UserRole.SUPER_ADMIN:
         # Super admin sees all mappings
-        query = select(CampaignMapping).where(
-            CampaignMapping.is_active == True
-        ).options(
-            selectinload(CampaignMapping.sync_source),
-            selectinload(CampaignMapping.dealership),
-            selectinload(CampaignMapping.whatsapp_template),
-        selectinload(CampaignMapping.versions),
-        ).order_by(CampaignMapping.sync_source_id, CampaignMapping.priority)
+        query = (
+            select(CampaignMapping)
+            .join(LeadSyncSource, CampaignMapping.sync_source_id == LeadSyncSource.id)
+            .where(
+                CampaignMapping.is_active == True,
+                LeadSyncSource.is_active == True,
+            )
+            .options(
+                selectinload(CampaignMapping.sync_source),
+                selectinload(CampaignMapping.dealership),
+                selectinload(CampaignMapping.whatsapp_template),
+                selectinload(CampaignMapping.versions),
+            )
+            .order_by(CampaignMapping.sync_source_id, CampaignMapping.priority)
+        )
         
         result = await db.execute(query)
         mappings = result.scalars().all()
@@ -222,6 +229,7 @@ async def list_my_campaign_mappings(
         LeadSyncSource, CampaignMapping.sync_source_id == LeadSyncSource.id
     ).where(
         CampaignMapping.is_active == True,
+        LeadSyncSource.is_active == True,
         or_(
             CampaignMapping.dealership_id == org_id,
             # Mapping inherits from sync source

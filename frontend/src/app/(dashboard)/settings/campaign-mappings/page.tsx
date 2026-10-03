@@ -119,6 +119,11 @@ export default function CampaignMappingsPage() {
         setEditingMapping(mapping)
         setEditDisplayName(mapping.display_name)
         setEditTargetingMessage(mapping.targeting_message ?? "")
+        const previous = (mapping.versions ?? []).find((version) => !version.is_current)
+        setSelectedVersionByMapping((prev) => ({
+            ...prev,
+            [mapping.id]: previous?.id ?? "",
+        }))
         setEditDialogOpen(true)
     }
 
@@ -159,6 +164,7 @@ export default function CampaignMappingsPage() {
 
     const applyVersion = async (mapping: DealershipCampaignMappingResponse) => {
         const versionId = selectedVersionByMapping[mapping.id]
+            || mapping.versions?.find((item) => !item.is_current)?.id
         const version = mapping.versions?.find((item) => item.id === versionId)
         if (!versionId || !version) return
         const confirmed = window.confirm(
@@ -252,7 +258,8 @@ export default function CampaignMappingsPage() {
     }
 
     // Group mappings by sync source
-    const groupedMappings = mappings.reduce((acc, mapping) => {
+    const activeMappings = mappings.filter((mapping) => mapping.is_active)
+    const groupedMappings = activeMappings.reduce((acc, mapping) => {
         const sourceId = mapping.sync_source_id
         const sourceName = mapping.sync_source_name || "Unknown Source"
 
@@ -276,7 +283,7 @@ export default function CampaignMappingsPage() {
                 </p>
             </div>
 
-            {mappings.length === 0 ? (
+            {activeMappings.length === 0 ? (
                 <Card>
                     <CardContent className="py-12">
                         <div className="text-center">
@@ -346,69 +353,6 @@ export default function CampaignMappingsPage() {
                                                     )}
                                                 </div>
 
-                                                {(mapping.versions?.length ?? 0) > 0 && (
-                                                    <div className="mt-3 rounded-md border border-border/60 bg-background/80 px-2.5 py-2">
-                                                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                                                            Name history
-                                                        </p>
-                                                        <p className="mt-1 text-xs text-muted-foreground">
-                                                            New leads use the current name. Past leads keep the name they arrived with until you apply one here.
-                                                        </p>
-                                                        <div className="mt-2 space-y-2">
-                                                            {mapping.versions!.map((version) => (
-                                                                <label
-                                                                    key={version.id}
-                                                                    className="flex items-start gap-2 cursor-pointer"
-                                                                >
-                                                                    <input
-                                                                        type="radio"
-                                                                        name={`version-${mapping.id}`}
-                                                                        className="mt-1"
-                                                                        checked={selectedVersionByMapping[mapping.id] === version.id}
-                                                                        onChange={() =>
-                                                                            setSelectedVersionByMapping((prev) => ({
-                                                                                ...prev,
-                                                                                [mapping.id]: version.id,
-                                                                            }))
-                                                                        }
-                                                                    />
-                                                                    <span className="min-w-0">
-                                                                        <span className="flex flex-wrap items-center gap-1.5">
-                                                                            <span className="text-sm font-medium">{version.display_name}</span>
-                                                                            {version.is_current && (
-                                                                                <Badge variant="secondary" className="text-[10px]">
-                                                                                    Current
-                                                                                </Badge>
-                                                                            )}
-                                                                            <span className="text-[10px] text-muted-foreground">
-                                                                                {new Date(version.created_at).toLocaleString()}
-                                                                            </span>
-                                                                        </span>
-                                                                        <span className="block text-xs text-muted-foreground line-clamp-2 whitespace-pre-wrap">
-                                                                            {version.targeting_message?.trim() || "No targeting message"}
-                                                                        </span>
-                                                                    </span>
-                                                                </label>
-                                                            ))}
-                                                        </div>
-                                                        <Button
-                                                            size="sm"
-                                                            variant="outline"
-                                                            className="mt-2"
-                                                            disabled={
-                                                                !selectedVersionByMapping[mapping.id] ||
-                                                                applyingMappingId === mapping.id
-                                                            }
-                                                            onClick={() => applyVersion(mapping)}
-                                                        >
-                                                            {applyingMappingId === mapping.id ? (
-                                                                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                                                            ) : null}
-                                                            Apply to past leads
-                                                        </Button>
-                                                    </div>
-                                                )}
-
                                                 <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
                                                     <span>
                                                         {mapping.leads_matched} leads matched
@@ -475,11 +419,7 @@ export default function CampaignMappingsPage() {
             <Card className="bg-muted/30">
                 <CardContent className="py-4">
                     <p className="text-sm text-muted-foreground">
-                        <strong>Note:</strong> The display name is the green source tag on leads.
-                        The targeting message appears next to it so agents know the campaign audience / pitch.
-                        Editing the name or message only changes leads that come in after you save.
-                        Pick a previous name and use Apply to past leads when you want older leads updated too.
-                        WhatsApp templates can auto-send when new leads match the campaign.
+                        <strong>Note:</strong> Only active campaigns are listed. Saving a name updates leads that arrive after you save. Open edit to apply an older name to past leads.
                         {isSuperAdmin && (
                             <span className="block mt-1">
                                 As a Super Admin, you can also manage mappings in{" "}
@@ -525,9 +465,49 @@ export default function CampaignMappingsPage() {
                                 className="resize-y"
                             />
                             <p className="text-xs text-muted-foreground">
-                                Shown under the source badge on new leads. Use name history to put an older message on past leads.
+                                New leads use this. Past leads stay on the previous name until you apply one below.
                             </p>
                         </div>
+                        {(() => {
+                            const pastVersions = (editingMapping?.versions ?? []).filter((version) => !version.is_current)
+                            if (!editingMapping || pastVersions.length === 0) return null
+                            return (
+                                <div className="space-y-2 border-t pt-4">
+                                    <Label>Apply an older name to past leads</Label>
+                                    <Select
+                                        value={selectedVersionByMapping[editingMapping.id] || pastVersions[0].id}
+                                        onValueChange={(value) =>
+                                            setSelectedVersionByMapping((prev) => ({
+                                                ...prev,
+                                                [editingMapping.id]: value,
+                                            }))
+                                        }
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {pastVersions.map((version) => (
+                                                <SelectItem key={version.id} value={version.id}>
+                                                    {version.display_name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        disabled={applyingMappingId === editingMapping.id}
+                                        onClick={() => applyVersion(editingMapping)}
+                                    >
+                                        {applyingMappingId === editingMapping.id ? (
+                                            <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                        ) : null}
+                                        Apply to past leads
+                                    </Button>
+                                </div>
+                            )
+                        })()}
                     </div>
                     <DialogFooter>
                         <Button variant="outline" onClick={closeEditDialog}>
