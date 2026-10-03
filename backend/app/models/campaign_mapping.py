@@ -5,7 +5,7 @@ Super Admin creates mappings, Dealership Admin/Owner can edit display names.
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, ENUM as PgENUM
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from app.models.lead_sync_source import LeadSyncSource
     from app.models.dealership import Dealership
     from app.models.user import User
+    from app.models.campaign_mapping_version import CampaignMappingVersion
     from app.models.whatsapp_template import WhatsAppTemplate
 
 
@@ -163,7 +164,7 @@ class CampaignMapping(Base):
         foreign_keys=[whatsapp_template_id],
         lazy="selectin"
     )
-    versions: Mapped[list] = relationship(
+    versions: Mapped[List["CampaignMappingVersion"]] = relationship(
         "CampaignMappingVersion",
         back_populates="campaign_mapping",
         lazy="noload",
