@@ -131,12 +131,21 @@ export interface CheckInRow {
     checked_in_at: string;
     checked_in_by_name: string | null;
     outcome: string | null;
+    partner_store_id?: string | null;
+    partner_store_name?: string | null;
+}
+
+export interface PartnerStoreSoldRow {
+    partner_store_id: string | null;
+    partner_store_name: string;
+    sold_count: number;
 }
 
 export interface DealershipAnalysisResponse {
     summary: DealershipSummary;
     salespeople: SalespersonAnalysisRow[];
     check_ins: CheckInRow[];
+    sold_by_partner_store?: PartnerStoreSoldRow[];
 }
 
 /** Shared filters for all analytics endpoints */
@@ -148,6 +157,7 @@ export interface AnalyticsFilters {
     bdc_agent_id?: string;
     source?: string;
     stage_id?: string;
+    partner_store_id?: string;
 }
 
 export interface LeadsOverTimeItem {

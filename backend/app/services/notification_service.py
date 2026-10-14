@@ -19,6 +19,7 @@ from app.models.user import User
 from app.models.dealership import Dealership
 from app.core.websocket_manager import ws_manager
 from app.core.timezone import utc_now
+from app.utils.timezone import convert_to_timezone, resolve_dealership_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +261,53 @@ class NotificationService:
             send_sms=False,
         )
     
+    async def _format_follow_up_when(
+        self,
+        when: datetime,
+        dealership_id: Optional[UUID] = None,
+    ) -> str:
+        """Format a follow-up time in the dealership timezone."""
+        tz_name = resolve_dealership_timezone(None)
+        if dealership_id:
+            row = await self.db.execute(
+                select(Dealership.timezone).where(Dealership.id == dealership_id)
+            )
+            tz_name = resolve_dealership_timezone(row.scalar_one_or_none())
+        local = convert_to_timezone(when, tz_name)
+        hour12 = local.hour % 12 or 12
+        return f"{local.strftime('%a, %b')} {local.day} at {hour12}:{local.strftime('%M %p')}"
+
+    async def notify_follow_up_scheduled(
+        self,
+        user_id: UUID,
+        lead_name: str,
+        lead_id: UUID,
+        follow_up_id: UUID,
+        scheduled_at: datetime,
+        notes: Optional[str] = None,
+        dealership_id: Optional[UUID] = None,
+    ) -> Notification:
+        """
+        Notify the assignee that a follow-up was scheduled (in-app + web push + email).
+        """
+        when_label = await self._format_follow_up_when(scheduled_at, dealership_id)
+        message = f"Scheduled for {when_label}"
+        note = (notes or "").strip()
+        if note:
+            message = f"{message}. {note[:180]}"
+        return await self.create_notification(
+            user_id=user_id,
+            notification_type=NotificationType.FOLLOW_UP_SCHEDULED,
+            title=f"Follow-up scheduled: {lead_name}",
+            message=message,
+            link=f"/leads/{lead_id}",
+            related_id=follow_up_id,
+            related_type="follow_up",
+            send_push=True,
+            send_email=True,
+            send_sms=False,
+        )
+
     async def notify_follow_up_due(
         self,
         user_id: UUID,
@@ -267,15 +315,17 @@ class NotificationService:
         lead_id: UUID,
         follow_up_id: UUID,
         due_time: datetime,
+        dealership_id: Optional[UUID] = None,
     ) -> Notification:
         """
         Create notification for upcoming follow-up (push + email).
         """
+        when_label = await self._format_follow_up_when(due_time, dealership_id)
         return await self.create_notification(
             user_id=user_id,
             notification_type=NotificationType.FOLLOW_UP_DUE,
             title=f"Follow-up due: {lead_name}",
-            message=f"Due at {due_time.strftime('%I:%M %p')}",
+            message=f"Due {when_label}",
             link=f"/leads/{lead_id}",
             related_id=follow_up_id,
             related_type="follow_up",

@@ -1,6 +1,7 @@
 """
 Follow-Up Endpoints
 """
+import logging
 import math
 from datetime import datetime
 from typing import Any, List, Optional
@@ -32,6 +33,28 @@ from app.services.notification_service import NotificationService, send_skate_al
 from app.utils.skate_helper import check_skate_condition
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _lead_display_name(lead: Lead) -> str:
+    name = f"{lead.first_name or ''} {lead.last_name or ''}".strip()
+    return name or "a lead"
+
+
+async def _notify_follow_up_scheduled(db: AsyncSession, follow_up: FollowUp, lead: Lead) -> None:
+    """In-app, email, and web push for the user the follow-up is assigned to."""
+    try:
+        await NotificationService(db).notify_follow_up_scheduled(
+            user_id=follow_up.assigned_to,
+            lead_name=_lead_display_name(lead),
+            lead_id=lead.id,
+            follow_up_id=follow_up.id,
+            scheduled_at=follow_up.scheduled_at,
+            notes=follow_up.notes,
+            dealership_id=lead.dealership_id,
+        )
+    except Exception:
+        logger.exception("Failed to notify follow-up scheduled for %s", follow_up.id)
 
 
 @router.get("/", response_model=FollowUpListResponse)
@@ -320,7 +343,9 @@ async def schedule_follow_up(
         dealership_id=lead.dealership_id,
         meta_data={"scheduled_at": follow_up_in.scheduled_at.isoformat(), "is_skate_action": is_skate_action}
     )
-    
+
+    await _notify_follow_up_scheduled(db, follow_up, lead)
+
     await db.commit()
     
     try:
@@ -481,9 +506,12 @@ async def update_follow_up(
     # Track what changed for activity log
     changes = []
     
+    rescheduled = False
     if update_data.scheduled_at is not None and update_data.scheduled_at != follow_up.scheduled_at:
         changes.append(f"rescheduled to {update_data.scheduled_at.strftime('%Y-%m-%d %H:%M')}")
         follow_up.scheduled_at = update_data.scheduled_at
+        follow_up.reminder_sent = False
+        rescheduled = True
     
     if update_data.notes is not None and update_data.notes != follow_up.notes:
         changes.append("notes updated")
@@ -515,7 +543,10 @@ async def update_follow_up(
             dealership_id=lead.dealership_id,
             meta_data={"changes": changes}
         )
-        
+
+        if rescheduled:
+            await _notify_follow_up_scheduled(db, follow_up, lead)
+
         await db.commit()
         
         try:

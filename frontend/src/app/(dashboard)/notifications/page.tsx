@@ -8,6 +8,7 @@ import {
     UserPlus,
     RefreshCw,
     Clock,
+    Calendar,
     AlertCircle,
     AlertTriangle,
     Info,
@@ -70,6 +71,7 @@ const typeIcons: Record<NotificationType, React.ComponentType<{ className?: stri
     email_received: Mail,
     lead_assigned: UserPlus,
     lead_updated: RefreshCw,
+    follow_up_scheduled: Calendar,
     follow_up_due: Clock,
     follow_up_overdue: AlertCircle,
     system: Info,
@@ -91,6 +93,7 @@ const typeColors: Record<NotificationType, string> = {
     email_received: "text-blue-500 bg-blue-100 dark:bg-blue-900/30",
     lead_assigned: "text-green-500 bg-green-100 dark:bg-green-900/30",
     lead_updated: "text-yellow-500 bg-yellow-100 dark:bg-yellow-900/30",
+    follow_up_scheduled: "text-amber-500 bg-amber-100 dark:bg-amber-900/30",
     follow_up_due: "text-orange-500 bg-orange-100 dark:bg-orange-900/30",
     follow_up_overdue: "text-red-500 bg-red-100 dark:bg-red-900/30",
     system: "text-gray-500 bg-gray-100 dark:bg-gray-900/30",
@@ -112,6 +115,7 @@ const typeLabels: Record<NotificationType, string> = {
     email_received: "Email",
     lead_assigned: "Lead Assigned",
     lead_updated: "Lead Updated",
+    follow_up_scheduled: "Follow-up Scheduled",
     follow_up_due: "Follow-up Due",
     follow_up_overdue: "Overdue",
     system: "System",
@@ -427,6 +431,7 @@ export default function NotificationsPage() {
                                 <SelectItem value="email_received">Email</SelectItem>
                                 <SelectItem value="lead_assigned">Lead Assigned</SelectItem>
                                 <SelectItem value="lead_updated">Lead Updated</SelectItem>
+                                <SelectItem value="follow_up_scheduled">Follow-up Scheduled</SelectItem>
                                 <SelectItem value="follow_up_due">Follow-up Due</SelectItem>
                                 <SelectItem value="follow_up_overdue">Overdue</SelectItem>
                                 <SelectItem value="system">System</SelectItem>

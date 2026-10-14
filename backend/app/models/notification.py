@@ -23,6 +23,7 @@ class NotificationType(str, Enum):
     EMAIL_RECEIVED = "EMAIL_RECEIVED"      # New email reply from a lead
     LEAD_ASSIGNED = "LEAD_ASSIGNED"        # Lead was assigned to user
     LEAD_UPDATED = "LEAD_UPDATED"          # Lead status changed
+    FOLLOW_UP_SCHEDULED = "FOLLOW_UP_SCHEDULED"  # Follow-up was scheduled
     FOLLOW_UP_DUE = "FOLLOW_UP_DUE"        # Follow-up reminder
     FOLLOW_UP_OVERDUE = "FOLLOW_UP_OVERDUE"  # Missed follow-up
     SYSTEM = "SYSTEM"                       # System notifications

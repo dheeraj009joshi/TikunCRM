@@ -5,6 +5,7 @@ export type NotificationType =
     | "email_received"
     | "lead_assigned"
     | "lead_updated"
+    | "follow_up_scheduled"
     | "follow_up_due"
     | "follow_up_overdue"
     | "whatsapp_new_lead"
@@ -58,6 +59,7 @@ export const NOTIFICATION_TYPE_INFO: Record<string, { label: string; color: stri
     email_received: { label: "Email", color: "blue", icon: "mail" },
     lead_assigned: { label: "Lead Assigned", color: "green", icon: "user-plus" },
     lead_updated: { label: "Lead Updated", color: "yellow", icon: "refresh-cw" },
+    follow_up_scheduled: { label: "Follow-up Scheduled", color: "amber", icon: "calendar" },
     follow_up_due: { label: "Follow-up Due", color: "orange", icon: "clock" },
     follow_up_overdue: { label: "Overdue", color: "red", icon: "alert-circle" },
     system: { label: "System", color: "gray", icon: "info" },

@@ -22,6 +22,7 @@ All events that send email also send push notifications:
 | New Lead | Yes | Yes | Yes |
 | Lead Assigned | Yes | Yes | No |
 | SKATE Alert | Yes | Yes | No |
+| Follow-up Scheduled | Yes | Yes | No |
 | Follow-up Due/Overdue | Yes | Yes | No |
 | Appointment Reminder | Yes | Yes | Yes |
 | Appointment Missed | Yes | Yes | No |

@@ -133,11 +133,71 @@ async def send_appointment_reminders():
 
 async def send_followup_reminders():
     """
-    DISABLED: Follow-up reminder notifications are disabled per notification ruleset.
-    This task is kept as a no-op for backward compatibility.
+    Notify assignees about pending follow-ups due within the next hour.
+    Runs every 15 minutes. Each follow-up is reminded once (reminder_sent).
+    Delivery is in-app + web push + email.
     """
-    logger.info("Follow-up reminder task is DISABLED per notification ruleset")
-    return
+    logger.info("Starting follow-up reminder task...")
+
+    try:
+        session_maker = get_reminder_session_maker()
+
+        async with session_maker() as session:
+            now = utc_now()
+            window_end = now + timedelta(hours=1)
+
+            result = await session.execute(
+                select(FollowUp).where(
+                    FollowUp.status == FollowUpStatus.PENDING,
+                    FollowUp.reminder_sent == False,
+                    FollowUp.scheduled_at >= now,
+                    FollowUp.scheduled_at <= window_end,
+                )
+            )
+            follow_ups = result.scalars().all()
+
+            if not follow_ups:
+                logger.info("No follow-ups need reminders")
+                return
+
+            logger.info("Found %s follow-ups needing reminders", len(follow_ups))
+            notification_service = NotificationService(session)
+
+            for follow_up in follow_ups:
+                try:
+                    lead_result = await session.execute(
+                        select(Lead).where(Lead.id == follow_up.lead_id)
+                    )
+                    lead = lead_result.scalar_one_or_none()
+                    if not lead:
+                        logger.warning("Lead not found for follow-up %s", follow_up.id)
+                        continue
+
+                    lead_name = f"{lead.first_name or ''} {lead.last_name or ''}".strip() or "a lead"
+                    # Mark first so a push-path commit cannot send this reminder twice
+                    follow_up.reminder_sent = True
+                    await notification_service.notify_follow_up_due(
+                        user_id=follow_up.assigned_to,
+                        lead_name=lead_name,
+                        lead_id=lead.id,
+                        follow_up_id=follow_up.id,
+                        due_time=follow_up.scheduled_at,
+                        dealership_id=lead.dealership_id,
+                    )
+                    logger.info(
+                        "Sent follow-up reminder to user %s for follow-up %s",
+                        follow_up.assigned_to,
+                        follow_up.id,
+                    )
+                except Exception as e:
+                    logger.error("Error processing follow-up %s: %s", follow_up.id, e)
+                    continue
+
+            await session.commit()
+            logger.info("Follow-up reminder task completed: %s reminders sent", len(follow_ups))
+
+    except Exception as e:
+        logger.error("Follow-up reminder task failed: %s", e)
 
 
 async def detect_missed_appointments():

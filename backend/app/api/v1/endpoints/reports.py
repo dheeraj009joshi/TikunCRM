@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from sqlalchemy import select, func, and_, or_, extract
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.api import deps
 from app.core.timezone import utc_now
@@ -36,6 +37,16 @@ from app.services.notification_service import NotificationService
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _partner_store_label(name: Optional[str], brand: Optional[str]) -> Optional[str]:
+    cleaned = (name or "").strip()
+    if not cleaned:
+        return None
+    brand_clean = (brand or "").strip()
+    if brand_clean:
+        return f"{cleaned} ({brand_clean})"
+    return cleaned
 
 # Appointments that count as "set" for analytics (exclude cancelled / rescheduled).
 # Includes arrived/completed/sold so check-in does not remove them from the set rate.
@@ -194,12 +205,22 @@ class CheckInRow(BaseModel):
     checked_in_at: datetime
     checked_in_by_name: Optional[str] = None
     outcome: Optional[str] = None  # sold, not_interested, follow_up, etc.
+    partner_store_id: Optional[str] = None
+    partner_store_name: Optional[str] = None
+
+
+class PartnerStoreSoldRow(BaseModel):
+    """Sold check-ins in the period, grouped by partner store."""
+    partner_store_id: Optional[str] = None
+    partner_store_name: str
+    sold_count: int
 
 
 class DealershipAnalysisResponse(BaseModel):
     summary: DealershipSummary
     salespeople: List[SalespersonAnalysisRow]
     check_ins: List[CheckInRow] = []  # Check-ins in period (for dedicated table)
+    sold_by_partner_store: List[PartnerStoreSoldRow] = []
 
 
 class LeadsOverTimeItem(BaseModel):
@@ -892,6 +913,7 @@ async def get_dealership_analysis(
     bdc_agent_id: Optional[UUID] = Query(None, description="Filter by BDC agent"),
     source: Optional[str] = Query(None, description="Filter by lead source"),
     stage_id: Optional[UUID] = Query(None, description="Filter by stage"),
+    partner_store_id: Optional[UUID] = Query(None, description="Filter check-ins by partner store"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
@@ -1444,14 +1466,52 @@ async def get_dealership_analysis(
 
     # Check-ins table: list of showroom visits in period (for dedicated table on frontend)
     check_ins_list: List[CheckInRow] = []
-    if activity_date_from is not None and activity_date_to is not None:
-        check_in_list_filters = [
+    sold_by_store: List[PartnerStoreSoldRow] = []
+    if activity_date_from is not None and activity_date_to is not None and not no_matching_leads:
+        period_visit_filters = [
             ShowroomVisit.dealership_id == resolved_dealership_id,
             ShowroomVisit.checked_in_at >= activity_date_from,
             ShowroomVisit.checked_in_at <= activity_date_to,
         ]
         if lead_ids:
-            check_in_list_filters.append(ShowroomVisit.lead_id.in_(lead_ids))
+            period_visit_filters.append(ShowroomVisit.lead_id.in_(lead_ids))
+
+        store_key = func.coalesce(Lead.sold_partner_store_id, Lead.partner_store_id)
+        sold_by_store_q = (
+            select(
+                store_key.label("store_id"),
+                PartnerStore.name,
+                PartnerStore.brand,
+                func.count(ShowroomVisit.id).label("sold_count"),
+            )
+            .select_from(ShowroomVisit)
+            .join(Lead, Lead.id == ShowroomVisit.lead_id)
+            .outerjoin(PartnerStore, PartnerStore.id == store_key)
+            .where(and_(*period_visit_filters, ShowroomVisit.outcome == ShowroomOutcome.SOLD))
+            .group_by(store_key, PartnerStore.name, PartnerStore.brand)
+            .order_by(func.count(ShowroomVisit.id).desc(), PartnerStore.name.asc().nulls_last())
+        )
+        sold_by_store_result = await db.execute(sold_by_store_q)
+        for row in sold_by_store_result.all():
+            label = _partner_store_label(row.name, row.brand) or "No partner store"
+            sold_by_store.append(
+                PartnerStoreSoldRow(
+                    partner_store_id=str(row.store_id) if row.store_id else None,
+                    partner_store_name=label,
+                    sold_count=row.sold_count or 0,
+                )
+            )
+
+        check_in_list_filters = list(period_visit_filters)
+        if partner_store_id:
+            check_in_list_filters.append(
+                or_(
+                    Lead.sold_partner_store_id == partner_store_id,
+                    Lead.partner_store_id == partner_store_id,
+                )
+            )
+        sent_store = aliased(PartnerStore)
+        sold_store = aliased(PartnerStore)
         check_in_list_q = (
             select(
                 ShowroomVisit.id,
@@ -1462,10 +1522,18 @@ async def get_dealership_analysis(
                 ShowroomVisit.checked_in_at,
                 ShowroomVisit.checked_in_by,
                 ShowroomVisit.outcome,
+                Lead.partner_store_id,
+                sent_store.name.label("sent_store_name"),
+                sent_store.brand.label("sent_store_brand"),
+                Lead.sold_partner_store_id,
+                sold_store.name.label("sold_store_name"),
+                sold_store.brand.label("sold_store_brand"),
             )
             .select_from(ShowroomVisit)
             .join(Lead, Lead.id == ShowroomVisit.lead_id)
             .join(Customer, Customer.id == Lead.customer_id)
+            .outerjoin(sent_store, sent_store.id == Lead.partner_store_id)
+            .outerjoin(sold_store, sold_store.id == Lead.sold_partner_store_id)
             .where(and_(*check_in_list_filters))
             .order_by(ShowroomVisit.checked_in_at.desc())
             .limit(500)
@@ -1486,6 +1554,15 @@ async def get_dealership_analysis(
                     user_id_to_name[u.id] = f"{u.first_name or ''} {u.last_name or ''}".strip() or str(u.id)
         for r in check_in_rows:
             lead_name = f"{r.first_name or ''} {r.last_name or ''}".strip() or "—"
+            outcome_value = r.outcome.value if r.outcome else None
+            sent_label = _partner_store_label(r.sent_store_name, r.sent_store_brand)
+            sold_label = _partner_store_label(r.sold_store_name, r.sold_store_brand)
+            if outcome_value == ShowroomOutcome.SOLD.value:
+                store_name = sold_label or sent_label
+                store_id = r.sold_partner_store_id or r.partner_store_id
+            else:
+                store_name = sent_label
+                store_id = r.partner_store_id
             check_ins_list.append(
                 CheckInRow(
                     visit_id=str(r.id),
@@ -1495,11 +1572,18 @@ async def get_dealership_analysis(
                     assigned_to_name=user_id_to_name.get(r.assigned_to) if r.assigned_to else None,
                     checked_in_at=r.checked_in_at,
                     checked_in_by_name=user_id_to_name.get(r.checked_in_by) if r.checked_in_by else None,
-                    outcome=r.outcome.value if r.outcome else None,
+                    outcome=outcome_value,
+                    partner_store_id=str(store_id) if store_id else None,
+                    partner_store_name=store_name,
                 )
             )
 
-    return DealershipAnalysisResponse(summary=summary, salespeople=salespeople_rows, check_ins=check_ins_list)
+    return DealershipAnalysisResponse(
+        summary=summary,
+        salespeople=salespeople_rows,
+        check_ins=check_ins_list,
+        sold_by_partner_store=sold_by_store,
+    )
 
 
 @router.get("/analytics/leads-over-time", response_model=LeadsOverTimeResponse)

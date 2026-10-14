@@ -42,6 +42,7 @@ import {
     RefreshCw,
     Download,
     LogIn,
+    Store,
 } from "lucide-react"
 import { useRole } from "@/hooks/use-role"
 import {
@@ -50,6 +51,7 @@ import {
     type DealershipSummary,
     type SalespersonAnalysisRow,
     type CheckInRow,
+    type PartnerStoreSoldRow,
     type AnalyticsFilters,
     type LeadsOverTimeResponse,
     type LeadsByStageResponse,
@@ -58,6 +60,7 @@ import {
 } from "@/services/reports-service"
 import { BarChart, DonutChart, AreaChart } from "@tremor/react"
 import { DealershipService } from "@/services/dealership-service"
+import { PartnerStoreService, type PartnerStore } from "@/services/partner-store-service"
 import { TeamService } from "@/services/team-service"
 import { LeadStageService, type LeadStage } from "@/services/lead-stage-service"
 import { useAuthStore } from "@/stores/auth-store"
@@ -145,7 +148,8 @@ function buildFilters(
     assignedTo: string | null,
     bdcAgentId: string | null,
     source: string | null,
-    stageId: string | null
+    stageId: string | null,
+    partnerStoreId: string | null
 ): AnalyticsFilters {
     const params: AnalyticsFilters = {}
     
@@ -174,6 +178,7 @@ function buildFilters(
     if (bdcAgentId) params.bdc_agent_id = bdcAgentId
     if (source) params.source = source
     if (stageId) params.stage_id = stageId
+    if (partnerStoreId) params.partner_store_id = partnerStoreId
     return params
 }
 
@@ -237,6 +242,22 @@ function downloadAnalysisCsv(analysis: DealershipAnalysisResponse) {
             String(r.outbound_calls_friday),
             String(r.appointments_contacted_saturday),
             String(r.check_ins_in_period),
+        ]),
+        [],
+        ["Partner store", "Sold"],
+        ...(analysis.sold_by_partner_store ?? []).map((r) => [
+            r.partner_store_name,
+            String(r.sold_count),
+        ]),
+        [],
+        ["Lead", "Assigned to", "Checked in at", "Checked in by", "Partner store", "Outcome"],
+        ...(analysis.check_ins ?? []).map((r) => [
+            r.lead_name,
+            r.assigned_to_name ?? "",
+            r.checked_in_at ? new Date(r.checked_in_at).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) : "",
+            r.checked_in_by_name ?? "",
+            r.partner_store_name ?? "",
+            r.outcome ?? "",
         ]),
     ]
     const csv = rows.map((row) => row.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n")
@@ -324,6 +345,23 @@ function downloadAnalysisPdf(
     })
     y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10
 
+    if (analysis.sold_by_partner_store && analysis.sold_by_partner_store.length > 0) {
+        doc.setFontSize(11)
+        doc.setFont("helvetica", "bold")
+        doc.text("Sold by partner store", margin, y)
+        y += 8
+        autoTable(doc, {
+            startY: y,
+            head: [["Partner store", "Sold"]],
+            body: analysis.sold_by_partner_store.map((r) => [r.partner_store_name, String(r.sold_count)]),
+            margin: { left: margin },
+            theme: "grid",
+            headStyles: { fillColor: [59, 130, 246] },
+            styles: { fontSize: 8 },
+        })
+        y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10
+    }
+
     if (analysis.check_ins && analysis.check_ins.length > 0) {
         doc.setFontSize(11)
         doc.setFont("helvetica", "bold")
@@ -331,12 +369,13 @@ function downloadAnalysisPdf(
         y += 8
         autoTable(doc, {
             startY: y,
-            head: [["Lead", "Assigned to", "Checked in at", "Checked in by", "Outcome"]],
+            head: [["Lead", "Assigned to", "Checked in at", "Checked in by", "Partner store", "Outcome"]],
             body: analysis.check_ins.map((r) => [
                 r.lead_name,
                 r.assigned_to_name ?? "—",
                 r.checked_in_at ? new Date(r.checked_in_at).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) : "—",
                 r.checked_in_by_name ?? "—",
+                r.partner_store_name ?? "—",
                 r.outcome ?? "—",
             ]),
             margin: { left: margin },
@@ -389,6 +428,8 @@ export default function AnalyticsPage() {
     const [bdcAgentId, setBdcAgentId] = React.useState<string | null>(null)
     const [source, setSource] = React.useState<string | null>(null)
     const [stageId, setStageId] = React.useState<string | null>(null)
+    const [partnerStoreId, setPartnerStoreId] = React.useState<string | null>(null)
+    const [partnerStores, setPartnerStores] = React.useState<PartnerStore[]>([])
 
     const [dealerships, setDealerships] = React.useState<Array<{ id: string; name: string }>>([])
     const [salespersons, setSalespersons] = React.useState<Array<{ id: string; first_name: string; last_name: string }>>([])
@@ -437,12 +478,19 @@ export default function AnalyticsPage() {
         LeadStageService.list().then(setStages).catch(() => setStages([]))
     }, [])
 
+    React.useEffect(() => {
+        if (!canView) return
+        PartnerStoreService.list({ active_only: false })
+            .then((res) => setPartnerStores(res.items))
+            .catch(() => setPartnerStores([]))
+    }, [canView])
+
     const fetchAll = React.useCallback(async () => {
         if (!canView) return
         const effectiveDealershipId = dealershipId || (isBdc ? orgDealershipId : null)
         setLoading(true)
         setError(null)
-        const filters = buildFilters(dateFrom, dateTo, singleDate, dateMode, effectiveDealershipId, assignedTo, bdcAgentId, source, stageId)
+        const filters = buildFilters(dateFrom, dateTo, singleDate, dateMode, effectiveDealershipId, assignedTo, bdcAgentId, source, stageId, partnerStoreId)
         try {
             const [analysisRes, overTimeRes, byStageRes, bySourceRes, activitiesRes] = await Promise.all([
                 ReportsService.getDealershipAnalysis(filters),
@@ -465,7 +513,7 @@ export default function AnalyticsPage() {
         } finally {
             setLoading(false)
         }
-    }, [canView, isBdc, orgDealershipId, dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, bdcAgentId, source, stageId])
+    }, [canView, isBdc, orgDealershipId, dateFrom, dateTo, singleDate, dateMode, dealershipId, assignedTo, bdcAgentId, source, stageId, partnerStoreId])
 
     React.useEffect(() => {
         fetchAll()
@@ -624,6 +672,22 @@ export default function AnalyticsPage() {
                                 {LEAD_SOURCES.map((s) => (
                                     <SelectItem key={s.value} value={s.value}>
                                         {s.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                        <label className="text-xs text-muted-foreground">Partner store</label>
+                        <Select value={partnerStoreId ?? "all"} onValueChange={(v) => setPartnerStoreId(v === "all" ? null : v)}>
+                            <SelectTrigger className="w-[200px]">
+                                <SelectValue placeholder="All" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All stores</SelectItem>
+                                {partnerStores.map((store) => (
+                                    <SelectItem key={store.id} value={store.id}>
+                                        {store.brand ? `${store.name} (${store.brand})` : store.name}
                                     </SelectItem>
                                 ))}
                             </SelectContent>
@@ -945,6 +1009,39 @@ export default function AnalyticsPage() {
                         </Card>
                     </div>
 
+                    <div>
+                        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                            <Store className="h-5 w-5" />
+                            Sold by partner store
+                        </h2>
+                        <Card className="overflow-hidden">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow className="bg-muted/50">
+                                        <TableHead>Partner store</TableHead>
+                                        <TableHead className="text-right">Sold</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {!analysis.sold_by_partner_store || analysis.sold_by_partner_store.length === 0 ? (
+                                        <TableEmpty
+                                            icon={<Store className="h-10 w-10" />}
+                                            title="No sold check-ins"
+                                            description="No showroom visits were marked sold in the selected date range."
+                                        />
+                                    ) : (
+                                        analysis.sold_by_partner_store.map((row: PartnerStoreSoldRow) => (
+                                            <TableRow key={row.partner_store_id ?? "none"}>
+                                                <TableCell className="font-medium">{row.partner_store_name}</TableCell>
+                                                <TableCell className="text-right">{row.sold_count}</TableCell>
+                                            </TableRow>
+                                        ))
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </Card>
+                    </div>
+
                     {/* Check-ins table (showroom visits in period) */}
                     <div>
                         <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
@@ -959,6 +1056,7 @@ export default function AnalyticsPage() {
                                         <TableHead>Assigned to</TableHead>
                                         <TableHead>Checked in at</TableHead>
                                         <TableHead>Checked in by</TableHead>
+                                        <TableHead>Partner store</TableHead>
                                         <TableHead>Outcome</TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -987,6 +1085,7 @@ export default function AnalyticsPage() {
                                                         : "—"}
                                                 </TableCell>
                                                 <TableCell>{row.checked_in_by_name ?? "—"}</TableCell>
+                                                <TableCell>{row.partner_store_name ?? "—"}</TableCell>
                                                 <TableCell>{row.outcome ?? "—"}</TableCell>
                                             </TableRow>
                                         ))

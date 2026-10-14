@@ -29,6 +29,7 @@ from app.models.lead import Lead
 from app.models.user import User
 from app.services.activity import ActivityService
 from app.services.lead_stage_service import LeadStageService
+from app.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -459,6 +460,7 @@ async def execute_create_follow_ups(
             status=FollowUpStatus.PENDING,
         )
         db.add(fu)
+        await db.flush()
         await ActivityService.log_activity(
             db,
             activity_type=ActivityType.FOLLOW_UP_SCHEDULED,
@@ -470,6 +472,19 @@ async def execute_create_follow_ups(
             dealership_id=lead.dealership_id,
             meta_data={"via": "tikun_ai", "scheduled_at": due.isoformat()},
         )
+        lead_name = f"{lead.first_name or ''} {lead.last_name or ''}".strip() or "a lead"
+        try:
+            await NotificationService(db).notify_follow_up_scheduled(
+                user_id=assigned_to,
+                lead_name=lead_name,
+                lead_id=lead.id,
+                follow_up_id=fu.id,
+                scheduled_at=due,
+                notes=notes,
+                dealership_id=lead.dealership_id,
+            )
+        except Exception:
+            logger.exception("Failed to notify AI follow-up for lead %s", lid)
         ok += 1
 
     await db.flush()
