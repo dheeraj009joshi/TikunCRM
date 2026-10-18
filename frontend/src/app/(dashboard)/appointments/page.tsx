@@ -33,7 +33,9 @@ import {
     ChevronRight,
     List,
     CalendarDays,
-    MessageCircle
+    Share2,
+    Copy,
+    Check
 } from "lucide-react"
 import { AppointmentCalendar } from "@/components/appointments/appointment-calendar"
 import { 
@@ -79,10 +81,14 @@ import { Badge, getRoleVariant } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { filterStorage } from "@/lib/filter-storage"
 import { useToast } from "@/hooks/use-toast"
+import { buildStoreAppointmentsWhatsAppMessage } from "@/lib/share-store-appointments"
 import {
-    buildStoreAppointmentsWhatsAppMessage,
-    whatsAppShareUrl,
-} from "@/lib/share-store-appointments"
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
 
 // Stats Card Component
 function StatsCard({ 
@@ -933,6 +939,10 @@ export default function AppointmentsPage() {
     const [storeFilter, setStoreFilter] = React.useState("")
     const [pagePartnerStores, setPagePartnerStores] = React.useState<PartnerStore[]>([])
     const [sharingWhatsApp, setSharingWhatsApp] = React.useState(false)
+    const [shareOpen, setShareOpen] = React.useState(false)
+    const [shareText, setShareText] = React.useState("")
+    const [shareStoreName, setShareStoreName] = React.useState("")
+    const [shareCopied, setShareCopied] = React.useState(false)
 
     React.useEffect(() => {
         PartnerStoreService.list({ active_only: true })
@@ -1342,7 +1352,7 @@ export default function AppointmentsPage() {
         printWindow.document.close()
     }
 
-    async function handleShareTodayToWhatsApp() {
+    async function openShareDialog() {
         const store = pagePartnerStores.find((s) => s.id === storeFilter)
         if (!store) {
             toast({
@@ -1351,7 +1361,10 @@ export default function AppointmentsPage() {
             })
             return
         }
-        const popup = window.open("about:blank", "_blank")
+        setShareStoreName(store.name)
+        setShareText("")
+        setShareCopied(false)
+        setShareOpen(true)
         setSharingWhatsApp(true)
         try {
             const res = await AppointmentService.list({
@@ -1361,43 +1374,52 @@ export default function AppointmentsPage() {
                 partner_store_id: store.id,
             })
             const { text, shared, skipped } = await buildStoreAppointmentsWhatsAppMessage(res.items, {
-                storeName: store.brand ? `${store.name} (${store.brand})` : store.name,
+                storeName: store.name,
                 timezoneFor: appointmentTimezone,
             })
             if (!text || shared === 0) {
-                popup?.close()
+                setShareOpen(false)
                 toast({
                     title: "Nothing to share",
                     description: `No appointments scheduled today at ${store.name}.`,
                 })
                 return
             }
-            try {
-                await navigator.clipboard.writeText(text)
-            } catch {
-                /* WhatsApp can still open with the text when it fits */
+            setShareText(text)
+            if (skipped > 0) {
+                toast({
+                    title: "Some appointments were skipped",
+                    description: `${skipped} could not be included.`,
+                })
             }
-            const { url, mode } = whatsAppShareUrl(text, store.phone)
-            if (popup) popup.location.href = url
-            const openedWithText = Boolean(popup) && mode === "with-text"
-            const skippedNote = skipped > 0 ? ` ${skipped} could not be included.` : ""
-            const countLabel = `${shared} appointment${shared === 1 ? "" : "s"}`
-            toast({
-                title: openedWithText ? "Opened in WhatsApp" : "Message copied",
-                description: openedWithText
-                    ? `${countLabel} for ${store.name} ready to send.${skippedNote}`
-                    : `Copied ${countLabel} for ${store.name}. Paste into the WhatsApp chat.${skippedNote}`,
-            })
         } catch (err) {
-            popup?.close()
-            console.error("Failed to share appointments to WhatsApp:", err)
+            console.error("Failed to build appointment share:", err)
+            setShareOpen(false)
             toast({
-                title: "Could not share",
+                title: "Could not prepare the share",
                 description: "Try again in a moment.",
                 variant: "destructive",
             })
         } finally {
             setSharingWhatsApp(false)
+        }
+    }
+
+    async function copyShareText() {
+        if (!shareText) return
+        try {
+            await navigator.clipboard.writeText(shareText)
+            setShareCopied(true)
+            toast({
+                title: "Copied",
+                description: "Paste it into the WhatsApp chat.",
+            })
+        } catch {
+            toast({
+                title: "Could not copy",
+                description: "Select the message and copy it manually.",
+                variant: "destructive",
+            })
         }
     }
     
@@ -1437,20 +1459,6 @@ export default function AppointmentsPage() {
                     <Button
                         variant="outline"
                         size="sm"
-                        onClick={handleShareTodayToWhatsApp}
-                        disabled={sharingWhatsApp}
-                        className="text-emerald-700 border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800"
-                    >
-                        {sharingWhatsApp ? (
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                            <MessageCircle className="h-4 w-4 mr-2" />
-                        )}
-                        Share to WhatsApp
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
                         onClick={handleExportCSV}
                         disabled={appointments.length === 0}
                     >
@@ -1465,6 +1473,18 @@ export default function AppointmentsPage() {
                     >
                         <Printer className="h-4 w-4 mr-2" />
                         Print Report
+                    </Button>
+                    <Button
+                        onClick={openShareDialog}
+                        disabled={sharingWhatsApp}
+                        className="bg-emerald-600 text-white hover:bg-emerald-700"
+                    >
+                        {sharingWhatsApp ? (
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                            <Share2 className="h-4 w-4 mr-2" />
+                        )}
+                        Share
                     </Button>
                     <Button onClick={() => setShowCreateModal(true)}>
                         <Plus className="h-4 w-4 mr-2" />
@@ -2113,6 +2133,38 @@ export default function AppointmentsPage() {
                 appointment={selectedAppointment}
                 onSuccess={loadData}
             />
+            <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+                <DialogContent className="max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>Share today's appointments</DialogTitle>
+                        <DialogDescription>
+                            {shareStoreName ? `${shareStoreName}. Copy this, then paste it into WhatsApp.` : "Copy this, then paste it into WhatsApp."}
+                        </DialogDescription>
+                    </DialogHeader>
+                    {sharingWhatsApp || !shareText ? (
+                        <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Preparing the list…
+                        </div>
+                    ) : (
+                        <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-md border bg-muted/40 p-3 text-sm leading-relaxed">
+                            {shareText.replace(/\u200B/g, "")}
+                        </pre>
+                    )}
+                    <Button
+                        onClick={copyShareText}
+                        disabled={!shareText || sharingWhatsApp}
+                        className="w-full bg-emerald-600 text-white hover:bg-emerald-700"
+                    >
+                        {shareCopied ? (
+                            <Check className="h-4 w-4 mr-2" />
+                        ) : (
+                            <Copy className="h-4 w-4 mr-2" />
+                        )}
+                        {shareCopied ? "Copied" : "Copy"}
+                    </Button>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

@@ -37,7 +37,41 @@ function shareUrlFor(guest: Guest, fallbackUrl?: string | null): string | null {
             ? `${window.location.origin}/g/${guest.share_token}`
             : fallbackUrl || null
     if (!base) return null
-    return `${base}${base.includes("?") ? "&" : "?"}v=${Date.now()}`
+    return base.split("?")[0]
+}
+
+function formatSharePhone(phone?: string | null): string {
+    const raw = phone?.trim() || ""
+    const digits = raw.replace(/\D/g, "")
+    if (digits.length === 11 && digits.startsWith("1")) {
+        return `+1 ${digits.slice(1, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`
+    }
+    if (digits.length === 10) {
+        return `+1 ${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`
+    }
+    return raw || "—"
+}
+
+/** Keep the link readable without letting WhatsApp attach the large QR preview card. */
+function linkWithoutPreview(url: string): string {
+    return url.replace(/^https:\/\//, "https://\u200B")
+}
+
+function tidyShareBlock(raw: string, name: string): string {
+    const lines = raw
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line && line !== "Customer:" && line !== "Info:")
+        .map((line) => {
+            if (line.startsWith("👉")) {
+                const url = line.replace(/^👉:\s*/, "")
+                return linkWithoutPreview(url)
+            }
+            return line.replace(/^(\p{Extended_Pictographic}(?:\uFE0F)?):\s+/u, "$1 ")
+        })
+        .filter((line) => !line.startsWith("👶"))
+
+    return [`*${name}*`, ...lines].join("\n")
 }
 
 async function messageForAppointment(
@@ -85,9 +119,10 @@ async function messageForAppointment(
         /* share still works without trust-score lines */
     }
 
-    return buildGuestWhatsAppMessage({
-        guestName: guest.full_name || customerName(apt),
-        phone: guest.phone || apt.lead?.customer?.phone,
+    const name = guest.full_name || customerName(apt)
+    const raw = buildGuestWhatsAppMessage({
+        guestName: name,
+        phone: formatSharePhone(guest.phone || apt.lead?.customer?.phone),
         email: guest.email || apt.lead?.customer?.email,
         appointmentAt: apt.scheduled_at,
         dealershipTimezone: timezone,
@@ -104,6 +139,7 @@ async function messageForAppointment(
         infoItems: eligibilityToWhatsAppInfoItems(assessment),
         shareUrl,
     })
+    return tidyShareBlock(raw, name)
 }
 
 export function shareableStoreAppointments(appointments: Appointment[]): Appointment[] {
@@ -138,25 +174,7 @@ export async function buildStoreAppointmentsWhatsAppMessage(
         return { text: "", shared: 0, skipped }
     }
 
-    const header =
-        blocks.length === 1
-            ? ""
-            : `Today's appointments — ${options.storeName} (${blocks.length})\n\n`
-    const text = header + blocks.join("\n\n————————\n\n")
+    const header = `*${options.storeName}*\nToday · ${blocks.length} appointment${blocks.length === 1 ? "" : "s"}`
+    const text = `${header}\n\n${blocks.join("\n\n")}`
     return { text, shared: blocks.length, skipped }
-}
-
-/** wa.me link. Long texts are omitted — WhatsApp truncates them, so the caller copies those instead. */
-export function whatsAppShareUrl(
-    text: string,
-    phone?: string | null
-): { url: string; mode: "with-text" | "paste" } {
-    const digits = (phone || "").replace(/\D/g, "")
-    const normalized = digits.length === 10 ? `1${digits}` : digits
-    const base = normalized.length >= 10 ? `https://wa.me/${normalized}` : "https://wa.me/"
-    const canInline = text.length > 0 && text.length <= 1500
-    return {
-        url: canInline ? `${base}?text=${encodeURIComponent(text)}` : base,
-        mode: canInline ? "with-text" : "paste",
-    }
 }
