@@ -287,6 +287,7 @@ async def list_appointments(
     assigned_to: Optional[UUID] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
+    partner_store_id: Optional[UUID] = None,
     today_only: bool = False,
     upcoming_only: bool = False,
     overdue_only: bool = False,
@@ -331,6 +332,16 @@ async def list_appointments(
     if date_to:
         query = query.where(Appointment.scheduled_at <= date_to)
         count_query = count_query.where(Appointment.scheduled_at <= date_to)
+
+    if partner_store_id:
+        query = query.outerjoin(Lead, Appointment.lead_id == Lead.id)
+        count_query = count_query.outerjoin(Lead, Appointment.lead_id == Lead.id)
+        store_match = or_(
+            Appointment.partner_store_id == partner_store_id,
+            Lead.partner_store_id == partner_store_id,
+        )
+        query = query.where(store_match)
+        count_query = count_query.where(store_match)
     
     now = utc_now()
     

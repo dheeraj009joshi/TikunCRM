@@ -32,7 +32,8 @@ import {
     ChevronLeft,
     ChevronRight,
     List,
-    CalendarDays
+    CalendarDays,
+    MessageCircle
 } from "lucide-react"
 import { AppointmentCalendar } from "@/components/appointments/appointment-calendar"
 import { 
@@ -77,6 +78,11 @@ import {
 import { Badge, getRoleVariant } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { filterStorage } from "@/lib/filter-storage"
+import { useToast } from "@/hooks/use-toast"
+import {
+    buildStoreAppointmentsWhatsAppMessage,
+    whatsAppShareUrl,
+} from "@/lib/share-store-appointments"
 
 // Stats Card Component
 function StatsCard({ 
@@ -902,6 +908,7 @@ const DATE_RANGE_PRESETS: { value: DateRangePreset; label: string }[] = [
 
 export default function AppointmentsPage() {
     const { user } = useAuthStore()
+    const { toast } = useToast()
     const { dealershipTimezone } = useDealershipTimezone()
     const searchParams = useSearchParams()
     const router = useRouter()
@@ -923,6 +930,15 @@ export default function AppointmentsPage() {
     // Filters - initial from URL or localStorage
     const [filter, setFilterState] = React.useState<FilterType>("all")
     const [statusFilter, setStatusFilterState] = React.useState<AppointmentStatus | "">("")
+    const [storeFilter, setStoreFilter] = React.useState("")
+    const [pagePartnerStores, setPagePartnerStores] = React.useState<PartnerStore[]>([])
+    const [sharingWhatsApp, setSharingWhatsApp] = React.useState(false)
+
+    React.useEffect(() => {
+        PartnerStoreService.list({ active_only: true })
+            .then((res) => setPagePartnerStores(res.items || []))
+            .catch(() => setPagePartnerStores([]))
+    }, [])
 
     // Restore from URL or localStorage
     React.useEffect(() => {
@@ -1045,12 +1061,13 @@ export default function AppointmentsPage() {
                 page_size: 200,
                 date_from: from.toISOString(),
                 date_to: to.toISOString(),
+                partner_store_id: storeFilter || undefined,
             })
             setCalendarAppointments(res.items)
         } catch (err) {
             console.error("Failed to load calendar appointments:", err)
         }
-    }, [])
+    }, [storeFilter])
 
     // Modals
     const [showCreateModal, setShowCreateModal] = React.useState(false)
@@ -1081,7 +1098,8 @@ export default function AppointmentsPage() {
                 page,
                 page_size: 20,
                 date_from: effectiveDateFrom,
-                date_to: effectiveDateTo
+                date_to: effectiveDateTo,
+                partner_store_id: storeFilter || undefined,
             }
 
             // Add status filter
@@ -1113,7 +1131,7 @@ export default function AppointmentsPage() {
         } finally {
             setLoading(false)
         }
-    }, [page, filter, statusFilter, dateFrom, dateTo, dateMode, specificDate])
+    }, [page, filter, statusFilter, dateFrom, dateTo, dateMode, specificDate, storeFilter])
     
     React.useEffect(() => {
         loadData()
@@ -1134,6 +1152,11 @@ export default function AppointmentsPage() {
         },
         [loadCalendarRange, loadData]
     )
+
+    React.useEffect(() => {
+        if (viewMode !== "calendar" || !calendarRangeRef.current) return
+        void loadCalendarRange(calendarRangeRef.current.from, calendarRangeRef.current.to)
+    }, [storeFilter, viewMode, loadCalendarRange])
 
     function handleComplete(appointment: Appointment) {
         setSelectedAppointment(appointment)
@@ -1318,6 +1341,65 @@ export default function AppointmentsPage() {
         `)
         printWindow.document.close()
     }
+
+    async function handleShareTodayToWhatsApp() {
+        const store = pagePartnerStores.find((s) => s.id === storeFilter)
+        if (!store) {
+            toast({
+                title: "Select a partner store",
+                description: "Choose the store, such as Toyota, then share today's appointments.",
+            })
+            return
+        }
+        const popup = window.open("about:blank", "_blank")
+        setSharingWhatsApp(true)
+        try {
+            const res = await AppointmentService.list({
+                page: 1,
+                page_size: 100,
+                today_only: true,
+                partner_store_id: store.id,
+            })
+            const { text, shared, skipped } = await buildStoreAppointmentsWhatsAppMessage(res.items, {
+                storeName: store.brand ? `${store.name} (${store.brand})` : store.name,
+                timezoneFor: appointmentTimezone,
+            })
+            if (!text || shared === 0) {
+                popup?.close()
+                toast({
+                    title: "Nothing to share",
+                    description: `No appointments scheduled today at ${store.name}.`,
+                })
+                return
+            }
+            try {
+                await navigator.clipboard.writeText(text)
+            } catch {
+                /* WhatsApp can still open with the text when it fits */
+            }
+            const { url, mode } = whatsAppShareUrl(text, store.phone)
+            if (popup) popup.location.href = url
+            const openedWithText = Boolean(popup) && mode === "with-text"
+            const skippedNote = skipped > 0 ? ` ${skipped} could not be included.` : ""
+            const countLabel = `${shared} appointment${shared === 1 ? "" : "s"}`
+            toast({
+                title: openedWithText ? "Opened in WhatsApp" : "Message copied",
+                description: openedWithText
+                    ? `${countLabel} for ${store.name} ready to send.${skippedNote}`
+                    : `Copied ${countLabel} for ${store.name}. Paste into the WhatsApp chat.${skippedNote}`,
+            })
+        } catch (err) {
+            popup?.close()
+            console.error("Failed to share appointments to WhatsApp:", err)
+            toast({
+                title: "Could not share",
+                description: "Try again in a moment.",
+                variant: "destructive",
+            })
+        } finally {
+            setSharingWhatsApp(false)
+        }
+    }
     
     return (
         <div className="p-6 space-y-6">
@@ -1327,7 +1409,7 @@ export default function AppointmentsPage() {
                     <h1 className="text-2xl font-bold">Appointments</h1>
                     <p className="text-muted-foreground">Schedule and manage your appointments</p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap justify-end">
                     <div className="flex items-center rounded-md border p-0.5">
                         <button
                             type="button"
@@ -1352,6 +1434,20 @@ export default function AppointmentsPage() {
                             Calendar
                         </button>
                     </div>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleShareTodayToWhatsApp}
+                        disabled={sharingWhatsApp}
+                        className="text-emerald-700 border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800"
+                    >
+                        {sharingWhatsApp ? (
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                            <MessageCircle className="h-4 w-4 mr-2" />
+                        )}
+                        Share to WhatsApp
+                    </Button>
                     <Button
                         variant="outline"
                         size="sm"
@@ -1455,6 +1551,27 @@ export default function AppointmentsPage() {
                             </SelectContent>
                         </Select>
                         
+                        <Select
+                            value={storeFilter || "all_stores"}
+                            onValueChange={(v) => {
+                                setStoreFilter(v === "all_stores" ? "" : v)
+                                setPage(1)
+                            }}
+                        >
+                            <SelectTrigger className="w-[180px] h-9">
+                                <Store className="mr-2 h-4 w-4 shrink-0" />
+                                <SelectValue placeholder="All stores" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all_stores">All stores</SelectItem>
+                                {pagePartnerStores.map((store) => (
+                                    <SelectItem key={store.id} value={store.id}>
+                                        {store.brand ? `${store.name} · ${store.brand}` : store.name}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+
                         {/* Status Filter */}
                         <Select value={statusFilter || "all_statuses"} onValueChange={(v) => setStatusFilter(v === "all_statuses" ? "" : (v as AppointmentStatus))}>
                             <SelectTrigger className="w-[150px] h-9">
@@ -1493,7 +1610,7 @@ export default function AppointmentsPage() {
                         </Select>
                         
                         {/* Clear Filters */}
-                        {(dateRangePreset !== "all_time" || filter !== "all" || statusFilter) && (
+                        {(dateRangePreset !== "all_time" || filter !== "all" || statusFilter || storeFilter) && (
                             <Button
                                 variant="outline"
                                 size="sm"
@@ -1505,6 +1622,7 @@ export default function AppointmentsPage() {
                                     setDateTo(undefined)
                                     setFilterState("all")
                                     setStatusFilterState("")
+                                    setStoreFilter("")
                                     setPage(1)
                                     router.replace("/appointments")
                                     filterStorage.setAppointments({ filter: "all", status: undefined })
@@ -1652,7 +1770,7 @@ export default function AppointmentsPage() {
                     )}
                     
                     {/* Active Filters Summary */}
-                    {(filter !== "all" || statusFilter || dateRangePreset !== "all_time") && (
+                    {(filter !== "all" || statusFilter || dateRangePreset !== "all_time" || storeFilter) && (
                         <div className="flex items-center gap-2 flex-wrap pt-2 border-t">
                             <span className="text-xs text-muted-foreground">Active:</span>
                             {filter !== "all" && (
@@ -1663,6 +1781,11 @@ export default function AppointmentsPage() {
                             {statusFilter && (
                                 <Badge variant="secondary" className="text-xs">
                                     {getAppointmentStatusLabel(statusFilter)}
+                                </Badge>
+                            )}
+                            {storeFilter && (
+                                <Badge variant="secondary" className="text-xs">
+                                    {pagePartnerStores.find((s) => s.id === storeFilter)?.name || "Partner store"}
                                 </Badge>
                             )}
                             {dateRangePreset !== "all_time" && (

@@ -120,6 +120,7 @@ export interface AppointmentListParams {
     assigned_to?: string
     date_from?: string
     date_to?: string
+    partner_store_id?: string
     today_only?: boolean
     upcoming_only?: boolean
     overdue_only?: boolean
@@ -140,6 +141,7 @@ export const AppointmentService = {
         if (params.assigned_to) searchParams.append("assigned_to", params.assigned_to)
         if (params.date_from) searchParams.append("date_from", params.date_from)
         if (params.date_to) searchParams.append("date_to", params.date_to)
+        if (params.partner_store_id) searchParams.append("partner_store_id", params.partner_store_id)
         if (params.today_only) searchParams.append("today_only", "true")
         if (params.upcoming_only) searchParams.append("upcoming_only", "true")
         if (params.overdue_only) searchParams.append("overdue_only", "true")
