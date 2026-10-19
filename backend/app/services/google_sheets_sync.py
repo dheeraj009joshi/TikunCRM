@@ -640,6 +640,7 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                             session.add(lead_campaign)
 
                             existing_lead.is_starred = True
+                            existing_lead.last_inbound_at = utc_now()
 
                             if matched_mapping:
                                 matched_mapping.leads_matched += 1

@@ -168,6 +168,10 @@ class Lead(Base):
         Boolean, nullable=False, default=False, index=True,
         comment="Indicates lead appeared in multiple campaigns"
     )
+    last_inbound_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
+        comment="When this existing lead arrived again as a new duplicate submission. Leads list sorts by this, then created_at.",
+    )
 
     interested_in: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     interested_brand: Mapped[Optional[str]] = mapped_column(

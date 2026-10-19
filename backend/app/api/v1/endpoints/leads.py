@@ -825,6 +825,11 @@ def _build_leads_list_select(
     return query
 
 
+def _lead_list_order():
+    """Newest arrival first: a duplicate that just came in sorts above its original created date."""
+    return func.coalesce(Lead.last_inbound_at, Lead.created_at).desc()
+
+
 @router.get("/")
 async def list_leads(
     db: AsyncSession = Depends(get_db),
@@ -903,7 +908,7 @@ async def list_leads(
     total_result = await db.execute(total_query)
     total = total_result.scalar() or 0
 
-    query = query.order_by(Lead.created_at.desc())
+    query = query.order_by(_lead_list_order(), Lead.created_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
 
     result = await db.execute(query)
@@ -946,7 +951,7 @@ async def list_unassigned_leads(
     total_result = await db.execute(total_query)
     total = total_result.scalar() or 0
     
-    query = query.order_by(Lead.created_at.desc())
+    query = query.order_by(_lead_list_order(), Lead.created_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
     
     result = await db.execute(query)
@@ -990,7 +995,7 @@ async def list_leads_unassigned_to_salesperson(
     total_result = await db.execute(total_query)
     total = total_result.scalar() or 0
     
-    query = query.order_by(Lead.created_at.desc())
+    query = query.order_by(_lead_list_order(), Lead.created_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
     
     result = await db.execute(query)
@@ -3819,7 +3824,7 @@ async def export_leads_csv(
         is_business=is_business,
     )
 
-    query = query.order_by(Lead.created_at.desc())
+    query = query.order_by(_lead_list_order(), Lead.created_at.desc())
 
     result = await db.execute(query)
     leads = result.scalars().all()
