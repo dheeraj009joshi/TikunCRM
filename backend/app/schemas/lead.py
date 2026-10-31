@@ -273,6 +273,8 @@ class LeadResponse(BaseModel):
     is_business: Optional[bool] = None
     # Multi-campaign tracking
     is_starred: bool = False
+    # Set when an existing lead receives another form fill (duplicate submission)
+    last_inbound_at: Optional[datetime] = None
     campaigns: List[LeadCampaignResponse] = Field(default_factory=list)
     # Timestamps
     first_contacted_at: Optional[datetime] = None
@@ -334,6 +336,13 @@ class LeadDetail(LeadResponse):
     created_by_user: Optional[UserBrief] = None
     dealership: Optional[DealershipBrief] = None
     access_level: Optional[str] = None
+
+
+class LeadIntakeSummary(BaseModel):
+    """How many leads arrived in a window: brand-new people vs existing leads that submitted again."""
+    new_count: int
+    duplicate_count: int
+    total: int
 
 
 class LeadListResponse(BaseModel):

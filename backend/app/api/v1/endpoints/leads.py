@@ -38,7 +38,7 @@ from app.models.campaign_mapping_version import CampaignMappingVersion
 from app.models.lead_sync_source import LeadSyncSource
 from app.models.partner_store import PartnerStore
 from app.schemas.lead import (
-    LeadResponse, LeadCreate, LeadUpdate, LeadDetail,
+    LeadResponse, LeadCreate, LeadUpdate, LeadDetail, LeadIntakeSummary,
     LeadStageChangeRequest, LeadStatusUpdateCompat, LeadAssignment, LeadListResponse,
     LeadDealershipAssignment, BulkLeadDealershipAssignment,
     CampaignFilterOption,
@@ -590,6 +590,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "has_dl_stip": bool(getattr(lead, "has_dl_stip", False)),
             "is_business": getattr(lead, "is_business", None),
             "is_starred": getattr(lead, 'is_starred', False),
+            "last_inbound_at": lead.last_inbound_at.isoformat() if getattr(lead, "last_inbound_at", None) else None,
             "campaigns": [],  # Not fetched in list view for performance
             "first_contacted_at": lead.first_contacted_at.isoformat() if lead.first_contacted_at else None,
             "last_contacted_at": lead.last_contacted_at.isoformat() if lead.last_contacted_at else None,
@@ -699,6 +700,7 @@ def _build_leads_list_select(
     is_active: Optional[bool] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
+    intake: Optional[str] = None,
     fresh_only: Optional[bool] = None,
     multi_campaign_only: Optional[bool] = None,
     campaign_mapping_id: Optional[UUID] = None,
@@ -778,10 +780,7 @@ def _build_leads_list_select(
         query = query.join(Customer, Lead.customer_id == Customer.id)
         query = query.where(_contact_match_filter(search))
 
-    if date_from:
-        query = query.where(Lead.created_at >= date_from)
-    if date_to:
-        query = query.where(Lead.created_at <= date_to)
+    query = _apply_arrival_window(query, date_from, date_to, intake)
 
     if fresh_only:
         fresh_subq = (
@@ -825,6 +824,46 @@ def _build_leads_list_select(
     return query
 
 
+def _apply_arrival_window(query, date_from: Optional[datetime], date_to: Optional[datetime], intake: Optional[str]):
+    """
+    Date window matches when a lead arrived, not only when the row was first created.
+
+    - new: created inside the window (a brand-new person)
+    - duplicate: an older lead received another form fill inside the window
+    - default: created in the window, or an existing lead came back in the window
+    """
+    if intake == "new":
+        if date_from:
+            query = query.where(Lead.created_at >= date_from)
+        if date_to:
+            query = query.where(Lead.created_at <= date_to)
+        return query
+
+    if intake == "duplicate":
+        query = query.where(Lead.last_inbound_at.isnot(None))
+        if date_from:
+            query = query.where(Lead.last_inbound_at >= date_from)
+            query = query.where(Lead.created_at < date_from)
+        if date_to:
+            query = query.where(Lead.last_inbound_at <= date_to)
+        if not date_from and not date_to:
+            query = query.where(Lead.created_at < Lead.last_inbound_at)
+        return query
+
+    if not date_from and not date_to:
+        return query
+
+    created_clauses = []
+    inbound_clauses = [Lead.last_inbound_at.isnot(None)]
+    if date_from:
+        created_clauses.append(Lead.created_at >= date_from)
+        inbound_clauses.append(Lead.last_inbound_at >= date_from)
+    if date_to:
+        created_clauses.append(Lead.created_at <= date_to)
+        inbound_clauses.append(Lead.last_inbound_at <= date_to)
+    return query.where(or_(and_(*created_clauses), and_(*inbound_clauses)))
+
+
 def _lead_list_order():
     """Newest arrival first: a duplicate that just came in sorts above its original created date."""
     return func.coalesce(Lead.last_inbound_at, Lead.created_at).desc()
@@ -852,8 +891,12 @@ async def list_leads(
     ),
     assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson (admin/owner only). Show only leads assigned to this user."),
     bdc_agent_id: Optional[UUID] = Query(None, description="Filter by BDC agent. Show only leads assigned to this BDC agent."),
-    date_from: Optional[datetime] = Query(None, description="Filter leads created on or after this date (ISO format)"),
-    date_to: Optional[datetime] = Query(None, description="Filter leads created on or before this date (ISO format)"),
+    date_from: Optional[datetime] = Query(None, description="Arrival window start. Matches leads created in the window or duplicates that came back in the window."),
+    date_to: Optional[datetime] = Query(None, description="Arrival window end."),
+    intake: Optional[Literal["new", "duplicate"]] = Query(
+        None,
+        description="With a date window: new = created in the window, duplicate = older lead that received another form fill in the window",
+    ),
     dealership_id: Optional[UUID] = Query(
         None,
         description="Filter by dealership (BDC / super admin with access)",
@@ -891,6 +934,7 @@ async def list_leads(
         is_active=is_active,
         date_from=date_from,
         date_to=date_to,
+        intake=intake,
         fresh_only=fresh_only,
         multi_campaign_only=multi_campaign_only,
         campaign_mapping_id=campaign_mapping_id,
@@ -1011,6 +1055,56 @@ async def list_leads_unassigned_to_salesperson(
         "page_size": page_size,
         "pages": (total + page_size - 1) // page_size
     }
+
+
+async def _count_lead_query(db: AsyncSession, query) -> int:
+    total_query = select(func.count()).select_from(query.subquery())
+    total_result = await db.execute(total_query)
+    return total_result.scalar() or 0
+
+
+@router.get("/intake-summary", response_model=LeadIntakeSummary)
+async def lead_intake_summary(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+    date_from: datetime = Query(..., description="Window start (inclusive)"),
+    date_to: datetime = Query(..., description="Window end (inclusive)"),
+    dealership_id: Optional[UUID] = Query(None, description="Limit to one dealership when the caller may see more than one"),
+) -> LeadIntakeSummary:
+    """
+    Counts for a day (or any window) the user can see:
+
+    - new_count: leads first created in the window
+    - duplicate_count: older leads that received another form fill in the window
+    - total: new + duplicate (each person once; a duplicate does not create a second row)
+    """
+    accessible_ids = await get_accessible_dealership_ids(db, current_user)
+
+    def _base():
+        return _build_leads_list_select(
+            current_user,
+            accessible_ids,
+            dealership_id=dealership_id,
+        )
+
+    new_count = await _count_lead_query(
+        db,
+        _base().where(Lead.created_at >= date_from, Lead.created_at <= date_to),
+    )
+    duplicate_count = await _count_lead_query(
+        db,
+        _base().where(
+            Lead.last_inbound_at.isnot(None),
+            Lead.last_inbound_at >= date_from,
+            Lead.last_inbound_at <= date_to,
+            Lead.created_at < date_from,
+        ),
+    )
+    return LeadIntakeSummary(
+        new_count=new_count,
+        duplicate_count=duplicate_count,
+        total=new_count + duplicate_count,
+    )
 
 
 @router.get("/campaign-filter-options", response_model=List[CampaignFilterOption])
@@ -1735,6 +1829,7 @@ async def get_lead(
         "campaign_mapping_id": lead.campaign_mapping_id if getattr(lead, "campaign_mapping_id", None) else None,
         "campaign_mapping": None,
         "is_starred": lead.is_starred,
+        "last_inbound_at": lead.last_inbound_at,
         "campaigns": [],  # Will be populated below
         "first_contacted_at": lead.first_contacted_at,
         "last_contacted_at": lead.last_contacted_at,
@@ -3773,8 +3868,12 @@ async def export_leads_csv(
     assigned_to: Optional[UUID] = Query(
         None, description="Filter by assignee (admin/owner/super only)"
     ),
-    date_from: Optional[datetime] = Query(None, description="Filter by created date from"),
-    date_to: Optional[datetime] = Query(None, description="Filter by created date to"),
+    date_from: Optional[datetime] = Query(None, description="Arrival window start"),
+    date_to: Optional[datetime] = Query(None, description="Arrival window end"),
+    intake: Optional[Literal["new", "duplicate"]] = Query(
+        None,
+        description="new = created in the window, duplicate = older lead that came back in the window",
+    ),
     down_min: Optional[float] = Query(None),
     down_max: Optional[float] = Query(None),
     has_license: Optional[bool] = Query(None),
@@ -3813,6 +3912,7 @@ async def export_leads_csv(
         is_active=is_active,
         date_from=date_from,
         date_to=date_to,
+        intake=intake,
         fresh_only=fresh_only,
         multi_campaign_only=multi_campaign_only,
         campaign_mapping_id=campaign_mapping_id,

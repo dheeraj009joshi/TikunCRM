@@ -82,7 +82,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar as CalendarPicker } from "@/components/ui/calendar"
-import { LeadService, Lead, LeadListResponse, type LeadListParams, type LeadExportFilters, type CampaignFilterOption, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool } from "@/services/lead-service"
+import { LeadService, Lead, type LeadListParams, type LeadExportFilters, type CampaignFilterOption, type LeadIntakeSummary, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool, getLeadArrival } from "@/services/lead-service"
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
@@ -257,6 +257,8 @@ export default function LeadsPage() {
     
     // Date filter state
     const [dateMode, setDateMode] = React.useState<"all" | "single" | "range">("all")
+    const [intakeKind, setIntakeKind] = React.useState<"any" | "new" | "duplicate">("any")
+    const [todayIntake, setTodayIntake] = React.useState<LeadIntakeSummary | null>(null)
     const [dateFrom, setDateFrom] = React.useState<Date | undefined>(undefined)
     const [dateTo, setDateTo] = React.useState<Date | undefined>(undefined)
     const [specificDate, setSpecificDate] = React.useState<Date | undefined>(undefined)
@@ -638,6 +640,9 @@ export default function LeadsPage() {
             if (dateFrom) params.date_from = startOfDay(dateFrom).toISOString()
             if (dateTo) params.date_to = endOfDay(dateTo).toISOString()
         }
+        if ((params.date_from || params.date_to) && intakeKind !== "any") {
+            params.intake = intakeKind
+        }
 
         // Tikun AI / stip & down filters
         if (hasSsnStip) params.has_ssn_stip = true
@@ -674,6 +679,7 @@ export default function LeadsPage() {
         specificDate,
         dateFrom,
         dateTo,
+        intakeKind,
         searchParams,
         hasSsnStip,
         hasDlStip,
@@ -681,6 +687,18 @@ export default function LeadsPage() {
         downMin,
         downMax,
     ])
+
+    const fetchTodayIntake = React.useCallback(async () => {
+        try {
+            const summary = await LeadService.getIntakeSummary({
+                date_from: startOfDay(new Date()).toISOString(),
+                date_to: endOfDay(new Date()).toISOString(),
+            })
+            setTodayIntake(summary)
+        } catch (error) {
+            console.error("Failed to fetch today's intake:", error)
+        }
+    }, [])
 
     const fetchLeads = React.useCallback(async () => {
         setIsLoading(true)
@@ -721,6 +739,9 @@ export default function LeadsPage() {
             } else if (dateMode === "range") {
                 if (dateFrom) baseParams.date_from = startOfDay(dateFrom).toISOString()
                 if (dateTo) baseParams.date_to = endOfDay(dateTo).toISOString()
+            }
+            if ((baseParams.date_from || baseParams.date_to) && intakeKind !== "any") {
+                baseParams.intake = intakeKind
             }
 
             if (viewMode === "unassigned") {
@@ -778,7 +799,7 @@ export default function LeadsPage() {
         } finally {
             setIsLoadingPipeline(false)
         }
-    }, [viewMode, search, source, selectedStageIds, stages, assignedTo, bdcAgentFilter, dateMode, specificDate, dateFrom, dateTo, campaignFilter])
+    }, [viewMode, search, source, selectedStageIds, stages, assignedTo, bdcAgentFilter, dateMode, specificDate, dateFrom, dateTo, intakeKind, campaignFilter])
 
     const loadMoreForStage = React.useCallback(
         async (stageId: string) => {
@@ -803,6 +824,16 @@ export default function LeadsPage() {
                 else if (viewMode === "fresh") params.fresh_only = true
                 else if (viewMode === "multi_campaign") params.multi_campaign_only = true
                 else if (viewMode === "converted" && convertedStage) params.is_active = false
+                if (dateMode === "single" && specificDate) {
+                    params.date_from = startOfDay(specificDate).toISOString()
+                    params.date_to = endOfDay(specificDate).toISOString()
+                } else if (dateMode === "range") {
+                    if (dateFrom) params.date_from = startOfDay(dateFrom).toISOString()
+                    if (dateTo) params.date_to = endOfDay(dateTo).toISOString()
+                }
+                if ((params.date_from || params.date_to) && intakeKind !== "any") {
+                    params.intake = intakeKind
+                }
 
                 const data = await LeadService.listLeads(params as LeadListParams)
                 setLeadsByStage((prev) => ({
@@ -824,15 +855,16 @@ export default function LeadsPage() {
                 setLoadingMoreStageId(null)
             }
         },
-        [stagePagination, loadingMoreStageId, stages, search, source, viewMode, assignedTo, bdcAgentFilter, campaignFilter]
+        [stagePagination, loadingMoreStageId, stages, search, source, viewMode, assignedTo, bdcAgentFilter, campaignFilter, dateMode, specificDate, dateFrom, dateTo, intakeKind]
     )
 
     React.useEffect(() => {
         const timer = setTimeout(() => {
             fetchLeads()
+            fetchTodayIntake()
         }, 300)
         return () => clearTimeout(timer)
-    }, [fetchLeads])
+    }, [fetchLeads, fetchTodayIntake])
 
     React.useEffect(() => {
         if (displayView === "pipeline" && stages.length > 0) {
@@ -844,20 +876,23 @@ export default function LeadsPage() {
     // WebSocket: Listen for lead updates to refresh the list in real-time
     useWebSocketEvent("lead:updated", () => {
         fetchLeads()
+        fetchTodayIntake()
         if (displayView === "pipeline") fetchLeadsForPipeline()
-    }, [fetchLeads, fetchLeadsForPipeline, displayView])
+    }, [fetchLeads, fetchTodayIntake, fetchLeadsForPipeline, displayView])
 
     // WebSocket: Listen for new leads to refresh the list in real-time
     useWebSocketEvent("lead:created", () => {
         fetchLeads()
+        fetchTodayIntake()
         if (displayView === "pipeline") fetchLeadsForPipeline()
-    }, [fetchLeads, fetchLeadsForPipeline, displayView])
+    }, [fetchLeads, fetchTodayIntake, fetchLeadsForPipeline, displayView])
 
     // WebSocket: Listen for badge refresh (triggers when assignments change)
     useWebSocketEvent("badges:refresh", () => {
         fetchLeads()
+        fetchTodayIntake()
         if (displayView === "pipeline") fetchLeadsForPipeline()
-    }, [fetchLeads, fetchLeadsForPipeline, displayView])
+    }, [fetchLeads, fetchTodayIntake, fetchLeadsForPipeline, displayView])
 
     const handleAssignClick = (lead: Lead) => {
         setSelectedLead(lead)
@@ -986,6 +1021,50 @@ export default function LeadsPage() {
         }
     }
 
+    const arrivalWindow = React.useMemo(() => {
+        if (dateMode === "single" && specificDate) {
+            return { start: startOfDay(specificDate), end: endOfDay(specificDate) }
+        }
+        if (dateMode === "range" && (dateFrom || dateTo)) {
+            return {
+                start: dateFrom ? startOfDay(dateFrom) : new Date(0),
+                end: dateTo ? endOfDay(dateTo) : new Date(8640000000000000),
+            }
+        }
+        return { start: startOfDay(new Date()), end: endOfDay(new Date()) }
+    }, [dateMode, specificDate, dateFrom, dateTo])
+
+    const viewingToday =
+        dateMode === "single" &&
+        !!specificDate &&
+        startOfDay(specificDate).getTime() === startOfDay(new Date()).getTime()
+
+    const todayFilterActive = (kind: "any" | "new" | "duplicate") =>
+        viewingToday && intakeKind === kind && viewMode === "all" && status === "all"
+
+    const applyTodayIntake = (kind: "any" | "new" | "duplicate") => {
+        if (todayFilterActive(kind)) {
+            setDateMode("all")
+            setIntakeKind("any")
+            setSpecificDate(undefined)
+            setPage(1)
+            return
+        }
+        if (viewMode !== "all" || status !== "all") {
+            setViewMode("all")
+            setStatus("all")
+            const params = new URLSearchParams(searchParams.toString())
+            params.set("filter", "all")
+            params.delete("status")
+            params.delete("page")
+            router.push(`/leads?${params.toString()}`)
+        }
+        setDateMode("single")
+        setSpecificDate(new Date())
+        setIntakeKind(kind)
+        setPage(1)
+    }
+
     return (
         <div className="space-y-6 min-w-0">
             {/* Header */}
@@ -999,6 +1078,58 @@ export default function LeadsPage() {
                         Add Manual Lead
                     </Button>
                 )}
+            </div>
+
+            <div className="flex flex-col gap-3 rounded-xl border bg-card px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                    <p className="text-sm font-semibold">Today&apos;s intake</p>
+                    <p className="text-xs text-muted-foreground mt-0.5 max-w-xl">
+                        Green rows are new people. Amber rows are duplicates — they already had a lead, filled the form again, and stay on that same lead.
+                    </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => applyTodayIntake("new")}
+                        className={cn(
+                            "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors",
+                            todayFilterActive("new")
+                                ? "border-emerald-500 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-100"
+                                : "border-emerald-200 bg-emerald-50/60 text-emerald-900 hover:bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/20 dark:text-emerald-100"
+                        )}
+                    >
+                        <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                        <span className="font-semibold tabular-nums">{todayIntake ? todayIntake.new_count : "–"}</span>
+                        new
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => applyTodayIntake("duplicate")}
+                        className={cn(
+                            "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors",
+                            todayFilterActive("duplicate")
+                                ? "border-amber-500 bg-amber-50 text-amber-950 dark:bg-amber-950/50 dark:text-amber-100"
+                                : "border-amber-200 bg-amber-50/70 text-amber-950 hover:bg-amber-50 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-100"
+                        )}
+                    >
+                        <span className="h-2 w-2 rounded-full bg-amber-500" />
+                        <span className="font-semibold tabular-nums">{todayIntake ? todayIntake.duplicate_count : "–"}</span>
+                        duplicates
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => applyTodayIntake("any")}
+                        className={cn(
+                            "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors",
+                            todayFilterActive("any")
+                                ? "border-primary bg-primary/10 text-foreground"
+                                : "bg-muted/40 text-foreground hover:bg-muted"
+                        )}
+                    >
+                        <span className="font-semibold tabular-nums">{todayIntake ? todayIntake.total : "–"}</span>
+                        total today
+                    </button>
+                </div>
             </div>
 
             {/* Saved views */}
@@ -1031,6 +1162,7 @@ export default function LeadsPage() {
                         setDownMax("")
                         setBdcAgentFilter("all")
                         setDateMode("all")
+                        setIntakeKind("any")
                         setSpecificDate(undefined)
                         setDateFrom(undefined)
                         setDateTo(undefined)
@@ -1416,6 +1548,7 @@ export default function LeadsPage() {
                                             size="sm"
                                             onClick={() => {
                                                 setDateMode("all")
+                                                setIntakeKind("any")
                                                 setSpecificDate(undefined)
                                                 setDateFrom(undefined)
                                                 setDateTo(undefined)
@@ -1438,6 +1571,9 @@ export default function LeadsPage() {
                                             Range
                                         </Button>
                                     </div>
+                                    <p className="text-xs text-muted-foreground">
+                                        A day includes new leads and duplicates that came back that day.
+                                    </p>
                                     {dateMode === "single" && (
                                         <CalendarPicker
                                             mode="single"
@@ -1481,6 +1617,7 @@ export default function LeadsPage() {
                                             className="w-full"
                                             onClick={() => {
                                                 setDateMode("all")
+                                                setIntakeKind("any")
                                                 setSpecificDate(undefined)
                                                 setDateFrom(undefined)
                                                 setDateTo(undefined)
@@ -1556,6 +1693,7 @@ export default function LeadsPage() {
                         isLoading={isLoadingPipeline}
                         onDragEnd={handlePipelineDragEnd}
                         onLoadMore={loadMoreForStage}
+                        arrivalWindow={arrivalWindow}
                     />
                 </div>
             )}
@@ -1631,10 +1769,17 @@ export default function LeadsPage() {
                                 }
                             />
                         ) : (
-                            leads.map((lead) => (
+                            leads.map((lead) => {
+                                const arrival = getLeadArrival(lead, arrivalWindow.start, arrivalWindow.end)
+                                return (
                                 <TableRow
                                     key={lead.id}
-                                    className="hover:bg-muted/30 transition-colors group cursor-pointer"
+                                    className={cn(
+                                        "transition-colors group cursor-pointer",
+                                        arrival === "new" && "bg-emerald-50 hover:!bg-emerald-100/80 dark:bg-emerald-950/40 dark:hover:!bg-emerald-950/60 shadow-[inset_3px_0_0_0_#10b981]",
+                                        arrival === "duplicate" && "bg-amber-50 hover:!bg-amber-100/90 dark:bg-amber-950/40 dark:hover:!bg-amber-950/60 shadow-[inset_3px_0_0_0_#d97706]",
+                                        arrival == null && "hover:bg-muted/30",
+                                    )}
                                     onClick={(e) => handleLeadActivation(lead, e)}
                                     onAuxClick={(e) => {
                                         if (e.button === 1) {
@@ -1651,7 +1796,21 @@ export default function LeadsPage() {
                                             <div>
                                                 <p className="font-semibold group-hover:text-primary transition-colors flex items-center gap-2">
                                                     {getLeadFullName(lead)}
-                                                    {lead.is_starred && (
+                                                    {arrival === "new" && (
+                                                        <Badge variant="secondary" className="text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200 border-0">
+                                                            New
+                                                        </Badge>
+                                                    )}
+                                                    {arrival === "duplicate" && (
+                                                        <Badge
+                                                            variant="secondary"
+                                                            className="text-[10px] font-medium bg-amber-100 text-amber-950 dark:bg-amber-900/50 dark:text-amber-100 border-0"
+                                                            title="This person already had a lead. A new form fill was added to the existing lead."
+                                                        >
+                                                            Duplicate
+                                                        </Badge>
+                                                    )}
+                                                    {lead.is_starred && arrival !== "duplicate" && (
                                                         <span
                                                             className="inline-flex"
                                                             title="Multi-campaign lead"
@@ -1869,10 +2028,22 @@ export default function LeadsPage() {
                                     )}
                                     {showCol("created") && (
                                     <TableCell>
+                                        {arrival === "duplicate" && lead.last_inbound_at ? (
+                                            <div className="space-y-0.5">
+                                                <div className="flex items-center gap-1 text-xs font-medium text-amber-800 dark:text-amber-200">
+                                                    <Calendar className="h-3 w-3" />
+                                                    Came back {formatDateInTimezone(lead.last_inbound_at, timezone, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                                                </div>
+                                                <p className="text-[10px] text-muted-foreground">
+                                                    First created {formatDateInTimezone(lead.created_at, timezone, { year: "numeric", month: "short", day: "numeric" })}
+                                                </p>
+                                            </div>
+                                        ) : (
                                         <div className="flex items-center gap-1 text-xs text-muted-foreground">
                                             <Calendar className="h-3 w-3" />
                                             {formatDateInTimezone(lead.created_at, timezone, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                                         </div>
+                                        )}
                                     </TableCell>
                                     )}
                                     <TableCell>
@@ -1958,7 +2129,8 @@ export default function LeadsPage() {
                                         </DropdownMenu>
                                     </TableCell>
                                 </TableRow>
-                            ))
+                                )
+                            })
                         )}
                     </TableBody>
                 </Table>

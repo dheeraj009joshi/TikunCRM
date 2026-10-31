@@ -97,6 +97,8 @@ export interface Lead {
     is_business?: boolean | null;
     /** Indicates this lead appeared in multiple campaigns */
     is_starred?: boolean;
+    /** When an existing lead received another form fill. Null for a lead that has never come back. */
+    last_inbound_at?: string | null;
     /** Campaign associations (for multi-campaign leads) */
     campaigns?: LeadCampaign[];
     first_contacted_at?: string;
@@ -159,6 +161,38 @@ export function isLeadReturnedToPool(lead: Lead): boolean {
     return Boolean(lead.returned_to_pool_at && !lead.assigned_to);
 }
 
+export type LeadArrivalKind = "new" | "duplicate";
+
+/**
+ * How this lead arrived in a window.
+ * "new" = first created in the window.
+ * "duplicate" = an older lead that received another form fill in the window.
+ */
+export function getLeadArrival(
+    lead: Pick<Lead, "created_at" | "last_inbound_at">,
+    windowStart: Date,
+    windowEnd: Date,
+): LeadArrivalKind | null {
+    const created = new Date(lead.created_at).getTime();
+    const start = windowStart.getTime();
+    const end = windowEnd.getTime();
+    if (Number.isNaN(created)) return null;
+    const inbound = lead.last_inbound_at ? new Date(lead.last_inbound_at).getTime() : Number.NaN;
+    if (!Number.isNaN(inbound) && inbound >= start && inbound <= end && created < start) {
+        return "duplicate";
+    }
+    if (created >= start && created <= end) {
+        return "new";
+    }
+    return null;
+}
+
+export interface LeadIntakeSummary {
+    new_count: number;
+    duplicate_count: number;
+    total: number;
+}
+
 export interface LeadListResponse {
     items: Lead[];
     total: number;
@@ -182,10 +216,12 @@ export interface LeadListParams {
     assigned_to?: string;
     /** Filter by BDC agent */
     bdc_agent_id?: string;
-    /** Filter leads created on or after this date (ISO format) */
+    /** Arrival window start. Includes leads created then, and duplicates that came back then. */
     date_from?: string;
-    /** Filter leads created on or before this date (ISO format) */
+    /** Arrival window end. */
     date_to?: string;
+    /** With a date window: new people, or older leads that submitted again. */
+    intake?: "new" | "duplicate";
     /** Only leads with multiple campaign submissions (is_starred) */
     multi_campaign_only?: boolean;
     /** Filter by campaign mapping (primary or lead_campaigns) */
@@ -238,6 +274,15 @@ export interface LeadUpdateData {
 export const LeadService = {
     async listLeads(params: LeadListParams = {}): Promise<LeadListResponse> {
         const response = await apiClient.get(`${LEADS_PREFIX}/`, { params });
+        return response.data;
+    },
+
+    async getIntakeSummary(params: {
+        date_from: string;
+        date_to: string;
+        dealership_id?: string;
+    }): Promise<LeadIntakeSummary> {
+        const response = await apiClient.get<LeadIntakeSummary>(`${LEADS_PREFIX}/intake-summary`, { params });
         return response.data;
     },
 
@@ -439,6 +484,7 @@ export const LeadService = {
         if (options?.assigned_to) params.append("assigned_to", options.assigned_to);
         if (options?.date_from) params.append("date_from", options.date_from);
         if (options?.date_to) params.append("date_to", options.date_to);
+        if (options?.intake) params.append("intake", options.intake);
         if (typeof options?.is_active === "boolean") params.append("is_active", String(options.is_active));
 
         const response = await apiClient.get(`${LEADS_PREFIX}/export/csv?${params.toString()}`, {

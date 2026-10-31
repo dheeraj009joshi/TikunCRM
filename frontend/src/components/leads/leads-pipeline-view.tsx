@@ -18,7 +18,7 @@ import { CSS } from "@dnd-kit/utilities"
 import { Phone, Mail, Loader2, Target, DollarSign } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { UserAvatar } from "@/components/ui/avatar"
-import { Lead, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool } from "@/services/lead-service"
+import { Lead, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool, getLeadArrival } from "@/services/lead-service"
 import { LeadStage } from "@/services/lead-stage-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
@@ -26,12 +26,18 @@ import { cn } from "@/lib/utils"
 import { rememberLeadsListLocation } from "@/lib/leads-list-return"
 import { TrustScoreBadge } from "@/components/eligibility/trust-score-badge"
 
+const ArrivalWindowContext = React.createContext<{ start: Date; end: Date } | null>(null)
+
 function PipelineLeadCard({ lead, isDragging }: { lead: Lead; isDragging?: boolean }) {
     const { timezone } = useBrowserTimezone()
+    const arrivalWindow = React.useContext(ArrivalWindowContext)
     const name = getLeadFullName(lead)
     const phone = getLeadPhone(lead)
     const email = getLeadEmail(lead)
     const assignedUser = lead.assigned_to_user
+    const arrival = arrivalWindow
+        ? getLeadArrival(lead, arrivalWindow.start, arrivalWindow.end)
+        : null
 
     return (
         <Link
@@ -41,13 +47,25 @@ function PipelineLeadCard({ lead, isDragging }: { lead: Lead; isDragging?: boole
             <div
                 className={cn(
                     "rounded-lg border bg-card p-3 shadow-sm hover:shadow-md transition-shadow cursor-pointer",
-                    isDragging && "opacity-50 ring-2 ring-primary"
+                    isDragging && "opacity-50 ring-2 ring-primary",
+                    arrival === "new" && "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40",
+                    arrival === "duplicate" && "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40",
                 )}
             >
                 <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1">
                         <p className="font-medium text-sm truncate flex items-center gap-1.5 flex-wrap">
                             <span className="truncate">{name}</span>
+                            {arrival === "new" && (
+                                <Badge variant="secondary" className="text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200 border-0">
+                                    New
+                                </Badge>
+                            )}
+                            {arrival === "duplicate" && (
+                                <Badge variant="secondary" className="text-[10px] bg-amber-100 text-amber-950 dark:bg-amber-900/50 dark:text-amber-100 border-0">
+                                    Duplicate
+                                </Badge>
+                            )}
                             {lead.guest_id && (
                                 <TrustScoreBadge score={lead.guest_trust_score} label="Trust" />
                             )}
@@ -127,7 +145,9 @@ function PipelineLeadCard({ lead, isDragging }: { lead: Lead; isDragging?: boole
                     </div>
                 )}
                 <p className="text-[10px] text-muted-foreground mt-1.5">
-                    {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium" })}
+                    {arrival === "duplicate" && lead.last_inbound_at
+                        ? `Came back ${formatDateInTimezone(lead.last_inbound_at, timezone, { dateStyle: "medium" })}`
+                        : formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium" })}
                 </p>
             </div>
         </Link>
@@ -251,6 +271,7 @@ export interface LeadsPipelineViewProps {
     onDragEnd: (event: DragEndEvent) => void | Promise<void>
     onLoadMore?: (stageId: string) => void | Promise<void>
     onRefresh?: () => void
+    arrivalWindow?: { start: Date; end: Date }
 }
 
 export function LeadsPipelineView({
@@ -261,6 +282,7 @@ export function LeadsPipelineView({
     isLoading,
     onDragEnd,
     onLoadMore,
+    arrivalWindow,
 }: LeadsPipelineViewProps) {
     const [activeId, setActiveId] = React.useState<string | null>(null)
 
@@ -295,6 +317,7 @@ export function LeadsPipelineView({
     }
 
     return (
+        <ArrivalWindowContext.Provider value={arrivalWindow ?? null}>
         <div className="w-full min-w-0 overflow-x-auto">
             <DndContext
                 sensors={sensors}
@@ -320,5 +343,6 @@ export function LeadsPipelineView({
                 </DragOverlay>
             </DndContext>
         </div>
+        </ArrivalWindowContext.Provider>
     )
 }
