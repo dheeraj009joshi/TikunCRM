@@ -71,6 +71,8 @@ class PartnerStoreResponse(BaseModel):
     is_active: bool
     created_at: Any
     updated_at: Any
+    program_type: Optional[str] = None
+    program_status: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -108,7 +110,26 @@ async def list_partner_stores(
     query = query.order_by(PartnerStore.name)
     result = await db.execute(query)
     stores = list(result.scalars().all())
-    return PartnerStoreListResponse(items=stores, total=len(stores))
+    programs = {}
+    if stores:
+        from app.models.partner_program import PartnerProgram
+        program_rows = (
+            await db.execute(
+                select(PartnerProgram).where(
+                    PartnerProgram.partner_store_id.in_([store.id for store in stores])
+                )
+            )
+        ).scalars().all()
+        programs = {row.partner_store_id: row for row in program_rows}
+    items = []
+    for store in stores:
+        item = PartnerStoreResponse.model_validate(store)
+        program = programs.get(store.id)
+        if program is not None and program.status != "cancelled":
+            item.program_type = program.program_type
+            item.program_status = program.status
+        items.append(item)
+    return PartnerStoreListResponse(items=items, total=len(items))
 
 
 @router.get("/brands", response_model=List[str])

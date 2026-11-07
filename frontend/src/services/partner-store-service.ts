@@ -23,6 +23,8 @@ export interface PartnerStore {
     is_active: boolean;
     created_at: string;
     updated_at: string;
+    program_type?: "leads_only" | "full_bdc" | null;
+    program_status?: string | null;
 }
 
 export interface PartnerStoreCreate {

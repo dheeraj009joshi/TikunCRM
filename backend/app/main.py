@@ -180,7 +180,10 @@ async def lifespan(app: FastAPI):
         ok = await CrmContentSearchService.ensure_index()
         if ok:
             logger.info("Azure AI Search index ready for CRM content")
-            asyncio.create_task(_backfill_azure_search_if_empty(), name="azure-search-backfill")
+            if settings.run_background_scheduler:
+                asyncio.create_task(_backfill_azure_search_if_empty(), name="azure-search-backfill")
+            else:
+                logger.info("Azure AI Search backfill skipped (background jobs disabled)")
         else:
             logger.warning("Azure AI Search configured but index setup failed — using Postgres fallback")
     else:

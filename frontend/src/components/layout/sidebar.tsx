@@ -26,7 +26,6 @@ import {
     MessageSquare,
     MessageCircle,
     Phone,
-    Headset,
     MessagesSquare,
     Store,
     Contact,
@@ -79,12 +78,6 @@ const allSidebarItems: SidebarItem[] = [
         name: "Time & Pay",
         icon: Timer,
         href: "/time-tracking",
-        roles: ["bdc", "super_admin", "dealership_admin", "dealership_owner"],
-    },
-    {
-        name: "BDC Desk",
-        icon: Headset,
-        href: "/bdc-desk",
         roles: ["bdc", "super_admin", "dealership_admin", "dealership_owner"],
     },
     {
