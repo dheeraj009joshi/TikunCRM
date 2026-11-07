@@ -7,7 +7,7 @@ import { Loader2 } from "lucide-react"
 
 const AUTH_PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/reset-password"]
 /** Paths anyone can open without auth (includes guest QR share links) */
-const PUBLIC_PATHS = [...AUTH_PUBLIC_PATHS, "/g/"]
+const PUBLIC_PATHS = [...AUTH_PUBLIC_PATHS, "/g/", "/partner"]
 const LANDING_PAGE_PATH = "/"
 const CHANGE_PASSWORD_PATH = "/change-password"
 

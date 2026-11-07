@@ -204,3 +204,251 @@ async def delete_partner_store(
     store.is_active = False
     await db.commit()
     logger.info(f"Partner store deactivated: {store.name} by {current_user.email}")
+
+
+# ── Program, portal login, BDC coverage ───────────────────────────
+
+from decimal import Decimal
+
+from app.core.security import get_password_hash
+from app.core.timezone import utc_now
+from app.models.partner_bdc_agent import PartnerBdcAgent
+from app.models.partner_portal_user import PartnerPortalUser
+from app.models.partner_program import (
+    PROGRAM_STATUSES,
+    PROGRAM_TYPES,
+    PartnerProgram,
+)
+from app.models.user import User as CrmUser
+
+
+class PartnerProgramUpsert(BaseModel):
+    program_type: str
+    status: str = "pending"
+    states: List[str] = Field(default_factory=list)
+    postal_codes: List[str] = Field(default_factory=list)
+    min_credit_score: Optional[int] = None
+    max_credit_score: Optional[int] = None
+    min_down_payment: Optional[Decimal] = None
+    daily_cap: Optional[int] = Field(None, ge=0)
+    monthly_cap: Optional[int] = Field(None, ge=0)
+    hours: dict = Field(default_factory=dict)
+    timezone: str = "America/New_York"
+    priority_weight: int = 0
+
+
+class PartnerProgramResponse(PartnerProgramUpsert):
+    id: UUID
+    partner_store_id: UUID
+
+    model_config = {"from_attributes": True}
+
+
+class PortalUserCreate(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+    first_name: Optional[str] = Field(None, max_length=100)
+    last_name: Optional[str] = Field(None, max_length=100)
+
+
+class PortalUserResponse(BaseModel):
+    id: UUID
+    email: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    is_active: bool
+
+    model_config = {"from_attributes": True}
+
+
+class BdcAgentAssignment(BaseModel):
+    user_id: UUID
+    max_open_leads: int = Field(15, ge=1, le=200)
+
+
+class BdcAgentResponse(BaseModel):
+    user_id: UUID
+    max_open_leads: int
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+
+
+def _clean_str_list(values: List[str]) -> list:
+    cleaned = []
+    seen = set()
+    for value in values or []:
+        item = str(value).strip()
+        if not item:
+            continue
+        key = item.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(item)
+    return cleaned
+
+
+async def _get_store_or_404(db: AsyncSession, store_id: UUID) -> PartnerStore:
+    store = await db.get(PartnerStore, store_id)
+    if store is None:
+        raise HTTPException(status_code=404, detail="Partner store not found")
+    return store
+
+
+@router.get("/{store_id}/program", response_model=Optional[PartnerProgramResponse])
+async def get_program(
+    store_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.MANAGE_PARTNER_STORES)),
+) -> Any:
+    await _get_store_or_404(db, store_id)
+    program = (
+        await db.execute(
+            select(PartnerProgram).where(PartnerProgram.partner_store_id == store_id)
+        )
+    ).scalar_one_or_none()
+    return program
+
+
+@router.put("/{store_id}/program", response_model=PartnerProgramResponse)
+async def upsert_program(
+    store_id: UUID,
+    body: PartnerProgramUpsert,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.MANAGE_PARTNER_STORES)),
+) -> Any:
+    await _get_store_or_404(db, store_id)
+    if body.program_type not in PROGRAM_TYPES:
+        raise HTTPException(status_code=400, detail="program_type must be leads_only or full_bdc")
+    if body.status not in PROGRAM_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid program status")
+    program = (
+        await db.execute(
+            select(PartnerProgram).where(PartnerProgram.partner_store_id == store_id)
+        )
+    ).scalar_one_or_none()
+    payload = body.model_dump()
+    payload["states"] = _clean_str_list(body.states)
+    payload["postal_codes"] = _clean_str_list(body.postal_codes)
+    if program is None:
+        program = PartnerProgram(partner_store_id=store_id, **payload)
+        db.add(program)
+    else:
+        for field, value in payload.items():
+            setattr(program, field, value)
+        program.updated_at = utc_now()
+    await db.commit()
+    await db.refresh(program)
+    logger.info("Partner program saved for store %s by %s", store_id, current_user.email)
+    return program
+
+
+@router.get("/{store_id}/portal-users", response_model=List[PortalUserResponse])
+async def list_portal_users(
+    store_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.MANAGE_PARTNER_STORES)),
+) -> Any:
+    await _get_store_or_404(db, store_id)
+    rows = (
+        await db.execute(
+            select(PartnerPortalUser)
+            .where(PartnerPortalUser.partner_store_id == store_id)
+            .order_by(PartnerPortalUser.email)
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+@router.post("/{store_id}/portal-users", response_model=PortalUserResponse, status_code=status.HTTP_201_CREATED)
+async def create_portal_user(
+    store_id: UUID,
+    body: PortalUserCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.MANAGE_PARTNER_STORES)),
+) -> Any:
+    await _get_store_or_404(db, store_id)
+    email = body.email.strip().lower()
+    existing = (
+        await db.execute(select(PartnerPortalUser).where(PartnerPortalUser.email == email))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(status_code=400, detail="That portal email is already in use")
+    portal_user = PartnerPortalUser(
+        partner_store_id=store_id,
+        email=email,
+        password_hash=get_password_hash(body.password),
+        first_name=(body.first_name or "").strip() or None,
+        last_name=(body.last_name or "").strip() or None,
+        is_active=True,
+    )
+    db.add(portal_user)
+    await db.commit()
+    await db.refresh(portal_user)
+    logger.info("Portal user %s created for store %s by %s", email, store_id, current_user.email)
+    return portal_user
+
+
+@router.get("/{store_id}/bdc-agents", response_model=List[BdcAgentResponse])
+async def list_bdc_agents(
+    store_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.MANAGE_PARTNER_STORES)),
+) -> Any:
+    await _get_store_or_404(db, store_id)
+    rows = (
+        await db.execute(
+            select(PartnerBdcAgent, CrmUser)
+            .join(CrmUser, CrmUser.id == PartnerBdcAgent.user_id)
+            .where(PartnerBdcAgent.partner_store_id == store_id)
+            .order_by(CrmUser.first_name)
+        )
+    ).all()
+    return [
+        BdcAgentResponse(
+            user_id=agent.user_id,
+            max_open_leads=agent.max_open_leads,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            email=user.email,
+        )
+        for agent, user in rows
+    ]
+
+
+@router.put("/{store_id}/bdc-agents", response_model=List[BdcAgentResponse])
+async def replace_bdc_agents(
+    store_id: UUID,
+    body: List[BdcAgentAssignment],
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.MANAGE_PARTNER_STORES)),
+) -> Any:
+    await _get_store_or_404(db, store_id)
+    seen = set()
+    for item in body:
+        if item.user_id in seen:
+            raise HTTPException(status_code=400, detail="Duplicate BDC agent")
+        seen.add(item.user_id)
+        user = await db.get(CrmUser, item.user_id)
+        role = user.role.value if user and hasattr(user.role, "value") else None
+        if user is None or role != "bdc":
+            raise HTTPException(status_code=400, detail="Each agent must be an active BDC user")
+    existing = (
+        await db.execute(
+            select(PartnerBdcAgent).where(PartnerBdcAgent.partner_store_id == store_id)
+        )
+    ).scalars().all()
+    for row in existing:
+        await db.delete(row)
+    await db.flush()
+    for item in body:
+        db.add(
+            PartnerBdcAgent(
+                user_id=item.user_id,
+                partner_store_id=store_id,
+                max_open_leads=item.max_open_leads,
+            )
+        )
+    await db.commit()
+    return await list_bdc_agents(store_id, db, current_user)

@@ -1250,6 +1250,8 @@ async def create_lead(
                 performer_name=current_user.full_name or current_user.email,
                 source=f"{source_label} (repeat interest)",
             )
+        from app.services.partner_routing_service import route_lead_safely
+        await route_lead_safely(db, existing_active_lead.id)
         return existing_active_lead
 
     # Optional secondary customer (e.g. co-buyer)
@@ -1337,6 +1339,9 @@ async def create_lead(
         )
     except Exception:
         logger.exception("Failed to create guest profile for lead %s", lead.id)
+
+    from app.services.partner_routing_service import route_lead_safely
+    await route_lead_safely(db, lead.id)
 
     return lead
 

@@ -60,6 +60,10 @@ from app.models.lead_credit_application import (
     CreditApplicationType,
 )
 from app.models.partner_store import PartnerStore
+from app.models.partner_program import PartnerProgram
+from app.models.lead_delivery import LeadDelivery
+from app.models.partner_bdc_agent import PartnerBdcAgent
+from app.models.partner_portal_user import PartnerPortalUser
 from app.models.time_entry import TimeEntry
 
 __all__ = [
@@ -141,5 +145,9 @@ __all__ = [
     "CreditApplicationTransactionType",
     "CreditApplicationType",
     "PartnerStore",
+    "PartnerProgram",
+    "LeadDelivery",
+    "PartnerBdcAgent",
+    "PartnerPortalUser",
     "TimeEntry",
 ]

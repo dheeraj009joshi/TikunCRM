@@ -9,8 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import Permission, UserRole, has_permission
-from app.core.security import verify_token, verify_config_unlock_token
+from app.core.security import decode_token, verify_token, verify_config_unlock_token
 from app.db.database import get_db
+from app.models.partner_portal_user import PartnerPortalUser
 from app.models.user import User
 from app.schemas.auth import CurrentUser
 
@@ -141,3 +142,26 @@ async def require_config_unlock(
             detail="invalid_or_expired_config_unlock_token",
         )
     return current_user
+
+
+async def get_current_partner(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_db),
+) -> PartnerPortalUser:
+    """Partner portal token. CRM access tokens are rejected here, and the reverse is true in get_current_user."""
+    payload = decode_token(credentials.credentials)
+    if payload is None or payload.get("type") != "partner":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    user_id = payload.get("sub")
+    result = await db.execute(select(PartnerPortalUser).where(PartnerPortalUser.id == user_id))
+    partner = result.scalar_one_or_none()
+    if partner is None or not partner.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Partner account not found",
+        )
+    return partner

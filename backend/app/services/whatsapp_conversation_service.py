@@ -473,7 +473,10 @@ class WhatsAppConversationService:
         )
         self.db.add(lead)
         await self.db.flush()
-        
+
+        from app.services.partner_routing_service import route_lead_safely
+        await route_lead_safely(self.db, lead.id)
+
         return customer, lead
 
     async def update_delivery_status(
@@ -965,7 +968,10 @@ class WhatsAppConversationService:
         )
         self.db.add(lead)
         await self.db.flush()
-        
+
+        from app.services.partner_routing_service import route_lead_safely
+        await route_lead_safely(self.db, lead.id)
+
         # Link all existing messages from this number to the new lead
         linked_count = await self.link_unknown_messages_to_lead(
             phone_number=phone_number,

@@ -101,6 +101,7 @@ import { TeamService, UserBrief } from "@/services/team-service"
 import { useAuthStore } from "@/stores/auth-store"
 import { AssignToDealershipModal, AssignToSalespersonModal, AssignSecondaryCustomerModal } from "@/components/leads/assignment-modal"
 import { AssignPartnerStore } from "@/components/leads/assign-partner-store"
+import { LeadDeliveries } from "@/components/leads/lead-deliveries"
 import { LogContactModal } from "@/components/leads/log-contact-modal"
 import { StageStepper } from "@/components/leads/stage-stepper"
 import { NextBestAction } from "@/components/leads/next-best-action"
@@ -2666,6 +2667,11 @@ export default function LeadDetailsPage() {
                             </div>
                                 )}
                             </div>
+
+                            <LeadDeliveries
+                                leadId={lead.id}
+                                canManage={Boolean(!isMentionOnly && canConnectToPartner)}
+                            />
 
                             {/* Partner destinations */}
                             <div>

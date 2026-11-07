@@ -57,6 +57,7 @@ import {
     type PartnerStore,
     type PartnerStoreCreate,
 } from "@/services/partner-store-service"
+import { PartnerProgramDialog } from "@/components/partner/partner-program-dialog"
 
 export default function PartnerStoresPage() {
     const { isSuperAdmin, isManagerOrAbove } = useRole()
@@ -69,6 +70,7 @@ export default function PartnerStoresPage() {
     const [brandFilter, setBrandFilter] = useState<string>("all")
     const [showCreateModal, setShowCreateModal] = useState(false)
     const [editingStore, setEditingStore] = useState<PartnerStore | null>(null)
+    const [programStore, setProgramStore] = useState<PartnerStore | null>(null)
     const [saving, setSaving] = useState(false)
 
     const loadStores = useCallback(async () => {
@@ -238,6 +240,13 @@ export default function PartnerStoresPage() {
                                                 <div className="flex justify-end gap-1">
                                                     <Button
                                                         variant="ghost"
+                                                        size="sm"
+                                                        onClick={() => setProgramStore(store)}
+                                                    >
+                                                        Program
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
                                                         size="icon"
                                                         onClick={() => { setEditingStore(store); setShowCreateModal(true) }}
                                                     >
@@ -270,6 +279,7 @@ export default function PartnerStoresPage() {
                 onClose={() => { setShowCreateModal(false); setEditingStore(null) }}
                 onSave={handleSave}
             />
+            <PartnerProgramDialog store={programStore} onClose={() => setProgramStore(null)} />
         </div>
     )
 }

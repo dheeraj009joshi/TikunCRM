@@ -444,6 +444,9 @@ class VoiceService:
         self.db.add(lead)
         await self.db.flush()
 
+        from app.services.partner_routing_service import route_lead_safely
+        await route_lead_safely(self.db, lead.id)
+
         logger.info(f"Created minimal lead {lead.id} for unknown caller {phone}")
         return lead, customer
 

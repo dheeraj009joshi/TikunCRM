@@ -8,6 +8,7 @@ hourly rate so historical payouts stay accurate after rate changes.
 """
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, time, date
 from decimal import Decimal, ROUND_HALF_UP
@@ -27,6 +28,8 @@ from app.models.customer import Customer
 from app.models.lead import Lead
 from app.models.time_entry import TimeEntry
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 from app.schemas.time_tracking import (
     AgentRosterItem,
     AgentRosterResponse,
@@ -593,6 +596,15 @@ async def clock_in(db: AsyncSession, user: User, note: Optional[str] = None) -> 
         await db.rollback()
         raise ValueError("already_clocked_in") from exc
     await db.refresh(entry)
+    role_value = user.role.value if hasattr(user.role, "value") else str(user.role)
+    if role_value == "bdc":
+        try:
+            from app.services.partner_routing_service import assign_waiting_bdc_leads
+            await assign_waiting_bdc_leads(db, user.id)
+            await db.commit()
+        except Exception:
+            logger.exception("Failed to assign waiting BDC leads on clock-in for %s", user.id)
+            await db.rollback()
     return entry
 
 

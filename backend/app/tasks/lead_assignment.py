@@ -120,13 +120,22 @@ async def auto_assign_leads_from_activity():
                     ),
                 )
             )
+            from app.models.lead_delivery import LOCKING_STATUSES, LeadDelivery
+            has_open_partner_delivery = exists(
+                select(LeadDelivery.id).where(
+                    LeadDelivery.lead_id == Lead.id,
+                    LeadDelivery.status.in_(LOCKING_STATUSES),
+                )
+            )
 
-            # Get leads with no salesperson assigned (including leads in dealerships)
+            # Get leads with no salesperson assigned (including leads in dealerships).
+            # Leads already delivered to a partner or sitting on the BDC desk stay there.
             result = await session.execute(
                 select(Lead)
                 .where(
                     Lead.assigned_to.is_(None),  # No salesperson assigned
                     has_post_pool_activity,
+                    ~has_open_partner_delivery,
                 )
             )
             unassigned_leads = result.scalars().all()

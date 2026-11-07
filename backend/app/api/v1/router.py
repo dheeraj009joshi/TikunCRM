@@ -3,7 +3,7 @@ API v1 Router - combines all route modules
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, bdc_reports, voice, sms, whatsapp, showroom, customers, lead_stages, stips, admin_sync_sources, campaign_mappings, auto_whatsapp, eligibility, guests, public, saved_views, tasks, ai_assistant, crm_search, credit_application, partner_stores, time_tracking
+from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, bdc_reports, voice, sms, whatsapp, showroom, customers, lead_stages, stips, admin_sync_sources, campaign_mappings, auto_whatsapp, eligibility, guests, public, saved_views, tasks, ai_assistant, crm_search, credit_application, partner_stores, time_tracking, lead_deliveries, bdc_desk, partner_portal
 from app.api.v1.endpoints.webhooks import sendgrid as sendgrid_webhook
 from app.api.v1.endpoints.webhooks import twilio as twilio_webhook
 from app.api.v1.endpoints.webhooks import twilio_ai_voice as twilio_ai_voice_webhook
@@ -16,6 +16,7 @@ api_router.include_router(auth_oauth.router, prefix="/auth/oauth", tags=["OAuth"
 api_router.include_router(users.router, prefix="/users", tags=["Users"])
 api_router.include_router(dealerships.router, prefix="/dealerships", tags=["Dealerships"])
 api_router.include_router(leads.router, prefix="/leads", tags=["Leads"])
+api_router.include_router(lead_deliveries.router, prefix="/leads", tags=["Lead Deliveries"])
 api_router.include_router(credit_application.router, prefix="/leads", tags=["Leads"])
 api_router.include_router(customers.router, prefix="/customers", tags=["Customers"])
 api_router.include_router(lead_stages.router, prefix="/lead-stages", tags=["Lead Stages"])
@@ -47,6 +48,9 @@ api_router.include_router(tasks.router, prefix="/tasks", tags=["Tasks"])
 api_router.include_router(ai_assistant.router, prefix="/ai", tags=["Tikun AI"])
 api_router.include_router(crm_search.router, prefix="/crm-search", tags=["CRM Search"])
 api_router.include_router(partner_stores.router, prefix="/partner-stores", tags=["Partner Stores"])
+api_router.include_router(bdc_desk.router, prefix="/bdc-desk", tags=["BDC Desk"])
+api_router.include_router(partner_portal.auth_router, prefix="/auth/partner", tags=["Partner Portal"])
+api_router.include_router(partner_portal.router, prefix="/partner-portal", tags=["Partner Portal"])
 api_router.include_router(time_tracking.router, prefix="/time-tracking", tags=["Time Tracking"])
 
 # Auto WhatsApp - Selenium-based bulk messaging

@@ -8,6 +8,7 @@ Active jobs only:
 - Appointment reminders (every 5 minutes)
 - Follow-up reminders (every 15 minutes)
 - Missed appointment detection (every 30 minutes)
+- Partner lead routing retry (every 2 minutes)
 
 IMAP email sync and WhatsApp bulk/auto workers are intentionally not scheduled.
 """
@@ -119,6 +120,19 @@ def setup_scheduler():
         max_instances=1,
     )
 
+    # Retry partner routing for leads that arrived while stores were closed or full.
+    from app.services.partner_routing_service import run_partner_routing_retry
+    scheduler.add_job(
+        run_partner_routing_retry,
+        trigger=IntervalTrigger(minutes=2, start_date=datetime.now() + timedelta(seconds=80)),
+        id="partner_lead_routing",
+        name="Route unmatched leads to partner programs",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=120,
+    )
+
     # CRM Azure Search backfill — daily when Azure AI Search is configured
     from app.tasks.crm_search_index import run_crm_search_backfill
     scheduler.add_job(
@@ -139,6 +153,7 @@ def setup_scheduler():
     logger.info("  - Appointment reminders (every 5 minutes)")
     logger.info("  - Follow-up reminders (every 15 minutes)")
     logger.info("  - Missed appointment detection (every 30 minutes)")
+    logger.info("  - Partner lead routing retry (every 2 minutes)")
     logger.info("  - CRM search backfill (every 24 hours, Azure only)")
     logger.info("  - DISABLED: IMAP email sync, WhatsApp bulk, Auto WhatsApp worker")
 

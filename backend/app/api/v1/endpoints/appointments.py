@@ -194,6 +194,10 @@ async def create_appointment(
             lead_row.partner_store_id = partner_store_id
             lead_row.partner_connected_at = utc_now()
             lead_row.fill_sold_partner_if_converted()
+            from app.services.partner_routing_service import mark_delivery_appointment_set
+            await mark_delivery_appointment_set(
+                db, appointment.lead_id, partner_store_id, appointment.scheduled_at
+            )
     
     # Log activity if associated with a lead
     if appointment.lead_id:
