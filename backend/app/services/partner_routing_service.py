@@ -19,6 +19,8 @@ from app.core.timezone import utc_now
 from app.models.activity import ActivityType
 from app.models.customer import Customer
 from app.models.lead import Lead
+from app.models.lead_campaign import LeadCampaign
+from app.models.partner_store_campaign import PartnerStoreCampaign
 from app.models.lead_delivery import (
     AGENT_OPEN_STATUSES,
     DELIVERY_APPOINTMENT_SET,
@@ -145,6 +147,50 @@ def _remaining(cap: Optional[int], used: int) -> int:
     return cap - used
 
 
+def _prefer_campaign_stores(candidates: list, campaign_store_ids: set) -> list:
+    """When a lead belongs to a linked campaign, that store gets it ahead of a geo-only store."""
+    if not campaign_store_ids:
+        return candidates
+    preferred = [(program, store) for program, store in candidates if store.id in campaign_store_ids]
+    return preferred or candidates
+
+
+async def _lead_campaign_ids(db: AsyncSession, lead: Lead) -> set:
+    ids = set()
+    if getattr(lead, "campaign_mapping_id", None):
+        ids.add(lead.campaign_mapping_id)
+    rows = (
+        await db.execute(
+            select(LeadCampaign.campaign_mapping_id).where(
+                LeadCampaign.lead_id == lead.id,
+                LeadCampaign.campaign_mapping_id.isnot(None),
+            )
+        )
+    ).all()
+    for (campaign_id,) in rows:
+        if campaign_id:
+            ids.add(campaign_id)
+    return ids
+
+
+async def _store_campaign_links(db: AsyncSession, store_ids: Iterable[UUID]) -> dict:
+    ids = list(store_ids)
+    if not ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(
+                PartnerStoreCampaign.partner_store_id,
+                PartnerStoreCampaign.campaign_mapping_id,
+            ).where(PartnerStoreCampaign.partner_store_id.in_(ids))
+        )
+    ).all()
+    links: dict = {}
+    for store_id, campaign_id in rows:
+        links.setdefault(store_id, set()).add(campaign_id)
+    return links
+
+
 def pick_store(candidates: list, usage: dict) -> Optional[tuple]:
     """Furthest under cap, then higher priority weight. None when every store is full."""
     viable = []
@@ -214,8 +260,17 @@ async def route_lead(db: AsyncSession, lead_id: UUID) -> list[LeadDelivery]:
         )
     ).all()
 
+    lead_campaign_ids = await _lead_campaign_ids(db, lead)
+    campaign_links = await _store_campaign_links(db, [store.id for _, store in rows])
+
     matched: list[tuple[PartnerProgram, PartnerStore]] = []
+    campaign_store_ids: set[UUID] = set()
     for program, store in rows:
+        linked = campaign_links.get(store.id) or set()
+        # A store with campaigns only receives leads from those campaigns.
+        # A store with none keeps the older state/zip match.
+        if linked and not (linked & lead_campaign_ids):
+            continue
         if not _area_matches(program, customer):
             continue
         if not _credit_matches(program, customer):
@@ -224,6 +279,8 @@ async def route_lead(db: AsyncSession, lead_id: UUID) -> list[LeadDelivery]:
             continue
         if not program_is_open(program.hours or {}, program.timezone, now):
             continue
+        if linked:
+            campaign_store_ids.add(store.id)
         matched.append((program, store))
 
     if not matched:
@@ -238,7 +295,7 @@ async def route_lead(db: AsyncSession, lead_id: UUID) -> list[LeadDelivery]:
             for program, store in matched
             if program.program_type == PROGRAM_FULL_BDC and store.id not in stores_already
         ]
-        winner = pick_store(bdc_candidates, usage)
+        winner = pick_store(_prefer_campaign_stores(bdc_candidates, campaign_store_ids), usage)
         if winner is not None:
             program, store = winner
             delivery = await _create_delivery(
@@ -265,7 +322,7 @@ async def route_lead(db: AsyncSession, lead_id: UUID) -> list[LeadDelivery]:
 
     customer_name = _customer_name(customer)
     for _key, group in groups.items():
-        winner = pick_store(group, usage)
+        winner = pick_store(_prefer_campaign_stores(group, campaign_store_ids), usage)
         if winner is None:
             continue
         program, store = winner

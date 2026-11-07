@@ -81,6 +81,18 @@ export const PartnerProgramService = {
         const response = await apiClient.put<BdcAgentAssignment[]>(`${PREFIX}/${storeId}/bdc-agents`, agents);
         return response.data;
     },
+    async listCampaigns(storeId: string) {
+        const response = await apiClient.get<{ campaign_mapping_id: string; display_name: string; match_pattern?: string | null }[]>(
+            `${PREFIX}/${storeId}/campaigns`
+        );
+        return response.data;
+    },
+    async saveCampaigns(storeId: string, campaignMappingIds: string[]) {
+        const response = await apiClient.put(`${PREFIX}/${storeId}/campaigns`, {
+            campaign_mapping_ids: campaignMappingIds,
+        });
+        return response.data;
+    },
     async listDeliveries(leadId: string) {
         const response = await apiClient.get<LeadDeliveryRow[]>(`/leads/${leadId}/deliveries`);
         return response.data;

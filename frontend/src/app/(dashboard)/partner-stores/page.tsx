@@ -312,6 +312,8 @@ interface StoreFormValues extends PartnerStoreCreate {
     maxOpen: string
     portalEmail: string
     portalPassword: string
+    hasPortalLogin: boolean
+    campaignIds: string[]
 }
 
 const emptyForm = (): StoreFormValues => ({
@@ -339,6 +341,8 @@ const emptyForm = (): StoreFormValues => ({
     maxOpen: "15",
     portalEmail: "",
     portalPassword: "",
+    hasPortalLogin: false,
+    campaignIds: [],
 })
 
 function optInLabel(programType?: string | null) {
@@ -359,6 +363,7 @@ function numberOrNull(value: string) {
 }
 
 async function saveStoreOptIn(storeId: string, data: StoreFormValues) {
+    await PartnerProgramService.saveCampaigns(storeId, data.campaignIds)
     const existing = await PartnerProgramService.get(storeId).catch(() => null)
     if (data.optIn === "off") {
         if (existing) {
@@ -436,6 +441,8 @@ function PartnerStoreModal({
 }) {
     const [form, setForm] = useState<StoreFormValues>(emptyForm)
     const [agents, setAgents] = useState<{ id: string; first_name: string; last_name: string }[]>([])
+    const [campaignOptions, setCampaignOptions] = useState<{ id: string; display_name: string; match_pattern?: string }[]>([])
+    const [campaignQuery, setCampaignQuery] = useState("")
 
     useEffect(() => {
         if (!open) return
@@ -458,13 +465,22 @@ function PartnerStoreModal({
                 if (store.program_type === "leads_only" || store.program_type === "full_bdc") {
                     next.optIn = store.program_type
                 }
-                const [program, assigned, bdcUsers] = await Promise.all([
+                const [program, assigned, bdcUsers, portalUsers, linkedCampaigns, campaignList] = await Promise.all([
                     PartnerProgramService.get(store.id).catch(() => null),
                     PartnerProgramService.listBdcAgents(store.id).catch(() => []),
                     apiClient.get<{ id: string; first_name: string; last_name: string }[]>("/users/", { params: { role: "bdc", is_active: true } }).then((res) => res.data).catch(() => []),
+                    PartnerProgramService.listPortalUsers(store.id).catch(() => []),
+                    PartnerProgramService.listCampaigns(store.id).catch(() => []),
+                    apiClient.get<{ items: { id: string; display_name: string; match_pattern?: string }[] }>("/campaign-mappings/").then((res) => res.data.items).catch(() => []),
                 ])
                 if (cancelled) return
                 setAgents(bdcUsers)
+                setCampaignOptions(campaignList)
+                next.campaignIds = linkedCampaigns.map((row) => row.campaign_mapping_id)
+                if (portalUsers[0]) {
+                    next.portalEmail = portalUsers[0].email
+                    next.hasPortalLogin = true
+                }
                 if (program && program.status !== "cancelled") {
                     next.optIn = program.program_type
                     next.states = (program.states || []).join(", ")
@@ -480,9 +496,13 @@ function PartnerStoreModal({
                 next.agentIds = assigned.map((row) => row.user_id)
                 if (assigned[0]) next.maxOpen = String(assigned[0].max_open_leads)
             } else {
-                const bdcUsers = await apiClient.get<{ id: string; first_name: string; last_name: string }[]>("/users/", { params: { role: "bdc", is_active: true } }).then((res) => res.data).catch(() => [])
+                const [bdcUsers, campaignList] = await Promise.all([
+                    apiClient.get<{ id: string; first_name: string; last_name: string }[]>("/users/", { params: { role: "bdc", is_active: true } }).then((res) => res.data).catch(() => []),
+                    apiClient.get<{ items: { id: string; display_name: string; match_pattern?: string }[] }>("/campaign-mappings/").then((res) => res.data.items).catch(() => []),
+                ])
                 if (cancelled) return
                 setAgents(bdcUsers)
+                setCampaignOptions(campaignList)
             }
             if (!cancelled) setForm(next)
         })()
@@ -494,17 +514,23 @@ function PartnerStoreModal({
     const update = (field: string, value: string) =>
         setForm((prev) => ({ ...prev, [field]: value }))
 
+    const shownCampaigns = campaignOptions.filter((campaign) => {
+        const q = campaignQuery.trim().toLowerCase()
+        if (!q) return true
+        return campaign.display_name.toLowerCase().includes(q) || (campaign.match_pattern || "").toLowerCase().includes(q)
+    })
+
     return (
         <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-            <DialogContent className="sm:max-w-[640px] max-h-[90vh] overflow-y-auto">
-                <DialogHeader>
+            <DialogContent className="flex max-h-[min(92vh,900px)] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+                <DialogHeader className="border-b px-6 py-4">
                     <DialogTitle>{store ? "Edit Partner Store" : "Add Partner Store"}</DialogTitle>
                     <DialogDescription>
-                        Store details and how this dealer receives leads, in one form.
+                        Store details, which campaigns send them leads, and how BDC coverage is capped.
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="grid gap-4 py-4">
+                <div className="grid gap-5 overflow-y-auto px-6 py-4">
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label htmlFor="name">Store Name *</Label>
@@ -578,7 +604,7 @@ function PartnerStoreModal({
                         <Textarea id="notes" rows={2} value={form.notes || ""} onChange={(e) => update("notes", e.target.value)} />
                     </div>
 
-                    <div className="space-y-3 border-t pt-4">
+                    <div className="space-y-4 border-t pt-4">
                         <div className="space-y-2">
                             <Label>What they receive</Label>
                             <Select value={form.optIn} onValueChange={(value) => setForm((prev) => ({ ...prev, optIn: value as OptIn }))}>
@@ -592,7 +618,7 @@ function PartnerStoreModal({
                                 </SelectContent>
                             </Select>
                             <p className="text-xs text-muted-foreground">
-                                The brand above is the bucket. A lead can go to Toyota and Ford. It never goes to two stores of the same brand.
+                                Brand is the bucket. A lead can go to Toyota and Ford, never to two stores of the same brand.
                             </p>
                         </div>
                         {form.optIn !== "off" && (
@@ -607,14 +633,17 @@ function PartnerStoreModal({
                                         <Input value={form.postalCodes} placeholder="30301, 30302" onChange={(e) => update("postalCodes", e.target.value)} />
                                     </div>
                                 </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Leave states and zips empty to take every lead from the campaigns below. Fill them in to also limit by location.
+                                </p>
                                 <div className="grid grid-cols-2 gap-3">
                                     <div className="space-y-1">
                                         <Label>Daily cap</Label>
-                                        <Input value={form.dailyCap} onChange={(e) => update("dailyCap", e.target.value)} />
+                                        <Input inputMode="numeric" value={form.dailyCap} placeholder="No daily limit" onChange={(e) => update("dailyCap", e.target.value)} />
                                     </div>
                                     <div className="space-y-1">
                                         <Label>Monthly cap</Label>
-                                        <Input value={form.monthlyCap} onChange={(e) => update("monthlyCap", e.target.value)} />
+                                        <Input inputMode="numeric" value={form.monthlyCap} placeholder="No monthly limit" onChange={(e) => update("monthlyCap", e.target.value)} />
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-3">
@@ -629,7 +658,7 @@ function PartnerStoreModal({
                                 </div>
                                 <div className="flex flex-wrap gap-2 text-sm">
                                     {DAYS.map((day) => (
-                                        <label key={day} className="flex items-center gap-1">
+                                        <label key={day} className="flex items-center gap-1.5 rounded-md border px-2 py-1">
                                             <input
                                                 type="checkbox"
                                                 checked={form.openDays.includes(day)}
@@ -646,11 +675,68 @@ function PartnerStoreModal({
                                         </label>
                                     ))}
                                 </div>
+
+                                <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+                                    <div>
+                                        <Label>Campaigns that send leads here</Label>
+                                        <p className="mt-1 text-xs text-muted-foreground">
+                                            A store can be linked to more than one campaign. Leads from those campaigns are delivered to this store.
+                                        </p>
+                                    </div>
+                                    <Input
+                                        value={campaignQuery}
+                                        placeholder="Search campaigns"
+                                        onChange={(e) => setCampaignQuery(e.target.value)}
+                                    />
+                                    <div className="max-h-36 space-y-1 overflow-y-auto text-sm">
+                                        {shownCampaigns.length === 0 && (
+                                            <p className="text-muted-foreground">No campaigns match.</p>
+                                        )}
+                                        {shownCampaigns.map((campaign) => (
+                                            <label key={campaign.id} className="flex items-start gap-2 rounded-md px-1 py-1 hover:bg-background">
+                                                <input
+                                                    type="checkbox"
+                                                    className="mt-0.5"
+                                                    checked={form.campaignIds.includes(campaign.id)}
+                                                    onChange={(event) => {
+                                                        setForm((prev) => ({
+                                                            ...prev,
+                                                            campaignIds: event.target.checked
+                                                                ? [...prev.campaignIds, campaign.id]
+                                                                : prev.campaignIds.filter((id) => id !== campaign.id),
+                                                        }))
+                                                    }}
+                                                />
+                                                <span>
+                                                    <span className="block">{campaign.display_name}</span>
+                                                    {campaign.match_pattern && campaign.match_pattern !== campaign.display_name && (
+                                                        <span className="block text-xs text-muted-foreground">{campaign.match_pattern}</span>
+                                                    )}
+                                                </span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                    {form.campaignIds.length > 0 && (
+                                        <p className="text-xs text-muted-foreground">{form.campaignIds.length} campaign{form.campaignIds.length === 1 ? "" : "s"} linked</p>
+                                    )}
+                                </div>
+
                                 {form.optIn === "full_bdc" && (
-                                    <div className="space-y-2">
-                                        <Label>BDC agents</Label>
-                                        <Input className="max-w-[140px]" value={form.maxOpen} onChange={(e) => update("maxOpen", e.target.value)} placeholder="Max open leads" />
-                                        <div className="max-h-28 space-y-1 overflow-y-auto text-sm">
+                                    <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+                                        <div>
+                                            <Label>BDC max open cap</Label>
+                                            <p className="mt-1 text-xs text-muted-foreground">
+                                                How many open leads one BDC agent can hold for this store at once. Once an agent hits this number, the next lead goes to another checked agent. Default is 15.
+                                            </p>
+                                        </div>
+                                        <Input
+                                            className="max-w-[160px]"
+                                            inputMode="numeric"
+                                            value={form.maxOpen}
+                                            onChange={(e) => update("maxOpen", e.target.value)}
+                                        />
+                                        <Label>BDC agents who work this store</Label>
+                                        <div className="max-h-32 space-y-1 overflow-y-auto text-sm">
                                             {agents.length === 0 && <p className="text-muted-foreground">No BDC users yet.</p>}
                                             {agents.map((agent) => (
                                                 <label key={agent.id} className="flex items-center gap-2">
@@ -672,14 +758,24 @@ function PartnerStoreModal({
                                         </div>
                                     </div>
                                 )}
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div className="space-y-1">
-                                        <Label>Portal email</Label>
-                                        <Input value={form.portalEmail} placeholder="Optional login" onChange={(e) => update("portalEmail", e.target.value)} />
+
+                                <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+                                    <div>
+                                        <Label>Partner portal login</Label>
+                                        <p className="mt-1 text-xs text-muted-foreground">
+                                            Email and password the store uses to sign in and see the leads you send them.
+                                            {form.hasPortalLogin ? " A login already exists. Leave the password blank to keep it." : " Leave both blank if they do not need a login yet."}
+                                        </p>
                                     </div>
-                                    <div className="space-y-1">
-                                        <Label>Portal password</Label>
-                                        <Input type="password" value={form.portalPassword} onChange={(e) => update("portalPassword", e.target.value)} />
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="space-y-1">
+                                            <Label htmlFor="portalEmail">Login email</Label>
+                                            <Input id="portalEmail" type="email" value={form.portalEmail} placeholder="store@dealer.com" onChange={(e) => update("portalEmail", e.target.value)} />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <Label htmlFor="portalPassword">Password</Label>
+                                            <Input id="portalPassword" type="password" value={form.portalPassword} placeholder={form.hasPortalLogin ? "Unchanged" : "At least 8 characters"} onChange={(e) => update("portalPassword", e.target.value)} />
+                                        </div>
                                     </div>
                                 </div>
                             </>
@@ -687,7 +783,7 @@ function PartnerStoreModal({
                     </div>
                 </div>
 
-                <DialogFooter>
+                <DialogFooter className="border-t px-6 py-4">
                     <Button variant="outline" onClick={onClose}>Cancel</Button>
                     <Button onClick={() => onSave(form)} disabled={saving || !form.name.trim()}>
                         {saving ? "Saving..." : store ? "Update" : "Create"}

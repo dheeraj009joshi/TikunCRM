@@ -473,3 +473,80 @@ async def replace_bdc_agents(
         )
     await db.commit()
     return await list_bdc_agents(store_id, db, current_user)
+
+
+class StoreCampaignLink(BaseModel):
+    campaign_mapping_id: UUID
+    display_name: str
+    match_pattern: Optional[str] = None
+
+
+class StoreCampaignUpdate(BaseModel):
+    campaign_mapping_ids: List[UUID] = Field(default_factory=list)
+
+
+@router.get("/{store_id}/campaigns", response_model=List[StoreCampaignLink])
+async def list_store_campaigns(
+    store_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Campaigns whose leads this store receives. A store can have several."""
+    from app.models.campaign_mapping import CampaignMapping
+    from app.models.partner_store_campaign import PartnerStoreCampaign
+
+    await _get_store_or_404(db, store_id)
+    rows = (
+        await db.execute(
+            select(PartnerStoreCampaign, CampaignMapping)
+            .join(CampaignMapping, CampaignMapping.id == PartnerStoreCampaign.campaign_mapping_id)
+            .where(PartnerStoreCampaign.partner_store_id == store_id)
+            .order_by(CampaignMapping.display_name)
+        )
+    ).all()
+    return [
+        StoreCampaignLink(
+            campaign_mapping_id=mapping.id,
+            display_name=mapping.display_name,
+            match_pattern=mapping.match_pattern,
+        )
+        for _link, mapping in rows
+    ]
+
+
+@router.put("/{store_id}/campaigns", response_model=List[StoreCampaignLink])
+async def replace_store_campaigns(
+    store_id: UUID,
+    body: StoreCampaignUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.MANAGE_PARTNER_STORES)),
+) -> Any:
+    """Replace the campaigns linked to this store. The same store can keep many."""
+    from app.models.campaign_mapping import CampaignMapping
+    from app.models.partner_store_campaign import PartnerStoreCampaign
+
+    await _get_store_or_404(db, store_id)
+    wanted = list(dict.fromkeys(body.campaign_mapping_ids))
+    if wanted:
+        found = (
+            await db.execute(select(CampaignMapping.id).where(CampaignMapping.id.in_(wanted)))
+        ).scalars().all()
+        if set(found) != set(wanted):
+            raise HTTPException(status_code=400, detail="One or more campaigns were not found")
+    existing = (
+        await db.execute(
+            select(PartnerStoreCampaign).where(PartnerStoreCampaign.partner_store_id == store_id)
+        )
+    ).scalars().all()
+    for row in existing:
+        await db.delete(row)
+    await db.flush()
+    for campaign_id in wanted:
+        db.add(
+            PartnerStoreCampaign(
+                partner_store_id=store_id,
+                campaign_mapping_id=campaign_id,
+            )
+        )
+    await db.commit()
+    return await list_store_campaigns(store_id, db, current_user)
