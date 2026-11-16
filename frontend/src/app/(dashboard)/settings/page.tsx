@@ -18,6 +18,7 @@ import {
     GitBranch,
     MessageSquare,
     Gauge,
+    PhoneCall,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -123,6 +124,13 @@ const settingsSections: SettingSection[] = [
         icon: Gauge,
         adminOnly: true,
         allowBdc: true,
+    },
+    {
+        title: "Call Scoring",
+        description: "Choose what the AI looks for when it reviews calls and how much each thing counts",
+        href: "/settings/call-scoring",
+        icon: PhoneCall,
+        adminOnly: true,
     },
     {
         title: "Security",

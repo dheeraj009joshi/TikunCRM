@@ -25,6 +25,8 @@ const SEGMENT_LABELS: Record<string, string> = {
     whatsapp: "WhatsApp",
     sms: "Text (SMS)",
     calls: "Calls",
+    "call-reviews": "Call Reviews",
+    "call-scoring": "Call Scoring",
     inbox: "Inbox",
     communications: "Communications",
     "auto-whatsapp": "Auto WhatsApp",

@@ -3,7 +3,7 @@ API v1 Router - combines all route modules
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, bdc_reports, voice, sms, whatsapp, showroom, customers, lead_stages, stips, admin_sync_sources, campaign_mappings, auto_whatsapp, eligibility, guests, public, saved_views, tasks, ai_assistant, crm_search, credit_application, partner_stores, time_tracking, lead_deliveries, bdc_desk, partner_portal
+from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, bdc_reports, voice, sms, whatsapp, showroom, customers, lead_stages, stips, admin_sync_sources, campaign_mappings, auto_whatsapp, eligibility, guests, public, saved_views, tasks, ai_assistant, crm_search, credit_application, partner_stores, time_tracking, lead_deliveries, bdc_desk, partner_portal, call_reviews
 from app.api.v1.endpoints.webhooks import sendgrid as sendgrid_webhook
 from app.api.v1.endpoints.webhooks import twilio as twilio_webhook
 from app.api.v1.endpoints.webhooks import twilio_ai_voice as twilio_ai_voice_webhook
@@ -37,6 +37,7 @@ api_router.include_router(push.router, prefix="/push", tags=["Push Notifications
 api_router.include_router(reports.router, prefix="/reports", tags=["Reports & Admin"])
 api_router.include_router(bdc_reports.router, prefix="/reports/bdc", tags=["BDC Reports"])
 api_router.include_router(voice.router, prefix="/voice", tags=["Voice Calling"])
+api_router.include_router(call_reviews.router, prefix="/call-reviews", tags=["Call Reviews"])
 api_router.include_router(sms.router, prefix="/sms", tags=["SMS Messaging"])
 api_router.include_router(whatsapp.router, prefix="/whatsapp", tags=["WhatsApp Messaging"])
 api_router.include_router(showroom.router, prefix="/showroom", tags=["Showroom Check-in/out"])

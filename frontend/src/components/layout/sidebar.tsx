@@ -36,6 +36,7 @@ import {
     Send,
     QrCode,
     Timer,
+    PhoneCall,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -156,6 +157,11 @@ const allSidebarItems: SidebarItem[] = [
         href: "/auto-whatsapp",
         roles: ["super_admin", "dealership_admin", "dealership_owner"],
     },
+    {
+        name: "Call Reviews",
+        icon: PhoneCall,
+        href: "/call-reviews",
+    },
     { 
         name: "Notifications", 
         icon: Bell, 
@@ -167,6 +173,7 @@ const allSidebarItems: SidebarItem[] = [
         roles: ["super_admin", "dealership_admin", "dealership_owner", "bdc"],
         children: [
             { name: "Analytics", icon: BarChart3, href: "/analytics" },
+            { name: "Call Intelligence", icon: PhoneCall, href: "/call-reviews/dashboard" },
             { name: "Team Activity", icon: Activity, href: "/team-activity" },
             { name: "Sold Cars", icon: Car, href: "/sold-cars" },
             { name: "BDC Export", icon: QrCode, href: "/reports/bdc-export" },

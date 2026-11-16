@@ -1772,6 +1772,12 @@ async def handle_recording_complete(
         recording_sid=recording_sid,
         recording_duration=duration,
     )
+
+    # Then transcribe + AI-review the call. Background tasks run in order, so this
+    # starts after the recording upload above. No-op unless CALL_REVIEW_AUTO_ENABLED.
+    if call_log and settings.call_review_auto_enabled:
+        from app.services.call_review_service import process_call_review_background
+        background_tasks.add_task(process_call_review_background, call_log.id)
     
     # Return immediately to Twilio
     return {"status": "ok"}
