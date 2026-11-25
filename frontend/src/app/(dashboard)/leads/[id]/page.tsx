@@ -106,6 +106,7 @@ import { LeadDeliveries } from "@/components/leads/lead-deliveries"
 import { LogContactModal } from "@/components/leads/log-contact-modal"
 import { StageStepper } from "@/components/leads/stage-stepper"
 import { NextBestAction } from "@/components/leads/next-best-action"
+import { NoteReminders } from "@/components/leads/note-reminders"
 import { LeadStoreDrive } from "@/components/leads/lead-store-drive"
 import { getCustomerFullName } from "@/services/customer-service"
 import { EmailComposerModal } from "@/components/emails/email-composer-modal"
@@ -770,6 +771,12 @@ export default function LeadDetailsPage() {
             console.error("Failed to fetch showroom status:", error)
         }
     }, [leadId])
+
+    // Changes when a note is added, so "From the notes" re-reads them
+    const notesKey = React.useMemo(() => {
+        const ids = activities.filter((a) => a.type === "note_added").map((a) => String(a.id))
+        return `${ids.length}:${ids.sort().join(",")}`
+    }, [activities])
 
     const fetchLeadAppointmentsAndFollowUps = React.useCallback(async () => {
         if (!leadId) return
@@ -2340,6 +2347,14 @@ export default function LeadDetailsPage() {
                             onBookAppointment={() => setShowBookAppointment(true)}
                             onViewFollowUps={() => setActiveActivityTab("followups")}
                             onViewAppointments={() => setActiveActivityTab("appointments")}
+                        />
+                    )}
+                    {!isMentionOnly && (
+                        <NoteReminders
+                            leadId={String(lead.id)}
+                            dealershipId={lead.dealership_id ? String(lead.dealership_id) : null}
+                            notesKey={notesKey}
+                            onFollowUpCreated={fetchLeadAppointmentsAndFollowUps}
                         />
                     )}
                     {/* Profile Card */}

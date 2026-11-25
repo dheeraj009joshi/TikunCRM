@@ -199,6 +199,19 @@ class Settings(BaseSettings):
     cartesia_api_key: str = ""  # Text-to-Speech (or use elevenlabs_api_key)
     elevenlabs_api_key: str = ""  # Alternative TTS provider
 
+    # AI Call Reviews (transcribe recorded calls + score against the rubric)
+    # Master switch for AUTOMATIC review of every eligible call. Off by default:
+    # turning it on sends call audio to Deepgram and transcripts to OpenAI, so
+    # confirm call-recording consent/disclosure with the business first.
+    # Managers can still review individual calls on demand while this is off.
+    call_review_auto_enabled: bool = False
+    call_review_model: str = "gpt-4o"  # LLM used for evaluation (recorded on every evaluation)
+    call_review_transcription_model: str = "nova-3"  # Deepgram model
+    call_review_min_duration_seconds: int = 30  # Shorter calls are skipped
+    call_review_max_attempts: int = 3  # Retries before a review stays failed
+    # Email the weekly call report to all active managers (Mondays 13:00 UTC). Off by default.
+    call_review_weekly_report_enabled: bool = False
+
     # Tikun AI (ChatGPT-style CRM assistant)
     ai_assistant_enabled: bool = True
     ai_assistant_model: str = "gpt-4o"
